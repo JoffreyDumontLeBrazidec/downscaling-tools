@@ -1,0 +1,31 @@
+2025-10-29 15:59:22,890 - INFO - Checkpoint directory: /home/ecm5702/scratch/aifs/checkpoint/
+2025-10-29 15:59:22,960 - INFO - Preparing configs ...
+2025-10-29 15:59:32,291 - INFO - Prepending current user directory (/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference) to the search path.
+2025-10-29 15:59:32,291 - INFO - Search path is now: [provider=anemoi-cwd-searchpath-plugin, path=/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference, provider=hydra, path=pkg://hydra.conf, provider=main, path=/home/ecm5702/dev/anemoi-config]
+2025-10-29 15:59:32,735 - INFO - Preparing datamodule ...
+2025-10-29 15:59:41,485 - INFO - Predicting sample 0, Current GPU memory usage: 1.17 GB
+2025-10-29 15:59:41,485 - INFO - Sample 0: Predicting member 0
+2025-10-29 15:59:41,485 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-10-29 15:59:41,485 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-10-29 16:00:23,532 - INFO - Sample 0: Predicting member 1
+2025-10-29 16:00:23,533 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-10-29 16:00:23,533 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-10-29 16:01:15,087 - INFO - Predictions saved at /home/ecm5702/scratch/aifs/checkpoint/4d3399b2ce754d269b339d79a024d806/predictions.nc
+2025-10-29 16:01:15,098 - INFO - Waiting for all processes for 2mn before plotting
+2025-10-29 16:03:15,533 - INFO - Removing existing PDF at /home/ecm5702/scratch/aifs/checkpoint//4d3399b2ce754d269b339d79a024d806/all_regions_plots.pdf
+2025-10-29 16:03:15,534 - INFO - Plotting region amazon_forest
+2025-10-29 16:03:15,797 - INFO - Sample 0: Plotting
+2025-10-29 16:03:32,981 - INFO - Plotting region european_arctic
+2025-10-29 16:03:33,016 - INFO - Sample 0: Plotting
+2025-10-29 16:03:44,527 - INFO - Plotting region himalayas
+2025-10-29 16:03:44,553 - INFO - Sample 0: Plotting
+2025-10-29 16:03:56,103 - INFO - Plotting region rocky_mountains
+2025-10-29 16:03:56,129 - INFO - Sample 0: Plotting
+2025-10-29 16:04:03,881 - INFO - Plotting region west_sahara
+2025-10-29 16:04:03,907 - INFO - Sample 0: Plotting
+2025-10-29 16:04:12,615 - INFO - Plotting region pyrenees_alpes
+2025-10-29 16:04:12,641 - INFO - Sample 0: Plotting
+2025-10-29 16:04:17,477 - INFO - Plotting region eastern_us
+2025-10-29 16:04:17,503 - INFO - Sample 0: Plotting
+2025-10-29 16:04:27,113 - INFO - Plotting region central_africa
+2025-10-29 16:04:27,140 - INFO - Sample 0: Plotting
