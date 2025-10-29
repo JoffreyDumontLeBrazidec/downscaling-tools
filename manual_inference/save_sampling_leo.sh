@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=494000
-#SBATCH --output=/leonardo/home/userexternal/jdumontl/dev/jobscripts/inference/outputs/%j.out
+#SBATCH --output=/leonardo/home/userexternal/jdumontl/dev/jobscripts/manual_inference_job_outputs/%j.out
 #SBATCH --partition=boost_usr_prod
 #SBATCH --account=DestE_340_25
 
