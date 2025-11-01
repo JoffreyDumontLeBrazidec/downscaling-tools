@@ -52,7 +52,7 @@ def prepare_config_from_ckpt(
     dir_exp,
     name_exp,
     name_ckpt,
-    config_dir="/home/ecm5702/dev/anemoi-config",
+    config_dir=os.path.join(os.environ["HOME"], "dev", "anemoi-config"),
     config_name="hindcast_o320",
 ):
     logging.info(f"Preparing configs ...")
@@ -107,7 +107,11 @@ class SampleSaver:
             prepare_config_from_ckpt(self.dir_exp, self.name_exp, self.name_ckpt)
         )
         self.graph_data = torch.load(
-            "/home/ecm5702/scratch/aifs/graphs/o96_o320_icosahedral_r6_multiscale_h1_s6-1encoder.pt",
+            os.path.join(
+                os.environ["OUTPUT"],
+                "graphs",
+                "o96_o320_icosahedral_r6_multiscale_h1_s6-1encoder.pt",
+            ),
             weights_only=False,
         )
         self.datamodule = prepare_datamodule(self.new_config, self.graph_data)

@@ -30,9 +30,9 @@ export HPC="atos"
 inference="save_sampling.py"
 
 name_exp="4d3399b2ce754d269b339d79a024d806"
-name_ckpt="anemoi-by_epoch-epoch_020-step_388752.ckpt"
+name_ckpt="anemoi-by_epoch-epoch_033-step_629408.ckpt"
 N_members=2
-N_samples=1
+N_samples=2
 num_steps=50
 
 srun --export=ALL,HPC python $inference --name_exp $name_exp --name_ckpt $name_ckpt --N_members $N_members --num_steps=$num_steps --N_samples $N_samples
