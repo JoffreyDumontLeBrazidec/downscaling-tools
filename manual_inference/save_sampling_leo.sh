@@ -8,7 +8,7 @@
 #SBATCH --mem=494000
 #SBATCH --output=/leonardo/home/userexternal/jdumontl/dev/jobscripts/manual_inference_job_outputs/%j.out
 #SBATCH --partition=boost_usr_prod
-#SBATCH --account=DestE_340_25
+#SBATCH --account=DestE_330_25
 
 
  

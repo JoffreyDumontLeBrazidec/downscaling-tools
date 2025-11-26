@@ -1,13 +1,13 @@
 #!/bin/bash
 
 #SBATCH --nodes=1
-#SBATCH --time=02:30:00
+#SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=256G
-#SBATCH --output=/home/ecm5702/dev/outputs/manual_inference_job_outputs/%j.out
-#SBATCH --qos=ng
+#SBATCH --output=/home/ecm5702/dev/jobscripts/manual_inference_job_outputs/%j.out
+#SBATCH --qos=dg
 
 set -eux
 cd /home/ecm5702/dev/downscaling-tools/manual_inference
@@ -29,23 +29,17 @@ export HPC="atos"
 
 inference="save_sampling.py"
 
-name_exp="7c4f11f30ece4c7487e6a8e70302d6a3"
-name_ckpt="anemoi-by_epoch-epoch_009-step_185120.ckpt"
-N_members=1
-N_samples=20
-idx=150
-num_steps=40
-sigma_max=88
-S_max=88
+dir_exp="/home/ecm5702/perm/leo_checkpoint_save"
+name_exp="20c6993866294adc8ebcaec21fd6d329"
+name_ckpt="anemoi-by_time-epoch_460-step_1066516.ckpt"
+N_members=2
+N_samples=1
+num_steps=50
+sigma_max=10000
+S_max=800
 S_noise=1.05
 S_churn=2.5
-sigma_min=0.02
+sigma_min=0.03
 S_min=0.75
 
-srun --export=ALL,HPC python $inference \
-  --name_exp $name_exp \
-  --name_ckpt $name_ckpt \
-  --N_members $N_members \
-  --num_steps=$num_steps \
-  --N_samples $N_samples \
-  --n_checkpoints 10
+srun --export=ALL,HPC python $inference --dir_exp $dir_exp --name_exp $name_exp --name_ckpt $name_ckpt --N_members $N_members --num_steps=$num_steps --N_samples $N_samples --sigma_max $sigma_max --S_max $S_max --S_noise $S_noise --S_churn $S_churn --sigma_min $sigma_min --S_min $S_min

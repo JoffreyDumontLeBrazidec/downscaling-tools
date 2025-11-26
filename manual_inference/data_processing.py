@@ -5,7 +5,7 @@ import numpy as np
 import xarray as xr
 from einops import rearrange
 from icecream import ic
-
+from anemoi.training.train.tasks.downscaler import match_tensor_channels
 from dataclasses import dataclass
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
@@ -28,7 +28,14 @@ class WeatherDataBatch:
 
         self.date = self.dataset.data.dates[idx : idx + N_samples]
 
+        ic(self.date)
         ic(self.x_in.shape, self.x_in_hres.shape, self.y.shape)
+
+    def prepare_tensors_for_model(self, idx: int, N_samples: int):
+        self.prepare(idx, N_samples)
+        self.x_in = self.x_in.to(self.device)
+        self.x_in_hres = self.x_in_hres.to(self.device)
+        self.y = self.y.to(self.device)
 
     def prepare_miscellaneous(self):
         self.lon_lres = self.dataset.data.longitudes[0]
@@ -43,10 +50,46 @@ class WeatherDataBatch:
         )
         return torch.from_numpy(tensor)  # .to(self.device)
 
+    def send_tensors_to_numpy(self):
+        tensor_attributes = [
+            "x_in",
+            "x_in_hres",
+            "y",
+            "x_in_interp_to_hres",
+            "y_residuals",
+            "y_pred",
+            "y_pred_residuals",
+        ]
+        for attr in tensor_attributes:
+            if hasattr(self, attr):
+                setattr(self, attr, tensors_to_numpy(getattr(self, attr)))
+
     def convert_to_numpy(self):
         self.x_in = tensors_to_numpy(self.x_in)
         self.x_in_hres = tensors_to_numpy(self.x_in_hres)
         self.y = tensors_to_numpy(self.y)
+
+    def prepare_residuals_for_model(self, interface, data_indices):
+
+        self.x_in_matching_channel_indices = match_tensor_channels(
+            data_indices.data.input[0].name_to_index,
+            {
+                k: v
+                for k, v in data_indices.data.output.name_to_index.items()
+                if v in data_indices.data.output.full
+            },
+        ).to(self.device)
+
+        assert (
+            len(self.x_in.shape) == 5
+        ), f"Expected self.x_in to have 5 dimensions, but got {len(self.x_in.shape)}"
+        self.x_in_interp_to_hres = interface.model._interpolate_to_high_res(
+            self.x_in[:, 0, 0, ...],
+        )[:, None, None, ...]
+        self.y_residuals = interface.model.compute_residuals(
+            self.y,
+            self.x_in_interp_to_hres[..., self.x_in_matching_channel_indices],
+        )
 
 
 def process_residuals(interface, x_in, y, samples, N_samples, N_members):
@@ -69,6 +112,8 @@ def process_residuals(interface, x_in, y, samples, N_samples, N_members):
 # Convert tensors to numpy
 def tensors_to_numpy(obj):
     if isinstance(obj, torch.Tensor):
+        if obj.requires_grad:
+            obj = obj.detach()
         return obj.cpu().numpy()
     elif isinstance(obj, np.ndarray):
         return obj
@@ -82,7 +127,6 @@ def tensors_to_numpy(obj):
         return {key: tensors_to_numpy(value) for key, value in obj.items()}
     else:
         raise TypeError(f"Unsupported type: {type(obj)}")
-    return obj
 
 
 # Extract filtered input from output
@@ -184,9 +228,13 @@ def create_xarray_dataset(
             ["sample", "ensemble_member", "grid_point_hres", "weather_state"],
             data_batch.y_pred_residuals,
         )
+        ds[f"y_pred_residuals"].attrs["lon"] = "lon_hres"
+        ds[f"y_pred_residuals"].attrs["lat"] = "lat_hres"
         ds["y_residuals"] = (
             ["sample", "grid_point_hres", "weather_state"],
             data_batch.y_residuals,
         )
+        ds[f"y_residuals"].attrs["lon"] = "lon_hres"
+        ds[f"y_residuals"].attrs["lat"] = "lat_hres"
 
     return ds

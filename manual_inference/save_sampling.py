@@ -75,6 +75,9 @@ def prepare_datamodule(config_checkpoint, graph_data):
 
     from anemoi.training.data.datamodule import DownscalingAnemoiDatasetsDataModule
 
+    config_checkpoint.dataloader.validation.frequency = (
+        "50h"  # to not get consecutive samples
+    )
     datamodule = DownscalingAnemoiDatasetsDataModule(config_checkpoint, graph_data)
     return datamodule
 
@@ -86,7 +89,7 @@ class SampleSaver:
     name_ckpt: "last.ckpt"
     N_members: 3
     N_samples: 2
-    idx: 0
+    idx: 100
     return_intermediate: False
 
     def __post_init__(self) -> None:
@@ -123,7 +126,7 @@ class SampleSaver:
 
         ### Prepare data batch
         self.data_batch = WeatherDataBatch(self.datamodule.ds_valid)
-        self.data_batch.prepare(idx=0, N_samples=self.N_samples)
+        self.data_batch.prepare(idx=self.idx, N_samples=self.N_samples)
         self.data_batch.prepare_miscellaneous()
 
     def sample(self, noise_scheduler_params=None, sampler_params=None):
@@ -242,17 +245,37 @@ class SampleSaver:
 
 
 if __name__ == "__main__":
-
-    if os.environ["HPC"] == "atos":
-        dir_exp = "/home/ecm5702/scratch/aifs/checkpoint/"
-    elif os.environ["HPC"] == "leo":
-        dir_exp = "/leonardo_work/DestE_340_25/output/jdumontl/downscaling/checkpoint"
-    elif os.environ["HPC"] == "marenostrum":
-        dir_exp = "/home/ecm/ecm800825/outputs/checkpoint"
-    else:
-        raise ValueError(f"Unknown HPC: {os.environ['HPC']}")
+    import argparse
+    import logging
+    import os
+    from pathlib import Path
 
     parser = argparse.ArgumentParser(description="Run inference and save predictions.")
+    hpc = os.environ.get("HPC", None)
+    if hpc == "atos":
+        parser.add_argument(
+            "--dir_exp",
+            type=str,
+            default="/home/ecm5702/scratch/aifs/checkpoint/",
+            help="Directory for experiment checkpoints.",
+        )
+    elif hpc == "leo":
+        parser.add_argument(
+            "--dir_exp",
+            type=str,
+            default="/leonardo_work/DestE_340_25/output/jdumontl/downscaling/checkpoint",
+            help="Directory for experiment checkpoints.",
+        )
+    elif hpc == "marenostrum":
+        parser.add_argument(
+            "--dir_exp",
+            type=str,
+            default="/home/ecm/ecm800825/outputs/checkpoint",
+            help="Directory for experiment checkpoints.",
+        )
+    else:
+        raise ValueError(f"Unknown HPC: {hpc}")
+
     parser.add_argument(
         "--name_exp", type=str, required=True, help="Name of the experiment."
     )
@@ -263,13 +286,13 @@ if __name__ == "__main__":
         "--N_samples", type=int, default=2, help="Number of samples to predict."
     )
     parser.add_argument(
-        "--idx", type=int, default=0, help="Starting index for samples."
+        "--idx", type=int, default=2, help="Starting index for samples."
     )
     parser.add_argument(
         "--name_ckpt",
         type=str,
         default="last.ckpt",
-        help="Name of the checkpoint file.",
+        help="Name of the checkpoint file (used when n_checkpoints=1).",
     )
     parser.add_argument(
         "--schedule_type",
@@ -331,48 +354,93 @@ if __name__ == "__main__":
         default=1.0,
         help="S_noise value for sampler (default: 1.0).",
     )
+    # NEW: number of checkpoints to process
+    parser.add_argument(
+        "--n_checkpoints",
+        type=int,
+        default=1,
+        help=(
+            "Number of checkpoints to run. "
+            "If 1, uses --name_ckpt. If >1, automatically selects that many "
+            "epoch checkpoints from dir_exp/name_exp."
+        ),
+    )
 
     args = parser.parse_args()
     logger = logging.getLogger(__name__)
-    logger.info(f"Checkpoint directory: {dir_exp}")
+    logging.basicConfig(level=logging.INFO)
 
-    ### Sampling and saving
-    sample_saver = SampleSaver(
-        dir_exp=dir_exp,
-        name_exp=args.name_exp,
-        name_ckpt=args.name_ckpt,
-        N_members=args.N_members,
-        N_samples=args.N_samples,
-        idx=args.idx,
-        return_intermediate=False,
-    )
-    sample_saver.sample(
-        noise_scheduler_params={
-            "schedule_type": args.schedule_type,
-            "sigma_max": args.sigma_max,
-            "sigma_min": args.sigma_min,
-            "rho": args.rho,
-            "num_steps": args.num_steps,
-        },
-        sampler_params={
-            "sampler": args.sampler,
-            "S_churn": args.S_churn,
-            "S_min": args.S_min,
-            "S_max": args.S_max,
-            "S_noise": args.S_noise,
-        },
-    )
-    name_predictions_file = "predictions.nc"
-    sample_saver.save_sampling(name_predictions_file=name_predictions_file)
+    logger.info(f"Checkpoint directory: {args.dir_exp}")
 
-    ### Waiting before plotting to make sure all processes are ready and predictions.nc is well saved
-    logging.info("Waiting for all processes for 2mn before plotting")
-    time.sleep(120)
+    def run_one_checkpoint(ckpt_name: str, predictions_filename: str) -> None:
+        """Run sampling + plotting for a single checkpoint."""
+        logger.info(f"Running checkpoint: {ckpt_name}")
+        sample_saver = SampleSaver(
+            dir_exp=args.dir_exp,
+            name_exp=args.name_exp,
+            name_ckpt=ckpt_name,
+            N_members=args.N_members,
+            N_samples=args.N_samples,
+            idx=args.idx,
+            return_intermediate=False,
+        )
+        sample_saver.sample(
+            noise_scheduler_params={
+                "schedule_type": args.schedule_type,
+                "sigma_max": args.sigma_max,
+                "sigma_min": args.sigma_min,
+                "rho": args.rho,
+                "num_steps": args.num_steps,
+            },
+            sampler_params={
+                "sampler": args.sampler,
+                "S_churn": args.S_churn,
+                "S_min": args.S_min,
+                "S_max": args.S_max,
+                "S_noise": args.S_noise,
+            },
+        )
+        sample_saver.save_sampling(name_predictions_file=predictions_filename)
 
-    ### Plotting
-    lip = LocalInferencePlotter(dir_exp, args.name_exp, name_predictions_file)
-    lip.save_plot(
-        lip.regions,
-        list_model_variables=["x", "y", "y_pred_0", "y_pred_1"],
-        num_samples_to_plot=args.N_samples,
-    )
+    if args.n_checkpoints <= 1:
+        # Original behaviour: single checkpoint
+        run_one_checkpoint(args.name_ckpt, "predictions.nc")
+        # No sleep here: save_sampling() has returned, file should be fully written.
+        lip = LocalInferencePlotter(args.dir_exp, args.name_exp, "predictions.nc")
+        lip.save_plot(
+            lip.regions,
+            list_model_variables=["x", "y", "y_pred_0", "y_pred_1"],
+            num_samples_to_plot=args.N_samples,
+        )
+    else:
+        # Multi-epoch mode: automatically pick ~n_checkpoints epoch checkpoints
+        exp_dir = Path(args.dir_exp) / args.name_exp
+        all_ckpts = sorted(exp_dir.glob("anemoi-*.ckpt"))
+
+        # Keep only epoch checkpoints (e.g. anemoi-by_epoch-epoch_240-step_557192.ckpt)
+        epoch_ckpts = [p for p in all_ckpts if "epoch_" in p.name]
+        if not epoch_ckpts:
+            raise RuntimeError(f"No epoch checkpoints found in {exp_dir}")
+
+        n = min(args.n_checkpoints, len(epoch_ckpts))
+        step = max(1, len(epoch_ckpts) // n)
+        selected = epoch_ckpts[::step][:n]
+
+        logger.info(
+            f"Found {len(epoch_ckpts)} epoch checkpoints, "
+            f"selecting {len(selected)} of them (step={step})."
+            f"selected are {[p.name for p in selected]}"
+        )
+
+        for ckpt_path in selected:
+            name = ckpt_path.name
+            # Try to extract epoch number from name; fall back to full name if it fails.
+            epoch_str = "unknown"
+            if "epoch_" in name:
+                try:
+                    epoch_str = name.split("epoch_")[1].split("-")[0]
+                except Exception:
+                    pass
+
+            predictions_file = f"predictions_epoch_{epoch_str}.nc"
+            run_one_checkpoint(name, predictions_file)
