@@ -13,7 +13,7 @@ from power_spectrum import GridInfo, compute_spectra
 # Configuration
 # --------------------------------------------------------------------
 DIR_EXP = "/home/ecm5702/scratch/aifs/checkpoint"
-NAME_EXP = "7c4f11f30ece4c7487e6a8e70302d6a3"
+NAME_EXP = "b4187af3064c426e805e83747b9f879d"
 PREDICTION_PATTERN = "predictions*.nc"  # e.g. predictions.nc, predictions_epoch_*.nc
 
 WEATHER_STATES = ["10u", "2t", "10v", "u_850"]
