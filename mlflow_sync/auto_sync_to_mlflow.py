@@ -81,6 +81,6 @@ class MLFlowAutoSyncer:
 
 if __name__ == "__main__":
     HPC = os.environ.get("HPC")
-    days = int(os.environ.get("DAYS", "1"))
+    days = int(os.environ.get("DAYS", "3"))
     s = MLFlowAutoSyncer(HPC, days)
     s.sync(s.find_recent_runs())

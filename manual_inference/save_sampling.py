@@ -163,6 +163,7 @@ class SampleSaver:
                     logging.info(
                         f"Input tensor hres shape {self.data_batch.x_in_hres[idx_sample].shape}"
                     )
+
                     y_pred = self.interface.predict_step(
                         self.data_batch.x_in[idx_sample].clone().to(self.device),
                         self.data_batch.x_in_hres[idx_sample].clone().to(self.device),

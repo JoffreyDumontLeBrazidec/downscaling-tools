@@ -65,9 +65,10 @@ class DownscalingDatasetProcessor:
         }
 
         ds_sfc = ekd.from_source("mars", sfc_request).to_xarray(squeeze=False)
-        ds_sfc = ds_sfc.squeeze(dim="levtype", drop=True)
+        print("ML predictions ds_sfc", ds_sfc)
+        ds_sfc = ds_sfc.squeeze(dim="level_type", drop=True)
         ds_pl = ekd.from_source("mars", pl_request).to_xarray(squeeze=False)
-        ds_pl = ds_pl.squeeze(dim="levtype", drop=True)
+        ds_pl = ds_pl.squeeze(dim="level_type", drop=True)
 
         self.ds = xr.merge([ds_sfc, ds_pl])
 
@@ -88,10 +89,11 @@ class DownscalingDatasetProcessor:
                 "Please ensure the grid size is either 421120 or 6599680."
             )
 
-        ds_pred["z_500"] = ds_pred.z.sel(levelist=500).drop_vars("levelist")
-        ds_pred["u_850"] = ds_pred.u.sel(levelist=850).drop_vars("levelist")
-        ds_pred["v_850"] = ds_pred.v.sel(levelist=850).drop_vars("levelist")
-        ds_pred["t_850"] = ds_pred.t.sel(levelist=850).drop_vars("levelist")
+        print("ML predictions ds_pred", ds_pred)
+        ds_pred["z_500"] = ds_pred.z.sel(level=500).drop_vars("level")
+        ds_pred["u_850"] = ds_pred.u.sel(level=850).drop_vars("level")
+        ds_pred["v_850"] = ds_pred.v.sel(level=850).drop_vars("level")
+        ds_pred["t_850"] = ds_pred.t.sel(level=850).drop_vars("level")
         ds_pred["lon_hres"] = ((ds_pred.lon_hres + 180) % 360) - 180
         if "lon_lres" in ds_pred:
             ds_pred["lon_lres"] = ((ds_pred.lon_lres + 180) % 360) - 180
@@ -123,7 +125,7 @@ class DownscalingDatasetProcessor:
                 "sp",
                 "10u",
                 "10v",
-                "levelist",
+                "level",
             ]
         )
         for var in ds_pred.variables.values():

@@ -2034,3 +2034,144 @@
 2025-11-25 19:40:50,798 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
 2025-11-25 19:41:24,155 - INFO - Predicting sample 19, Current GPU memory usage: 3.32 GB
 2025-11-25 19:41:24,155 - INFO - Sample 19: Predicting member 0
+2025-11-27 11:09:37,260 - INFO - Checkpoint directory: /home/ecm5702/scratch/aifs/checkpoint/
+2025-11-27 11:09:37,260 - INFO - Running checkpoint: anemoi-by_epoch-epoch_286-step_663544.ckpt
+2025-11-27 11:09:37,287 - INFO - Preparing configs ...
+2025-11-27 11:09:39,660 - INFO - Prepending current user directory (/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference) to the search path.
+2025-11-27 11:09:39,660 - INFO - Search path is now: [provider=anemoi-cwd-searchpath-plugin, path=/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference, provider=hydra, path=pkg://hydra.conf, provider=main, path=/home/ecm5702/dev/anemoi-config]
+2025-11-27 11:09:42,217 - INFO - Preparing datamodule ...
+2025-11-27 11:09:59,103 - INFO - Predicting sample 0, Current GPU memory usage: 1.17 GB
+2025-11-27 11:09:59,104 - INFO - Sample 0: Predicting member 0
+2025-11-27 11:09:59,104 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-11-27 11:09:59,104 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-11-27 11:10:32,852 - INFO - Sample 0: Predicting member 1
+2025-11-27 11:10:32,852 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-11-27 11:10:32,852 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-11-27 11:11:06,223 - INFO - Predicting sample 1, Current GPU memory usage: 1.50 GB
+2025-11-27 11:11:06,223 - INFO - Sample 1: Predicting member 0
+2025-11-27 11:11:06,223 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-11-27 11:11:06,223 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-11-27 11:11:39,590 - INFO - Sample 1: Predicting member 1
+2025-11-27 11:11:39,590 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-11-27 11:11:39,590 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-11-27 11:12:24,488 - INFO - Predictions saved at /home/ecm5702/scratch/aifs/checkpoint/b4187af3064c426e805e83747b9f879d/predictions.nc
+2025-11-27 11:12:25,105 - INFO - Removing existing PDF at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf
+2025-11-27 11:12:25,106 - INFO - Plotting region amazon_forest
+2025-11-27 11:12:25,211 - INFO - Sample 0: Plotting
+2025-11-27 11:12:40,734 - INFO - Sample 1: Plotting
+2025-11-27 11:12:55,630 - INFO - Plotting region european_arctic
+2025-11-27 11:12:55,654 - INFO - Sample 0: Plotting
+2025-11-27 11:13:06,329 - INFO - Sample 1: Plotting
+2025-11-27 11:13:17,442 - INFO - Plotting region himalayas
+2025-11-27 11:13:17,466 - INFO - Sample 0: Plotting
+2025-11-27 11:13:26,815 - INFO - Sample 1: Plotting
+2025-11-27 11:13:35,704 - INFO - Plotting region rocky_mountains
+2025-11-27 11:13:35,728 - INFO - Sample 0: Plotting
+2025-11-27 11:13:43,378 - INFO - Sample 1: Plotting
+2025-11-27 11:13:50,802 - INFO - Plotting region west_sahara
+2025-11-27 11:13:50,825 - INFO - Sample 0: Plotting
+2025-11-27 11:13:59,517 - INFO - Sample 1: Plotting
+2025-11-27 11:14:08,742 - INFO - Plotting region pyrenees_alpes
+2025-11-27 11:14:08,766 - INFO - Sample 0: Plotting
+2025-11-27 11:14:13,946 - INFO - Sample 1: Plotting
+2025-11-27 11:14:18,725 - INFO - Plotting region eastern_us
+2025-11-27 11:14:18,749 - INFO - Sample 0: Plotting
+2025-11-27 11:14:28,321 - INFO - Sample 1: Plotting
+2025-11-27 11:14:37,894 - INFO - Plotting region central_africa
+2025-11-27 11:14:37,918 - INFO - Sample 0: Plotting
+2025-11-27 11:14:50,001 - INFO - Sample 1: Plotting
+2025-11-27 11:15:10,914 - INFO - Plot saved successfully at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf
+2025-12-09 15:24:19,513 - INFO - Checkpoint directory: /home/ecm5702/scratch/aifs/checkpoint/
+2025-12-09 15:24:19,513 - INFO - Running checkpoint: anemoi-by_epoch-epoch_286-step_663544.ckpt
+2025-12-09 15:24:19,540 - INFO - Preparing configs ...
+2025-12-09 15:24:21,742 - INFO - Prepending current user directory (/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference) to the search path.
+2025-12-09 15:24:21,742 - INFO - Search path is now: [provider=anemoi-cwd-searchpath-plugin, path=/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference, provider=hydra, path=pkg://hydra.conf, provider=main, path=/home/ecm5702/dev/anemoi-config]
+2025-12-09 15:24:22,227 - INFO - Preparing datamodule ...
+2025-12-09 15:24:34,185 - INFO - Predicting sample 0, Current GPU memory usage: 1.17 GB
+2025-12-09 15:24:34,185 - INFO - Sample 0: Predicting member 0
+2025-12-09 15:24:34,185 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:24:34,185 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:25:09,894 - INFO - Sample 0: Predicting member 1
+2025-12-09 15:25:09,894 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:25:09,894 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:25:43,246 - INFO - Predicting sample 1, Current GPU memory usage: 1.50 GB
+2025-12-09 15:25:43,246 - INFO - Sample 1: Predicting member 0
+2025-12-09 15:25:43,246 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:25:43,246 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:26:16,610 - INFO - Sample 1: Predicting member 1
+2025-12-09 15:26:16,610 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:26:16,610 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:27:02,836 - INFO - Predictions saved at /home/ecm5702/scratch/aifs/checkpoint/b4187af3064c426e805e83747b9f879d/predictions.nc
+2025-12-09 15:27:03,624 - INFO - Removing existing PDF at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf
+2025-12-09 15:27:03,626 - INFO - Plotting region amazon_forest
+2025-12-09 15:27:03,681 - INFO - Sample 0: Plotting
+2025-12-09 15:27:21,261 - INFO - Sample 1: Plotting
+2025-12-09 15:27:38,440 - INFO - Plotting region european_arctic
+2025-12-09 15:27:38,483 - INFO - Sample 0: Plotting
+2025-12-09 15:27:51,150 - INFO - Sample 1: Plotting
+2025-12-09 15:28:04,507 - INFO - Plotting region himalayas
+2025-12-09 15:28:04,551 - INFO - Sample 0: Plotting
+2025-12-09 15:28:15,798 - INFO - Sample 1: Plotting
+2025-12-09 15:28:26,971 - INFO - Plotting region rocky_mountains
+2025-12-09 15:28:27,013 - INFO - Sample 0: Plotting
+2025-12-09 15:28:35,559 - INFO - Sample 1: Plotting
+2025-12-09 15:28:44,692 - INFO - Plotting region west_sahara
+2025-12-09 15:28:44,735 - INFO - Sample 0: Plotting
+2025-12-09 15:28:55,649 - INFO - Sample 1: Plotting
+2025-12-09 15:29:06,820 - INFO - Plotting region pyrenees_alpes
+2025-12-09 15:29:06,862 - INFO - Sample 0: Plotting
+2025-12-09 15:29:12,590 - INFO - Sample 1: Plotting
+2025-12-09 15:29:18,777 - INFO - Plotting region eastern_us
+2025-12-09 15:29:18,820 - INFO - Sample 0: Plotting
+2025-12-09 15:29:30,217 - INFO - Sample 1: Plotting
+2025-12-09 15:29:41,051 - INFO - Plotting region central_africa
+2025-12-09 15:29:41,094 - INFO - Sample 0: Plotting
+2025-12-09 15:29:55,718 - INFO - Sample 1: Plotting
+2025-12-09 15:30:18,087 - INFO - Plot saved successfully at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf
+2025-12-09 15:30:53,805 - INFO - Checkpoint directory: /home/ecm5702/scratch/aifs/checkpoint/
+2025-12-09 15:30:53,806 - INFO - Running checkpoint: anemoi-by_epoch-epoch_339-step_786080.ckpt
+2025-12-09 15:30:53,832 - INFO - Preparing configs ...
+2025-12-09 15:30:56,077 - INFO - Prepending current user directory (/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference) to the search path.
+2025-12-09 15:30:56,078 - INFO - Search path is now: [provider=anemoi-cwd-searchpath-plugin, path=/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/manual_inference, provider=hydra, path=pkg://hydra.conf, provider=main, path=/home/ecm5702/dev/anemoi-config]
+2025-12-09 15:30:56,496 - INFO - Preparing datamodule ...
+2025-12-09 15:31:12,746 - INFO - Predicting sample 0, Current GPU memory usage: 1.17 GB
+2025-12-09 15:31:12,747 - INFO - Sample 0: Predicting member 0
+2025-12-09 15:31:12,747 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:31:12,747 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:31:46,055 - INFO - Sample 0: Predicting member 1
+2025-12-09 15:31:46,056 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:31:46,056 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:32:19,100 - INFO - Predicting sample 1, Current GPU memory usage: 1.50 GB
+2025-12-09 15:32:19,101 - INFO - Sample 1: Predicting member 0
+2025-12-09 15:32:19,101 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:32:19,101 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:32:52,148 - INFO - Sample 1: Predicting member 1
+2025-12-09 15:32:52,148 - INFO - Input tensor lres shape torch.Size([1, 1, 40320, 68])
+2025-12-09 15:32:52,148 - INFO - Input tensor hres shape torch.Size([1, 1, 421120, 11])
+2025-12-09 15:33:37,282 - INFO - Predictions saved at /home/ecm5702/scratch/aifs/checkpoint/b4187af3064c426e805e83747b9f879d/predictions.nc
+2025-12-09 15:33:38,488 - INFO - Removing existing PDF at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf
+2025-12-09 15:33:38,489 - INFO - Plotting region amazon_forest
+2025-12-09 15:33:38,735 - INFO - Sample 0: Plotting
+2025-12-09 15:33:54,472 - INFO - Sample 1: Plotting
+2025-12-09 15:34:09,443 - INFO - Plotting region european_arctic
+2025-12-09 15:34:09,467 - INFO - Sample 0: Plotting
+2025-12-09 15:34:20,175 - INFO - Sample 1: Plotting
+2025-12-09 15:34:31,319 - INFO - Plotting region himalayas
+2025-12-09 15:34:31,343 - INFO - Sample 0: Plotting
+2025-12-09 15:34:40,732 - INFO - Sample 1: Plotting
+2025-12-09 15:34:49,996 - INFO - Plotting region rocky_mountains
+2025-12-09 15:34:50,020 - INFO - Sample 0: Plotting
+2025-12-09 15:34:57,160 - INFO - Sample 1: Plotting
+2025-12-09 15:35:04,726 - INFO - Plotting region west_sahara
+2025-12-09 15:35:04,750 - INFO - Sample 0: Plotting
+2025-12-09 15:35:13,865 - INFO - Sample 1: Plotting
+2025-12-09 15:35:23,083 - INFO - Plotting region pyrenees_alpes
+2025-12-09 15:35:23,107 - INFO - Sample 0: Plotting
+2025-12-09 15:35:27,876 - INFO - Sample 1: Plotting
+2025-12-09 15:35:32,976 - INFO - Plotting region eastern_us
+2025-12-09 15:35:33,000 - INFO - Sample 0: Plotting
+2025-12-09 15:35:42,449 - INFO - Sample 1: Plotting
+2025-12-09 15:35:51,550 - INFO - Plotting region central_africa
+2025-12-09 15:35:51,574 - INFO - Sample 0: Plotting
+2025-12-09 15:36:04,059 - INFO - Sample 1: Plotting
+2025-12-09 15:36:24,315 - INFO - Plot saved successfully at /home/ecm5702/scratch/aifs/checkpoint//b4187af3064c426e805e83747b9f879d/all_regions_plots.pdf

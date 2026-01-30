@@ -1,0 +1,26 @@
+#!/bin/bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+#SBATCH --time=01:00:00
+#SBATCH --output=/home/ecm5702/dev/outputs/region_plotting/region_plotting-%j.out
+
+
+set -eux
+
+EXPVER="iz2q"
+PLOT_DATES=20230802
+step=24/120
+#low_res_reference_grib="eefo_reference_o96.grib"
+#high_res_reference_grib="enfo_reference_o320.grib"
+low_res_reference_grib="eefo_reference_o96-early-august.grib"
+high_res_reference_grib="enfo_reference_o320-early-august.grib"
+
+
+# Plot local area plots
+module load python3/3.11.10-01
+
+source /home/ecm5702/dev/.ds-dyn/bin/activate
+echo "Plotting local areas..."
+#echo "python /home/ecm5702/dev/inference/post_prepml/plot_local_areas.py --expver ${EXPVER} --date ${PLOT_DATES} --low_res_reference_grib ${low_res_reference_grib} --high_res_reference_grib ${high_res_reference_grib}"
+python /home/ecm5702/dev/post_prepml/region_plotting/plot_regions.py --expver ${EXPVER} --date ${PLOT_DATES} --low_res_reference_grib ${low_res_reference_grib} --high_res_reference_grib ${high_res_reference_grib} --step ${step} 

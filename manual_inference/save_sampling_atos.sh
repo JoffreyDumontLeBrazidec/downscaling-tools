@@ -1,13 +1,13 @@
 #!/bin/bash
 
 #SBATCH --nodes=1
-#SBATCH --time=02:30:00
+#SBATCH --time=00:30:00
 #SBATCH --gpus-per-node=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=256G
 #SBATCH --output=/home/ecm5702/dev/outputs/manual_inference_job_outputs/%j.out
-#SBATCH --qos=ng
+#SBATCH --qos=dg
 
 set -eux
 cd /home/ecm5702/dev/downscaling-tools/manual_inference
@@ -29,10 +29,10 @@ export HPC="atos"
 
 inference="save_sampling.py"
 
-name_exp="7c4f11f30ece4c7487e6a8e70302d6a3"
-name_ckpt="anemoi-by_epoch-epoch_009-step_185120.ckpt"
-N_members=1
-N_samples=20
+name_exp="b4187af3064c426e805e83747b9f879d"
+name_ckpt="anemoi-by_epoch-epoch_339-step_786080.ckpt"
+N_members=2
+N_samples=2
 idx=150
 num_steps=40
 sigma_max=88
@@ -48,4 +48,4 @@ srun --export=ALL,HPC python $inference \
   --N_members $N_members \
   --num_steps=$num_steps \
   --N_samples $N_samples \
-  --n_checkpoints 10
+#  --n_checkpoints 10
