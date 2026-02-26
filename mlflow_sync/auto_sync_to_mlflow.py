@@ -5,15 +5,11 @@ from datetime import datetime, timedelta
 
 class MLFlowAutoSyncer:
     def __init__(self, HPC, days=3):
-        logging.info(
-            "Initializing MLFlowAutoSyncer with HPC: %s and days: %d", HPC, days
-        )
+        logging.info("Initializing MLFlowAutoSyncer with HPC: %s and days: %d", HPC, days)
         if HPC == "atos":
             self.root = Path("/home/ecm5702/scratch/aifs/logs/mlflow")
         elif HPC == "leo":
-            self.root = Path(
-                "/leonardo_work/DestE_340_25/output/jdumontl/downscaling/logs/mlflow"
-            )
+            self.root = Path("/leonardo_work/DestE_340_25/output/jdumontl/downscaling/logs/mlflow")
         else:
             raise ValueError(f"Unknown HPC: {HPC}")
         self.cutoff = time.time() - days * 86400
@@ -48,10 +44,7 @@ class MLFlowAutoSyncer:
             for d in dirs:
                 if self.rx.match(d):
                     p = Path(root, d)
-                    if (
-                        self._dir_non_empty(p)
-                        and self._dir_latest_mtime(p) >= self.cutoff
-                    ):
+                    if self._dir_non_empty(p) and self._dir_latest_mtime(p) >= self.cutoff:
                         logging.info("Recent run found: %s", d)
                         runs.add(d)
         logging.info("Total recent runs found: %d", len(runs))
@@ -81,6 +74,6 @@ class MLFlowAutoSyncer:
 
 if __name__ == "__main__":
     HPC = os.environ.get("HPC")
-    days = int(os.environ.get("DAYS", "3"))
+    days = int(os.environ.get("DAYS", "2"))
     s = MLFlowAutoSyncer(HPC, days)
     s.sync(s.find_recent_runs())

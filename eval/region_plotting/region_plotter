@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+#SBATCH --time=01:00:00
+#SBATCH --output=/home/ecm5702/dev/outputs/region_plotting/region_plotting-%j.out
+
+
+set -eux
+
+EXPVER="j24v"
+PLOT_DATES=20230802
+step=24/120
+#low_res_reference_grib="eefo_reference_o96.grib"
+#high_res_reference_grib="enfo_reference_o320.grib"
+low_res_reference_grib="eefo_reference_o96-early-august.grib"
+high_res_reference_grib="enfo_reference_o320-early-august.grib"
+
+
+
+source /home/ecm5702/dev/.ds-dyn/bin/activate
+echo "Plotting local areas..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/downscaling-tools" ]]; then
+    PROJECT_ROOT="${SLURM_SUBMIT_DIR}/downscaling-tools"
+else
+    PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+fi
+export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+
+if [[ -f "${SCRIPT_DIR}/plot_regions.py" ]]; then
+    PLOT_SCRIPT="${SCRIPT_DIR}/plot_regions.py"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/downscaling-tools/eval/region_plotting/plot_regions.py" ]]; then
+    PLOT_SCRIPT="${SLURM_SUBMIT_DIR}/downscaling-tools/eval/region_plotting/plot_regions.py"
+else
+    PLOT_SCRIPT="/home/ecm5702/dev/downscaling-tools/eval/region_plotting/plot_regions.py"
+fi
+
+python "${PLOT_SCRIPT}" --expver ${EXPVER} --date ${PLOT_DATES} --low_res_reference_grib ${low_res_reference_grib} --high_res_reference_grib ${high_res_reference_grib} --step ${step}
