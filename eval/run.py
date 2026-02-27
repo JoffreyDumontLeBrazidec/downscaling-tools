@@ -11,6 +11,9 @@ from typing import Any
 
 DEFAULT_EVAL_ROOT = "/home/ecm5702/perm/eval"
 DEFAULT_CKPT_ROOT = "/home/ecm5702/scratch/aifs/checkpoint"
+DEFAULT_EXTRA_ARGS_JSON = (
+    '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun","S_max":1000.0}'
+)
 
 
 def _sanitize_name(name: str) -> str:
@@ -260,7 +263,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ckpt.add_argument("--ckpt-root", default=DEFAULT_CKPT_ROOT)
     p_ckpt.add_argument("--device", default="cuda")
     p_ckpt.add_argument("--validation-frequency", default="50h")
-    p_ckpt.add_argument("--extra-args-json", default="")
+    p_ckpt.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
     p_ckpt.add_argument("--bundle-nc", default="", help="If set, run prediction from bundle.")
     p_ckpt.add_argument("--batch-index", type=int, default=0)
     p_ckpt.add_argument("--idx", type=int, default=0)

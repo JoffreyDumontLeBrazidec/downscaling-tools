@@ -60,6 +60,10 @@ grid = args.grid
 class_ = args.class_
 expver = args.expver
 database = args.database
+oro_interp_postproc = (
+    "orography_correction:"
+    f"class=od,number=1,stream=enfo,type=pf,step=0,expver=0001,date=2024-01-01,grid={grid},database=off"
+)
 
 
 date1 = first_reference_date
@@ -161,7 +165,7 @@ def observations_surface(DATETIME, preproc, numbers):
     if len(parameters_without_precip) > 0:
         compute(
             reference=surfaceobservations(),
-            interpolation_postprocessor="orography_correction:class=od,number=1,stream=enfo,type=pf,step=0,expver=0001,date=2024-01-01,grid=O320,database=off",
+            interpolation_postprocessor=oro_interp_postproc,
             forecast=forecast_quaver,
             specifics=specifics(
                 parameter=parameters_without_precip,
@@ -212,7 +216,7 @@ def observations_surface(DATETIME, preproc, numbers):
         if len(parameters_without_precip) > 0:
             compute(
                 reference=surfaceobservations(climatology=stationclimatology()),
-                interpolation_postprocessor="orography_correction:class=od,number=1,stream=enfo,type=pf,step=0,expver=0001,date=2024-01-01,grid=O320,database=off",
+                interpolation_postprocessor=oro_interp_postproc,
                 forecast=forecast_quaver,
                 specifics=specifics(
                     parameter=parameters_without_precip,

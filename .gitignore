@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Legacy generated eval scripts (new flow writes under /home/ecm5702/perm/eval/<run>/jobs)
+eval/jobs/generated/

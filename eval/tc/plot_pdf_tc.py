@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 DIR_DATA_BASE = "/home/ecm5702/hpcperm/data/tc"
 
 
-def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "") -> str:
-    exp_key = f"ENFO_O320_{expver}"
+def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str = "ENFO_O320") -> str:
+    exp_key = f"{exp_prefix}_{expver}"
     exp_labels = {exp_key: expver}
     list_ml_exps = [exp_key]
     events_to_run = {
@@ -59,11 +59,16 @@ def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "") -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot TC normalized PDFs for all configured events.")
-    parser.add_argument("--expver", default="j24v", help="ML expver (without ENFO_O320_ prefix).")
+    parser.add_argument("--expver", default="j24v", help="ML expver (prefix configured by --exp-prefix).")
     parser.add_argument("--outdir", default="/home/ecm5702/dev", help="Output directory for combined PDF.")
     parser.add_argument("--out-name", default="", help="Optional output PDF filename.")
+    parser.add_argument(
+        "--exp-prefix",
+        default="ENFO_O320",
+        help="Prefix for ML TC GRIB ids (e.g. ENFO_O320 or ENFO_O1280).",
+    )
     args = parser.parse_args()
-    run_tc_pdf(expver=args.expver, outdir=args.outdir, out_name=args.out_name)
+    run_tc_pdf(expver=args.expver, outdir=args.outdir, out_name=args.out_name, exp_prefix=args.exp_prefix)
 
 
 if __name__ == "__main__":

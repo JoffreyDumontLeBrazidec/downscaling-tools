@@ -6,6 +6,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 from scipy.sparse import load_npz
 from pathlib import Path
+from dataclasses import asdict, is_dataclass
 
 
 class ObjectFromCheckpointLoader:
@@ -16,8 +17,12 @@ class ObjectFromCheckpointLoader:
         self.checkpoint, self.config_checkpoint = get_checkpoint(
             dir_exp, name_exp, name_ckpt
         )
-        self.config_for_datamodule = instantiate_config()
-        # self.config_checkpoint = adapt_config_hpc(self.config_checkpoint, self.config)
+        # Keep checkpoint-native data/dataloader settings, only adapt local paths.
+        local_paths_config = instantiate_config()
+        self.config_checkpoint = adapt_config_hpc(
+            self.config_checkpoint, local_paths_config
+        )
+        self.config_for_datamodule = to_omegaconf(self.config_checkpoint)
 
     def load(self):
         map_location = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -75,6 +80,32 @@ def instantiate_config(
     initialize_config_dir(config_dir=anemoi_config_dir, job_name="compose_config")
     config = compose(config_name=config_name)
     return config
+
+
+def _coerce_to_container(obj):
+    if OmegaConf.is_config(obj):
+        return OmegaConf.to_container(obj, resolve=False)
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, (dict, list, tuple)):
+        return obj
+    if hasattr(obj, "__dict__"):
+        return {
+            k: v
+            for k, v in vars(obj).items()
+            if not k.startswith("_")
+        }
+    return obj
+
+
+def to_omegaconf(obj):
+    if OmegaConf.is_config(obj):
+        return obj
+    return OmegaConf.create(_coerce_to_container(obj))
 
 
 def get_datamodule(config, graph_data):

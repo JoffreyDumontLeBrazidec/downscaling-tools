@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage:
+  $(basename "$0") --ckpt-id <CKPT_ID> [--run-id <RUN_ID>] [extra autopilot args]
+
+If --run-id is omitted, one is generated as: manual_<4 random alphanumeric chars>.
+If --run-id is provided and does not start with manual_, it is normalized to manual_<RUN_ID>.
+
+Examples:
+  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f
+  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id manual_abcd
+  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id abcd   # normalized to manual_abcd
+  # 9km/heavy checkpoints (recommended): 4 GPUs
+  $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g --predict-gpus 4 --predict-mem 768G --predict-cpus 32
+  # QoS guidance: ng for short tests, dg for longer runs
+  $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g_test --predict-qos ng --predict-time 00:20:00 --predict-gpus 4 --predict-mem 768G --predict-cpus 32
+  $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g_full --predict-qos dg --predict-time 02:00:00 --predict-gpus 4 --predict-mem 768G --predict-cpus 32
+EOF
+}
+
+RUN_ID=""
+CKPT_ID=""
+EXTRA_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run-id)
+      RUN_ID="${2:-}"
+      shift 2
+      ;;
+    --ckpt-id)
+      CKPT_ID="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      EXTRA_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "${CKPT_ID}" ]]; then
+  echo "--ckpt-id is required" >&2
+  usage
+  exit 2
+fi
+
+if [[ -z "${RUN_ID}" ]]; then
+  RAND="$(tr -dc 'a-z0-9' </dev/urandom | head -c 4 || true)"
+  if [[ ${#RAND} -ne 4 ]]; then
+    RAND="$(date +%s | tail -c 5)"
+  fi
+  RUN_ID="manual_${RAND}"
+elif [[ "${RUN_ID}" != manual_* ]]; then
+  RUN_ID="manual_${RUN_ID}"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"${SCRIPT_DIR}/codex_eval" --run-id "${RUN_ID}" --ckpt-id "${CKPT_ID}" "${EXTRA_ARGS[@]}"

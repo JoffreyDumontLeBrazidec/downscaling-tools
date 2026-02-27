@@ -14,7 +14,7 @@ If `--out` is not set, predictions are written to:
 python -m manual_inference.prediction.predict from-dataloader \
   --name-ckpt <exp_or_ckpt> \
   --idx 0 --n-samples 1 --members 0 \
-  --extra-args-json '{"num_steps":20,"sigma_max":80.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
+  --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
 ```
 
 2. From input bundle (preferred for MARS data):
@@ -22,7 +22,7 @@ python -m manual_inference.prediction.predict from-dataloader \
 python -m manual_inference.prediction.predict from-bundle \
   --name-ckpt <exp_or_ckpt> \
   --bundle-nc /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc \
-  --extra-args-json '{"num_steps":20,"sigma_max":80.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
+  --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
 ```
 
 3. Build bundle (GRIB → bundle), if you need it:

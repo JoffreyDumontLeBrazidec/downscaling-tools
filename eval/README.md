@@ -9,6 +9,16 @@ Use the orchestration CLI:
 python -m eval.run <subcommand> [args]
 ```
 
+For background full-suite orchestration with retries and auto-monitoring, use:
+```bash
+/home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval --expver <EXPVER>
+```
+
+Predictions + eval flow (from checkpoint):
+```bash
+/home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval --run-id <RUN_ID> --ckpt-id <CKPT_ID>
+```
+
 All artifacts are stored under:
 `/home/ecm5702/perm/eval/<run_name>/`
 

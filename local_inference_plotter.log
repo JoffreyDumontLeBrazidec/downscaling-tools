@@ -1,0 +1,15 @@
+2026-02-27 15:51:42,090 - INFO - Saving region plots for sanity_predictions_20230827_step024
+2026-02-27 15:51:42,091 - INFO - Plotting region amazon_forest
+2026-02-27 16:05:16,267 - INFO - Saving region plots for sanity_regioncheck_20230826_step024
+2026-02-27 16:05:16,267 - INFO - Plotting region amazon_forest
+2026-02-27 16:05:27,145 - INFO - Plotting region european_arctic
+2026-02-27 16:05:35,030 - INFO - Plotting region himalayas
+2026-02-27 16:05:41,570 - INFO - Plotting region rocky_mountains
+2026-02-27 16:05:50,543 - INFO - Plotting region west_sahara
+2026-02-27 16:05:57,280 - INFO - Plotting region pyrenees_alpes
+2026-02-27 16:06:00,957 - INFO - Plotting region eastern_us
+2026-02-27 16:06:08,020 - INFO - Plotting region central_africa
+2026-02-27 16:06:19,952 - INFO - Plot saved successfully at /home/ecm5702/perm/eval/manual_o320r2/eval/sanity_regioncheck_20230826_step024/all_regions_plots.pdf
+2026-02-27 17:12:02,183 - INFO - Saving custom O1280 region plots for o1280_3c54794f_agstyle_evalcheck_full_20260227
+2026-02-27 17:12:02,187 - INFO - Plotting custom O1280 region tibet_karakoram [33.5, 41.5, 79.5, 91.5]
+2026-02-27 17:12:21,955 - INFO - Plotting custom O1280 region andes_central [-37.5, -29.5, -75.5, -63.5]
