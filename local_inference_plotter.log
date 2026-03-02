@@ -13,3 +13,9 @@
 2026-02-27 17:12:02,183 - INFO - Saving custom O1280 region plots for o1280_3c54794f_agstyle_evalcheck_full_20260227
 2026-02-27 17:12:02,187 - INFO - Plotting custom O1280 region tibet_karakoram [33.5, 41.5, 79.5, 91.5]
 2026-02-27 17:12:21,955 - INFO - Plotting custom O1280 region andes_central [-37.5, -29.5, -75.5, -63.5]
+2026-02-27 17:12:41,652 - INFO - Plotting custom O1280 region greenland_south_tip [58.5, 66.5, -54.5, -42.5]
+2026-02-27 17:12:54,074 - INFO - Plotting custom O1280 region horn_of_africa [5.5, 13.5, 35.5, 47.5]
+2026-02-27 17:13:19,927 - INFO - Plotting custom O1280 region iran_zagros [31.5, 39.5, 46.5, 58.5]
+2026-02-27 17:13:39,224 - INFO - Plotting custom O1280 region rockies_wyoming [40.5, 48.5, -113.5, -101.5]
+2026-02-27 17:13:56,077 - INFO - Plotting custom O1280 region himalayas_west [31.5, 39.5, 64.5, 76.5]
+2026-02-27 17:14:15,122 - INFO - Plotting custom O1280 region new_zealand_north [-38.5, -30.5, 168.5, 180.5]

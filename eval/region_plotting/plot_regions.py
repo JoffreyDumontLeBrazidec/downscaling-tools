@@ -7,13 +7,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
-from anemoi.training.diagnostics.local_inference.plot_predictions import (
-    LocalInferencePlotter,
-)
-from anemoi.training.diagnostics.local_inference.plots import get_region_ds, plot_x_y
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 
+from eval.region_plotting.local_plotting import LocalInferencePlotter, get_region_ds, plot_x_y
 from manual_inference.data import DownscalingDatasetProcessor
 
 LOG = logging.getLogger(__name__)
@@ -48,7 +45,13 @@ def _safe_datetime_str(value) -> str:
 
 
 def _sample_meta_title(ds_region: xr.Dataset, region_name: str, sample_idx: int) -> str:
-    parts = [f"{region_name}", f"sample_idx={sample_idx}"]
+    parts = [f"{region_name}", f"sample_pos={sample_idx}"]
+    if "sample" in ds_region.coords:
+        try:
+            sample_id = int(np.asarray(ds_region["sample"].isel(sample=sample_idx).values).item())
+            parts.append(f"sample_id={sample_id}")
+        except Exception:
+            pass
     if "date" in ds_region and "sample" in ds_region["date"].dims:
         date_val = ds_region["date"].isel(sample=sample_idx).values
         date_str = _safe_datetime_str(date_val)

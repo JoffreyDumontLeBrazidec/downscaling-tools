@@ -1,0 +1,91 @@
+# Eval Agent Playbook (Parallel Bundle)
+
+Use this as the default when a user asks to evaluate a run.
+
+## Required Behavior
+
+- Launch independent eval components in parallel.
+- Keep local plotting to one representative date (5 lead times) unless the user asks for all dates.
+- Use short quaver windows (5 days) by default.
+- Record all submitted jobs and monitor commands in `in_progress/tasks/<task>.md`.
+
+## A) Predictions Run (`run-id`) - Eval Only
+
+Assumes predictions already exist at:
+`/home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_*.nc`
+
+1) One-date local plots (5 files, example date `20230826`):
+
+```bash
+cat > /tmp/eval_one_date_<RUN_ID>.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=e5_<RUN_ID>_d20230826
+#SBATCH --qos=nf
+#SBATCH --time=03:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --output=/home/ecm5702/perm/eval/<RUN_ID>/logs/eval5_20230826_<RUN_ID>_%j.out
+set -euo pipefail
+source /home/ecm5702/dev/.ds-dyn/bin/activate
+export PYTHONPATH="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools:${PYTHONPATH:-}"
+cd /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools
+count=0
+for f in /home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_20230826_step*.nc; do
+  [ -f "$f" ] || continue
+  base=$(basename "$f" .nc)
+  python -m eval.run --eval-root /home/ecm5702/perm/eval/<RUN_ID>/eval_one_date predictions --predictions-nc "$f" --run-name "$base"
+  count=$((count+1))
+  echo "evaluated ${count} file(s): $f"
+done
+if [ "$count" -ne 5 ]; then
+  echo "Expected 5 prediction files for 20230826 but evaluated $count" >&2
+  exit 3
+fi
+EOF
+sbatch /tmp/eval_one_date_<RUN_ID>.sbatch
+```
+
+2) TC plots in parallel:
+
+```bash
+sbatch --job-name=tcplot_<RUN_ID> --qos=nf --time=02:00:00 --cpus-per-task=4 --mem=32G \
+  --output=/home/ecm5702/perm/eval/<RUN_ID>/logs/tc_plot_<RUN_ID>_%j.out \
+  --wrap='set -euo pipefail; source /home/ecm5702/dev/.ds-dyn/bin/activate; module unload ifs || true; module load ecmwf-toolbox; export PYTHONPATH="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools:${PYTHONPATH:-}"; cd /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools; python -m eval.tc.plot_members_tc --expver 0001 --outdir /home/ecm5702/perm/eval/<RUN_ID>; python -m eval.tc.plot_pdf_tc --expver 0001 --outdir /home/ecm5702/perm/eval/<RUN_ID> --out-name tc_normed_pdfs_all_events_<RUN_ID>.pdf --exp-prefix ENFO_O320'
+```
+
+3) Reference spectra generation in parallel:
+
+```bash
+sbatch --export=ALL,TARGETS=enfo_o1280,eefo_o320,DATE_RANGE=20230826/to/20230827/by/1,STEPS=144,NUMBERS=1/2,DATE_START=2023-08-26,DATE_END=2023-08-27,STEP_LIST=144,NUMBERS_LIST=1,2 \
+  /home/ecm5702/dev/post_prepml/spectra/generate_reference_spectra.sbatch
+```
+
+## B) Expver Run (Full Eval Family)
+
+Use existing launcher and let it submit components in parallel:
+
+```bash
+/home/ecm5702/dev/downscaling-tools/eval/jobs/launch_full_eval_suite.sh --expver <EXPVER>
+```
+
+Recommended short-window flags:
+
+```bash
+/home/ecm5702/dev/downscaling-tools/eval/jobs/launch_full_eval_suite.sh \
+  --expver <EXPVER> \
+  --quaver-first-date 20230826 \
+  --quaver-last-date 20230830 \
+  --spectra-date 20230826/to/20230830/by/1
+```
+
+## Monitoring
+
+```bash
+squeue -j <JOB1>,<JOB2>,<JOB3>
+sacct -j <JOB1>,<JOB2>,<JOB3> --format=JobID,JobName%30,QOS,State,ExitCode,Elapsed,Timelimit,NodeList,Reason -n -P
+```
+
+## Notes
+
+- If a previous all-dates eval job is running and user requests one-date-only local plots, cancel the broader job and replace it with one-date eval-only submission.
+- For checkpoint mode (`python -m eval.run checkpoint ...`), keep sigma evaluator enabled unless the user explicitly asks to skip.

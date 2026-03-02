@@ -19,7 +19,8 @@ def test_sample_meta_title_includes_indices_and_dates():
     )
     title = mod._sample_meta_title(ds, "tibet_karakoram", 0)
     assert "tibet_karakoram" in title
-    assert "sample_idx=0" in title
+    assert "sample_pos=0" in title
+    assert "sample_id=0" in title
     assert "date=2026-02-27 00:00" in title
     assert "init=2026-02-26 00:00" in title
     assert "lead_h=24" in title
