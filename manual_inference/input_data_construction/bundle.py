@@ -242,6 +242,81 @@ def fill_inputs_from_bundle(
     )
 
 
+def extract_target_from_bundle(
+    bundle_nc: str | Path,
+    weather_states: Sequence[str],
+) -> tuple[np.ndarray | None, int]:
+    """Return optional high-res target truth from bundle as [point_hres, weather_state].
+
+    Supported variable naming in bundle:
+    - point fields: `target_hres_<name>` (also `out_hres_<name>`, `y_hres_<name>`)
+    - level fields: `target_hres_<base>` with level-like coord (`target_level`/`level`/`isobaricInhPa`)
+      where weather state names use `<base>_<level>` (e.g. `t_850`).
+    """
+    bundle = _open_bundle_dataset(bundle_nc)
+    try:
+        n_points = int(bundle.sizes["point_hres"])
+        y = np.full((n_points, len(weather_states)), np.nan, dtype=np.float32)
+        found_channels = 0
+        prefixes = ("target_hres_", "out_hres_", "y_hres_")
+
+        for i, name in enumerate(weather_states):
+            base, level = split_level_channel(name)
+            candidates: list[str] = []
+            for pref in prefixes:
+                candidates.append(f"{pref}{name}")
+                candidates.append(f"{pref}{base}")
+
+            channel = None
+            for var_name in candidates:
+                if var_name not in bundle:
+                    continue
+                da = bundle[var_name]
+                if level is not None:
+                    selected = False
+                    for lev_name in ("target_level", "level", "isobaricInhPa"):
+                        if lev_name in da.coords:
+                            levels = np.asarray(da[lev_name].values).astype(int).tolist()
+                            if int(level) not in levels:
+                                break
+                            da = da.sel({lev_name: int(level)})
+                            selected = True
+                            break
+                    if not selected and any(n in da.coords for n in ("target_level", "level", "isobaricInhPa")):
+                        continue
+
+                ok = True
+                for dim in list(da.dims):
+                    if dim == "point_hres":
+                        continue
+                    if da.sizes[dim] != 1:
+                        ok = False
+                        break
+                    da = da.isel({dim: 0})
+                if not ok:
+                    continue
+
+                vals = np.asarray(da.values, dtype=np.float32).reshape(-1)
+                if vals.size != n_points:
+                    continue
+                channel = vals
+                break
+
+            if channel is None:
+                continue
+            y[:, i] = channel
+            found_channels += 1
+
+        if found_channels == 0:
+            return None, 0
+        return y, found_channels
+    finally:
+        try:
+            bundle.close()
+        except Exception:
+            pass
+
+
 def _to_1d_points(da: xr.DataArray) -> np.ndarray:
     da = da.copy()
     for dim in list(da.dims):
@@ -329,6 +404,8 @@ def build_input_bundle_from_grib(
     step_hours: int | None = None,
     member: int | None = None,
     out_zarr: str | Path | None = None,
+    target_sfc_grib: str | Path | None = None,
+    target_pl_grib: str | Path | None = None,
 ) -> Path:
     import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
 
@@ -391,7 +468,51 @@ def build_input_bundle_from_grib(
             continue
         data_vars[dst] = ("point_hres", _to_1d_points(ds_hres[src]))
 
+    target_level_coord: np.ndarray | None = None
+    if target_sfc_grib:
+        ds_target_sfc = ekd.from_source("file", str(target_sfc_grib)).to_xarray(engine="cfgrib")
+        ds_target_sfc = _select_step(ds_target_sfc, step_hours)
+        ds_target_sfc = _select_member(ds_target_sfc, member, allow_missing=True)
+        target_map_sfc = {
+            "u10": "target_hres_10u",
+            "v10": "target_hres_10v",
+            "d2m": "target_hres_2d",
+            "t2m": "target_hres_2t",
+            "msl": "target_hres_msl",
+            "skt": "target_hres_skt",
+            "sp": "target_hres_sp",
+            "tcw": "target_hres_tcw",
+        }
+        for src, dst in target_map_sfc.items():
+            if src not in ds_target_sfc:
+                continue
+            vals = _to_1d_points(ds_target_sfc[src])
+            if vals.size != lat_hres.size:
+                raise ValueError(
+                    f"Target SFC field {src} point count {vals.size} != point_hres {lat_hres.size}"
+                )
+            data_vars[dst] = ("point_hres", vals)
+
+    if target_pl_grib:
+        ds_target_pl = ekd.from_source("file", str(target_pl_grib)).to_xarray(engine="cfgrib")
+        ds_target_pl = _select_step(ds_target_pl, step_hours)
+        ds_target_pl = _select_member(ds_target_pl, member, allow_missing=True)
+        level_coord_target = _get_pl_level_coord(ds_target_pl)
+        target_levels = np.asarray(ds_target_pl[level_coord_target].values, dtype=np.int32).reshape(-1)
+        target_level_coord = target_levels
+        for var in ("q", "t", "u", "v", "w", "z"):
+            if var not in ds_target_pl:
+                continue
+            vals = _to_2d_level_points(ds_target_pl[var])
+            if vals.shape[1] != lat_hres.size:
+                raise ValueError(
+                    f"Target PL field {var} point count {vals.shape[1]} != point_hres {lat_hres.size}"
+                )
+            data_vars[f"target_hres_{var}"] = (("target_level", "point_hres"), vals)
+
     bundle = xr.Dataset(data_vars=data_vars, coords=coords)
+    if target_level_coord is not None:
+        bundle = bundle.assign_coords(target_level=target_level_coord)
     valid_time = (
         str(np.asarray(ds_sfc["valid_time"].values).squeeze())
         if "valid_time" in ds_sfc
@@ -401,8 +522,13 @@ def build_input_bundle_from_grib(
     bundle.attrs["source_lres_sfc"] = str(lres_sfc_grib)
     bundle.attrs["source_lres_pl"] = str(lres_pl_grib)
     bundle.attrs["source_hres"] = str(hres_grib)
+    if target_sfc_grib:
+        bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
+    if target_pl_grib:
+        bundle.attrs["source_target_pl"] = str(target_pl_grib)
     bundle.attrs["description"] = (
-        "Combined low-res + high-res feature inputs for local inference."
+        "Combined low-res + high-res feature inputs for local inference. "
+        "Optional target_hres_* fields may be included for truth-aware evaluation."
     )
     if step_hours is not None:
         bundle.attrs["step_hours"] = int(step_hours)
@@ -438,6 +564,16 @@ def main() -> None:
     parser.add_argument("--lres-sfc-grib", required=True)
     parser.add_argument("--lres-pl-grib", required=True)
     parser.add_argument("--hres-grib", required=True)
+    parser.add_argument(
+        "--target-sfc-grib",
+        default="",
+        help="Optional high-res surface GRIB containing target/truth fields to store in bundle.",
+    )
+    parser.add_argument(
+        "--target-pl-grib",
+        default="",
+        help="Optional high-res pressure-level GRIB containing target/truth fields to store in bundle.",
+    )
     parser.add_argument("--out", default="")
     parser.add_argument(
         "--out-zarr",
@@ -478,6 +614,8 @@ def main() -> None:
         step_hours=args.step_hours,
         member=args.member,
         out_zarr=args.out_zarr or None,
+        target_sfc_grib=args.target_sfc_grib or None,
+        target_pl_grib=args.target_pl_grib or None,
     )
     print(f"Saved bundle: {out}")
 

@@ -1,6 +1,7 @@
 import logging
 import os
 import argparse
+import json
 
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
@@ -24,7 +25,9 @@ DIR_DATA_BASE = "/home/ecm5702/hpcperm/data/tc"
 def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str = "ENFO_O320") -> str:
     exp_key = f"{exp_prefix}_{expver}"
     exp_labels = {exp_key: expver}
-    list_ml_exps = [exp_key]
+    # ip6y is always plotted as a fixed reference in tc_pdf_plot.py.
+    # Avoid plotting it twice if user asks for expver=ip6y.
+    list_ml_exps = [] if exp_key == "ENFO_O320_ip6y" else [exp_key]
     events_to_run = {
         "dora": list_ml_exps,
         "hilary": list_ml_exps,
@@ -37,23 +40,36 @@ def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str 
     if not out_name:
         out_name = f"tc_normed_pdfs_all_events_{expver}.pdf"
     out_pdf = os.path.join(outdir, out_name)
+    out_stats = os.path.join(outdir, f"{os.path.splitext(out_name)[0]}.stats.json")
+    all_stats: dict[str, object] = {
+        "expver": expver,
+        "exp_prefix": exp_prefix,
+        "pdf_file": out_pdf,
+        "events": {},
+    }
 
     with PdfPages(out_pdf) as pdf:
         for event_name, ml_exps in events_to_run.items():
             cfg = EVENTS[event_name]
             logger.info("Running event=%s with ML=%s", event_name, ml_exps)
-            fig = plot_event(
+            fig, event_stats = plot_event(
                 cfg,
                 dir_data_base=DIR_DATA_BASE,
                 out_path="unused",
                 include_ml=ml_exps,
                 exclude_ml=None,
                 exp_labels=exp_labels,
+                return_stats=True,
             )
             pdf.savefig(fig, dpi=300)
             plt.close(fig)
+            all_stats["events"][event_name] = event_stats
+
+    with open(out_stats, "w", encoding="utf-8") as f:
+        json.dump(all_stats, f, indent=2, sort_keys=True)
 
     logger.info("Saved combined PDF to %s", out_pdf)
+    logger.info("Saved TC stats JSON to %s", out_stats)
     return out_pdf
 
 

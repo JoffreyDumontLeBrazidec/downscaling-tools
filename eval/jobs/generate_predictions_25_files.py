@@ -113,6 +113,7 @@ def main() -> None:
     for date in dates:
         for step in steps:
             x_members: list[np.ndarray] = []
+            y_members: list[np.ndarray | None] = []
             yp_members: list[np.ndarray] = []
             source_paths: list[str] = []
 
@@ -120,7 +121,7 @@ def main() -> None:
             for m in members:
                 key = BundleKey(date, step, m)
                 bundle_path = bundle_map[key]
-                x, _y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, _dates = _predict_from_bundle(
+                x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, _dates = _predict_from_bundle(
                     inference_model=inference_model,
                     datamodule=datamodule,
                     device=args.device,
@@ -131,15 +132,24 @@ def main() -> None:
                     model_comm_group=model_comm_group,
                 )
                 x_members.append(x[0])
+                y_members.append(None if y is None else y[0, 0])
                 yp_members.append(y_pred[0, 0])
                 source_paths.append(str(bundle_path))
 
             x_stack = np.stack(x_members, axis=0)[None, ...]
+            y_stack = None
+            if any(y is not None for y in y_members):
+                template = next(y for y in y_members if y is not None)
+                y_filled = [
+                    (y if y is not None else np.full_like(template, np.nan, dtype=np.float32))
+                    for y in y_members
+                ]
+                y_stack = np.stack(y_filled, axis=0)[None, ...]
             yp_stack = np.stack(yp_members, axis=0)[None, ...]
 
             ds = build_predictions_dataset(
                 x=x_stack,
-                y=None,
+                y=y_stack,
                 y_pred=yp_stack,
                 lon_lres=lon_lres,
                 lat_lres=lat_lres,
@@ -158,6 +168,8 @@ def main() -> None:
             ds.attrs["checkpoint_path"] = ckpt_path
             ds.attrs["sampling_config_json"] = args.extra_args_json
             ds.attrs["validation_frequency"] = args.validation_frequency
+            ds.attrs["target_members_with_data"] = int(sum(y is not None for y in y_members))
+            ds.attrs["target_weather_state_count"] = int(len(weather_states))
 
             out_path = out_dir / f"predictions_{date}_step{step:03d}.nc"
             if out_path.exists():

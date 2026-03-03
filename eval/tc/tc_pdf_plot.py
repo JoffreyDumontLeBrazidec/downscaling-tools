@@ -13,6 +13,7 @@ Changes vs your current version:
 import os
 import warnings
 import logging
+import math
 from typing import Iterable, Optional
 
 import numpy as np
@@ -37,6 +38,8 @@ warnings.filterwarnings(
 
 sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 np.seterr(divide="ignore", invalid="ignore")
+IDALIA_EXTREME_MSLP_RANGE = (980.0, 990.0)
+IDALIA_EXTREME_WIND_MIN = 25.0
 
 
 # -------------------------
@@ -111,6 +114,111 @@ def _safe_ratio(num: np.ndarray, den: np.ndarray) -> np.ndarray:
     return out
 
 
+def _summary_stats(x: np.ndarray) -> dict:
+    vals = _finite_1d(x)
+    if vals.size == 0:
+        return {"n": 0}
+    return {
+        "n": int(vals.size),
+        "mean": float(np.mean(vals)),
+        "std": float(np.std(vals)),
+        "min": float(np.min(vals)),
+        "max": float(np.max(vals)),
+        "q01": float(np.quantile(vals, 0.01)),
+        "q05": float(np.quantile(vals, 0.05)),
+        "q50": float(np.quantile(vals, 0.50)),
+        "q95": float(np.quantile(vals, 0.95)),
+        "q99": float(np.quantile(vals, 0.99)),
+    }
+
+
+def _distribution_metrics(hist_ref: np.ndarray, hist_other: np.ndarray, bin_width: float) -> dict:
+    # Convert densities to probability masses to compute robust divergences.
+    pref = np.asarray(hist_ref, dtype=np.float64) * bin_width
+    poth = np.asarray(hist_other, dtype=np.float64) * bin_width
+    sref = float(np.sum(pref))
+    soth = float(np.sum(poth))
+    if sref <= 0.0 or soth <= 0.0:
+        return {
+            "l1_mass": math.nan,
+            "total_variation": math.nan,
+            "rmse_density": math.nan,
+            "max_abs_density_diff": math.nan,
+            "ks_hist": math.nan,
+            "kl_ref_to_other": math.nan,
+            "kl_other_to_ref": math.nan,
+            "js_divergence": math.nan,
+        }
+    pref /= sref
+    poth /= soth
+    diff = pref - poth
+    l1 = float(np.sum(np.abs(diff)))
+    tv = 0.5 * l1
+    max_abs_density_diff = float(np.max(np.abs(hist_ref - hist_other)))
+    rmse_density = float(np.sqrt(np.mean((hist_ref - hist_other) ** 2)))
+    cdf_ref = np.cumsum(pref)
+    cdf_oth = np.cumsum(poth)
+    ks_hist = float(np.max(np.abs(cdf_ref - cdf_oth)))
+    eps = 1e-12
+    kl_ref_to_other = float(np.sum(pref * np.log((pref + eps) / (poth + eps))))
+    kl_other_to_ref = float(np.sum(poth * np.log((poth + eps) / (pref + eps))))
+    m = 0.5 * (pref + poth)
+    js = 0.5 * (
+        np.sum(pref * np.log((pref + eps) / (m + eps)))
+        + np.sum(poth * np.log((poth + eps) / (m + eps)))
+    )
+    return {
+        "l1_mass": l1,
+        "total_variation": tv,
+        "rmse_density": rmse_density,
+        "max_abs_density_diff": max_abs_density_diff,
+        "ks_hist": ks_hist,
+        "kl_ref_to_other": kl_ref_to_other,
+        "kl_other_to_ref": kl_other_to_ref,
+        "js_divergence": float(js),
+    }
+
+
+def _ratio_metrics(hist_ref: np.ndarray, hist_other: np.ndarray) -> dict:
+    ratio = _safe_ratio(hist_other, hist_ref)
+    valid = np.isfinite(ratio)
+    if not np.any(valid):
+        return {
+            "valid_bins": 0,
+            "ratio_mean": math.nan,
+            "ratio_std": math.nan,
+            "ratio_min": math.nan,
+            "ratio_max": math.nan,
+            "ratio_mae_to_1": math.nan,
+            "ratio_max_abs_dev_from_1": math.nan,
+        }
+    r = ratio[valid]
+    return {
+        "valid_bins": int(r.size),
+        "ratio_mean": float(np.mean(r)),
+        "ratio_std": float(np.std(r)),
+        "ratio_min": float(np.min(r)),
+        "ratio_max": float(np.max(r)),
+        "ratio_mae_to_1": float(np.mean(np.abs(r - 1.0))),
+        "ratio_max_abs_dev_from_1": float(np.max(np.abs(r - 1.0))),
+    }
+
+
+def _extreme_fraction_mslp(vals: np.ndarray, mslp_range: tuple[float, float]) -> float:
+    v = _finite_1d(vals)
+    if v.size == 0:
+        return math.nan
+    lo, hi = mslp_range
+    return float(np.mean((v >= lo) & (v <= hi)))
+
+
+def _extreme_fraction_wind(vals: np.ndarray, wind_gt: float) -> float:
+    v = _finite_1d(vals)
+    if v.size == 0:
+        return math.nan
+    return float(np.mean(v > wind_gt))
+
+
 # -------------------------
 # Main plotting
 # -------------------------
@@ -122,7 +230,8 @@ def plot_event(
     include_ml: Optional[Iterable[str]] = None,
     exclude_ml: Optional[Iterable[str]] = None,
     exp_labels: Optional[dict[str, str]] = None,
-) -> plt.Figure:
+    return_stats: bool = False,
+) -> plt.Figure | tuple[plt.Figure, dict]:
     """
     Plot per-event PDF ratios (ML + references) for:
       - MSLP (ratio vs OPER analysis)
@@ -180,12 +289,35 @@ def plot_event(
             for d in cfg.analysis_dates
         ]
     )
+    # Mandatory reference requested by workflow policy.
+    dataset_ip6y = to_xarray_from_files(
+        [
+            os.path.join(
+                dir_data,
+                f"surface_pf_ENFO_O320_ip6y_{cfg.year}{cfg.month}{d}.grib",
+            )
+            for d in cfg.dates
+        ]
+    )
 
     # --- plotting
     cmap = cm.batlow
     colors = cmap(np.linspace(0, 1, max(1, len(all_datasets))))
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    extreme_parts: dict[str, dict[str, float]] = {}
+    event_stats = {
+        "event": cfg.name,
+        "year": cfg.year,
+        "month": cfg.month,
+        "dates": list(cfg.dates),
+        "analysis_dates": list(cfg.analysis_dates),
+        "ml_exps": ml_exps,
+        "variables": {
+            "mslp_hpa": {"curves": {}},
+            "wind10m_ms": {"curves": {}},
+        },
+    }
 
     # =====================
     # MSLP
@@ -198,6 +330,13 @@ def plot_event(
     oper_min_msl, oper_max_msl = float(oper_msl.min()), float(oper_msl.max())
 
     s_oper_msl = _tail_summary(oper_msl, tail="low")
+    extreme_parts["OPER_O320_0001"] = {
+        "mslp_980_990_fraction": _extreme_fraction_mslp(oper_msl, IDALIA_EXTREME_MSLP_RANGE),
+    }
+    event_stats["variables"]["mslp_hpa"]["oper"] = {
+        "summary": _summary_stats(oper_msl),
+        "tail": s_oper_msl,
+    }
     logger.info(
         "MSLP OPER support [%.2f, %.2f] hPa | tail_index=%.3g extreme_index=%.3g",
         oper_min_msl,
@@ -226,6 +365,19 @@ def plot_event(
         )
 
         hist_exp, _ = np.histogram(vals, bins=xbins_msl, density=True)
+        event_stats["variables"]["mslp_hpa"]["curves"][exp] = {
+            "label": exp_labels.get(exp, exp),
+            "summary": _summary_stats(vals),
+            "tail": s,
+            "vs_oper": {
+                **_distribution_metrics(hist_oper_msl, hist_exp, cfg.mslp_bin_range[2]),
+                **_ratio_metrics(hist_oper_msl, hist_exp),
+            },
+        }
+        extreme_parts.setdefault(exp, {})["mslp_980_990_fraction"] = _extreme_fraction_mslp(
+            vals,
+            IDALIA_EXTREME_MSLP_RANGE,
+        )
         axs[0].plot(
             mids_msl,
             _safe_ratio(hist_exp, hist_oper_msl),
@@ -238,6 +390,18 @@ def plot_event(
     # references
     vals = _finite_1d(dataset_enfo_o320["msl"].values / 100.0)
     hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
+    event_stats["variables"]["mslp_hpa"]["curves"]["ENFO_O320_0001"] = {
+        "label": "enfo_o320",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="low"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
+            **_ratio_metrics(hist_oper_msl, hist),
+        },
+    }
+    extreme_parts["ENFO_O320_0001"] = {
+        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
+    }
     axs[0].plot(
         mids_msl,
         _safe_ratio(hist, hist_oper_msl),
@@ -249,6 +413,18 @@ def plot_event(
 
     vals = _finite_1d(dataset_eefo_o96["msl"].values / 100.0)
     hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
+    event_stats["variables"]["mslp_hpa"]["curves"]["EEFO_O96_0001"] = {
+        "label": "eefo_o96",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="low"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
+            **_ratio_metrics(hist_oper_msl, hist),
+        },
+    }
+    extreme_parts["EEFO_O96_0001"] = {
+        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
+    }
     axs[0].plot(
         mids_msl,
         _safe_ratio(hist, hist_oper_msl),
@@ -256,6 +432,28 @@ def plot_event(
         linewidth=2,
         color="red",
         label="eefo_o96",
+    )
+    vals = _finite_1d(dataset_ip6y["msl"].values / 100.0)
+    hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
+    event_stats["variables"]["mslp_hpa"]["curves"]["ENFO_O320_ip6y"] = {
+        "label": "ip6y",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="low"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
+            **_ratio_metrics(hist_oper_msl, hist),
+        },
+    }
+    extreme_parts["ENFO_O320_ip6y"] = {
+        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
+    }
+    axs[0].plot(
+        mids_msl,
+        _safe_ratio(hist, hist_oper_msl),
+        ":",
+        linewidth=2,
+        color="orange",
+        label="ip6y",
     )
 
     axs[0].plot(
@@ -285,6 +483,14 @@ def plot_event(
     oper_min_w, oper_max_w = float(oper_wind.min()), float(oper_wind.max())
 
     s_oper_w = _tail_summary(oper_wind, tail="high")
+    extreme_parts.setdefault("OPER_O320_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
+        oper_wind,
+        IDALIA_EXTREME_WIND_MIN,
+    )
+    event_stats["variables"]["wind10m_ms"]["oper"] = {
+        "summary": _summary_stats(oper_wind),
+        "tail": s_oper_w,
+    }
     logger.info(
         "WIND OPER support [%.2f, %.2f] m/s | tail_index=%.3g extreme_index=%.3g",
         oper_min_w,
@@ -318,6 +524,19 @@ def plot_event(
         )
 
         hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
+        event_stats["variables"]["wind10m_ms"]["curves"][exp] = {
+            "label": exp_labels.get(exp, exp),
+            "summary": _summary_stats(vals),
+            "tail": s,
+            "vs_oper": {
+                **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
+                **_ratio_metrics(hist_oper_wind, hist),
+            },
+        }
+        extreme_parts.setdefault(exp, {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
+            vals,
+            IDALIA_EXTREME_WIND_MIN,
+        )
         axs[1].plot(
             mids_wind,
             _safe_ratio(hist, hist_oper_wind),
@@ -332,6 +551,19 @@ def plot_event(
         np.sqrt(dataset_enfo_o320["u10"] ** 2 + dataset_enfo_o320["v10"] ** 2).values
     )
     hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
+    event_stats["variables"]["wind10m_ms"]["curves"]["ENFO_O320_0001"] = {
+        "label": "enfo_o320",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="high"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
+            **_ratio_metrics(hist_oper_wind, hist),
+        },
+    }
+    extreme_parts.setdefault("ENFO_O320_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
+        vals,
+        IDALIA_EXTREME_WIND_MIN,
+    )
     axs[1].plot(
         mids_wind,
         _safe_ratio(hist, hist_oper_wind),
@@ -345,6 +577,19 @@ def plot_event(
         np.sqrt(dataset_eefo_o96["u10"] ** 2 + dataset_eefo_o96["v10"] ** 2).values
     )
     hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
+    event_stats["variables"]["wind10m_ms"]["curves"]["EEFO_O96_0001"] = {
+        "label": "eefo_o96",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="high"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
+            **_ratio_metrics(hist_oper_wind, hist),
+        },
+    }
+    extreme_parts.setdefault("EEFO_O96_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
+        vals,
+        IDALIA_EXTREME_WIND_MIN,
+    )
     axs[1].plot(
         mids_wind,
         _safe_ratio(hist, hist_oper_wind),
@@ -352,6 +597,31 @@ def plot_event(
         linewidth=2,
         color="red",
         label="eefo_o96",
+    )
+    vals = _finite_1d(
+        np.sqrt(dataset_ip6y["u10"] ** 2 + dataset_ip6y["v10"] ** 2).values
+    )
+    hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
+    event_stats["variables"]["wind10m_ms"]["curves"]["ENFO_O320_ip6y"] = {
+        "label": "ip6y",
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail="high"),
+        "vs_oper": {
+            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
+            **_ratio_metrics(hist_oper_wind, hist),
+        },
+    }
+    extreme_parts.setdefault("ENFO_O320_ip6y", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
+        vals,
+        IDALIA_EXTREME_WIND_MIN,
+    )
+    axs[1].plot(
+        mids_wind,
+        _safe_ratio(hist, hist_oper_wind),
+        ":",
+        linewidth=2,
+        color="orange",
+        label="ip6y",
     )
 
     axs[1].plot(
@@ -370,5 +640,38 @@ def plot_event(
 
     fig.suptitle(cfg.plot_title)
     plt.tight_layout()
+    if cfg.name == "idalia":
+        rows: list[dict[str, float | str]] = []
+        for exp, part in extreme_parts.items():
+            m = part.get("mslp_980_990_fraction", math.nan)
+            w = part.get("wind_gt_25_fraction", math.nan)
+            rows.append(
+                {
+                    "exp": exp,
+                    "mslp_980_990_fraction": float(m),
+                    "wind_gt_25_fraction": float(w),
+                    "extreme_score": 0.0,
+                }
+            )
+        m_vals = [r["mslp_980_990_fraction"] for r in rows if np.isfinite(r["mslp_980_990_fraction"])]
+        w_vals = [r["wind_gt_25_fraction"] for r in rows if np.isfinite(r["wind_gt_25_fraction"])]
+        m_min, m_max = (min(m_vals), max(m_vals)) if m_vals else (math.nan, math.nan)
+        w_min, w_max = (min(w_vals), max(w_vals)) if w_vals else (math.nan, math.nan)
+        for r in rows:
+            m = r["mslp_980_990_fraction"]
+            w = r["wind_gt_25_fraction"]
+            m_norm = (m - m_min) / (m_max - m_min) if np.isfinite(m) and m_max > m_min else 0.0
+            w_norm = (w - w_min) / (w_max - w_min) if np.isfinite(w) and w_max > w_min else 0.0
+            r["extreme_score"] = 0.5 * m_norm + 0.5 * w_norm
+        rows.sort(key=lambda x: float(x["extreme_score"]), reverse=True)
+        event_stats["extreme_tail"] = {
+            "thresholds": {
+                "mslp_hpa_range": [IDALIA_EXTREME_MSLP_RANGE[0], IDALIA_EXTREME_MSLP_RANGE[1]],
+                "wind_ms_gt": IDALIA_EXTREME_WIND_MIN,
+            },
+            "rows": rows,
+        }
     logger.info("Event %s complete", cfg.name)
+    if return_stats:
+        return fig, event_stats
     return fig

@@ -19,6 +19,7 @@ from manual_inference.checkpoints import (
     to_omegaconf,
 )
 from manual_inference.input_data_construction.bundle import fill_inputs_from_bundle
+from manual_inference.input_data_construction.bundle import extract_target_from_bundle
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.utils import extract_filtered_input_from_output
 
@@ -273,9 +274,19 @@ def _predict_from_bundle(
         x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
     )
 
+    y_np = None
+    target_np, found_target_channels = extract_target_from_bundle(bundle_nc, weather_states)
+    if target_np is not None:
+        y_np = target_np[None, None, ...]
+        if found_target_channels < len(weather_states):
+            print(
+                f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
+                f"(missing channels will be NaN in y)."
+            )
+
     return (
         x_np[None, ...],
-        None,
+        y_np,
         pred_np[None, None, ...],
         lon_lres,
         lat_lres,
@@ -328,6 +339,8 @@ def main() -> None:
     p_bundle_build.add_argument("--lres-sfc-grib", required=True)
     p_bundle_build.add_argument("--lres-pl-grib", required=True)
     p_bundle_build.add_argument("--hres-grib", required=True)
+    p_bundle_build.add_argument("--target-sfc-grib", default="")
+    p_bundle_build.add_argument("--target-pl-grib", default="")
     p_bundle_build.add_argument("--out", required=True)
     p_bundle_build.add_argument("--step-hours", type=int, default=None)
     p_bundle_build.add_argument("--member", type=int, default=None)
@@ -347,6 +360,8 @@ def main() -> None:
             out_nc=args.out,
             step_hours=args.step_hours,
             member=args.member,
+            target_sfc_grib=args.target_sfc_grib or None,
+            target_pl_grib=args.target_pl_grib or None,
         )
         print(f"Saved bundle: {out}")
         return

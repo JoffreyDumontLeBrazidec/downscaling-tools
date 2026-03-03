@@ -3,6 +3,11 @@ This folder produces `predictions.nc` from a checkpoint using either:
 1. the Anemoi dataloader, or
 2. a prebuilt **input bundle** (`.nc`) made from MARS/GRIB.
 
+**Simple notebooks**
+- `manual_inference/notebooks/01_prediction_from_dataloader.ipynb`
+- `manual_inference/notebooks/02_prediction_from_bundle.ipynb`
+- `manual_inference/notebooks/03_build_bundle.ipynb`
+
 **Default Output Location**
 If `--out` is not set, predictions are written to:
 `/home/ecm5702/hpcperm/experiments/<name_exp>/predictions.nc`
@@ -31,6 +36,8 @@ python -m manual_inference.prediction.predict build-bundle \
   --lres-sfc-grib /path/lres_sfc.grib \
   --lres-pl-grib  /path/lres_pl.grib \
   --hres-grib     /path/hres_static.grib \
+  --target-sfc-grib /path/hres_target_sfc.grib \
+  --target-pl-grib  /path/hres_target_pl.grib \
   --out /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc
 ```
 
