@@ -37,6 +37,11 @@ try:
 except Exception:  # pragma: no cover
     Coastlines = None
 
+try:
+    from cartopy import crs as ccrs
+except Exception:  # pragma: no cover
+    ccrs = None
+
 
 DEFAULT_EXTRA_ARGS_JSON = (
     '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,'
@@ -441,25 +446,128 @@ def _draw_field(
     title: str,
     vmin: float,
     vmax: float,
+    tc_member_style: bool = False,
+    region_box: Sequence[float] | None = None,
+    extent_bounds: Sequence[float] | None = None,
 ):
-    scatter = ax.scatter(
-        lon,
-        lat,
-        c=field,
-        s=max(1.0, 75_000 / max(1, len(lon))),
-        vmin=vmin,
-        vmax=vmax,
-        cmap="viridis",
-        rasterized=True,
-    )
-    if Coastlines is not None:
-        Coastlines().plot_continents(ax)
+    if tc_member_style and ccrs is not None:
+        levels = np.linspace(float(vmin), float(vmax), 31)
+        scatter = ax.tricontourf(
+            lon,
+            lat,
+            field,
+            levels=levels,
+            transform=ccrs.PlateCarree(),
+            cmap="viridis",
+            vmin=float(vmin),
+            vmax=float(vmax),
+        )
+        ax.tricontour(
+            lon,
+            lat,
+            field,
+            levels=levels,
+            transform=ccrs.PlateCarree(),
+            colors="black",
+            linewidths=0.5,
+        )
+        ax.coastlines()
+        ax.grid(color="white", linestyle="--", linewidth=0.5)
+        gl = ax.gridlines(draw_labels=False, dms=True, x_inline=False, y_inline=False)
+        if extent_bounds is not None and len(extent_bounds) == 4:
+            ax.set_extent(
+                [float(extent_bounds[0]), float(extent_bounds[1]), float(extent_bounds[2]), float(extent_bounds[3])],
+                crs=ccrs.PlateCarree(),
+            )
+        elif region_box is not None and len(region_box) == 4:
+            ax.set_extent(
+                [float(region_box[2]), float(region_box[3]), float(region_box[0]), float(region_box[1])],
+                crs=ccrs.PlateCarree(),
+            )
+    else:
+        scatter = ax.scatter(
+            lon,
+            lat,
+            c=field,
+            s=max(1.0, 75_000 / max(1, len(lon))),
+            vmin=vmin,
+            vmax=vmax,
+            cmap="viridis",
+            rasterized=True,
+        )
+        if Coastlines is not None:
+            Coastlines().plot_continents(ax)
+        ax.set_xlim(float(np.nanmin(lon)), float(np.nanmax(lon)))
+        ax.set_ylim(float(np.nanmin(lat)), float(np.nanmax(lat)))
+        ax.set_aspect("auto", adjustable=None)
+        ax.set_box_aspect(1)
     ax.set_title(title)
-    ax.set_xlim(float(np.nanmin(lon)), float(np.nanmax(lon)))
-    ax.set_ylim(float(np.nanmin(lat)), float(np.nanmax(lat)))
-    ax.set_aspect("auto", adjustable=None)
-    ax.set_box_aspect(1)
     return scatter
+
+
+def _format_panel_title(
+    *,
+    base: str,
+    center_lon: float | None = None,
+    center_lat: float | None = None,
+    msl_min_hpa: float | None = None,
+    wind_max: float | None = None,
+) -> str:
+    line1 = base
+    parts: list[str] = []
+    if (center_lon is not None) and (center_lat is not None):
+        parts.append(f"c=({center_lon:.1f},{center_lat:.1f})")
+    if msl_min_hpa is not None:
+        parts.append(f"msl={msl_min_hpa:.1f}hPa")
+    if wind_max is not None:
+        parts.append(f"w={wind_max:.1f}")
+    if not parts:
+        return line1
+    return f"{line1}\n" + " ".join(parts)
+
+
+def _human_date_string(value: object) -> str:
+    try:
+        arr = np.asarray(value)
+        if np.issubdtype(arr.dtype, np.datetime64):
+            dt = arr.astype("datetime64[s]")
+            return np.datetime_as_string(dt, unit="s").replace("T", " ") + " UTC"
+        if np.issubdtype(arr.dtype, np.integer):
+            iv = int(arr.reshape(()).item())
+            # Common case in this workflow: nanoseconds since epoch.
+            if abs(iv) > 10_000_000_000:
+                dt = np.datetime64(iv, "ns").astype("datetime64[s]")
+                return np.datetime_as_string(dt, unit="s").replace("T", " ") + " UTC"
+            dt = np.datetime64(iv, "s").astype("datetime64[s]")
+            return np.datetime_as_string(dt, unit="s").replace("T", " ") + " UTC"
+        return str(arr.reshape(()).item())
+    except Exception:
+        return str(value)
+
+
+def _window_extent_within_bounds(
+    *,
+    center: float,
+    half_span: float,
+    data_min: float,
+    data_max: float,
+) -> tuple[float, float]:
+    lo = center - half_span
+    hi = center + half_span
+    target_width = 2.0 * half_span
+    if lo < data_min:
+        hi += data_min - lo
+        lo = data_min
+    if hi > data_max:
+        lo -= hi - data_max
+        hi = data_max
+    lo = max(lo, data_min)
+    hi = min(hi, data_max)
+    if (hi - lo) < target_width:
+        missing = target_width - (hi - lo)
+        lo = max(data_min, lo - 0.5 * missing)
+        hi = min(data_max, hi + 0.5 * missing)
+    return float(lo), float(hi)
 
 
 def _nearest_interp_lres_to_hres(
@@ -485,6 +593,26 @@ def _nearest_interp_lres_to_hres(
         return out
 
 
+def _panel_state_values(
+    *,
+    ds_member: xr.Dataset,
+    panel_kind: str,
+    weather_state: str,
+    sampling_step: int | None,
+) -> np.ndarray | None:
+    if weather_state not in ds_member.weather_state.values:
+        return None
+    if panel_kind == "step":
+        if sampling_step is None:
+            return None
+        return ds_member["inter_state"].sel(sampling_step=int(sampling_step), weather_state=weather_state).values
+    if panel_kind == "y_pred":
+        return ds_member["y_pred"].sel(weather_state=weather_state).values
+    if panel_kind == "y" and "y" in ds_member:
+        return ds_member["y"].sel(weather_state=weather_state).values
+    return None
+
+
 def plot_intermediate_trajectory(
     *,
     ds: xr.Dataset,
@@ -497,6 +625,17 @@ def plot_intermediate_trajectory(
     sampling_steps: Sequence[int] | None = None,
     independent_color_scales: bool = False,
     show_residuals: bool = True,
+    max_cols: int = 0,
+    center_track_mode: str = "none",
+    center_track_state: str = "",
+    center_window_deg: float = 0.0,
+    annotate_extremes: bool = False,
+    extreme_radius_deg: float = 3.0,
+    tc_member_style: bool = False,
+    stats_out: str = "",
+    panel_scale_mode: str = "percentile",
+    dpi: int = 320,
+    hide_coordinates: bool = True,
 ) -> Path:
     if "inter_state" not in ds.variables:
         raise ValueError("Dataset does not contain 'inter_state'.")
@@ -504,7 +643,8 @@ def plot_intermediate_trajectory(
         raise ValueError(f"Unknown weather_state={weather_state}")
 
     ds_region = get_region_ds(ds, region)
-    ds_sel = ds_region.sel(sample=sample, ensemble_member=member, weather_state=weather_state)
+    ds_member = ds_region.sel(sample=sample, ensemble_member=member)
+    ds_sel = ds_member.sel(weather_state=weather_state)
 
     available_steps = [int(v) for v in ds_sel.sampling_step.values]
     if sampling_steps:
@@ -515,14 +655,17 @@ def plot_intermediate_trajectory(
     if not steps:
         raise ValueError("No sampling steps selected.")
 
+    unit_scale = 0.01 if weather_state == "msl" else 1.0
+    unit_label = "hPa" if weather_state == "msl" else "native"
+
     inter_data = ds_sel["inter_state"].sel(sampling_step=steps).values
-    pred_data = ds_sel["y_pred"].values
-    truth_data = ds_sel["y"].values if "y" in ds_sel else None
+    pred_data = ds_sel["y_pred"].values * unit_scale
+    truth_data = (ds_sel["y"].values * unit_scale) if "y" in ds_sel else None
     base_data = None
     if "x" in ds_sel:
         x_vals = ds_sel["x"].values
         if x_vals.shape == pred_data.shape:
-            base_data = x_vals
+            base_data = x_vals * unit_scale
         elif (
             "grid_point_lres" in ds_sel["x"].dims
             and "lon_lres" in ds_sel
@@ -536,15 +679,28 @@ def plot_intermediate_trajectory(
                 values_lres=x_vals,
                 lon_hres=ds_sel["lon_hres"].values,
                 lat_hres=ds_sel["lat_hres"].values,
-            )
+            ) * unit_scale
 
     panel_titles: list[str] = [f"step={int(s)}" for s in steps]
-    panel_fields: list[np.ndarray] = [ds_sel["inter_state"].sel(sampling_step=s).values for s in steps]
+    panel_fields: list[np.ndarray] = [
+        ds_sel["inter_state"].sel(sampling_step=s).values * unit_scale for s in steps
+    ]
+    panel_kinds: list[tuple[str, int | None]] = [("step", int(s)) for s in steps]
     panel_titles.append("y_pred")
     panel_fields.append(pred_data)
+    panel_kinds.append(("y_pred", None))
     if truth_data is not None:
         panel_titles.append("y")
         panel_fields.append(truth_data)
+        panel_kinds.append(("y", None))
+
+    center_track_mode = str(center_track_mode).lower().strip()
+    if center_track_mode not in {"none", "min", "max"}:
+        raise ValueError("center_track_mode must be one of: none, min, max.")
+    center_enabled = center_track_mode != "none"
+    center_state = center_track_state.strip() or weather_state
+    if center_enabled and center_state not in ds_member.weather_state.values:
+        raise ValueError(f"center_track_state={center_state} is not present in weather_state.")
 
     all_fields = [f.reshape(-1) for f in panel_fields]
     global_vmin = float(np.nanmin(np.concatenate(all_fields)))
@@ -555,12 +711,25 @@ def plot_intermediate_trajectory(
     if residual_enabled:
         residual_concat = np.concatenate([rf.reshape(-1) for rf in residual_fields])
 
-    ncols = len(panel_fields)
-    nrows = 2 if residual_enabled else 1
-    fig, axs = plt.subplots(nrows, ncols, figsize=(5.1 * ncols, 5.0 * nrows), squeeze=False)
+    n_panels = len(panel_fields)
+    ncols = n_panels if max_cols <= 0 else min(max_cols, n_panels)
+    nfield_rows = (n_panels + ncols - 1) // ncols
+    nrows = nfield_rows * (2 if residual_enabled else 1)
+    subplot_kw = {"projection": ccrs.PlateCarree()} if (tc_member_style and ccrs is not None) else {}
+    fig, axs = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(4.3 * ncols, 3.9 * nrows),
+        squeeze=False,
+        subplot_kw=subplot_kw,
+    )
 
     lon = ds_sel["lon_hres"].values
     lat = ds_sel["lat_hres"].values
+
+    panel_scale_mode = str(panel_scale_mode).strip().lower()
+    if panel_scale_mode not in {"percentile", "minmax"}:
+        raise ValueError("panel_scale_mode must be one of: percentile, minmax.")
 
     if independent_color_scales:
         row0_vmin, row0_vmax = global_vmin, global_vmax
@@ -570,27 +739,156 @@ def plot_intermediate_trajectory(
         if not np.isfinite(row0_vmin) or not np.isfinite(row0_vmax) or row0_vmin == row0_vmax:
             row0_vmin, row0_vmax = global_vmin, global_vmax
 
+    used_axes = set()
+    panel_masks: list[np.ndarray] = []
     for i, field in enumerate(panel_fields):
+        mask = np.ones_like(lon, dtype=bool)
+        center_lon: float | None = None
+        center_lat: float | None = None
+        msl_min_hpa: float | None = None
+        wind_max: float | None = None
+        if center_enabled:
+            panel_kind, panel_step = panel_kinds[i]
+            center_field = _panel_state_values(
+                ds_member=ds_member,
+                panel_kind=panel_kind,
+                weather_state=center_state,
+                sampling_step=panel_step,
+            )
+            if center_field is not None:
+                center_idx = int(np.nanargmin(center_field)) if center_track_mode == "min" else int(np.nanargmax(center_field))
+                center_lon = float(lon[center_idx])
+                center_lat = float(lat[center_idx])
+                if center_window_deg > 0:
+                    local_mask = (
+                        (np.abs(lon - center_lon) <= center_window_deg)
+                        & (np.abs(lat - center_lat) <= center_window_deg)
+                    )
+                    if (not tc_member_style) and int(np.count_nonzero(local_mask)) >= 20:
+                        mask = local_mask
+
+                if annotate_extremes:
+                    radius = max(0.1, float(extreme_radius_deg))
+                    dist2 = (lon - center_lon) ** 2 + (lat - center_lat) ** 2
+                    ext_mask = dist2 <= radius**2
+                    if int(np.count_nonzero(ext_mask)) > 0:
+                        msl_vals = _panel_state_values(
+                            ds_member=ds_member,
+                            panel_kind=panel_kind,
+                            weather_state="msl",
+                            sampling_step=panel_step,
+                        )
+                        u_vals = _panel_state_values(
+                            ds_member=ds_member,
+                            panel_kind=panel_kind,
+                            weather_state="10u",
+                            sampling_step=panel_step,
+                        )
+                        v_vals = _panel_state_values(
+                            ds_member=ds_member,
+                            panel_kind=panel_kind,
+                            weather_state="10v",
+                            sampling_step=panel_step,
+                        )
+                        if msl_vals is not None:
+                            msl_min_hpa = float(np.nanmin(msl_vals[ext_mask]) * 0.01)
+                        if (u_vals is not None) and (v_vals is not None):
+                            wind = np.sqrt(np.asarray(u_vals) ** 2 + np.asarray(v_vals) ** 2)
+                            wind_max = float(np.nanmax(wind[ext_mask]))
+
+        panel_masks.append(mask)
+        field_plot = field[mask]
+        lon_plot = lon[mask]
+        lat_plot = lat[mask]
+        region_box = ds_region.attrs.get("region")
+        if (center_enabled and (center_window_deg > 0) and (center_lon is not None) and (center_lat is not None)):
+            # Keep a constant panel span around tracked center so all frames are visually comparable.
+            span = float(center_window_deg)
+            lon_lo, lon_hi = _window_extent_within_bounds(
+                center=center_lon,
+                half_span=span,
+                data_min=float(np.nanmin(lon)),
+                data_max=float(np.nanmax(lon)),
+            )
+            lat_lo, lat_hi = _window_extent_within_bounds(
+                center=center_lat,
+                half_span=span,
+                data_min=float(np.nanmin(lat)),
+                data_max=float(np.nanmax(lat)),
+            )
+            extent_bounds = [lon_lo, lon_hi, lat_lo, lat_hi]
+        elif region_box is not None and len(region_box) == 4:
+            extent_bounds = [float(region_box[2]), float(region_box[3]), float(region_box[0]), float(region_box[1])]
+        else:
+            lon_min = float(np.nanmin(lon))
+            lon_max = float(np.nanmax(lon))
+            lat_min = float(np.nanmin(lat))
+            lat_max = float(np.nanmax(lat))
+            extent_bounds = [lon_min, lon_max, lat_min, lat_max]
+        rr = i // ncols
+        cc = i % ncols
         if independent_color_scales:
-            vmin = float(np.nanpercentile(field, 1))
-            vmax = float(np.nanpercentile(field, 99))
+            if panel_scale_mode == "minmax":
+                vmin = float(np.nanmin(field))
+                vmax = float(np.nanmax(field))
+            else:
+                vmin = float(np.nanpercentile(field, 1))
+                vmax = float(np.nanpercentile(field, 99))
             if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
                 vmin, vmax = row0_vmin, row0_vmax
         else:
             vmin, vmax = row0_vmin, row0_vmax
         mappable = _draw_field(
-            axs[0, i],
-            lon,
-            lat,
-            field,
-            title=panel_titles[i],
+            axs[rr, cc],
+            lon_plot,
+            lat_plot,
+            field_plot,
+            title=_format_panel_title(
+                base=panel_titles[i],
+                center_lon=center_lon,
+                center_lat=center_lat,
+                msl_min_hpa=msl_min_hpa,
+                wind_max=wind_max,
+            ),
             vmin=vmin,
             vmax=vmax,
+            tc_member_style=bool(tc_member_style),
+            region_box=ds_region.attrs.get("region"),
+            extent_bounds=extent_bounds,
         )
-        cbar = fig.colorbar(mappable, ax=axs[0, i], orientation="vertical", pad=0.05)
-        cbar.outline.set_edgecolor("black")
-        cbar.outline.set_linewidth(1.0)
-        cbar.ax.tick_params(labelsize=10)
+        used_axes.add((rr, cc))
+        if independent_color_scales:
+            cbar = fig.colorbar(
+                mappable,
+                ax=axs[rr, cc],
+                orientation="horizontal",
+                shrink=0.62,
+                fraction=0.045,
+                pad=0.03,
+            )
+            cbar.outline.set_edgecolor("black")
+            cbar.outline.set_linewidth(1.0)
+            cbar.ax.tick_params(labelsize=8)
+            cbar.locator = ticker.MaxNLocator(nbins=4)
+            cbar.update_ticks()
+
+    if not independent_color_scales and used_axes:
+        top_axes = [axs[r, c] for (r, c) in sorted(used_axes) if r < nfield_rows]
+        if top_axes:
+            cbar_top = fig.colorbar(
+                plt.cm.ScalarMappable(cmap="viridis", norm=plt.Normalize(vmin=row0_vmin, vmax=row0_vmax)),
+                ax=top_axes,
+                orientation="horizontal",
+                fraction=0.025,
+                pad=0.04,
+                aspect=40,
+            )
+            cbar_top.outline.set_edgecolor("black")
+            cbar_top.outline.set_linewidth(1.0)
+            cbar_top.ax.tick_params(labelsize=9)
+            cbar_top.locator = ticker.MaxNLocator(nbins=5)
+            cbar_top.update_ticks()
+            cbar_top.set_label(f"{weather_state} ({unit_label})", fontsize=9)
 
     if residual_enabled:
         if independent_color_scales:
@@ -602,52 +900,188 @@ def plot_intermediate_trajectory(
                 row1_vmin, row1_vmax = float(np.nanmin(residual_concat)), float(np.nanmax(residual_concat))
 
         for i, rfield in enumerate(residual_fields):
+            mask = panel_masks[i] if i < len(panel_masks) else np.ones_like(rfield, dtype=bool)
+            rfield_plot = rfield[mask]
+            lon_plot = lon[mask]
+            lat_plot = lat[mask]
+            region_box = ds_region.attrs.get("region")
+            if region_box is not None and len(region_box) == 4:
+                extent_bounds = [float(region_box[2]), float(region_box[3]), float(region_box[0]), float(region_box[1])]
+            else:
+                lon_min = float(np.nanmin(lon))
+                lon_max = float(np.nanmax(lon))
+                lat_min = float(np.nanmin(lat))
+                lat_max = float(np.nanmax(lat))
+                extent_bounds = [lon_min, lon_max, lat_min, lat_max]
+            rr = (i // ncols) + nfield_rows
+            cc = i % ncols
             if independent_color_scales:
-                rvmin = float(np.nanpercentile(rfield, 1))
-                rvmax = float(np.nanpercentile(rfield, 99))
+                if panel_scale_mode == "minmax":
+                    rvmin = float(np.nanmin(rfield))
+                    rvmax = float(np.nanmax(rfield))
+                else:
+                    rvmin = float(np.nanpercentile(rfield, 1))
+                    rvmax = float(np.nanpercentile(rfield, 99))
                 if not np.isfinite(rvmin) or not np.isfinite(rvmax) or rvmin == rvmax:
                     rvmin, rvmax = row1_vmin, row1_vmax
             else:
                 rvmin, rvmax = row1_vmin, row1_vmax
             rmappable = _draw_field(
-                axs[1, i],
-                lon,
-                lat,
-                rfield,
-                title=f"{panel_titles[i]} - x_interp",
+                axs[rr, cc],
+                lon_plot,
+                lat_plot,
+                rfield_plot,
+                title=f"{panel_titles[i]} - x_lres_interp",
                 vmin=rvmin,
                 vmax=rvmax,
+                tc_member_style=bool(tc_member_style),
+                region_box=ds_region.attrs.get("region"),
+                extent_bounds=extent_bounds,
             )
+            used_axes.add((rr, cc))
             rmappable.set_cmap("viridis")
-            cbar = fig.colorbar(rmappable, ax=axs[1, i], orientation="vertical", pad=0.05)
-            cbar.outline.set_edgecolor("black")
-            cbar.outline.set_linewidth(1.0)
-            cbar.ax.tick_params(labelsize=10)
+            if independent_color_scales:
+                cbar = fig.colorbar(
+                    rmappable,
+                    ax=axs[rr, cc],
+                    orientation="horizontal",
+                    shrink=0.62,
+                    fraction=0.045,
+                    pad=0.03,
+                )
+                cbar.outline.set_edgecolor("black")
+                cbar.outline.set_linewidth(1.0)
+                cbar.ax.tick_params(labelsize=8)
+                cbar.locator = ticker.MaxNLocator(nbins=4)
+                cbar.update_ticks()
+
+        if not independent_color_scales:
+            bottom_axes = [axs[r, c] for (r, c) in sorted(used_axes) if r >= nfield_rows]
+            if bottom_axes:
+                cbar_bottom = fig.colorbar(
+                    plt.cm.ScalarMappable(cmap="viridis", norm=plt.Normalize(vmin=row1_vmin, vmax=row1_vmax)),
+                    ax=bottom_axes,
+                    orientation="horizontal",
+                    fraction=0.025,
+                    pad=0.04,
+                    aspect=40,
+                )
+                cbar_bottom.outline.set_edgecolor("black")
+                cbar_bottom.outline.set_linewidth(1.0)
+                cbar_bottom.ax.tick_params(labelsize=9)
+                cbar_bottom.locator = ticker.MaxNLocator(nbins=5)
+                cbar_bottom.update_ticks()
+                cbar_bottom.set_label(f"{weather_state} - x_lres_interp ({unit_label})", fontsize=9)
 
     for r in range(nrows):
         for c in range(ncols):
             ax = axs[r, c]
-            ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            ax.tick_params(axis="both", which="major", labelsize=10)
-            ax.grid(False)
+            if (r, c) not in used_axes:
+                ax.axis("off")
+                continue
+            if not tc_member_style:
+                ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
+                ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
+            if hide_coordinates:
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+            else:
+                # Keep only outer tick labels to reduce repetitive clutter.
+                is_bottom_row = r == (nrows - 1)
+                is_left_col = c == 0
+                ax.tick_params(axis="both", which="major", labelsize=9)
+                ax.tick_params(axis="x", labelbottom=is_bottom_row)
+                ax.tick_params(axis="y", labelleft=is_left_col)
             ax.patch.set_edgecolor("black")
             ax.patch.set_linewidth(2)
+            ax.set_title(ax.get_title(), fontsize=9, pad=6)
 
-    for r in range(nrows):
-        axs[r, 0].set_ylabel("Latitude (°)", fontsize=12)
-    for c in range(ncols):
-        axs[-1, c].set_xlabel("Longitude (°)", fontsize=12)
+    date_str = "na"
+    if "date" in ds_member:
+        try:
+            date_str = _human_date_string(np.asarray(ds_member["date"].values).item())
+        except Exception:
+            date_str = _human_date_string(ds_member["date"].values)
     fig.suptitle(
-        f"Intermediate diffusion states | region={region} | sample={sample} | member={member} | state={weather_state}",
-        y=1.02,
+        f"Intermediate diffusion states | {weather_state} | region={region} | sample={sample} | member={member} | date={date_str} | ref=x_lres_interp",
+        y=0.995,
+        fontsize=11,
     )
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.035, right=0.995, bottom=0.045, top=0.92, wspace=0.24, hspace=0.32)
 
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=200, bbox_inches="tight")
+    fig.savefig(out, dpi=max(120, int(dpi)), bbox_inches="tight")
     plt.close(fig)
+
+    if stats_out:
+        stats: dict[str, object] = {
+            "weather_state": weather_state,
+            "unit_label": unit_label,
+            "region": region,
+            "sample": int(sample),
+            "member": int(member),
+            "panel_stats": [],
+            "reference_stats": {},
+            "final_step_checks": {},
+        }
+
+        if base_data is not None:
+            stats["reference_stats"] = {
+                "x_lres_interp_min": float(np.nanmin(base_data)),
+                "x_lres_interp_max": float(np.nanmax(base_data)),
+                "x_lres_interp_mean": float(np.nanmean(base_data)),
+                "x_lres_interp_std": float(np.nanstd(base_data)),
+            }
+        if "x_interp" in ds_sel:
+            x_interp_vals = ds_sel["x_interp"].values
+            stats["reference_stats"] = dict(stats["reference_stats"]) if stats["reference_stats"] else {}
+            stats["reference_stats"]["x_interp_internal_min"] = float(np.nanmin(x_interp_vals))
+            stats["reference_stats"]["x_interp_internal_max"] = float(np.nanmax(x_interp_vals))
+            stats["reference_stats"]["x_interp_internal_mean"] = float(np.nanmean(x_interp_vals))
+            stats["reference_stats"]["x_interp_internal_std"] = float(np.nanstd(x_interp_vals))
+
+        panel_stats = []
+        for i, field in enumerate(panel_fields):
+            kind, step = panel_kinds[i]
+            item = {
+                "panel_title": panel_titles[i],
+                "panel_kind": kind,
+                "sampling_step": None if step is None else int(step),
+                "full_min": float(np.nanmin(field)),
+                "full_max": float(np.nanmax(field)),
+                "full_mean": float(np.nanmean(field)),
+                "full_std": float(np.nanstd(field)),
+            }
+            if residual_enabled and i < len(residual_fields):
+                rfield = residual_fields[i]
+                item["full_minus_x_lres_interp_min"] = float(np.nanmin(rfield))
+                item["full_minus_x_lres_interp_max"] = float(np.nanmax(rfield))
+                item["full_minus_x_lres_interp_mean"] = float(np.nanmean(rfield))
+                item["full_minus_x_lres_interp_std"] = float(np.nanstd(rfield))
+            panel_stats.append(item)
+        stats["panel_stats"] = panel_stats
+
+        if steps:
+            last_step = int(steps[-1])
+            last_field = ds_sel["inter_state"].sel(sampling_step=last_step).values * unit_scale
+            final_checks = {
+                "last_sampling_step": last_step,
+                "last_step_vs_y_pred_rmse": float(np.sqrt(np.nanmean((last_field - pred_data) ** 2))),
+                "last_step_vs_y_pred_max_abs": float(np.nanmax(np.abs(last_field - pred_data))),
+            }
+            if truth_data is not None:
+                final_checks["y_pred_vs_y_rmse"] = float(np.sqrt(np.nanmean((pred_data - truth_data) ** 2)))
+                final_checks["y_pred_vs_y_max_abs"] = float(np.nanmax(np.abs(pred_data - truth_data)))
+            stats["final_step_checks"] = final_checks
+
+        stats_path = Path(stats_out)
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        with stats_path.open("w", encoding="utf-8") as f:
+            json.dump(stats, f, indent=2)
+
     return out
 
 
@@ -719,6 +1153,67 @@ def _build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Disable residual row (field - x_interp).",
         )
+        p.add_argument(
+            "--max-cols",
+            type=int,
+            default=0,
+            help="Maximum number of panels per row (0 keeps all panels in one row).",
+        )
+        p.add_argument(
+            "--center-track-mode",
+            choices=["none", "min", "max"],
+            default="none",
+            help="Track center on a reference weather_state using min or max value.",
+        )
+        p.add_argument(
+            "--center-track-state",
+            default="",
+            help="Weather state used for center tracking (default: current --weather-state).",
+        )
+        p.add_argument(
+            "--center-window-deg",
+            type=float,
+            default=0.0,
+            help="If >0, crop each panel to a +/-degree window around tracked center.",
+        )
+        p.add_argument(
+            "--annotate-extremes",
+            action="store_true",
+            help="Annotate center-local MSLP minimum and wind maximum near tracked center.",
+        )
+        p.add_argument(
+            "--extreme-radius-deg",
+            type=float,
+            default=3.0,
+            help="Radius in degrees for center-local extreme diagnostics.",
+        )
+        p.add_argument(
+            "--tc-member-style",
+            action="store_true",
+            help="Use TC member map style (PlateCarree + contour overlays + gridline labels).",
+        )
+        p.add_argument(
+            "--also-region-style-out",
+            default="",
+            help="Optional second output path rendered in region_plotting-like style (non-TC style).",
+        )
+        p.add_argument(
+            "--stats-out",
+            default="",
+            help="Optional JSON path to save panel/reference/final-step statistics.",
+        )
+        p.add_argument(
+            "--panel-scale-mode",
+            choices=["percentile", "minmax"],
+            default="percentile",
+            help="Scale mode when --independent-color-scales is enabled.",
+        )
+        p.add_argument("--dpi", type=int, default=320, help="Output DPI for raster export.")
+        p.add_argument(
+            "--show-coordinates",
+            action="store_true",
+            help="Show longitude/latitude ticks and labels (default hides them for readability).",
+        )
         p.add_argument("--out", required=True, help="Output image path (png/pdf).")
 
     return parser
@@ -742,8 +1237,43 @@ def main(argv: Sequence[str] | None = None) -> None:
         sampling_steps=steps,
         independent_color_scales=bool(args.independent_color_scales),
         show_residuals=not bool(args.no_residuals),
+        max_cols=int(args.max_cols),
+        center_track_mode=str(args.center_track_mode),
+        center_track_state=str(args.center_track_state),
+        center_window_deg=float(args.center_window_deg),
+        annotate_extremes=bool(args.annotate_extremes),
+        extreme_radius_deg=float(args.extreme_radius_deg),
+        tc_member_style=bool(args.tc_member_style),
+        stats_out=str(getattr(args, "stats_out", "")),
+        panel_scale_mode=str(getattr(args, "panel_scale_mode", "percentile")),
+        dpi=int(getattr(args, "dpi", 320)),
+        hide_coordinates=not bool(getattr(args, "show_coordinates", False)),
     )
     print(f"Saved intermediate trajectory plot: {out}")
+    if str(getattr(args, "also_region_style_out", "")).strip():
+        out_region = plot_intermediate_trajectory(
+            ds=ds,
+            weather_state=args.weather_state,
+            sample=int(args.sample),
+            member=int(getattr(args, "member", 0)),
+            out_path=str(args.also_region_style_out),
+            region=args.region,
+            max_panels=int(args.max_panels),
+            sampling_steps=steps,
+            independent_color_scales=bool(args.independent_color_scales),
+            show_residuals=not bool(args.no_residuals),
+            max_cols=int(args.max_cols),
+            center_track_mode=str(args.center_track_mode),
+            center_track_state=str(args.center_track_state),
+            center_window_deg=float(args.center_window_deg),
+            annotate_extremes=bool(args.annotate_extremes),
+            extreme_radius_deg=float(args.extreme_radius_deg),
+            tc_member_style=False,
+            panel_scale_mode=str(getattr(args, "panel_scale_mode", "percentile")),
+            dpi=int(getattr(args, "dpi", 320)),
+            hide_coordinates=not bool(getattr(args, "show_coordinates", False)),
+        )
+        print(f"Saved region-style intermediate trajectory plot: {out_region}")
 
 
 if __name__ == "__main__":

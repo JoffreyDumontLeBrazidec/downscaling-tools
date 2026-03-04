@@ -71,6 +71,11 @@ def main() -> None:
         default=DEFAULT_EXTRA_ARGS_JSON,
     )
     ap.add_argument("--manifest", default="")
+    ap.add_argument(
+        "--allow-missing-target",
+        action="store_true",
+        help="Allow writing predictions even if y truth is absent in input bundles.",
+    )
     args = ap.parse_args()
 
     input_root = Path(args.input_root)
@@ -145,6 +150,11 @@ def main() -> None:
                     for y in y_members
                 ]
                 y_stack = np.stack(y_filled, axis=0)[None, ...]
+            elif not args.allow_missing_target:
+                raise SystemExit(
+                    f"No target truth (y) extracted for date={date} step={step}. "
+                    "Rebuild bundles with target_hres_* fields (or pass --allow-missing-target)."
+                )
             yp_stack = np.stack(yp_members, axis=0)[None, ...]
 
             ds = build_predictions_dataset(

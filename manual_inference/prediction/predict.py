@@ -341,6 +341,7 @@ def main() -> None:
     p_bundle_build.add_argument("--hres-grib", required=True)
     p_bundle_build.add_argument("--target-sfc-grib", default="")
     p_bundle_build.add_argument("--target-pl-grib", default="")
+    p_bundle_build.add_argument("--allow-missing-target", action="store_true")
     p_bundle_build.add_argument("--out", required=True)
     p_bundle_build.add_argument("--step-hours", type=int, default=None)
     p_bundle_build.add_argument("--member", type=int, default=None)
@@ -362,6 +363,7 @@ def main() -> None:
             member=args.member,
             target_sfc_grib=args.target_sfc_grib or None,
             target_pl_grib=args.target_pl_grib or None,
+            require_target_fields=not args.allow_missing_target,
         )
         print(f"Saved bundle: {out}")
         return

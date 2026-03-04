@@ -142,6 +142,8 @@ def get_region_ds(ds: xr.Dataset, region_box: Union[str, list[int]] = "default")
         "himalayas": [25, 40, 75, 100],
         "greatbarrier_reef": [-25, -10, 140, 155],
         "eastern_us": [25, 45, -90, -70],
+        "idalia": [10, 40, -100, -70],
+        "idalia_center": [18, 32, -92, -78],
         "central_africa": [-10, 10, 10, 30],
         "european_arctic": [-25, 0, 75, 90],
         "rocky_mountains_central": [40, 45, -115, -105],

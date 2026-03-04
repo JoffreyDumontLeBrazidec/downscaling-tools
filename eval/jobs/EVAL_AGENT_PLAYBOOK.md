@@ -19,6 +19,12 @@ Use this as the default when a user asks to evaluate a run.
   - `tc_extreme_tail_*.json`
   - `tc_normed_pdfs_*from_predictions.stats.json`
   - and return a ranked cross-experiment table (highest `extreme_score` first).
+- For all "extreme" requests, this comparison table is mandatory and must include the target run plus all other analyzed experiments discoverable in `/home/ecm5702/perm/eval`.
+- If any analyzed experiment is missing extreme stats, agents must recalculate the missing stats first, then regenerate the ranked comparison table before final reporting.
+- Final response must always include:
+  - the absolute path to the generated comparison table file,
+  - the absolute output directory path(s),
+  - experiment config used for the target run (checkpoint/run_id, sampling params, script/command, job id(s)).
 - Record all submitted jobs and monitor commands in `in_progress/tasks/<task>.md`.
 
 ## A) Predictions Run (`run-id`) - Eval Only
@@ -131,10 +137,27 @@ Extract/merge rows and rank by `extreme_score` descending. Include per-row:
 - `extreme_score`
 - `mslp_980_990_fraction`
 - `wind_gt_25_fraction`
+- thresholds used for each row
 - source file path
+
+Write the ranked table to a stable artifact path (for example `/home/ecm5702/perm/eval/tc_extreme_scoreboard_all_exps.tsv` and/or `<RUN_DIR>/tc_extreme_scoreboard_all_exps.tsv`) and share that path.
+
+## Clean Readable Scoreboards (VS Code Friendly)
+
+Regenerate the two markdown scoreboards:
+
+```bash
+python /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/generate_clean_scoreboards.py
+```
+
+Outputs:
+- `/home/ecm5702/perm/eval/scoreboards/prepml_all_tc_reproduction_scoreboard.md`
+- `/home/ecm5702/perm/eval/scoreboards/global_extreme_scoreboard.md`
 
 ## Notes
 
+- MARS/FDB retrieval requests can fail transiently or produce incomplete staging. If a TC retrieve job fails or expected files are missing, restart the retrieve step and then rerun dependent TC plotting jobs.
+- Before launching TC plots, verify staged inputs exist under `/home/ecm5702/hpcperm/data/tc/<event>/surface_pf_ENFO_O320_<EXPVER>_YYYYMMDD.grib`.
 - If a previous all-dates eval job is running and user requests one-date-only local plots, cancel the broader job and replace it with one-date eval-only submission.
 - For checkpoint mode (`python -m eval.run checkpoint ...`), keep sigma evaluator enabled unless the user explicitly asks to skip.
 - Do not use `python -m eval.tc.plot_pdf_tc --expver 0001` as the ML curve for run-id evaluations; this duplicates the ENFO reference and is not run-specific.

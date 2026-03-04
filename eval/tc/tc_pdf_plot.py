@@ -651,6 +651,9 @@ def plot_event(
                     "mslp_980_990_fraction": float(m),
                     "wind_gt_25_fraction": float(w),
                     "extreme_score": 0.0,
+                    "extreme_repro_score": 0.0,
+                    "mslp_repro_ratio_vs_ip6y": math.nan,
+                    "wind_repro_ratio_vs_ip6y": math.nan,
                 }
             )
         m_vals = [r["mslp_980_990_fraction"] for r in rows if np.isfinite(r["mslp_980_990_fraction"])]
@@ -663,11 +666,39 @@ def plot_event(
             m_norm = (m - m_min) / (m_max - m_min) if np.isfinite(m) and m_max > m_min else 0.0
             w_norm = (w - w_min) / (w_max - w_min) if np.isfinite(w) and w_max > w_min else 0.0
             r["extreme_score"] = 0.5 * m_norm + 0.5 * w_norm
-        rows.sort(key=lambda x: float(x["extreme_score"]), reverse=True)
+
+        # Reference-consistent reproduction score:
+        # 1.0 means matching ip6y extreme occurrence rates exactly for both pressure/wind.
+        # Falls smoothly as ratios diverge (under- or over-production are both penalized).
+        ref_exp = "ENFO_O320_ip6y"
+        ref_row = next((r for r in rows if r["exp"] == ref_exp), None)
+        eps = 1e-12
+        if ref_row is not None:
+            ref_m = float(ref_row["mslp_980_990_fraction"])
+            ref_w = float(ref_row["wind_gt_25_fraction"])
+            for r in rows:
+                m = float(r["mslp_980_990_fraction"])
+                w = float(r["wind_gt_25_fraction"])
+                m_ratio = (m + eps) / (ref_m + eps) if np.isfinite(m) else math.nan
+                w_ratio = (w + eps) / (ref_w + eps) if np.isfinite(w) else math.nan
+                m_repro = math.exp(-abs(math.log(max(m_ratio, eps)))) if np.isfinite(m_ratio) else 0.0
+                w_repro = math.exp(-abs(math.log(max(w_ratio, eps)))) if np.isfinite(w_ratio) else 0.0
+                r["mslp_repro_ratio_vs_ip6y"] = m_ratio
+                r["wind_repro_ratio_vs_ip6y"] = w_ratio
+                r["extreme_repro_score"] = 0.5 * m_repro + 0.5 * w_repro
+
+        rows.sort(
+            key=lambda x: (
+                float(x.get("extreme_repro_score", 0.0)),
+                float(x.get("extreme_score", 0.0)),
+            ),
+            reverse=True,
+        )
         event_stats["extreme_tail"] = {
             "thresholds": {
                 "mslp_hpa_range": [IDALIA_EXTREME_MSLP_RANGE[0], IDALIA_EXTREME_MSLP_RANGE[1]],
                 "wind_ms_gt": IDALIA_EXTREME_WIND_MIN,
+                "reference_exp_for_repro_score": ref_exp,
             },
             "rows": rows,
         }

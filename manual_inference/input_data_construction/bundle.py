@@ -29,6 +29,45 @@ def split_level_channel(name: str) -> tuple[str, int | None]:
     return match.group(1), int(match.group(2))
 
 
+def _infer_target_gribs_from_hres(
+    hres_grib: str | Path,
+) -> tuple[Path | None, Path | None]:
+    """Try to infer colocated target GRIB paths from hres source file name.
+
+    Example:
+      enfo_o320_0001_date20230829_time0000_step24to120_sfc.grib
+    -> enfo_o320_0001_date20230829_time0000_mem1to10_step24to120_sfc_y.grib
+       enfo_o320_0001_date20230829_time0000_mem1to10_step24to120_pl_y.grib
+    """
+    hres_path = Path(hres_grib)
+    name = hres_path.name
+    if not name.startswith("enfo_o320_") or "_sfc.grib" not in name:
+        return None, None
+
+    m = re.match(
+        r"^(enfo_o320_[^_]+_date\d{8}_time\d{4})_(step[^_]+)_sfc\.grib$",
+        name,
+    )
+    if m is None:
+        return None, None
+    prefix = m.group(1)
+    step_token = m.group(2)
+    sfc_y = f"{prefix}_mem1to10_{step_token}_sfc_y.grib"
+    pl_y = f"{prefix}_mem1to10_{step_token}_pl_y.grib"
+
+    candidates = [
+        hres_path.with_name(sfc_y),
+        hres_path.parent.parent / sfc_y,
+    ]
+    sfc_path = next((p for p in candidates if p.exists()), None)
+    candidates = [
+        hres_path.with_name(pl_y),
+        hres_path.parent.parent / pl_y,
+    ]
+    pl_path = next((p for p in candidates if p.exists()), None)
+    return sfc_path, pl_path
+
+
 def parse_valid_time(value, fallback) -> datetime:
     raw = value if value is not None else fallback
     if raw is None or str(raw).strip().lower() == "unknown":
@@ -406,6 +445,7 @@ def build_input_bundle_from_grib(
     out_zarr: str | Path | None = None,
     target_sfc_grib: str | Path | None = None,
     target_pl_grib: str | Path | None = None,
+    require_target_fields: bool = True,
 ) -> Path:
     import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
 
@@ -468,6 +508,12 @@ def build_input_bundle_from_grib(
             continue
         data_vars[dst] = ("point_hres", _to_1d_points(ds_hres[src]))
 
+    auto_sfc, auto_pl = (None, None)
+    if target_sfc_grib is None and target_pl_grib is None:
+        auto_sfc, auto_pl = _infer_target_gribs_from_hres(hres_grib)
+    target_sfc_grib = target_sfc_grib or auto_sfc
+    target_pl_grib = target_pl_grib or auto_pl
+
     target_level_coord: np.ndarray | None = None
     if target_sfc_grib:
         ds_target_sfc = ekd.from_source("file", str(target_sfc_grib)).to_xarray(engine="cfgrib")
@@ -509,6 +555,14 @@ def build_input_bundle_from_grib(
                     f"Target PL field {var} point count {vals.shape[1]} != point_hres {lat_hres.size}"
                 )
             data_vars[f"target_hres_{var}"] = (("target_level", "point_hres"), vals)
+
+    if require_target_fields:
+        has_target = any(name.startswith("target_hres_") for name in data_vars)
+        if not has_target:
+            raise ValueError(
+                "No target_hres_* fields were added to bundle. "
+                "Provide --target-sfc-grib/--target-pl-grib or place matching enfo_o320 *_y.grib files near hres input."
+            )
 
     bundle = xr.Dataset(data_vars=data_vars, coords=coords)
     if target_level_coord is not None:
@@ -574,6 +628,11 @@ def main() -> None:
         default="",
         help="Optional high-res pressure-level GRIB containing target/truth fields to store in bundle.",
     )
+    parser.add_argument(
+        "--allow-missing-target",
+        action="store_true",
+        help="Allow creating bundle without target_hres_* fields.",
+    )
     parser.add_argument("--out", default="")
     parser.add_argument(
         "--out-zarr",
@@ -616,6 +675,7 @@ def main() -> None:
         out_zarr=args.out_zarr or None,
         target_sfc_grib=args.target_sfc_grib or None,
         target_pl_grib=args.target_pl_grib or None,
+        require_target_fields=not args.allow_missing_target,
     )
     print(f"Saved bundle: {out}")
 

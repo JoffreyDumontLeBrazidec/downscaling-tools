@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -79,6 +80,7 @@ def test_plot_intermediate_trajectory_writes_file(tmp_path: Path):
     )
 
     out = tmp_path / "intermediate_plot.png"
+    stats = tmp_path / "intermediate_plot_stats.json"
     result = plot_intermediate_trajectory(
         ds=ds,
         weather_state="2t",
@@ -87,10 +89,16 @@ def test_plot_intermediate_trajectory_writes_file(tmp_path: Path):
         out_path=str(out),
         region="default",
         max_panels=4,
+        stats_out=str(stats),
     )
 
     assert result == out
     assert out.exists()
+    assert stats.exists()
+    with stats.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    assert payload["weather_state"] == "2t"
+    assert "final_step_checks" in payload
 
 
 def test_plot_intermediate_trajectory_with_sparse_step_coords(tmp_path: Path):
