@@ -15,8 +15,11 @@ import xarray as xr
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.predict import (
     DEFAULT_EXTRA_ARGS_JSON,
+    _get_parallel_info,
+    _init_model_comm_group,
     _load_objects,
     _predict_from_bundle,
+    _resolve_device,
 )
 
 BUNDLE_RE = re.compile(
@@ -60,6 +63,7 @@ def main() -> None:
     ap.add_argument("--ckpt-id", required=True)
     ap.add_argument("--ckpt-root", default="/home/ecm5702/scratch/aifs/checkpoint")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--num-gpus-per-model", type=int, default=1)
     ap.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
     ap.add_argument("--validation-frequency", default="50h")
     ap.add_argument("--batch-index", type=int, default=0)
@@ -102,14 +106,23 @@ def main() -> None:
     if args.device == "cuda" and not torch.cuda.is_available():
         args.device = "cpu"
 
-    model_comm_group = None
+    global_rank, local_rank, world_size = _get_parallel_info()
+    device = _resolve_device(args.device, local_rank)
+    if str(device).startswith("cuda"):
+        torch.cuda.set_device(int(str(device).split(":")[1]))
+    if args.num_gpus_per_model > 1 and world_size != args.num_gpus_per_model:
+        raise SystemExit(
+            f"Expected world_size={args.num_gpus_per_model} for model-parallel inference, got {world_size}. "
+            "Launch with matching srun --ntasks."
+        )
+    model_comm_group = _init_model_comm_group(device, global_rank, world_size)
 
     inference_model, datamodule, _, _ = _load_objects(
         ckpt_path=ckpt_path,
-        device=args.device,
+        device=device,
         validation_frequency=args.validation_frequency,
         precision=args.precision,
-        num_gpus_per_model_override=1,
+        num_gpus_per_model_override=args.num_gpus_per_model,
     )
 
     manifest_lines = ["date,step,member,bundle_path,predictions_path"]
@@ -130,7 +143,7 @@ def main() -> None:
                 x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, _dates = _predict_from_bundle(
                     inference_model=inference_model,
                     datamodule=datamodule,
-                    device=args.device,
+                    device=device,
                     bundle_nc=str(bundle_path),
                     batch_index=args.batch_index,
                     extra_args=extra_args,
@@ -183,19 +196,21 @@ def main() -> None:
             ds.attrs["target_weather_state_count"] = int(len(weather_states))
 
             out_path = out_dir / f"predictions_{date}_step{step:03d}.nc"
-            if out_path.exists():
-                out_path.unlink()
-            ds.to_netcdf(out_path)
+            if global_rank == 0:
+                if out_path.exists():
+                    out_path.unlink()
+                ds.to_netcdf(out_path)
 
-            for m, src in zip(members, source_paths):
-                manifest_lines.append(f"{date},{step},{m},{src},{out_path}")
+                for m, src in zip(members, source_paths):
+                    manifest_lines.append(f"{date},{step},{m},{src},{out_path}")
 
-            done_files += 1
-            print(f"[{done_files}/{total_files}] wrote {out_path}")
+                done_files += 1
+                print(f"[{done_files}/{total_files}] wrote {out_path}")
 
     manifest_path = Path(args.manifest) if args.manifest else (out_dir / "predictions_manifest.csv")
-    manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
-    print(f"Wrote manifest: {manifest_path}")
+    if global_rank == 0:
+        manifest_path.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+        print(f"Wrote manifest: {manifest_path}")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,11 @@ import numpy as np
 import xarray as xr
 
 DEFAULT_CONSTANT_FORCINGS_NPZ = "/home/ecm5702/hpcperm/data/o320-forcings.npz"
+FALLBACK_CONSTANT_FORCINGS_NPZ = (
+    "/home/ecm5702/hpcperm/data/o1280-forcings.npz",
+    "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o320.npz",
+    "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o1280.npz",
+)
 
 SFC_TO_CFGRIB = {
     "10u": "u10",
@@ -108,6 +113,31 @@ def _extract_pl_field(ds_pl: xr.Dataset, base: str, level: int) -> np.ndarray:
     return np.asarray(ds_pl[base].sel({level_coord: int(level)}).values, dtype=np.float32).squeeze()
 
 
+def _load_constant_forcings_for_size(
+    npz_candidates: Sequence[str | Path],
+    target_size: int,
+) -> tuple[dict[str, np.ndarray], str | None, list[str]]:
+    constant_values: dict[str, np.ndarray] = {}
+    tried_paths: list[str] = []
+
+    for candidate in npz_candidates:
+        npz_path = Path(candidate)
+        if not npz_path.exists():
+            continue
+        tried_paths.append(str(npz_path))
+        with np.load(npz_path) as npz:
+            current: dict[str, np.ndarray] = {}
+            for key in npz.files:
+                arr = np.asarray(npz[key], dtype=np.float32).reshape(-1)
+                if arr.size == target_size:
+                    current[key] = arr
+        if current:
+            constant_values = current
+            return constant_values, str(npz_path), tried_paths
+
+    return constant_values, None, tried_paths
+
+
 def load_lres_fields_from_grib(
     sfc_grib: str | Path,
     pl_grib: str | Path,
@@ -157,14 +187,17 @@ def fill_hres_features(
     )  # pylint: disable=import-outside-toplevel
 
     constant_values: dict[str, np.ndarray] = {}
+    constant_source: str | None = None
+    tried_constant_npz: list[str] = []
+    npz_candidates: list[str | Path] = []
     if constant_forcings_npz is not None:
-        npz_path = Path(constant_forcings_npz)
-        if npz_path.exists():
-            with np.load(npz_path) as npz:
-                for key in npz.files:
-                    arr = np.asarray(npz[key], dtype=np.float32).reshape(-1)
-                    if arr.size == lat_hres.size:
-                        constant_values[key] = arr
+        npz_candidates.append(constant_forcings_npz)
+        for fallback in FALLBACK_CONSTANT_FORCINGS_NPZ:
+            if str(fallback) != str(constant_forcings_npz):
+                npz_candidates.append(fallback)
+        constant_values, constant_source, tried_constant_npz = _load_constant_forcings_for_size(
+            npz_candidates, lat_hres.size
+        )
 
     # Prefer NPZ constants for strict parity with runner constant forcings.
     constant_features = (
@@ -185,9 +218,13 @@ def fill_hres_features(
         elif name == "lsm" and lsm is not None:
             arr = np.asarray(lsm, dtype=np.float32).reshape(-1)
         else:
+            tried = ", ".join(tried_constant_npz) if tried_constant_npz else "(no existing NPZ found)"
             raise KeyError(
                 f"Missing required high-res constant forcing '{name}'. "
-                f"Provide it in {constant_forcings_npz!s} or the bundle."
+                f"Provide it in {constant_forcings_npz!s} or the bundle. "
+                f"Expected flattened size={lat_hres.size}. "
+                f"Resolved NPZ source={constant_source or 'none'}. "
+                f"Tried: {tried}"
             )
         x_hres[0, 0, 0, :, name_to_idx_hres[name]] = torch.from_numpy(arr).to(device)
 
