@@ -78,6 +78,30 @@ python -m eval.plot_intermediate.plot_intermediate dataset \
   --out /tmp/intermediate_2t.png
 ```
 
+Preset region-style intermediate panel plotting (keeps the validated ecm5702 layout):
+```bash
+python -m eval.region_plotting.plot_intermediate_presets \
+  --predictions-nc /home/ecm5702/perm/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/eefo_o96_0001_date20230826_time0000_mem06_step048h__intermediate_cached.nc \
+  --region idalia_center \
+  --weather-states 10u,10v,2t,msl \
+  --ordered-steps 16,14,13,12,11 \
+  --include-sigma-labels \
+  --style amazon-baseline \
+  --out /home/ecm5702/perm/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/readability_v2/idalia_center_baseline.pdf
+```
+
+Minimal frame-change variant (`pcolormesh + contour` while keeping the baseline panel structure):
+```bash
+python -m eval.region_plotting.plot_intermediate_presets \
+  --predictions-nc /home/ecm5702/perm/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/eefo_o96_0001_date20230826_time0000_mem06_step048h__intermediate_cached.nc \
+  --region idalia_center \
+  --weather-states 10u,10v,2t,msl \
+  --ordered-steps 16,14,13,12,11 \
+  --include-sigma-labels \
+  --style minimal-pcolor-contour \
+  --out /home/ecm5702/perm/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/readability_v2/idalia_center_minimal_contour.pdf
+```
+
 ## Legacy Modules
 - `eval/region_plotting` (local region plots)
 - `eval/sigma_evaluator` (sigma sweeps / tables)

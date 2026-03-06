@@ -109,9 +109,17 @@ def to_omegaconf(obj):
 
 
 def get_datamodule(config, graph_data):
-    from anemoi.training.data.datamodule import DownscalingAnemoiDatasetsDataModule
+    # Compatibility: old stacks expose AnemoiDatasetsDataModule, newer stacks
+    # expose DownscalingAnemoiDatasetsDataModule.
+    try:
+        from anemoi.training.data.datamodule import DownscalingAnemoiDatasetsDataModule as DataModuleCls
+    except ImportError:
+        from anemoi.training.data.datamodule import AnemoiDatasetsDataModule as DataModuleCls
 
-    datamodule = DownscalingAnemoiDatasetsDataModule(config, graph_data)
+    try:
+        datamodule = DataModuleCls(config, graph_data)
+    except TypeError:
+        datamodule = DataModuleCls(config)
     # data_indices = datamodule.data_indices
     # statistics = datamodule.statistics
     # supporting_arrays = datamodule.supporting_arrays

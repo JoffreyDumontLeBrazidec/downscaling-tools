@@ -253,12 +253,109 @@ def _predict_with_intermediates_single_member(
     include_init_state: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     model = interface.model
+    if not hasattr(model, "_before_sampling"):
+        # OLD interface path (e.g. DownscalingModelInterface in anemoi_2024):
+        # manually run default_sampler with return_intermediate enabled.
+        nsteps = int(extra_args.get("num_steps", 40))
+        sigma_min = float(extra_args.get("sigma_min", 0.03))
+        sigma_max = float(extra_args.get("sigma_max", 80.0))
+        rho = float(extra_args.get("rho", 7.0))
+        capture_steps_resolved = resolve_capture_steps(
+            total_steps=nsteps,
+            explicit_steps=capture_steps,
+            capture_max_steps=0,
+        )
+
+        x_in_4d = x_in_lres[:, 0, ...]
+        x_hres_4d = x_in_hres[:, 0, ...]
+        x_interp_to_hres = interface.interpolate_down(x_in_lres[:, 0, 0, ...], grad_checkpoint=False)[:, None, ...]
+        x_interp_state = x_interp_to_hres[0, 0].detach().cpu().numpy().astype(np.float32)
+
+        if getattr(interface, "model_version", "one_encoder") == "two_encoder":
+            x_proc = interface.pre_processors_state(x_in_4d, "input_lres", in_place=False)
+            x_proc = x_proc[..., interface.data_indices.data.input[0].full]
+        else:
+            x_proc = interface.pre_processors_state(x_interp_to_hres, "input_lres", in_place=False)
+            x_proc = x_proc[..., interface.data_indices.data.input[0].full]
+
+        x_hres_proc = interface.pre_processors_state(x_hres_4d, "input_hres", in_place=False)
+        x_hres_proc = x_hres_proc[..., interface.data_indices.data.input[1].full]
+
+        x_proc_5d = x_proc[..., None, :, :]
+        x_hres_5d = x_hres_proc[..., None, :, :]
+
+        noise_steps = interface.noise_schedule(
+            device=x_proc_5d.device,
+            dtype=torch.float64,
+            nsteps=nsteps,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            rho=rho,
+        )
+        _, sampler_args = _split_sampling_args(extra_args)
+        states = interface.default_sampler(
+            x_proc_5d,
+            x_hres_5d,
+            noise_steps,
+            return_intermediate=True,
+            model_comm_group=model_comm_group,
+            **sampler_args,
+        )
+
+        def _align_interpolated(pred: torch.Tensor, interp: torch.Tensor) -> torch.Tensor:
+            aligned = interp
+            while aligned.ndim < pred.ndim:
+                aligned = aligned.unsqueeze(1)
+            return aligned
+
+        y_hat = interface.post_processors_state(states["y_hat"], in_place=False, dataset="output")
+        training_cfg = getattr(getattr(interface, "config", None), "training", None)
+        if training_cfg is not None and hasattr(training_cfg, "predict_residuals"):
+            predicts_residuals = bool(getattr(training_cfg, "predict_residuals"))
+        else:
+            predicts_residuals = True
+        interp_state = interface.interpolate_down(x_in_lres[:, 0, 0, ...], grad_checkpoint=False)
+        if predicts_residuals:
+            y_hat = y_hat + _align_interpolated(y_hat, interp_state)
+
+        all_intermediates: list[torch.Tensor] = []
+        for inter_state in states.get("intermediate_states", []):
+            inter_pp = interface.post_processors_state(inter_state, in_place=False, dataset="output")
+            if predicts_residuals:
+                inter_pp = inter_pp + _align_interpolated(inter_pp, interp_state)
+            all_intermediates.append(inter_pp)
+
+        if not all_intermediates:
+            raise RuntimeError("No intermediate states were produced by OLD default_sampler.")
+
+        if include_init_state:
+            # OLD sampler does not expose pre-denoising initial state explicitly.
+            capture_steps_resolved = capture_steps_resolved
+
+        kept_steps: list[np.ndarray] = []
+        for s in capture_steps_resolved:
+            if 0 <= int(s) < len(all_intermediates):
+                kept_steps.append(all_intermediates[int(s)][0, 0, 0].detach().cpu().numpy().astype(np.float32))
+        if not kept_steps:
+            kept_steps.append(all_intermediates[-1][0, 0, 0].detach().cpu().numpy().astype(np.float32))
+            capture_steps_resolved = [len(all_intermediates) - 1]
+
+        final_pred = y_hat[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+        inter = np.stack(kept_steps, axis=0)
+        return final_pred, inter, np.asarray(capture_steps_resolved, dtype=np.int32), x_interp_state
+
+    pre_processors = getattr(interface, "pre_processors", None)
+    if pre_processors is None:
+        pre_processors = getattr(interface, "pre_processors_state", None)
+    post_processors = getattr(interface, "post_processors", None)
+    if post_processors is None:
+        post_processors = getattr(interface, "post_processors_state", None)
 
     predict_kwargs = {
         "x_in": x_in_lres,
         "x_in_hres": x_in_hres,
-        "pre_processors": interface.pre_processors,
-        "post_processors": interface.post_processors,
+        "pre_processors": pre_processors,
+        "post_processors": post_processors,
         "multi_step": interface.multi_step,
         "model_comm_group": model_comm_group,
     }
@@ -325,7 +422,7 @@ def _predict_with_intermediates_single_member(
     for latent in latent_steps:
         state = model._after_sampling(
             latent.to(x_interp.dtype),
-            interface.post_processors,
+            post_processors,
             before_sampling_data,
             model_comm_group=model_comm_group,
             grid_shard_shapes=grid_shard_shapes,

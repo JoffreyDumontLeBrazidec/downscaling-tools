@@ -4,9 +4,11 @@ import argparse
 import gc
 import os
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import torch
+from omegaconf import OmegaConf
 
 from manual_inference.checkpoints import (
     ObjectFromCheckpointLoader,
@@ -17,6 +19,33 @@ from manual_inference.checkpoints import (
 
 from .sigma_evaluator import SigmaEvaluator
 from .sigmas import sigmas
+
+
+def _rewrite_dataset_paths_in_place(node: Any) -> Any:
+    if OmegaConf.is_config(node):
+        container = OmegaConf.to_container(node, resolve=False)
+        rewritten = _rewrite_dataset_paths_in_place(container)
+        return OmegaConf.create(rewritten)
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            node[k] = _rewrite_dataset_paths_in_place(v)
+        return node
+    if isinstance(node, list):
+        return [_rewrite_dataset_paths_in_place(v) for v in node]
+    if isinstance(node, tuple):
+        return tuple(_rewrite_dataset_paths_in_place(v) for v in node)
+    if isinstance(node, str):
+        prefixes = (
+            "/leonardo_work/DestE_340_25/ai-ml/datasets///",
+            "/leonardo_work/DestE_340_25/ai-ml/datasets/",
+        )
+        for pref in prefixes:
+            if node.startswith(pref):
+                candidate = node.replace(pref, "/home/mlx/ai-ml/datasets/", 1)
+                if os.path.exists(candidate):
+                    return candidate
+        return node
+    return node
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -97,6 +126,11 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
     config_checkpoint = adapt_config_hpc(config_checkpoint, config)
 
     object_loader.config_checkpoint = config_checkpoint
+    # Some checkpoints were produced on external paths (e.g. /leonardo_work/...).
+    # Rewrite known dataset prefixes to local mirrors when present.
+    object_loader.config_for_datamodule = _rewrite_dataset_paths_in_place(
+        object_loader.config_for_datamodule
+    )
     object_loader.config_for_datamodule.dataloader.validation.frequency = (
         args.validation_frequency
     )

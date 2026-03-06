@@ -89,6 +89,28 @@ def _get_template_batch(datamodule, batch_index: int, device: str):
     raise RuntimeError(f"Could not find validation batch index {batch_index}")
 
 
+def _get_full_grid_template(datamodule, sample_index: int, device: str):
+    """Build template tensors from the full (unsharded) dataset.
+
+    The dataloader may shard grid points across GPUs, making its batches
+    too small for bundle-based inference which requires the full grid.
+    This reads directly from the dataset and transposes to match the
+    dataloader batch layout: (1, 1, 1, n_grid, n_vars).
+    """
+    data = datamodule.ds_valid.data
+    sample = data[sample_index : sample_index + 1]
+    # Dataset returns (dates, vars, ens, grid).
+    # Dataloader convention is (batch, ?, ens, grid, vars).
+    x_np = np.asarray(sample[0])   # (1, n_vars_lres, n_ens, n_grid_lres)
+    xh_np = np.asarray(sample[1])  # (1, n_vars_hres, n_ens, n_grid_hres)
+    y_np = np.asarray(sample[2])   # (1, n_vars_target, n_ens, n_grid_hres)
+
+    x = torch.from_numpy(np.transpose(x_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
+    xh = torch.from_numpy(np.transpose(xh_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
+    y = torch.from_numpy(np.transpose(y_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
+    return x, xh, y
+
+
 
 
 def _load_objects(
@@ -97,6 +119,7 @@ def _load_objects(
     device: str,
     validation_frequency: str,
     precision: str,
+    num_gpus_per_model_override: int | None = None,
 ):
     ckpt_path, dir_exp, name_exp, name_ckpt = _split_ckpt_path(ckpt_path)
     checkpoint, config_checkpoint = get_checkpoint(dir_exp, name_exp, name_ckpt)
@@ -107,6 +130,12 @@ def _load_objects(
     config_for_datamodule.dataloader.validation.frequency = validation_frequency
     if hasattr(config_for_datamodule.dataloader.validation, "num_workers"):
         config_for_datamodule.dataloader.validation.num_workers = 0
+    # Bundle-based inference needs template tensors on the full grid. Some checkpoints
+    # carry a multi-GPU-per-model training setting that shards template grids.
+    if num_gpus_per_model_override is not None and hasattr(config_for_datamodule, "hardware"):
+        config_for_datamodule.hardware.num_gpus_per_model = int(num_gpus_per_model_override)
+    if num_gpus_per_model_override is not None and hasattr(config_for_datamodule.dataloader, "read_group_size"):
+        config_for_datamodule.dataloader.read_group_size = int(num_gpus_per_model_override)
 
     inference_model = torch.load(
         os.path.join(dir_exp, name_exp, "inference-" + name_ckpt),
@@ -228,7 +257,7 @@ def _predict_from_bundle(
     precision: str,
     model_comm_group,
 ):
-    x_template, x_hres_template, _ = _get_template_batch(
+    x_template, x_hres_template, _ = _get_full_grid_template(
         datamodule, batch_index, device
     )
     x_in = x_template.clone()

@@ -28,6 +28,8 @@ def _build_exp_configs(
     expver: str,
     hres_reference_name: str,
     hres_reference_label: str,
+    eefo_token: str,
+    hres_token: str,
 ) -> list[dict]:
     return [
         {
@@ -41,12 +43,14 @@ def _build_exp_configs(
             "type": "hpc",
             "base_path": "/home/ecm5702/hpcperm/reference_spectra/eefo_o96",
             "label": "eefo O96",
+            "token": eefo_token,
         },
         {
             "name": hres_reference_name,
             "type": "hpc",
             "base_path": f"/home/ecm5702/hpcperm/reference_spectra/{hres_reference_name}",
             "label": hres_reference_label,
+            "token": hres_token,
         },
     ]
 
@@ -57,8 +61,9 @@ def _get_paths(conf: dict, dir_name: str, date_in: int, step: int, param: str, l
         w = Path(f"{b}/{dir_name}/wvn_{date_in}_{step}_{param}_{level}_{conf['name']}_n{number}.npy")
         a = Path(f"{b}/{dir_name}/ampl_{date_in}_{step}_{param}_{level}_{conf['name']}_n{number}.npy")
     else:
-        w = Path(f"{b}/{dir_name}/wvn_{date_in}_{step}_{param}_{level}_1_n{number}.npy")
-        a = Path(f"{b}/{dir_name}/ampl_{date_in}_{step}_{param}_{level}_1_n{number}.npy")
+        token = conf.get("token", "1")
+        w = Path(f"{b}/{dir_name}/wvn_{date_in}_{step}_{param}_{level}_{token}_n{number}.npy")
+        a = Path(f"{b}/{dir_name}/ampl_{date_in}_{step}_{param}_{level}_{token}_n{number}.npy")
     return w, a
 
 
@@ -81,6 +86,16 @@ def main() -> None:
         default="enfo O320",
         help="Legend label for selected high-resolution reference.",
     )
+    parser.add_argument(
+        "--eefo-token",
+        default="1",
+        help="Filename token for eefo_o96 spectra files (default: 1).",
+    )
+    parser.add_argument(
+        "--hres-token",
+        default="1",
+        help="Filename token for selected high-resolution reference spectra files (default: 1).",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir) if args.output_dir else Path(f"/home/ecm5702/perm/eval/{args.expver}")
@@ -93,6 +108,8 @@ def main() -> None:
         args.expver,
         hres_reference_name=args.hres_reference_name,
         hres_reference_label=args.hres_reference_label,
+        eefo_token=args.eefo_token,
+        hres_token=args.hres_token,
     )
     colors = [cmc.batlow(i / max(1, len(expvers) - 1)) for i in range(len(expvers))]
     type_style = {"ai": "-", "hpc": "--"}

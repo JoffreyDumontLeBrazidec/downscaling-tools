@@ -109,6 +109,7 @@ def main() -> None:
         device=args.device,
         validation_frequency=args.validation_frequency,
         precision=args.precision,
+        num_gpus_per_model_override=1,
     )
 
     manifest_lines = ["date,step,member,bundle_path,predictions_path"]
