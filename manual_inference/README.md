@@ -4,6 +4,12 @@ This package produces `predictions.nc` from a checkpoint using either:
 - the Anemoi dataloader
 - a prebuilt input bundle (`.nc`) from MARS/GRIB
 
+Strict new-stack policy:
+- `y` truth must be present in `predictions.nc`.
+- `from-bundle` is the production path.
+- `from-dataloader` is debug-only and requires `--debug-from-dataloader`.
+- bundle build no longer supports missing targets.
+
 ## Notebooks (Super Simple)
 - `manual_inference/notebooks/00_manual_inference_overview.ipynb`
 - `manual_inference/notebooks/01_prediction_from_dataloader.ipynb`
@@ -18,6 +24,7 @@ This package produces `predictions.nc` from a checkpoint using either:
 From dataloader:
 ```bash
 python -m manual_inference.prediction.predict from-dataloader \
+  --debug-from-dataloader \
   --name-ckpt <exp_or_ckpt> \
   --idx 0 --n-samples 1 --members 0 \
   --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'

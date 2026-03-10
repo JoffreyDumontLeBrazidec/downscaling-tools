@@ -25,6 +25,8 @@ from manual_inference.prediction.predict import (
 from manual_inference.prediction.utils import extract_filtered_input_from_output
 
 try:
+    from anemoi.models.distributed.graph import gather_tensor
+    from anemoi.models.distributed.shapes import apply_shard_shapes
     from anemoi.models.samplers import diffusion_samplers
 except Exception as exc:  # pragma: no cover
     raise RuntimeError(
@@ -48,7 +50,20 @@ DEFAULT_EXTRA_ARGS_JSON = (
     '"rho":7.0,"sampler":"heun","S_max":1000.0}'
 )
 
-NOISE_KEYS = {"schedule_type", "sigma_max", "sigma_min", "rho", "num_steps"}
+NOISE_KEYS = {
+    "schedule_type",
+    "sigma_max",
+    "sigma_min",
+    "rho",
+    "num_steps",
+    "sigma_transition",
+    "num_steps_high",
+    "num_steps_low",
+    "high_schedule_type",
+    "low_schedule_type",
+    "rho_high",
+    "rho_low",
+}
 SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
 
 
@@ -173,7 +188,7 @@ def _sample_heun_with_intermediates(
             y = y_next
 
         if (capture_steps is None) or (i in capture_steps):
-            out_steps.append(y.clone())
+            out_steps.append(y.detach().to(device="cpu", dtype=torch.float32).clone())
 
     return out_steps
 
@@ -215,7 +230,7 @@ def _sample_dpmpp_2m_with_intermediates(
         if sigma_next == 0:
             y = denoised
             if (capture_steps is None) or (i in capture_steps):
-                out_steps.append(y.clone())
+                out_steps.append(y.detach().to(device="cpu", dtype=torch.float32).clone())
             break
 
         t = -torch.log(sigma + 1e-10)
@@ -237,7 +252,7 @@ def _sample_dpmpp_2m_with_intermediates(
 
         old_denoised = denoised
         if (capture_steps is None) or (i in capture_steps):
-            out_steps.append(y.clone())
+            out_steps.append(y.detach().to(device="cpu", dtype=torch.float32).clone())
 
     return out_steps
 
@@ -367,7 +382,6 @@ def _predict_with_intermediates_single_member(
     before_sampling_data, grid_shard_shapes = model._before_sampling(**predict_kwargs)
     x_interp = before_sampling_data[0]
     x_hres_proc = before_sampling_data[1]
-    x_interp_state = x_interp[0, 0, 0].detach().cpu().numpy().astype(np.float32)
 
     noise_args, sampler_args = _split_sampling_args(extra_args)
     sigmas = _build_sigmas(model, x_interp, noise_args)
@@ -377,26 +391,40 @@ def _predict_with_intermediates_single_member(
         explicit_steps=capture_steps,
         capture_max_steps=0,
     )
-    capture_steps_set = set(capture_steps_resolved)
+    capture_steps_expected = list(capture_steps_resolved)
+    if include_init_state:
+        capture_steps_expected = [-1] + capture_steps_expected
 
-    shape = (x_interp.shape[0], 1, x_interp.shape[2], x_interp.shape[-2], model.num_output_channels)
-    y = torch.randn(shape, device=x_interp.device) * sigmas[0]
-    y_init = y.clone()
-
+    post_tend = getattr(interface, "post_processors_tendencies", None)
     sampler_name = sampler_args.get("sampler", model.inference_defaults.diffusion_sampler.get("sampler", "heun"))
     if sampler_name == "heun":
-        latent_steps = _sample_heun_with_intermediates(
-            model=model,
-            x_in_interp=x_interp,
-            x_in_hres=x_hres_proc,
-            y=y,
-            sigmas=sigmas,
+        capture_steps_set = set(capture_steps_expected)
+        captured_latents: dict[int, torch.Tensor] = {}
+
+        def _capture_step(step_idx: int, latent: torch.Tensor) -> None:
+            if step_idx not in capture_steps_set or step_idx in captured_latents:
+                return
+            captured_latents[step_idx] = latent.detach().to(device="cpu", dtype=torch.float32).clone()
+
+        model.sample(
+            x_interp,
+            x_hres_proc,
             model_comm_group=model_comm_group,
             grid_shard_shapes=grid_shard_shapes,
-            sampler_params=sampler_args,
-            capture_steps=capture_steps_set,
+            noise_scheduler_params=noise_args or None,
+            sampler_params=sampler_args or None,
+            step_callback=_capture_step,
+            capture_init_state=include_init_state,
         )
+
+        missing_steps = [step_idx for step_idx in capture_steps_expected if step_idx not in captured_latents]
+        if missing_steps:
+            raise RuntimeError(f"Missing captured intermediate states for sampling steps: {missing_steps}")
+
+        latent_steps = [captured_latents[step_idx] for step_idx in capture_steps_expected]
     elif sampler_name == "dpmpp_2m":
+        shape = (x_interp.shape[0], 1, x_interp.shape[2], x_interp.shape[-2], model.num_output_channels)
+        y = torch.randn(shape, device=x_interp.device) * sigmas[0]
         latent_steps = _sample_dpmpp_2m_with_intermediates(
             model=model,
             x_in_interp=x_interp,
@@ -405,23 +433,20 @@ def _predict_with_intermediates_single_member(
             sigmas=sigmas,
             model_comm_group=model_comm_group,
             grid_shard_shapes=grid_shard_shapes,
-            capture_steps=capture_steps_set,
+            capture_steps=set(capture_steps_resolved),
         )
+        if include_init_state:
+            latent_steps = [y.detach().to(device="cpu", dtype=torch.float32).clone()] + latent_steps
     else:
         raise ValueError(f"Unsupported sampler for intermediate plotting: {sampler_name}")
 
     if not latent_steps:
         raise RuntimeError("No intermediate states were produced by the sampler.")
 
-    post_tend = getattr(interface, "post_processors_tendencies", None)
-    if include_init_state:
-        latent_steps = [y_init] + latent_steps
-        capture_steps_resolved = [-1] + capture_steps_resolved
-
     state_steps: list[np.ndarray] = []
     for latent in latent_steps:
         state = model._after_sampling(
-            latent.to(x_interp.dtype),
+            latent.to(device=x_interp.device, dtype=x_interp.dtype),
             post_processors,
             before_sampling_data,
             model_comm_group=model_comm_group,
@@ -432,8 +457,17 @@ def _predict_with_intermediates_single_member(
         state_steps.append(state[0, 0, 0].detach().cpu().numpy().astype(np.float32))
 
     final_pred = state_steps[-1]
+    x_interp_for_export = x_interp
+    if model_comm_group is not None and grid_shard_shapes is not None:
+        x_interp_for_export = gather_tensor(
+            x_interp_for_export,
+            -2,
+            apply_shard_shapes(x_interp_for_export, -2, grid_shard_shapes),
+            model_comm_group,
+        )
+    x_interp_state = x_interp_for_export[0, 0, 0].detach().cpu().numpy().astype(np.float32)
     inter = np.stack(state_steps, axis=0)
-    return final_pred, inter, np.asarray(capture_steps_resolved, dtype=np.int32), x_interp_state
+    return final_pred, inter, np.asarray(capture_steps_expected, dtype=np.int32), x_interp_state
 
 
 def _build_intermediate_dataset_from_checkpoint(args: argparse.Namespace) -> xr.Dataset:

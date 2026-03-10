@@ -11,6 +11,7 @@ from pathlib import Path
 TERMINAL_OK = {"COMPLETED"}
 TERMINAL_BAD = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"}
 TERMINAL_ALL = TERMINAL_OK | TERMINAL_BAD
+SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 @dataclass
@@ -100,6 +101,23 @@ def _write_state(state_file: Path, run_id: str, jobs: dict[str, JobTrack]) -> No
     state_file.write_text(json.dumps(payload, indent=2))
 
 
+def _validate_safe_name(name: str, *, label: str) -> None:
+    if not SAFE_NAME_RE.fullmatch(name):
+        raise SystemExit(
+            f"{label} contains unsafe characters: {name!r}. "
+            "Allowed pattern: [A-Za-z0-9._-]+"
+        )
+
+
+def _validate_eval_root(eval_root: Path) -> None:
+    # Catch accidental nesting where users pass an existing run directory as eval root.
+    if (eval_root / "logs").is_dir() and (eval_root / "jobs").is_dir():
+        raise SystemExit(
+            f"Refusing eval root that already looks like a run directory: {eval_root}. "
+            "Pass the parent eval root (for example /home/ecm5702/perm/eval)."
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Autopilot for predictions->eval chained pipeline")
     ap.add_argument("--run-id", required=True)
@@ -117,8 +135,23 @@ def main() -> None:
     ap.add_argument("--eval-time", default="08:00:00")
     ap.add_argument("--eval-cpus", default="8")
     ap.add_argument("--eval-mem", default="64G")
+    ap.add_argument(
+        "--allow-existing-run-dir",
+        action="store_true",
+        help="Allow reuse of an existing run directory (explicitly unsafe).",
+    )
     ap.add_argument("--resume", action="store_true", default=True)
     args = ap.parse_args()
+
+    _validate_safe_name(args.run_id, label="run-id")
+    eval_root = Path(args.eval_root).expanduser().resolve()
+    _validate_eval_root(eval_root)
+    run_dir = eval_root / args.run_id
+    if run_dir.exists() and not args.allow_existing_run_dir:
+        raise SystemExit(
+            f"Run directory already exists: {run_dir}. "
+            "Refusing silent reuse; use a new run-id or pass --allow-existing-run-dir explicitly."
+        )
 
     project_root = Path(__file__).resolve().parents[2]
     launch_script = project_root / "eval/jobs/launch_predictions_eval_suite.sh"
@@ -139,9 +172,10 @@ def main() -> None:
         "--eval-mem", args.eval_mem,
         "--dry-run",
     ]
+    if args.allow_existing_run_dir:
+        launch_args.append("--allow-existing-run-dir")
     subprocess.check_call([str(launch_script)] + launch_args)
 
-    run_dir = Path(args.eval_root) / args.run_id
     gen_dir = run_dir / "jobs"
     logs_dir = run_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)

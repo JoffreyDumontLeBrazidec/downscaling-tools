@@ -20,6 +20,7 @@ Options:
   --eval-time <hh:mm:ss>       Eval walltime (default: 08:00:00)
   --eval-cpus <n>              Eval cpus-per-task (default: 8)
   --eval-mem <mem>             Eval memory (default: 64G)
+  --allow-existing-run-dir     Allow reusing an existing run directory (explicitly unsafe)
   --dry-run                    Generate scripts only
 EOF
 }
@@ -37,6 +38,7 @@ EVAL_QOS="nf"
 EVAL_TIME="08:00:00"
 EVAL_CPUS="8"
 EVAL_MEM="64G"
+ALLOW_EXISTING_RUN_DIR=0
 DRY_RUN=0
 
 to_seconds() {
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --eval-time) EVAL_TIME="$2"; shift 2 ;;
     --eval-cpus) EVAL_CPUS="$2"; shift 2 ;;
     --eval-mem) EVAL_MEM="$2"; shift 2 ;;
+    --allow-existing-run-dir) ALLOW_EXISTING_RUN_DIR=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2 ;;
@@ -75,6 +78,15 @@ while [[ $# -gt 0 ]]; do
 if [[ -z "$RUN_ID" ]]; then
   echo "--run-id is required" >&2
   usage
+  exit 2
+fi
+if [[ "${RUN_ID}" == *"/"* ]]; then
+  echo "RUN_ID must not contain '/': ${RUN_ID}" >&2
+  exit 2
+fi
+if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "RUN_ID contains unsafe characters: ${RUN_ID}" >&2
+  echo "Allowed pattern: [A-Za-z0-9._-]+" >&2
   exit 2
 fi
 
@@ -92,11 +104,28 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+EVAL_ROOT_REAL="$(realpath -m "${EVAL_ROOT}")"
+if [[ ( -d "${EVAL_ROOT}/logs" && -d "${EVAL_ROOT}/jobs" ) || ( -d "${EVAL_ROOT_REAL}/logs" && -d "${EVAL_ROOT_REAL}/jobs" ) ]]; then
+  echo "Refusing eval root that already looks like a run directory: ${EVAL_ROOT}" >&2
+  echo "Use the parent eval root (for example /home/ecm5702/perm/eval), not an existing run folder." >&2
+  exit 2
+fi
 RUN_DIR="${EVAL_ROOT}/${RUN_ID}"
 JOBS_DIR="${RUN_DIR}/jobs"
 PRED_DIR="${RUN_DIR}/predictions"
 EVAL_RUN_ROOT="${RUN_DIR}/eval"
+
+if [[ -e "${RUN_DIR}" && "${ALLOW_EXISTING_RUN_DIR}" -ne 1 ]]; then
+  echo "Run directory already exists: ${RUN_DIR}" >&2
+  echo "Refusing silent reuse. Use a new run-id, or pass --allow-existing-run-dir explicitly." >&2
+  exit 2
+fi
 mkdir -p "${JOBS_DIR}" "${RUN_DIR}/logs" "${PRED_DIR}" "${EVAL_RUN_ROOT}"
+
+PREDICTION_SAFETY_FLAGS=""
+if [[ "${ALLOW_EXISTING_RUN_DIR}" -eq 1 ]]; then
+  PREDICTION_SAFETY_FLAGS="--allow-existing-out-dir --allow-overwrite-existing-files"
+fi
 
 cat > "${JOBS_DIR}/predict25_${RUN_ID}.sbatch" <<EOF
 #!/bin/bash
@@ -122,7 +151,7 @@ python eval/jobs/generate_predictions_25_files.py \
   --input-root ${INPUT_ROOT} \
   --out-dir ${PRED_DIR} \
   --ckpt-id ${CKPT_ID} \
-  --device cuda
+  --device cuda ${PREDICTION_SAFETY_FLAGS}
 EOF
 
 cat > "${JOBS_DIR}/eval25_${RUN_ID}.sbatch" <<EOF

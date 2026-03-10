@@ -4,11 +4,9 @@ import argparse
 import gc
 import os
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import torch
-from omegaconf import OmegaConf
 
 from manual_inference.checkpoints import (
     ObjectFromCheckpointLoader,
@@ -16,37 +14,10 @@ from manual_inference.checkpoints import (
     get_checkpoint,
     instantiate_config,
 )
+from manual_inference.prediction.predict import _rewrite_dataset_paths_in_place
 
 from .sigma_evaluator import SigmaEvaluator
 from .sigmas import sigmas
-
-
-def _rewrite_dataset_paths_in_place(node: Any) -> Any:
-    if OmegaConf.is_config(node):
-        container = OmegaConf.to_container(node, resolve=False)
-        rewritten = _rewrite_dataset_paths_in_place(container)
-        return OmegaConf.create(rewritten)
-    if isinstance(node, dict):
-        for k, v in list(node.items()):
-            node[k] = _rewrite_dataset_paths_in_place(v)
-        return node
-    if isinstance(node, list):
-        return [_rewrite_dataset_paths_in_place(v) for v in node]
-    if isinstance(node, tuple):
-        return tuple(_rewrite_dataset_paths_in_place(v) for v in node)
-    if isinstance(node, str):
-        prefixes = (
-            "/leonardo_work/DestE_340_25/ai-ml/datasets///",
-            "/leonardo_work/DestE_340_25/ai-ml/datasets/",
-        )
-        for pref in prefixes:
-            if node.startswith(pref):
-                candidate = node.replace(pref, "/home/mlx/ai-ml/datasets/", 1)
-                if os.path.exists(candidate):
-                    return candidate
-        return node
-    return node
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run sigma evaluator.")

@@ -12,11 +12,18 @@ This folder produces `predictions.nc` from a checkpoint using either:
 If `--out` is not set, predictions are written to:
 `/home/ecm5702/hpcperm/experiments/<name_exp>/predictions.nc`
 
+**Strict new-stack policy**
+- `y` truth is mandatory in output `predictions.nc`.
+- `from-bundle` is the production path.
+- `from-dataloader` is debug-only and requires `--debug-from-dataloader`.
+- `--allow-missing-target` is no longer supported for bundle build.
+
 **Commands**
 
 1. From dataloader:
 ```bash
 python -m manual_inference.prediction.predict from-dataloader \
+  --debug-from-dataloader \
   --name-ckpt <exp_or_ckpt> \
   --idx 0 --n-samples 1 --members 0 \
   --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'

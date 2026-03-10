@@ -19,6 +19,7 @@ from manual_inference.prediction.predict import (
     _init_model_comm_group,
     _load_objects,
     _predict_from_bundle,
+    _resolve_ckpt_path,
     _resolve_device,
 )
 
@@ -60,7 +61,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Generate 25 predictions_YYYYMMDD_stepXXX.nc files from bundle inputs.")
     ap.add_argument("--input-root", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--ckpt-id", required=True)
+    ap.add_argument("--ckpt-id", default="")
+    ap.add_argument(
+        "--name-ckpt",
+        default="",
+        help="Explicit checkpoint path under --ckpt-root or an absolute .ckpt path. Overrides --ckpt-id.",
+    )
     ap.add_argument("--ckpt-root", default="/home/ecm5702/scratch/aifs/checkpoint")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--num-gpus-per-model", type=int, default=1)
@@ -78,13 +84,50 @@ def main() -> None:
     ap.add_argument(
         "--allow-missing-target",
         action="store_true",
-        help="Allow writing predictions even if y truth is absent in input bundles.",
+        help="Deprecated in new stack: y truth is required for predictions output.",
+    )
+    ap.add_argument(
+        "--allow-existing-out-dir",
+        action="store_true",
+        help="Allow writing into an existing non-empty output directory.",
+    )
+    ap.add_argument(
+        "--allow-overwrite-existing-files",
+        action="store_true",
+        help="Allow overwriting existing predictions_*.nc files.",
     )
     args = ap.parse_args()
 
+    if args.allow_missing_target:
+        raise SystemExit(
+            "--allow-missing-target is no longer supported in the new stack. "
+            "Bundles must include target_hres_* so y is always present."
+        )
+
     input_root = Path(args.input_root)
     out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+
+    global_rank, local_rank, world_size = _get_parallel_info()
+    dir_check_error = None
+    if global_rank == 0:
+        try:
+            if out_dir.exists():
+                if not args.allow_existing_out_dir and any(out_dir.iterdir()):
+                    raise SystemExit(
+                        f"Output directory already exists and is not empty: {out_dir}. "
+                        "Use a fresh run folder or pass --allow-existing-out-dir explicitly."
+                    )
+            else:
+                out_dir.mkdir(parents=True, exist_ok=False)
+        except BaseException as exc:  # propagate rank-0 startup failure cleanly
+            dir_check_error = exc
+
+    if world_size > 1 and torch.distributed.is_available() and torch.distributed.is_initialized():
+        sync_device_ids = [local_rank] if args.device == "cuda" and torch.cuda.is_available() else None
+        torch.distributed.barrier(device_ids=sync_device_ids)
+
+    if dir_check_error is not None:
+        raise dir_check_error
 
     members = parse_int_list(args.members)
     steps = parse_int_list(args.steps)
@@ -100,13 +143,17 @@ def main() -> None:
         head = ", ".join(f"{m.date}/step{m.step}/mem{m.member}" for m in missing[:15])
         raise SystemExit(f"Missing {len(missing)} required bundle(s). First missing: {head}")
 
-    ckpt_path = os.path.join(args.ckpt_root, args.ckpt_id, "last.ckpt")
+    if args.name_ckpt:
+        ckpt_path = _resolve_ckpt_path(args.name_ckpt, args.ckpt_root)
+    elif args.ckpt_id:
+        ckpt_path = os.path.join(args.ckpt_root, args.ckpt_id, "last.ckpt")
+    else:
+        raise SystemExit("Pass either --name-ckpt or --ckpt-id.")
     extra_args = json.loads(args.extra_args_json) if args.extra_args_json else {}
 
     if args.device == "cuda" and not torch.cuda.is_available():
         args.device = "cpu"
 
-    global_rank, local_rank, world_size = _get_parallel_info()
     device = _resolve_device(args.device, local_rank)
     if str(device).startswith("cuda"):
         torch.cuda.set_device(int(str(device).split(":")[1]))
@@ -135,6 +182,7 @@ def main() -> None:
             y_members: list[np.ndarray | None] = []
             yp_members: list[np.ndarray] = []
             source_paths: list[str] = []
+            members_missing_target: list[int] = []
 
             lon_lres = lat_lres = lon_hres = lat_hres = weather_states = None
             for m in members:
@@ -146,12 +194,15 @@ def main() -> None:
                     device=device,
                     bundle_nc=str(bundle_path),
                     batch_index=args.batch_index,
+                    member_index=0,
                     extra_args=extra_args,
                     precision=args.precision,
                     model_comm_group=model_comm_group,
                 )
                 x_members.append(x[0])
                 y_members.append(None if y is None else y[0, 0])
+                if y is None:
+                    members_missing_target.append(m)
                 yp_members.append(y_pred[0, 0])
                 source_paths.append(str(bundle_path))
 
@@ -164,10 +215,15 @@ def main() -> None:
                     for y in y_members
                 ]
                 y_stack = np.stack(y_filled, axis=0)[None, ...]
-            elif not args.allow_missing_target:
+                if members_missing_target:
+                    print(
+                        f"WARNING date={date} step={step}: missing target y for members {members_missing_target}; "
+                        "filled with NaN to keep y present in predictions file."
+                    )
+            else:
                 raise SystemExit(
                     f"No target truth (y) extracted for date={date} step={step}. "
-                    "Rebuild bundles with target_hres_* fields (or pass --allow-missing-target)."
+                    "Rebuild bundles with target_hres_* fields."
                 )
             yp_stack = np.stack(yp_members, axis=0)[None, ...]
 
@@ -193,12 +249,20 @@ def main() -> None:
             ds.attrs["sampling_config_json"] = args.extra_args_json
             ds.attrs["validation_frequency"] = args.validation_frequency
             ds.attrs["target_members_with_data"] = int(sum(y is not None for y in y_members))
+            ds.attrs["target_members_missing_data"] = int(len(members_missing_target))
+            ds.attrs["target_missing_member_ids"] = ",".join(str(m) for m in members_missing_target)
             ds.attrs["target_weather_state_count"] = int(len(weather_states))
 
             out_path = out_dir / f"predictions_{date}_step{step:03d}.nc"
             if global_rank == 0:
                 if out_path.exists():
-                    out_path.unlink()
+                    if args.allow_overwrite_existing_files:
+                        out_path.unlink()
+                    else:
+                        raise SystemExit(
+                            f"Refusing to overwrite existing prediction file: {out_path}. "
+                            "Use a fresh output directory or pass --allow-overwrite-existing-files explicitly."
+                        )
                 ds.to_netcdf(out_path)
 
                 for m, src in zip(members, source_paths):

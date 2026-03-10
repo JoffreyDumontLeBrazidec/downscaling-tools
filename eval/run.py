@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from manual_inference.prediction.predict import _resolve_ckpt_path as _shared_resolve_ckpt_path
 
 DEFAULT_EVAL_ROOT = "/home/ecm5702/perm/eval"
 DEFAULT_CKPT_ROOT = "/home/ecm5702/scratch/aifs/checkpoint"
@@ -25,13 +26,7 @@ def _sanitize_name(name: str) -> str:
 
 
 def _resolve_ckpt_path(name_ckpt: str, ckpt_root: str) -> Path:
-    raw = Path(name_ckpt).expanduser()
-    if raw.is_absolute():
-        return raw
-    root = Path(ckpt_root).expanduser()
-    if str(raw).endswith(".ckpt"):
-        return root / raw
-    return root / raw / "last.ckpt"
+    return Path(_shared_resolve_ckpt_path(name_ckpt, ckpt_root))
 
 
 def _default_checkpoint_run_name(name_ckpt: str, ckpt_root: str) -> str:
@@ -141,6 +136,7 @@ def run_from_checkpoint(args: argparse.Namespace) -> Path:
     else:
         predict_cmd = [
             "from-dataloader",
+            "--debug-from-dataloader",
             "--idx",
             str(args.idx),
             "--n-samples",

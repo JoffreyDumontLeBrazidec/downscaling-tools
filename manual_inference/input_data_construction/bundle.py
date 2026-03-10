@@ -258,6 +258,76 @@ def fill_hres_features(
             ).to(device)
 
 
+def load_inputs_from_bundle_numpy(
+    bundle_nc: str | Path,
+    name_to_idx_lres: Mapping[str, int],
+    name_to_idx_hres: Mapping[str, int],
+    *,
+    valid_time_override=None,
+    constant_forcings_npz: str | Path | None = DEFAULT_CONSTANT_FORCINGS_NPZ,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    bundle = _open_bundle_dataset(bundle_nc)
+    try:
+        n_lres = int(bundle.sizes["point_lres"])
+        n_hres = int(bundle.sizes["point_hres"])
+
+        x_lres = np.zeros((n_lres, len(name_to_idx_lres)), dtype=np.float32)
+        x_hres = np.zeros((n_hres, len(name_to_idx_hres)), dtype=np.float32)
+
+        levels_bundle = (
+            set(int(v) for v in np.asarray(bundle["level"].values).tolist())
+            if "level" in bundle
+            else set()
+        )
+        for name, idx in name_to_idx_lres.items():
+            base, level = split_level_channel(name)
+            if level is None:
+                field_name = f"in_lres_{name}"
+                if field_name not in bundle:
+                    raise KeyError(f"Missing bundle field: {field_name}")
+                raw = bundle[field_name].values.astype(np.float32)
+            else:
+                field_name = f"in_lres_{base}"
+                if field_name not in bundle:
+                    raise KeyError(f"Missing bundle field: {field_name}")
+                if level not in levels_bundle:
+                    raise KeyError(f"Missing level {level} for {base}")
+                raw = bundle[field_name].sel(level=int(level)).values.astype(np.float32)
+            x_lres[:, idx] = np.asarray(raw, dtype=np.float32).reshape(-1)
+
+        lat_lres = bundle["lat_lres"].values.astype(np.float32)
+        lon_lres = bundle["lon_lres"].values.astype(np.float32)
+        lat_hres = bundle["lat_hres"].values.astype(np.float32)
+        lon_hres = bundle["lon_hres"].values.astype(np.float32)
+
+        z = bundle["in_hres_z"].values.astype(np.float32) if "in_hres_z" in bundle else None
+        lsm = bundle["in_hres_lsm"].values.astype(np.float32) if "in_hres_lsm" in bundle else None
+        dt = parse_valid_time(valid_time_override, bundle.attrs.get("case_valid_time"))
+
+        import torch  # pylint: disable=import-outside-toplevel
+
+        x_hres_tensor = torch.zeros((1, 1, 1, n_hres, len(name_to_idx_hres)), dtype=torch.float32)
+        fill_hres_features(
+            x_hres_tensor,
+            name_to_idx_hres,
+            lat_hres,
+            lon_hres,
+            dt,
+            "cpu",
+            z=z,
+            lsm=lsm,
+            constant_forcings_npz=constant_forcings_npz,
+        )
+        x_hres[:, :] = x_hres_tensor[0, 0, 0].numpy()
+
+        return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
+    finally:
+        try:
+            bundle.close()
+        except Exception:
+            pass
+
+
 def fill_inputs_from_bundle(
     bundle_nc: str | Path,
     x_lres,
@@ -270,52 +340,19 @@ def fill_inputs_from_bundle(
     constant_forcings_npz: str | Path | None = DEFAULT_CONSTANT_FORCINGS_NPZ,
 ) -> None:
     import torch  # pylint: disable=import-outside-toplevel
-
-    bundle = _open_bundle_dataset(bundle_nc)
-    if int(bundle.sizes["point_lres"]) != int(x_lres.shape[3]):
-        raise RuntimeError("LRES grid-size mismatch between bundle and model template")
-    if int(bundle.sizes["point_hres"]) != int(x_hres.shape[3]):
-        raise RuntimeError("HRES grid-size mismatch between bundle and model template")
-
-    levels_bundle = (
-        set(int(v) for v in np.asarray(bundle["level"].values).tolist())
-        if "level" in bundle
-        else set()
-    )
-    for name, idx in name_to_idx_lres.items():
-        base, level = split_level_channel(name)
-        if level is None:
-            field_name = f"in_lres_{name}"
-            if field_name not in bundle:
-                raise KeyError(f"Missing bundle field: {field_name}")
-            raw = bundle[field_name].values.astype(np.float32)
-        else:
-            field_name = f"in_lres_{base}"
-            if field_name not in bundle:
-                raise KeyError(f"Missing bundle field: {field_name}")
-            if level not in levels_bundle:
-                raise KeyError(f"Missing level {level} for {base}")
-            raw = bundle[field_name].sel(level=int(level)).values.astype(np.float32)
-        x_lres[0, 0, 0, :, idx] = torch.from_numpy(raw).to(device)
-
-    lat_hres = bundle["lat_hres"].values.astype(np.float32)
-    lon_hres = bundle["lon_hres"].values.astype(np.float32)
-    z = bundle["in_hres_z"].values.astype(np.float32) if "in_hres_z" in bundle else None
-    lsm = (
-        bundle["in_hres_lsm"].values.astype(np.float32) if "in_hres_lsm" in bundle else None
-    )
-    dt = parse_valid_time(valid_time_override, bundle.attrs.get("case_valid_time"))
-    fill_hres_features(
-        x_hres,
+    x_lres_np, x_hres_np, _, _, _, _ = load_inputs_from_bundle_numpy(
+        bundle_nc,
+        name_to_idx_lres,
         name_to_idx_hres,
-        lat_hres,
-        lon_hres,
-        dt,
-        device,
-        z=z,
-        lsm=lsm,
+        valid_time_override=valid_time_override,
         constant_forcings_npz=constant_forcings_npz,
     )
+    if int(x_lres_np.shape[0]) != int(x_lres.shape[3]):
+        raise RuntimeError("LRES grid-size mismatch between bundle and model template")
+    if int(x_hres_np.shape[0]) != int(x_hres.shape[3]):
+        raise RuntimeError("HRES grid-size mismatch between bundle and model template")
+    x_lres[0, 0, 0, :, :] = torch.from_numpy(x_lres_np).to(device)
+    x_hres[0, 0, 0, :, :] = torch.from_numpy(x_hres_np).to(device)
 
 
 def extract_target_from_bundle(
@@ -619,7 +656,7 @@ def build_input_bundle_from_grib(
         bundle.attrs["source_target_pl"] = str(target_pl_grib)
     bundle.attrs["description"] = (
         "Combined low-res + high-res feature inputs for local inference. "
-        "Optional target_hres_* fields may be included for truth-aware evaluation."
+        "Includes target_hres_* fields for truth-aware evaluation."
     )
     if step_hours is not None:
         bundle.attrs["step_hours"] = int(step_hours)
@@ -695,6 +732,11 @@ def main() -> None:
         help="Select a single member if GRIBs contain an ensemble dimension.",
     )
     args = parser.parse_args()
+    if args.allow_missing_target:
+        raise SystemExit(
+            "--allow-missing-target is no longer supported in the new stack. "
+            "Bundles must include target_hres_* fields."
+        )
 
     out_path = args.out
     if not out_path:
@@ -712,7 +754,7 @@ def main() -> None:
         out_zarr=args.out_zarr or None,
         target_sfc_grib=args.target_sfc_grib or None,
         target_pl_grib=args.target_pl_grib or None,
-        require_target_fields=not args.allow_missing_target,
+        require_target_fields=True,
     )
     print(f"Saved bundle: {out}")
 

@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import pytest
 
 from manual_inference.prediction import predict
 
@@ -152,20 +153,29 @@ def test_predict_from_dataloader_no_members():
 def test_predict_from_bundle_minimal(monkeypatch):
     point_lres = 3
     point_hres = 4
-    n_lres_features = 2
-
-    x_template = torch.zeros((1, 1, 1, point_lres, n_lres_features), dtype=torch.float32)
-    x_hres_template = torch.zeros((1, 1, 1, point_hres, 1), dtype=torch.float32)
-
-    def _fake_template(datamodule, batch_index, device):
-        return x_template.clone(), x_hres_template.clone(), None
-
-    def _fake_fill(bundle_nc, x_lres, x_hres, name_to_idx_lres, name_to_idx_hres, device, **kwargs):
-        x_lres[0, 0, 0, :, 0] = 1.0
-        x_lres[0, 0, 0, :, 1] = 2.0
-
-    monkeypatch.setattr(predict, "_get_template_batch", _fake_template)
-    monkeypatch.setattr(predict, "fill_inputs_from_bundle", _fake_fill)
+    monkeypatch.setattr(
+        predict,
+        "load_inputs_from_bundle_numpy",
+        lambda *args, **kwargs: (
+            np.stack(
+                [
+                    np.ones(point_lres, dtype=np.float32),
+                    np.full(point_lres, 2.0, dtype=np.float32),
+                ],
+                axis=1,
+            ),
+            np.zeros((point_hres, 1), dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32) + 10,
+            np.arange(point_hres, dtype=np.float32),
+            np.arange(point_hres, dtype=np.float32) + 20,
+        ),
+    )
+    monkeypatch.setattr(
+        predict,
+        "extract_target_from_bundle",
+        lambda bundle_nc, weather_states: (None, 0),
+    )
 
     class _Indices:
         def __init__(self):
@@ -208,6 +218,7 @@ def test_predict_from_bundle_minimal(monkeypatch):
         device="cpu",
         bundle_nc="/tmp/fake.nc",
         batch_index=0,
+        member_index=0,
         extra_args={},
         precision="fp32",
         model_comm_group=None,
@@ -258,26 +269,77 @@ def test_predict_from_dataloader_forwards_classic_sampling_args():
         precision="fp32",
         model_comm_group=None,
     )
-
     assert len(model.calls) == 1
     assert model.calls[0]["extra_args"] == classic
+
+
+def test_resolve_ckpt_path_falls_back_to_single_ckpt(tmp_path):
+    ckpt_root = tmp_path / "ckpts"
+    run_dir = ckpt_root / "run123"
+    run_dir.mkdir(parents=True)
+    only_ckpt = run_dir / "anemoi-by_epoch-epoch_021-step_100000.ckpt"
+    only_ckpt.write_text("x", encoding="utf-8")
+
+    resolved = predict._resolve_ckpt_path("run123", str(ckpt_root))
+
+    assert resolved == str(only_ckpt)
+
+
+def test_resolve_ckpt_path_rejects_ambiguous_ckpts(tmp_path):
+    ckpt_root = tmp_path / "ckpts"
+    run_dir = ckpt_root / "run123"
+    run_dir.mkdir(parents=True)
+    (run_dir / "first.ckpt").write_text("x", encoding="utf-8")
+    (run_dir / "second.ckpt").write_text("y", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="Multiple base checkpoint files found"):
+        predict._resolve_ckpt_path("run123", str(ckpt_root))
+
+
+def test_resolve_ckpt_path_prefers_base_ckpt_over_inference_companion(tmp_path):
+    ckpt_root = tmp_path / "ckpts"
+    run_dir = ckpt_root / "run123"
+    run_dir.mkdir(parents=True)
+    base_ckpt = run_dir / "anemoi-by_epoch-epoch_021-step_100000.ckpt"
+    inference_ckpt = run_dir / "inference-anemoi-by_epoch-epoch_021-step_100000.ckpt"
+    base_ckpt.write_text("base", encoding="utf-8")
+    inference_ckpt.write_text("inference", encoding="utf-8")
+
+    resolved = predict._resolve_ckpt_path("run123", str(ckpt_root))
+
+    assert resolved == str(base_ckpt)
+
+
+def test_resolve_ckpt_path_rejects_inference_companion_input(tmp_path):
+    ckpt_root = tmp_path / "ckpts"
+    run_dir = ckpt_root / "run123"
+    run_dir.mkdir(parents=True)
+    inference_ckpt = run_dir / "inference-anemoi-by_epoch-epoch_021-step_100000.ckpt"
+    inference_ckpt.write_text("inference", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Pass the base checkpoint path"):
+        predict._resolve_ckpt_path(str(inference_ckpt), str(ckpt_root))
 
 
 def test_predict_from_bundle_forwards_classic_sampling_args(monkeypatch):
     point_lres = 3
     point_hres = 4
-    x_template = torch.zeros((1, 1, 1, point_lres, 2), dtype=torch.float32)
-    x_hres_template = torch.zeros((1, 1, 1, point_hres, 1), dtype=torch.float32)
-
     monkeypatch.setattr(
         predict,
-        "_get_template_batch",
-        lambda datamodule, batch_index, device: (x_template.clone(), x_hres_template.clone(), None),
+        "load_inputs_from_bundle_numpy",
+        lambda *args, **kwargs: (
+            np.zeros((point_lres, 2), dtype=np.float32),
+            np.zeros((point_hres, 1), dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32) + 10,
+            np.arange(point_hres, dtype=np.float32),
+            np.arange(point_hres, dtype=np.float32) + 20,
+        ),
     )
     monkeypatch.setattr(
         predict,
-        "fill_inputs_from_bundle",
-        lambda bundle_nc, x_lres, x_hres, name_to_idx_lres, name_to_idx_hres, device, **kwargs: None,
+        "extract_target_from_bundle",
+        lambda bundle_nc, weather_states: (None, 0),
     )
 
     class _Indices:
@@ -328,6 +390,7 @@ def test_predict_from_bundle_forwards_classic_sampling_args(monkeypatch):
         device="cpu",
         bundle_nc="/tmp/fake.nc",
         batch_index=0,
+        member_index=0,
         extra_args=classic,
         precision="fp32",
         model_comm_group=None,
@@ -335,3 +398,81 @@ def test_predict_from_bundle_forwards_classic_sampling_args(monkeypatch):
 
     assert len(model.calls) == 1
     assert model.calls[0]["extra_args"] == classic
+
+
+def test_predict_from_bundle_rejects_nonzero_member_index(monkeypatch):
+    monkeypatch.setattr(
+        predict,
+        "load_inputs_from_bundle_numpy",
+        lambda *args, **kwargs: (
+            np.zeros((2, 1), dtype=np.float32),
+            np.zeros((3, 1), dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+            np.zeros(3, dtype=np.float32),
+            np.zeros(3, dtype=np.float32),
+        ),
+    )
+
+    class _Indices:
+        def __init__(self):
+            self.data = type(
+                "_Data",
+                (),
+                {
+                    "input": [
+                        type("_In", (), {"name_to_index": {"a": 0}}),
+                        type("_In", (), {"name_to_index": {"z": 0}}),
+                    ]
+                },
+            )
+            self.model = type("_Model", (), {"output": type("_Out", (), {"name_to_index": {"a": 0}})})
+
+    dm = type("_DummyDM", (), {"data_indices": _Indices()})()
+    model = _DummyModel(grid_hres=3, n_states=1)
+
+    try:
+        predict._predict_from_bundle(
+            inference_model=model,
+            datamodule=dm,
+            device="cpu",
+            bundle_nc="/tmp/fake.nc",
+            batch_index=0,
+            member_index=1,
+            extra_args={},
+            precision="fp32",
+            model_comm_group=None,
+        )
+    except ValueError as exc:
+        assert "single-member bundles" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for nonzero bundle member index")
+
+
+def test_fail_if_missing_truth_raises():
+    with pytest.raises(SystemExit, match="Missing target truth `y`"):
+        predict._fail_if_missing_truth(y=None, context="from-bundle")
+
+
+def test_validate_output_path_rejects_nonempty_parent(tmp_path):
+    out_dir = tmp_path / "run_a"
+    out_dir.mkdir(parents=True)
+    (out_dir / "already_here.txt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="already exists and is not empty"):
+        predict._validate_output_path(
+            out_path=out_dir / "predictions.nc",
+            allow_existing_output_dir=False,
+        )
+
+
+def test_validate_output_path_rejects_nested_run_layout(tmp_path):
+    old_run = tmp_path / "old_run_20260309"
+    (old_run / "logs").mkdir(parents=True)
+    nested_out = old_run / "new_run_20260310" / "predictions.nc"
+
+    with pytest.raises(SystemExit, match="Unsafe nested output path detected"):
+        predict._validate_output_path(
+            out_path=nested_out,
+            allow_existing_output_dir=False,
+        )

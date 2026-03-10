@@ -52,6 +52,16 @@ case "${MODE}" in
     ;;
 esac
 
+if [[ "${RUN_NAME}" == *"/"* ]]; then
+  echo "Unsafe target name (contains '/'): ${RUN_NAME}" >&2
+  exit 2
+fi
+if [[ ! "${RUN_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Unsafe target name: ${RUN_NAME}" >&2
+  echo "Allowed pattern: [A-Za-z0-9._-]+" >&2
+  exit 2
+fi
+
 LOG_DIR="/home/ecm5702/perm/eval/${RUN_NAME}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/${LOG_FILE_BASENAME}"

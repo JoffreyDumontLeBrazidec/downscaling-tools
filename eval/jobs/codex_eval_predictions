@@ -8,6 +8,7 @@ Usage:
 
 If --run-id is omitted, one is generated as: manual_<4 random alphanumeric chars>.
 If --run-id is provided and does not start with manual_, it is normalized to manual_<RUN_ID>.
+Run-id must match: [A-Za-z0-9._-]+ and must not contain "/".
 
 Examples:
   $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f
@@ -60,6 +61,15 @@ if [[ -z "${RUN_ID}" ]]; then
   RUN_ID="manual_${RAND}"
 elif [[ "${RUN_ID}" != manual_* ]]; then
   RUN_ID="manual_${RUN_ID}"
+fi
+if [[ "${RUN_ID}" == *"/"* ]]; then
+  echo "Unsafe run-id (contains '/'): ${RUN_ID}" >&2
+  exit 2
+fi
+if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Unsafe run-id: ${RUN_ID}" >&2
+  echo "Allowed pattern: [A-Za-z0-9._-]+" >&2
+  exit 2
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
