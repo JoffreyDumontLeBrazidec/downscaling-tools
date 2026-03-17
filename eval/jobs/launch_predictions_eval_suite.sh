@@ -29,6 +29,7 @@ RUN_ID=""
 EVAL_ROOT="/home/ecm5702/perm/eval"
 INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 CKPT_ID="4a5b2f1b24b84c52872bfcec1410b00f"
+NAME_CKPT=""
 PREDICT_QOS="dg"
 PREDICT_TIME="00:30:00"
 PREDICT_CPUS="32"
@@ -59,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --eval-root) EVAL_ROOT="$2"; shift 2 ;;
     --input-root) INPUT_ROOT="$2"; shift 2 ;;
     --ckpt-id) CKPT_ID="$2"; shift 2 ;;
+    --name-ckpt) NAME_CKPT="$2"; shift 2 ;;
     --predict-qos) PREDICT_QOS="$2"; shift 2 ;;
     --predict-time) PREDICT_TIME="$2"; shift 2 ;;
     --predict-cpus) PREDICT_CPUS="$2"; shift 2 ;;
@@ -127,6 +129,13 @@ if [[ "${ALLOW_EXISTING_RUN_DIR}" -eq 1 ]]; then
   PREDICTION_SAFETY_FLAGS="--allow-existing-out-dir --allow-overwrite-existing-files"
 fi
 
+CKPT_FLAG=""
+if [[ -n "$NAME_CKPT" ]]; then
+  CKPT_FLAG="--name-ckpt ${NAME_CKPT}"
+else
+  CKPT_FLAG="--ckpt-id ${CKPT_ID}"
+fi
+
 cat > "${JOBS_DIR}/predict25_${RUN_ID}.sbatch" <<EOF
 #!/bin/bash
 #SBATCH --job-name=p25_${RUN_ID}
@@ -150,7 +159,7 @@ cd ${PROJECT_ROOT}
 python eval/jobs/generate_predictions_25_files.py \
   --input-root ${INPUT_ROOT} \
   --out-dir ${PRED_DIR} \
-  --ckpt-id ${CKPT_ID} \
+  ${CKPT_FLAG} \
   --device cuda ${PREDICTION_SAFETY_FLAGS}
 EOF
 

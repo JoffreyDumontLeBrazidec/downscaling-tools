@@ -20,9 +20,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DIR_DATA_BASE = "/home/ecm5702/hpcperm/data/tc"
-
-
-def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str = "ENFO_O320") -> str:
+def run_tc_pdf(
+    *,
+    expver: str,
+    outdir: str,
+    out_name: str = "",
+    exp_prefix: str = "ENFO_O320",
+    support_mode: str = "regridded",
+) -> str:
     exp_key = f"{exp_prefix}_{expver}"
     exp_labels = {exp_key: expver}
     # ip6y is always plotted as a fixed reference in tc_pdf_plot.py.
@@ -45,6 +50,7 @@ def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str 
         "expver": expver,
         "exp_prefix": exp_prefix,
         "pdf_file": out_pdf,
+        "support_mode": support_mode,
         "events": {},
     }
 
@@ -60,6 +66,7 @@ def run_tc_pdf(*, expver: str, outdir: str, out_name: str = "", exp_prefix: str 
                 exclude_ml=None,
                 exp_labels=exp_labels,
                 return_stats=True,
+                support_mode=support_mode,
             )
             pdf.savefig(fig, dpi=300)
             plt.close(fig)
@@ -83,8 +90,20 @@ def main() -> None:
         default="ENFO_O320",
         help="Prefix for ML TC GRIB ids (e.g. ENFO_O320 or ENFO_O1280).",
     )
+    parser.add_argument(
+        "--support-mode",
+        choices=["native", "regridded"],
+        default="regridded",
+        help="Use native supports directly or regrid every curve onto the canonical regular TC grid.",
+    )
     args = parser.parse_args()
-    run_tc_pdf(expver=args.expver, outdir=args.outdir, out_name=args.out_name, exp_prefix=args.exp_prefix)
+    run_tc_pdf(
+        expver=args.expver,
+        outdir=args.outdir,
+        out_name=args.out_name,
+        exp_prefix=args.exp_prefix,
+        support_mode=args.support_mode,
+    )
 
 
 if __name__ == "__main__":

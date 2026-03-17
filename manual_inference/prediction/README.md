@@ -16,7 +16,12 @@ If `--out` is not set, predictions are written to:
 - `y` truth is mandatory in output `predictions.nc`.
 - `from-bundle` is the production path.
 - `from-dataloader` is debug-only and requires `--debug-from-dataloader`.
-- `--allow-missing-target` is no longer supported for bundle build.
+- bundle build requires target truth by default.
+- `build-bundle`, `from-bundle`, and `generate_predictions_25_files.py` may use
+  `--allow-missing-target-unsafe` only for explicit prediction-only recovery output.
+- If you explicitly need prediction-only recovery output from an incomplete bundle, `from-bundle`
+  can use `--allow-missing-target-unsafe` to write `y` as all-NaN. Treat that output as
+  non-canonical for truth-aware evaluation.
 
 **Commands**
 
@@ -45,6 +50,16 @@ python -m manual_inference.prediction.predict build-bundle \
   --hres-grib     /path/hres_static.grib \
   --target-sfc-grib /path/hres_target_sfc.grib \
   --target-pl-grib  /path/hres_target_pl.grib \
+  --out /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc
+```
+
+4. Build prediction-only bundle when target GRIBs are unavailable:
+```bash
+python -m manual_inference.prediction.predict build-bundle \
+  --lres-sfc-grib /path/lres_sfc.grib \
+  --lres-pl-grib  /path/lres_pl.grib \
+  --hres-grib     /path/hres_static.grib \
+  --allow-missing-target-unsafe \
   --out /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc
 ```
 

@@ -1,31 +1,25 @@
-# tc_pdf_plot.py
 """
 Plotting logic for TC PDF comparisons.
-
-Changes vs your current version:
-- Much less logging: only the essentials + a short summary per experiment.
-- Wind: no "below_oper" logging (only "above OPER" + fraction above).
-- Default behavior: keep your full ML list, but you can pass exclude_ml/include_ml
-  to quickly drop known-bad experiments (e.g. j0ys).
-- Safer ratio plotting: bins where OPER histogram is zero are set to NaN (no spikes).
 """
 
-import os
-import warnings
+from __future__ import annotations
+
 import logging
 import math
+import warnings
 from typing import Iterable, Optional
 
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import cmcrameri.cm as cm
-import earthkit.data as ekd
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 
 try:
     from .tc_events import TCEvent
+    from .tc_vector_loading import CurveVectors, SupportMode, load_grib_event_curves
 except ImportError:  # allow running as a script
     from tc_events import TCEvent
+    from tc_vector_loading import CurveVectors, SupportMode, load_grib_event_curves
 
 logger = logging.getLogger(__name__)
 
@@ -38,19 +32,24 @@ warnings.filterwarnings(
 
 sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 np.seterr(divide="ignore", invalid="ignore")
+
+OPER_KEY = "OPER_O320_0001"
+REFERENCE_ORDER = ["ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"]
+REFERENCE_STYLES = {
+    "ENFO_O320_0001": {"label": "enfo_o320", "color": "black", "linestyle": "-.", "linewidth": 2},
+    "EEFO_O96_0001": {"label": "eefo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
+    "ENFO_O320_ip6y": {"label": "ip6y", "color": "orange", "linestyle": ":", "linewidth": 2},
+}
+
 IDALIA_EXTREME_MSLP_RANGE = (980.0, 990.0)
 IDALIA_EXTREME_WIND_MIN = 25.0
 
 
-# -------------------------
-# IO helpers
-# -------------------------
-def to_xarray_from_files(files):
-    logger.debug("Loading %d GRIB files", len(files))
-    missing = [f for f in files if not os.path.exists(f)]
-    if missing:
-        raise FileNotFoundError("Missing GRIB files:\n" + "\n".join(missing))
-    return ekd.from_source("file", files).to_xarray(engine="cfgrib")
+def _safe_ratio(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    out = np.full_like(num, np.nan, dtype=np.float64)
+    mask = den > 0
+    out[mask] = num[mask] / den[mask]
+    return out
 
 
 def _finite_1d(x: np.ndarray) -> np.ndarray:
@@ -58,21 +57,13 @@ def _finite_1d(x: np.ndarray) -> np.ndarray:
     return x[np.isfinite(x)]
 
 
-# -------------------------
-# Tail diagnostics (kept, but we log less)
-# -------------------------
 def _tail_summary(x: np.ndarray, *, tail: str) -> dict:
-    """
-    tail='low'  -> unusually low values (e.g., MSLP)
-    tail='high' -> unusually high values (e.g., wind)
-    """
     x = _finite_1d(x)
     if x.size == 0:
         return {"n": 0}
 
     p = np.percentile(x, [0.1, 1, 5, 50, 95, 99, 99.5, 99.9])
     p01, p1, p5, p50, p95, p99, p995, p999 = p
-
     out = {
         "n": int(x.size),
         "min": float(x.min()),
@@ -97,20 +88,9 @@ def _tail_summary(x: np.ndarray, *, tail: str) -> dict:
         denom = max(p50 - p5, eps)
         out["tail_index"] = float((p5 - p1) / denom)
         out["extreme_index"] = float((p1 - p01) / denom)
-        out["bottom0.1_mean"] = (
-            float(x[x <= p01].mean()) if np.any(x <= p01) else np.nan
-        )
+        out["bottom0.1_mean"] = float(x[x <= p01].mean()) if np.any(x <= p01) else np.nan
     else:
         raise ValueError("tail must be 'low' or 'high'")
-
-    return out
-
-
-def _safe_ratio(num: np.ndarray, den: np.ndarray) -> np.ndarray:
-    """Return num/den but NaN where den<=0."""
-    out = np.full_like(num, np.nan, dtype=np.float64)
-    m = den > 0
-    out[m] = num[m] / den[m]
     return out
 
 
@@ -133,7 +113,6 @@ def _summary_stats(x: np.ndarray) -> dict:
 
 
 def _distribution_metrics(hist_ref: np.ndarray, hist_other: np.ndarray, bin_width: float) -> dict:
-    # Convert densities to probability masses to compute robust divergences.
     pref = np.asarray(hist_ref, dtype=np.float64) * bin_width
     poth = np.asarray(hist_other, dtype=np.float64) * bin_width
     sref = float(np.sum(pref))
@@ -162,10 +141,10 @@ def _distribution_metrics(hist_ref: np.ndarray, hist_other: np.ndarray, bin_widt
     eps = 1e-12
     kl_ref_to_other = float(np.sum(pref * np.log((pref + eps) / (poth + eps))))
     kl_other_to_ref = float(np.sum(poth * np.log((poth + eps) / (pref + eps))))
-    m = 0.5 * (pref + poth)
+    mean_prob = 0.5 * (pref + poth)
     js = 0.5 * (
-        np.sum(pref * np.log((pref + eps) / (m + eps)))
-        + np.sum(poth * np.log((poth + eps) / (m + eps)))
+        np.sum(pref * np.log((pref + eps) / (mean_prob + eps)))
+        + np.sum(poth * np.log((poth + eps) / (mean_prob + eps)))
     )
     return {
         "l1_mass": l1,
@@ -192,269 +171,245 @@ def _ratio_metrics(hist_ref: np.ndarray, hist_other: np.ndarray) -> dict:
             "ratio_mae_to_1": math.nan,
             "ratio_max_abs_dev_from_1": math.nan,
         }
-    r = ratio[valid]
+    values = ratio[valid]
     return {
-        "valid_bins": int(r.size),
-        "ratio_mean": float(np.mean(r)),
-        "ratio_std": float(np.std(r)),
-        "ratio_min": float(np.min(r)),
-        "ratio_max": float(np.max(r)),
-        "ratio_mae_to_1": float(np.mean(np.abs(r - 1.0))),
-        "ratio_max_abs_dev_from_1": float(np.max(np.abs(r - 1.0))),
+        "valid_bins": int(values.size),
+        "ratio_mean": float(np.mean(values)),
+        "ratio_std": float(np.std(values)),
+        "ratio_min": float(np.min(values)),
+        "ratio_max": float(np.max(values)),
+        "ratio_mae_to_1": float(np.mean(np.abs(values - 1.0))),
+        "ratio_max_abs_dev_from_1": float(np.max(np.abs(values - 1.0))),
     }
 
 
 def _extreme_fraction_mslp(vals: np.ndarray, mslp_range: tuple[float, float]) -> float:
-    v = _finite_1d(vals)
-    if v.size == 0:
+    vals = _finite_1d(vals)
+    if vals.size == 0:
         return math.nan
     lo, hi = mslp_range
-    return float(np.mean((v >= lo) & (v <= hi)))
+    return float(np.mean((vals >= lo) & (vals <= hi)))
 
 
 def _extreme_fraction_wind(vals: np.ndarray, wind_gt: float) -> float:
-    v = _finite_1d(vals)
-    if v.size == 0:
+    vals = _finite_1d(vals)
+    if vals.size == 0:
         return math.nan
-    return float(np.mean(v > wind_gt))
+    return float(np.mean(vals > wind_gt))
 
 
-# -------------------------
-# Main plotting
-# -------------------------
-def plot_event(
+def _curve_label(curve_key: str, exp_labels: dict[str, str]) -> str:
+    if curve_key in REFERENCE_STYLES:
+        return REFERENCE_STYLES[curve_key]["label"]
+    if curve_key == OPER_KEY:
+        return "OPER AN"
+    if curve_key in exp_labels:
+        return exp_labels[curve_key]
+    return curve_key.replace("ENFO_O320_", "")
+
+
+def _curve_style(
+    curve_key: str,
+    *,
+    ml_palette: np.ndarray,
+    ml_index: int,
+) -> dict[str, object]:
+    if curve_key in REFERENCE_STYLES:
+        return dict(REFERENCE_STYLES[curve_key])
+    return {
+        "color": ml_palette[ml_index],
+        "linestyle": "-",
+        "linewidth": 3,
+    }
+
+
+def _variable_stats(
+    vals: np.ndarray,
+    *,
+    hist_ref: np.ndarray,
+    bins: np.ndarray,
+    bin_width: float,
+    tail: str,
+) -> tuple[np.ndarray, dict]:
+    hist, _ = np.histogram(vals, bins=bins, density=True)
+    stats = {
+        "summary": _summary_stats(vals),
+        "tail": _tail_summary(vals, tail=tail),
+        "vs_oper": {
+            **_distribution_metrics(hist_ref, hist, bin_width),
+            **_ratio_metrics(hist_ref, hist),
+        },
+    }
+    return hist, stats
+
+
+def _extreme_tail_table(series: dict[str, tuple[np.ndarray, np.ndarray]]) -> dict:
+    rows: list[dict[str, object]] = []
+    for exp, (msl_arr, wind_arr) in series.items():
+        msl = _finite_1d(msl_arr)
+        wind = _finite_1d(wind_arr)
+        msl_hit = (msl >= IDALIA_EXTREME_MSLP_RANGE[0]) & (msl <= IDALIA_EXTREME_MSLP_RANGE[1])
+        wind_hit = wind > IDALIA_EXTREME_WIND_MIN
+        rows.append(
+            {
+                "exp": exp,
+                "mslp_980_990_count": int(np.sum(msl_hit)),
+                "mslp_980_990_fraction": float(np.mean(msl_hit)) if msl.size else math.nan,
+                "wind_gt_25_count": int(np.sum(wind_hit)),
+                "wind_gt_25_fraction": float(np.mean(wind_hit)) if wind.size else math.nan,
+                "n_msl": int(msl.size),
+                "n_wind": int(wind.size),
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            float(row["mslp_980_990_fraction"]) if np.isfinite(row["mslp_980_990_fraction"]) else -1.0,
+            float(row["wind_gt_25_fraction"]) if np.isfinite(row["wind_gt_25_fraction"]) else -1.0,
+        ),
+        reverse=True,
+    )
+    return {
+        "thresholds": {
+            "mslp_hpa_range": [IDALIA_EXTREME_MSLP_RANGE[0], IDALIA_EXTREME_MSLP_RANGE[1]],
+            "wind_ms_gt": IDALIA_EXTREME_WIND_MIN,
+        },
+        "rows": rows,
+    }
+
+
+def plot_event_curves(
     cfg: TCEvent,
     *,
-    dir_data_base: str,
-    out_path: str,  # kept for API compatibility; not used here (caller may save fig)
-    include_ml: Optional[Iterable[str]] = None,
-    exclude_ml: Optional[Iterable[str]] = None,
+    curves: dict[str, CurveVectors],
+    curve_order: Iterable[str],
     exp_labels: Optional[dict[str, str]] = None,
     return_stats: bool = False,
 ) -> plt.Figure | tuple[plt.Figure, dict]:
-    """
-    Plot per-event PDF ratios (ML + references) for:
-      - MSLP (ratio vs OPER analysis)
-      - 10m wind speed (ratio vs OPER analysis)
-
-    Logging is intentionally short:
-      - OPER support + a compact tail index
-      - For each ML exp: support + fraction outside (MSLP) or fraction above (wind)
-    """
-
     exp_labels = exp_labels or {}
+    curve_order = [curve_key for curve_key in curve_order if curve_key in curves and curve_key != OPER_KEY]
+    ml_like_keys = [curve_key for curve_key in curve_order if curve_key not in REFERENCE_STYLES]
+    ml_palette = cm.batlow(np.linspace(0, 1, max(1, len(ml_like_keys))))
+    ml_indices = {curve_key: idx for idx, curve_key in enumerate(ml_like_keys)}
 
-    dir_data = os.path.join(dir_data_base, cfg.name)
-    logger.info("Event: %s | data: %s", cfg.name, dir_data)
+    oper_curve = curves[OPER_KEY]
+    oper_msl = _finite_1d(oper_curve.msl)
+    oper_wind = _finite_1d(oper_curve.wind)
 
-    # --- select ML experiments (preserve order)
-    ml_exps = list(include_ml) if include_ml is not None else list(cfg.list_expid_ml)
-    if exclude_ml is not None:
-        excl = set(exclude_ml)
-        ml_exps = [e for e in ml_exps if e not in excl]
+    xbins_msl = np.arange(*cfg.mslp_bin_range)
+    mids_msl = (xbins_msl[:-1] + xbins_msl[1:]) / 2.0
+    xbins_wind = np.arange(*cfg.wind_bin_range)
+    mids_wind = (xbins_wind[:-1] + xbins_wind[1:]) / 2.0
 
-    logger.info("ML exps (%d): %s", len(ml_exps), ml_exps)
+    hist_oper_msl, _ = np.histogram(oper_msl, bins=xbins_msl, density=True)
+    hist_oper_wind, _ = np.histogram(oper_wind, bins=xbins_wind, density=True)
 
-    # --- load ML datasets
-    all_datasets: dict[str, "xarray.Dataset"] = {}
-    for exp in ml_exps:
-        files = [
-            os.path.join(dir_data, f"surface_pf_{exp}_{cfg.year}{cfg.month}{d}.grib")
-            for d in cfg.dates
-        ]
-        all_datasets[exp] = to_xarray_from_files(files)
-
-    # --- load references
-    dataset_enfo_o320 = to_xarray_from_files(
-        [
-            os.path.join(
-                dir_data,
-                f"surface_pf_{cfg.expid_enfo_o320}_{cfg.year}{cfg.month}{d}.grib",
-            )
-            for d in cfg.dates
-        ]
+    s_oper_msl = _tail_summary(oper_msl, tail="low")
+    s_oper_wind = _tail_summary(oper_wind, tail="high")
+    logger.info(
+        "MSLP OPER support [%.2f, %.2f] hPa | tail_index=%.3g extreme_index=%.3g",
+        float(oper_msl.min()),
+        float(oper_msl.max()),
+        s_oper_msl.get("tail_index", np.nan),
+        s_oper_msl.get("extreme_index", np.nan),
     )
-    dataset_eefo_o96 = to_xarray_from_files(
-        [
-            os.path.join(
-                dir_data,
-                f"surface_pf_{cfg.expid_eefo_o96}_{cfg.year}{cfg.month}{d}.grib",
-            )
-            for d in cfg.dates
-        ]
+    logger.info(
+        "WIND OPER support [%.2f, %.2f] m/s | tail_index=%.3g extreme_index=%.3g",
+        float(oper_wind.min()),
+        float(oper_wind.max()),
+        s_oper_wind.get("tail_index", np.nan),
+        s_oper_wind.get("extreme_index", np.nan),
     )
-    dataset_oper = to_xarray_from_files(
-        [
-            os.path.join(dir_data, f"surface_an_{cfg.analysis}_{d}.grib")
-            for d in cfg.analysis_dates
-        ]
-    )
-    # Mandatory reference requested by workflow policy.
-    dataset_ip6y = to_xarray_from_files(
-        [
-            os.path.join(
-                dir_data,
-                f"surface_pf_ENFO_O320_ip6y_{cfg.year}{cfg.month}{d}.grib",
-            )
-            for d in cfg.dates
-        ]
-    )
-
-    # --- plotting
-    cmap = cm.batlow
-    colors = cmap(np.linspace(0, 1, max(1, len(all_datasets))))
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
-    extreme_parts: dict[str, dict[str, float]] = {}
     event_stats = {
         "event": cfg.name,
         "year": cfg.year,
         "month": cfg.month,
         "dates": list(cfg.dates),
         "analysis_dates": list(cfg.analysis_dates),
-        "ml_exps": ml_exps,
+        "curve_order": list(curve_order),
         "variables": {
-            "mslp_hpa": {"curves": {}},
-            "wind10m_ms": {"curves": {}},
+            "mslp_hpa": {
+                "oper": {"summary": _summary_stats(oper_msl), "tail": s_oper_msl},
+                "curves": {},
+            },
+            "wind10m_ms": {
+                "oper": {"summary": _summary_stats(oper_wind), "tail": s_oper_wind},
+                "curves": {},
+            },
         },
     }
-
-    # =====================
-    # MSLP
-    # =====================
-    xbins_msl = np.arange(*cfg.mslp_bin_range)
-    mids_msl = (xbins_msl[:-1] + xbins_msl[1:]) / 2
-
-    oper_msl = _finite_1d(dataset_oper["msl"].values / 100.0)
-    hist_oper_msl, _ = np.histogram(oper_msl, bins=xbins_msl, density=True)
-    oper_min_msl, oper_max_msl = float(oper_msl.min()), float(oper_msl.max())
-
-    s_oper_msl = _tail_summary(oper_msl, tail="low")
-    extreme_parts["OPER_O320_0001"] = {
-        "mslp_980_990_fraction": _extreme_fraction_mslp(oper_msl, IDALIA_EXTREME_MSLP_RANGE),
+    extreme_series: dict[str, tuple[np.ndarray, np.ndarray]] = {
+        OPER_KEY: (oper_msl, oper_wind),
     }
-    event_stats["variables"]["mslp_hpa"]["oper"] = {
-        "summary": _summary_stats(oper_msl),
-        "tail": s_oper_msl,
-    }
-    logger.info(
-        "MSLP OPER support [%.2f, %.2f] hPa | tail_index=%.3g extreme_index=%.3g",
-        oper_min_msl,
-        oper_max_msl,
-        s_oper_msl.get("tail_index", np.nan),
-        s_oper_msl.get("extreme_index", np.nan),
-    )
 
-    for i, exp in enumerate(all_datasets.keys()):
-        vals = _finite_1d(all_datasets[exp]["msl"].values / 100.0)
-        vmin, vmax = float(vals.min()), float(vals.max())
-
-        frac_below = float(np.mean(vals < oper_min_msl))
-        frac_above = float(np.mean(vals > oper_max_msl))
-
-        s = _tail_summary(vals, tail="low")
-        logger.info(
-            "MSLP %-14s support [%.2f, %.2f] | outside: below=%.2e above=%.2e | tail=%.3g ext=%.3g",
-            exp,
-            vmin,
-            vmax,
-            frac_below,
-            frac_above,
-            s.get("tail_index", np.nan),
-            s.get("extreme_index", np.nan),
+    for curve_key in curve_order:
+        curve = curves[curve_key]
+        label = _curve_label(curve_key, exp_labels)
+        style = _curve_style(
+            curve_key,
+            ml_palette=ml_palette,
+            ml_index=ml_indices.get(curve_key, 0),
         )
 
-        hist_exp, _ = np.histogram(vals, bins=xbins_msl, density=True)
-        event_stats["variables"]["mslp_hpa"]["curves"][exp] = {
-            "label": exp_labels.get(exp, exp),
-            "summary": _summary_stats(vals),
-            "tail": s,
-            "vs_oper": {
-                **_distribution_metrics(hist_oper_msl, hist_exp, cfg.mslp_bin_range[2]),
-                **_ratio_metrics(hist_oper_msl, hist_exp),
-            },
-        }
-        extreme_parts.setdefault(exp, {})["mslp_980_990_fraction"] = _extreme_fraction_mslp(
-            vals,
-            IDALIA_EXTREME_MSLP_RANGE,
+        vals_msl = _finite_1d(curve.msl)
+        hist_msl, msl_stats = _variable_stats(
+            vals_msl,
+            hist_ref=hist_oper_msl,
+            bins=xbins_msl,
+            bin_width=cfg.mslp_bin_range[2],
+            tail="low",
+        )
+        logger.info(
+            "MSLP %-24s support [%.2f, %.2f] | tail=%.3g ext=%.3g",
+            curve_key,
+            float(vals_msl.min()),
+            float(vals_msl.max()),
+            msl_stats["tail"].get("tail_index", np.nan),
+            msl_stats["tail"].get("extreme_index", np.nan),
         )
         axs[0].plot(
             mids_msl,
-            _safe_ratio(hist_exp, hist_oper_msl),
-            linestyle="-",
-            linewidth=3,
-            label=exp_labels.get(exp, exp),
-            color=colors[i],
+            _safe_ratio(hist_msl, hist_oper_msl),
+            label=label,
+            color=style["color"],
+            linestyle=style["linestyle"],
+            linewidth=style["linewidth"],
         )
+        event_stats["variables"]["mslp_hpa"]["curves"][curve_key] = {
+            "label": label,
+            **msl_stats,
+        }
 
-    # references
-    vals = _finite_1d(dataset_enfo_o320["msl"].values / 100.0)
-    hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
-    event_stats["variables"]["mslp_hpa"]["curves"]["ENFO_O320_0001"] = {
-        "label": "enfo_o320",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="low"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
-            **_ratio_metrics(hist_oper_msl, hist),
-        },
-    }
-    extreme_parts["ENFO_O320_0001"] = {
-        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
-    }
-    axs[0].plot(
-        mids_msl,
-        _safe_ratio(hist, hist_oper_msl),
-        "-.",
-        linewidth=2,
-        color="black",
-        label="enfo_o320",
-    )
-
-    vals = _finite_1d(dataset_eefo_o96["msl"].values / 100.0)
-    hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
-    event_stats["variables"]["mslp_hpa"]["curves"]["EEFO_O96_0001"] = {
-        "label": "eefo_o96",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="low"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
-            **_ratio_metrics(hist_oper_msl, hist),
-        },
-    }
-    extreme_parts["EEFO_O96_0001"] = {
-        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
-    }
-    axs[0].plot(
-        mids_msl,
-        _safe_ratio(hist, hist_oper_msl),
-        "--",
-        linewidth=2,
-        color="red",
-        label="eefo_o96",
-    )
-    vals = _finite_1d(dataset_ip6y["msl"].values / 100.0)
-    hist, _ = np.histogram(vals, bins=xbins_msl, density=True)
-    event_stats["variables"]["mslp_hpa"]["curves"]["ENFO_O320_ip6y"] = {
-        "label": "ip6y",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="low"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_msl, hist, cfg.mslp_bin_range[2]),
-            **_ratio_metrics(hist_oper_msl, hist),
-        },
-    }
-    extreme_parts["ENFO_O320_ip6y"] = {
-        "mslp_980_990_fraction": _extreme_fraction_mslp(vals, IDALIA_EXTREME_MSLP_RANGE),
-    }
-    axs[0].plot(
-        mids_msl,
-        _safe_ratio(hist, hist_oper_msl),
-        ":",
-        linewidth=2,
-        color="orange",
-        label="ip6y",
-    )
+        vals_wind = _finite_1d(curve.wind)
+        hist_wind, wind_stats = _variable_stats(
+            vals_wind,
+            hist_ref=hist_oper_wind,
+            bins=xbins_wind,
+            bin_width=cfg.wind_bin_range[2],
+            tail="high",
+        )
+        logger.info(
+            "WIND %-24s support [%.2f, %.2f] | tail=%.3g ext=%.3g",
+            curve_key,
+            float(vals_wind.min()),
+            float(vals_wind.max()),
+            wind_stats["tail"].get("tail_index", np.nan),
+            wind_stats["tail"].get("extreme_index", np.nan),
+        )
+        axs[1].plot(
+            mids_wind,
+            _safe_ratio(hist_wind, hist_oper_wind),
+            label=label,
+            color=style["color"],
+            linestyle=style["linestyle"],
+            linewidth=style["linewidth"],
+        )
+        event_stats["variables"]["wind10m_ms"]["curves"][curve_key] = {
+            "label": label,
+            **wind_stats,
+        }
+        extreme_series[curve_key] = (vals_msl, vals_wind)
 
     axs[0].plot(
         mids_msl,
@@ -469,160 +424,6 @@ def plot_event(
     axs[0].set_ylabel("Normalized Probability Density", fontsize=14)
     axs[0].set_title("Normalized (by AN O320) Distribution MSLP", fontsize=14)
     axs[0].legend()
-
-    # =====================
-    # WIND
-    # =====================
-    xbins_wind = np.arange(*cfg.wind_bin_range)
-    mids_wind = (xbins_wind[:-1] + xbins_wind[1:]) / 2
-
-    oper_wind = _finite_1d(
-        np.sqrt(dataset_oper["u10"] ** 2 + dataset_oper["v10"] ** 2).values
-    )
-    hist_oper_wind, _ = np.histogram(oper_wind, bins=xbins_wind, density=True)
-    oper_min_w, oper_max_w = float(oper_wind.min()), float(oper_wind.max())
-
-    s_oper_w = _tail_summary(oper_wind, tail="high")
-    extreme_parts.setdefault("OPER_O320_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
-        oper_wind,
-        IDALIA_EXTREME_WIND_MIN,
-    )
-    event_stats["variables"]["wind10m_ms"]["oper"] = {
-        "summary": _summary_stats(oper_wind),
-        "tail": s_oper_w,
-    }
-    logger.info(
-        "WIND OPER support [%.2f, %.2f] m/s | tail_index=%.3g extreme_index=%.3g",
-        oper_min_w,
-        oper_max_w,
-        s_oper_w.get("tail_index", np.nan),
-        s_oper_w.get("extreme_index", np.nan),
-    )
-
-    for i, exp in enumerate(all_datasets.keys()):
-        vals = _finite_1d(
-            np.sqrt(
-                all_datasets[exp]["u10"] ** 2 + all_datasets[exp]["v10"] ** 2
-            ).values
-        )
-        vmin, vmax = float(vals.min()), float(vals.max())
-
-        above_oper = vmax > oper_max_w
-        frac_above = float(np.mean(vals > oper_max_w))
-
-        s = _tail_summary(vals, tail="high")
-        # NOTE: no "below_oper" for wind (by request)
-        logger.info(
-            "WIND %-14s support [%.2f, %.2f] | above_OPER=%s frac_above=%.2e | tail=%.3g ext=%.3g",
-            exp,
-            vmin,
-            vmax,
-            str(bool(above_oper)),
-            frac_above,
-            s.get("tail_index", np.nan),
-            s.get("extreme_index", np.nan),
-        )
-
-        hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
-        event_stats["variables"]["wind10m_ms"]["curves"][exp] = {
-            "label": exp_labels.get(exp, exp),
-            "summary": _summary_stats(vals),
-            "tail": s,
-            "vs_oper": {
-                **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
-                **_ratio_metrics(hist_oper_wind, hist),
-            },
-        }
-        extreme_parts.setdefault(exp, {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
-            vals,
-            IDALIA_EXTREME_WIND_MIN,
-        )
-        axs[1].plot(
-            mids_wind,
-            _safe_ratio(hist, hist_oper_wind),
-            "-",
-            linewidth=3,
-            color=colors[i],
-            label=exp_labels.get(exp, exp),
-        )
-
-    # references
-    vals = _finite_1d(
-        np.sqrt(dataset_enfo_o320["u10"] ** 2 + dataset_enfo_o320["v10"] ** 2).values
-    )
-    hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
-    event_stats["variables"]["wind10m_ms"]["curves"]["ENFO_O320_0001"] = {
-        "label": "enfo_o320",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="high"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
-            **_ratio_metrics(hist_oper_wind, hist),
-        },
-    }
-    extreme_parts.setdefault("ENFO_O320_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
-        vals,
-        IDALIA_EXTREME_WIND_MIN,
-    )
-    axs[1].plot(
-        mids_wind,
-        _safe_ratio(hist, hist_oper_wind),
-        "-.",
-        linewidth=2,
-        color="black",
-        label="enfo_o320",
-    )
-
-    vals = _finite_1d(
-        np.sqrt(dataset_eefo_o96["u10"] ** 2 + dataset_eefo_o96["v10"] ** 2).values
-    )
-    hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
-    event_stats["variables"]["wind10m_ms"]["curves"]["EEFO_O96_0001"] = {
-        "label": "eefo_o96",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="high"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
-            **_ratio_metrics(hist_oper_wind, hist),
-        },
-    }
-    extreme_parts.setdefault("EEFO_O96_0001", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
-        vals,
-        IDALIA_EXTREME_WIND_MIN,
-    )
-    axs[1].plot(
-        mids_wind,
-        _safe_ratio(hist, hist_oper_wind),
-        "--",
-        linewidth=2,
-        color="red",
-        label="eefo_o96",
-    )
-    vals = _finite_1d(
-        np.sqrt(dataset_ip6y["u10"] ** 2 + dataset_ip6y["v10"] ** 2).values
-    )
-    hist, _ = np.histogram(vals, bins=xbins_wind, density=True)
-    event_stats["variables"]["wind10m_ms"]["curves"]["ENFO_O320_ip6y"] = {
-        "label": "ip6y",
-        "summary": _summary_stats(vals),
-        "tail": _tail_summary(vals, tail="high"),
-        "vs_oper": {
-            **_distribution_metrics(hist_oper_wind, hist, cfg.wind_bin_range[2]),
-            **_ratio_metrics(hist_oper_wind, hist),
-        },
-    }
-    extreme_parts.setdefault("ENFO_O320_ip6y", {})["wind_gt_25_fraction"] = _extreme_fraction_wind(
-        vals,
-        IDALIA_EXTREME_WIND_MIN,
-    )
-    axs[1].plot(
-        mids_wind,
-        _safe_ratio(hist, hist_oper_wind),
-        ":",
-        linewidth=2,
-        color="orange",
-        label="ip6y",
-    )
 
     axs[1].plot(
         mids_wind,
@@ -639,70 +440,45 @@ def plot_event(
     axs[1].legend()
 
     fig.suptitle(cfg.plot_title)
-    plt.tight_layout()
-    if cfg.name == "idalia":
-        rows: list[dict[str, float | str]] = []
-        for exp, part in extreme_parts.items():
-            m = part.get("mslp_980_990_fraction", math.nan)
-            w = part.get("wind_gt_25_fraction", math.nan)
-            rows.append(
-                {
-                    "exp": exp,
-                    "mslp_980_990_fraction": float(m),
-                    "wind_gt_25_fraction": float(w),
-                    "extreme_score": 0.0,
-                    "extreme_repro_score": 0.0,
-                    "mslp_repro_ratio_vs_ip6y": math.nan,
-                    "wind_repro_ratio_vs_ip6y": math.nan,
-                }
-            )
-        m_vals = [r["mslp_980_990_fraction"] for r in rows if np.isfinite(r["mslp_980_990_fraction"])]
-        w_vals = [r["wind_gt_25_fraction"] for r in rows if np.isfinite(r["wind_gt_25_fraction"])]
-        m_min, m_max = (min(m_vals), max(m_vals)) if m_vals else (math.nan, math.nan)
-        w_min, w_max = (min(w_vals), max(w_vals)) if w_vals else (math.nan, math.nan)
-        for r in rows:
-            m = r["mslp_980_990_fraction"]
-            w = r["wind_gt_25_fraction"]
-            m_norm = (m - m_min) / (m_max - m_min) if np.isfinite(m) and m_max > m_min else 0.0
-            w_norm = (w - w_min) / (w_max - w_min) if np.isfinite(w) and w_max > w_min else 0.0
-            r["extreme_score"] = 0.5 * m_norm + 0.5 * w_norm
+    fig.tight_layout()
+    event_stats["extreme_tail"] = _extreme_tail_table(extreme_series)
 
-        # Reference-consistent reproduction score:
-        # 1.0 means matching ip6y extreme occurrence rates exactly for both pressure/wind.
-        # Falls smoothly as ratios diverge (under- or over-production are both penalized).
-        ref_exp = "ENFO_O320_ip6y"
-        ref_row = next((r for r in rows if r["exp"] == ref_exp), None)
-        eps = 1e-12
-        if ref_row is not None:
-            ref_m = float(ref_row["mslp_980_990_fraction"])
-            ref_w = float(ref_row["wind_gt_25_fraction"])
-            for r in rows:
-                m = float(r["mslp_980_990_fraction"])
-                w = float(r["wind_gt_25_fraction"])
-                m_ratio = (m + eps) / (ref_m + eps) if np.isfinite(m) else math.nan
-                w_ratio = (w + eps) / (ref_w + eps) if np.isfinite(w) else math.nan
-                m_repro = math.exp(-abs(math.log(max(m_ratio, eps)))) if np.isfinite(m_ratio) else 0.0
-                w_repro = math.exp(-abs(math.log(max(w_ratio, eps)))) if np.isfinite(w_ratio) else 0.0
-                r["mslp_repro_ratio_vs_ip6y"] = m_ratio
-                r["wind_repro_ratio_vs_ip6y"] = w_ratio
-                r["extreme_repro_score"] = 0.5 * m_repro + 0.5 * w_repro
-
-        rows.sort(
-            key=lambda x: (
-                float(x.get("extreme_repro_score", 0.0)),
-                float(x.get("extreme_score", 0.0)),
-            ),
-            reverse=True,
-        )
-        event_stats["extreme_tail"] = {
-            "thresholds": {
-                "mslp_hpa_range": [IDALIA_EXTREME_MSLP_RANGE[0], IDALIA_EXTREME_MSLP_RANGE[1]],
-                "wind_ms_gt": IDALIA_EXTREME_WIND_MIN,
-                "reference_exp_for_repro_score": ref_exp,
-            },
-            "rows": rows,
-        }
-    logger.info("Event %s complete", cfg.name)
     if return_stats:
         return fig, event_stats
     return fig
+
+
+def plot_event(
+    cfg: TCEvent,
+    *,
+    dir_data_base: str,
+    out_path: str,
+    include_ml: Optional[Iterable[str]] = None,
+    exclude_ml: Optional[Iterable[str]] = None,
+    exp_labels: Optional[dict[str, str]] = None,
+    return_stats: bool = False,
+    support_mode: SupportMode = "regridded",
+) -> plt.Figure | tuple[plt.Figure, dict]:
+    del out_path
+
+    exp_labels = exp_labels or {}
+    ml_exps = list(include_ml) if include_ml is not None else list(cfg.list_expid_ml)
+    if exclude_ml is not None:
+        excluded = set(exclude_ml)
+        ml_exps = [expid for expid in ml_exps if expid not in excluded]
+
+    logger.info("Event: %s | support=%s | ML=%s", cfg.name, support_mode, ml_exps)
+    curves = load_grib_event_curves(
+        cfg,
+        dir_data_base=dir_data_base,
+        ml_exps=ml_exps,
+        support_mode=support_mode,
+    )
+    curve_order = [*ml_exps, *REFERENCE_ORDER]
+    return plot_event_curves(
+        cfg,
+        curves=curves,
+        curve_order=curve_order,
+        exp_labels=exp_labels,
+        return_stats=return_stats,
+    )

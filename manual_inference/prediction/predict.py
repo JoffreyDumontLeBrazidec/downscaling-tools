@@ -23,6 +23,8 @@ from manual_inference.input_data_construction.bundle import fill_inputs_from_bun
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
 from manual_inference.prediction.dataset import build_predictions_dataset
+from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
+from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction.utils import extract_filtered_input_from_output
 
 DEFAULT_EXTRA_ARGS_JSON = (
@@ -223,6 +225,11 @@ def _parse_members(value: str, max_members: int) -> list[int]:
     return members
 
 
+def _parse_output_weather_states(value: str) -> list[str] | None:
+    requested = [item.strip() for item in value.split(",") if item.strip()]
+    return requested or None
+
+
 def _predict_from_dataloader(
     *,
     inference_model,
@@ -234,6 +241,8 @@ def _predict_from_dataloader(
     extra_args: dict,
     precision: str,
     model_comm_group,
+    output_weather_state_mode: str = "all",
+    output_weather_states: Sequence[str] | None = None,
 ):
     data = datamodule.ds_valid.data
     x_in = np.asarray(data[idx : idx + n_samples][0])  # [dates, vars, ens, grid]
@@ -256,7 +265,12 @@ def _predict_from_dataloader(
     lon_hres = np.asarray(data.longitudes[2])
     lat_hres = np.asarray(data.latitudes[2])
     dates = np.asarray(data.dates[idx : idx + n_samples])
-    weather_states = list(name_to_idx_out.keys())
+    full_weather_states = list(name_to_idx_out.keys())
+    weather_states, selected_indices = resolve_output_weather_states(
+        weather_states=full_weather_states,
+        mode=output_weather_state_mode,
+        explicit_weather_states=output_weather_states,
+    )
 
     y_pred = np.zeros(
         (n_samples, len(members), lon_hres.shape[0], len(weather_states)),
@@ -285,13 +299,13 @@ def _predict_from_dataloader(
                         extra_args=extra_args,
                     )
             y_pred[i_sample, j] = (
-                pred[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+                pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
             )
 
     if not members:
         raise ValueError("No members selected. Pass at least one member id.")
-    x_out = x_in[:, members, :, :]
-    y_out = y[:, members, :, :]
+    x_out = x_in[:, members, :, :][..., selected_indices]
+    y_out = y[:, members, :, :][..., selected_indices]
     return (
         x_out,
         y_out,
@@ -316,6 +330,8 @@ def _predict_from_bundle(
     extra_args: dict,
     precision: str,
     model_comm_group,
+    output_weather_state_mode: str = "all",
+    output_weather_states: Sequence[str] | None = None,
 ):
     name_to_idx_lres = datamodule.data_indices.data.input[0].name_to_index
     name_to_idx_hres = datamodule.data_indices.data.input[1].name_to_index
@@ -355,15 +371,21 @@ def _predict_from_bundle(
                 extra_args=extra_args,
             )
 
-    x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
-    pred_np = pred[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+    weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
+    weather_states, selected_indices = resolve_output_weather_states(
+        weather_states=weather_states_full,
+        mode=output_weather_state_mode,
+        explicit_weather_states=output_weather_states,
+    )
 
-    weather_states = list(datamodule.data_indices.model.output.name_to_index.keys())
+    x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+    pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
     dates = None
 
     x_np, _ = extract_filtered_input_from_output(
         x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
     )
+    x_np = x_np[..., selected_indices]
 
     y_np = None
     target_np, found_target_channels = extract_target_from_bundle(bundle_nc, weather_states)
@@ -402,6 +424,25 @@ def _fail_if_missing_truth(*, y: np.ndarray | None, context: str) -> None:
             "Missing target truth `y` in predictions output. "
             f"Context={context}. Rebuild bundles with complete target_hres_* fields."
         )
+
+
+def _coerce_missing_truth_to_nan(
+    *,
+    y: np.ndarray | None,
+    y_pred: np.ndarray,
+    context: str,
+    allow_missing_target_unsafe: bool,
+) -> tuple[np.ndarray, bool]:
+    if y is not None:
+        return y, False
+    if not allow_missing_target_unsafe:
+        _fail_if_missing_truth(y=y, context=context)
+    print(
+        "WARNING: missing target truth `y` in predictions output. "
+        f"Context={context}. Writing all-NaN y because --allow-missing-target-unsafe was set. "
+        "Treat this artifact as prediction-only and non-canonical for truth-aware evaluation."
+    )
+    return np.full_like(y_pred, np.nan, dtype=np.float32), True
 
 
 def _validate_output_path(
@@ -455,6 +496,22 @@ def main() -> None:
     p_dl.add_argument("--validation-frequency", default="50h")
     p_dl.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
     p_dl.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
+    p_dl.add_argument(
+        "--output-weather-state-mode",
+        choices=OUTPUT_WEATHER_STATE_MODE_CHOICES,
+        default="all",
+        help="Subset saved variables. 'surface-plus-core-pl' keeps all surface outputs plus z_500 and t_850.",
+    )
+    p_dl.add_argument(
+        "--output-weather-states",
+        default="",
+        help="Explicit CSV override for saved weather states. Overrides --output-weather-state-mode when set.",
+    )
+    p_dl.add_argument(
+        "--slim-output",
+        action="store_true",
+        help="Write only canonical x/y/y_pred ensemble arrays and skip duplicate x_*/y_*/y_pred_* member views.",
+    )
     p_dl.add_argument("--out", default="")
     p_dl.add_argument(
         "--debug-from-dataloader",
@@ -477,11 +534,35 @@ def main() -> None:
     p_bundle.add_argument("--validation-frequency", default="50h")
     p_bundle.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
     p_bundle.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
+    p_bundle.add_argument(
+        "--output-weather-state-mode",
+        choices=OUTPUT_WEATHER_STATE_MODE_CHOICES,
+        default="all",
+        help="Subset saved variables. 'surface-plus-core-pl' keeps all surface outputs plus z_500 and t_850.",
+    )
+    p_bundle.add_argument(
+        "--output-weather-states",
+        default="",
+        help="Explicit CSV override for saved weather states. Overrides --output-weather-state-mode when set.",
+    )
+    p_bundle.add_argument(
+        "--slim-output",
+        action="store_true",
+        help="Write only canonical x/y/y_pred ensemble arrays and skip duplicate x_*/y_*/y_pred_* member views.",
+    )
     p_bundle.add_argument("--out", default="")
     p_bundle.add_argument(
         "--allow-existing-output-dir",
         action="store_true",
         help="Allow writing into a pre-existing non-empty output directory.",
+    )
+    p_bundle.add_argument(
+        "--allow-missing-target-unsafe",
+        action="store_true",
+        help=(
+            "Explicitly allow missing target_hres_* truth in bundle predictions by writing "
+            "all-NaN y. Unsafe: output is prediction-only and non-canonical for truth-aware evaluation."
+        ),
     )
 
     p_bundle_build = sub.add_parser("build-bundle", help="Create input bundle from GRIB.")
@@ -491,6 +572,14 @@ def main() -> None:
     p_bundle_build.add_argument("--target-sfc-grib", default="")
     p_bundle_build.add_argument("--target-pl-grib", default="")
     p_bundle_build.add_argument("--allow-missing-target", action="store_true")
+    p_bundle_build.add_argument(
+        "--allow-missing-target-unsafe",
+        action="store_true",
+        help=(
+            "Explicitly allow creating bundle without target_hres_* fields. "
+            "Unsafe: output is prediction-only and non-canonical for truth-aware evaluation."
+        ),
+    )
     p_bundle_build.add_argument("--out", required=True)
     p_bundle_build.add_argument("--step-hours", type=int, default=None)
     p_bundle_build.add_argument("--member", type=int, default=None)
@@ -504,8 +593,8 @@ def main() -> None:
         )
         if args.allow_missing_target:
             raise SystemExit(
-                "--allow-missing-target is no longer supported in the new stack. "
-                "Bundles must include target_hres_* fields."
+                "--allow-missing-target is deprecated. "
+                "Use --allow-missing-target-unsafe for an explicit prediction-only escape hatch."
             )
 
         out = build_input_bundle_from_grib(
@@ -517,7 +606,7 @@ def main() -> None:
             member=args.member,
             target_sfc_grib=args.target_sfc_grib or None,
             target_pl_grib=args.target_pl_grib or None,
-            require_target_fields=True,
+            require_target_fields=not args.allow_missing_target_unsafe,
         )
         print(f"Saved bundle: {out}")
         return
@@ -538,6 +627,7 @@ def main() -> None:
     )
 
     extra_args = _parse_json(args.extra_args_json)
+    output_weather_states = _parse_output_weather_states(getattr(args, "output_weather_states", ""))
     if args.cmd == "from-dataloader":
         if not args.debug_from_dataloader:
             raise SystemExit(
@@ -567,9 +657,16 @@ def main() -> None:
             extra_args=extra_args,
             precision=args.precision,
             model_comm_group=model_comm_group,
+            output_weather_state_mode=args.output_weather_state_mode,
+            output_weather_states=output_weather_states,
         )
         member_ids = members
-        _fail_if_missing_truth(y=y, context="from-dataloader")
+        y, used_missing_target_unsafe = _coerce_missing_truth_to_nan(
+            y=y,
+            y_pred=y_pred,
+            context="from-dataloader",
+            allow_missing_target_unsafe=bool(getattr(args, "allow_missing_target_unsafe", False)),
+        )
     elif args.cmd == "from-bundle":
         (
             x,
@@ -591,9 +688,16 @@ def main() -> None:
             extra_args=extra_args,
             precision=args.precision,
             model_comm_group=model_comm_group,
+            output_weather_state_mode=args.output_weather_state_mode,
+            output_weather_states=output_weather_states,
         )
         member_ids = [args.member_index]
-        _fail_if_missing_truth(y=y, context="from-bundle")
+        y, used_missing_target_unsafe = _coerce_missing_truth_to_nan(
+            y=y,
+            y_pred=y_pred,
+            context="from-bundle",
+            allow_missing_target_unsafe=bool(getattr(args, "allow_missing_target_unsafe", False)),
+        )
     else:
         raise SystemExit("Unknown command")
 
@@ -608,7 +712,13 @@ def main() -> None:
         weather_states=weather_states,
         dates=dates,
         member_ids=member_ids,
+        include_member_views=not getattr(args, "slim_output", False),
     )
+    if used_missing_target_unsafe:
+        ds.attrs["missing_target_policy"] = "all_nan_due_to_allow_missing_target_unsafe"
+    ds.attrs["output_weather_state_mode"] = args.output_weather_state_mode
+    ds.attrs["output_weather_states"] = ",".join(weather_states)
+    ds.attrs["slim_output"] = int(bool(getattr(args, "slim_output", False)))
 
     out_path = args.out
     if not out_path:

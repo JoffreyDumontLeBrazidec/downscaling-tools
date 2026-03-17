@@ -6,6 +6,10 @@ import numpy as np
 import xarray as xr
 
 
+OUTPUT_WEATHER_STATE_MODE_CHOICES = ("all", "surface-plus-core-pl")
+_SURFACE_PLUS_CORE_PL_WEATHER_STATES = frozenset({"t_850", "z_500"})
+
+
 def infer_grid_attr(*, lres_len: int | None, hres_len: int | None) -> str | None:
     if hres_len in (421120,):
         return "O320"
@@ -57,6 +61,42 @@ def add_member_views(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+def resolve_output_weather_states(
+    *,
+    weather_states: Sequence[str],
+    mode: str = "all",
+    explicit_weather_states: Sequence[str] | None = None,
+) -> tuple[list[str], list[int]]:
+    states = [str(name) for name in weather_states]
+
+    if explicit_weather_states is not None:
+        requested = [str(name).strip() for name in explicit_weather_states if str(name).strip()]
+        if not requested:
+            raise ValueError("Explicit output weather states cannot be empty.")
+        missing = [name for name in requested if name not in states]
+        if missing:
+            raise ValueError(
+                "Requested output weather state(s) not found: " + ", ".join(missing)
+            )
+        return requested, [states.index(name) for name in requested]
+
+    if mode == "all":
+        return states, list(range(len(states)))
+
+    if mode == "surface-plus-core-pl":
+        selected = [
+            name
+            for name in states
+            if "_" not in name or name in _SURFACE_PLUS_CORE_PL_WEATHER_STATES
+        ]
+        return selected, [states.index(name) for name in selected]
+
+    raise ValueError(
+        f"Unsupported output weather state mode {mode!r}. "
+        f"Expected one of {OUTPUT_WEATHER_STATE_MODE_CHOICES}."
+    )
+
+
 def build_predictions_dataset(
     *,
     x: np.ndarray,
@@ -69,6 +109,7 @@ def build_predictions_dataset(
     weather_states: Sequence[str],
     dates: Sequence | None,
     member_ids: Sequence[int],
+    include_member_views: bool = True,
 ) -> xr.Dataset:
     dates = np.asarray(dates) if dates is not None else np.arange(x.shape[0])
     if x.ndim == 3:
@@ -136,4 +177,7 @@ def build_predictions_dataset(
     if grid_attr:
         ds.attrs["grid"] = grid_attr
 
-    return add_member_views(ensure_sample_dim(ds))
+    ds = ensure_sample_dim(ds)
+    if include_member_views:
+        ds = add_member_views(ds)
+    return ds

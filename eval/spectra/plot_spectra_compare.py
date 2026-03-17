@@ -24,6 +24,14 @@ def _parse_csv_ints(value: str) -> list[int]:
     return [int(x.strip()) for x in value.split(",") if x.strip()]
 
 
+def _mean_curve(curves: list[np.ndarray]) -> np.ndarray:
+    if not curves:
+        raise ValueError("Cannot average an empty list of curves.")
+    min_len = min(len(curve) for curve in curves)
+    trimmed = [curve[:min_len] for curve in curves]
+    return np.mean(trimmed, axis=0)
+
+
 def _build_exp_configs(
     expver: str,
     hres_reference_name: str,
@@ -75,6 +83,11 @@ def main() -> None:
     parser.add_argument("--date-freq", default="1D")
     parser.add_argument("--steps", default="144", help="Comma-separated forecast steps.")
     parser.add_argument("--members", default="1", help="Comma-separated ensemble members.")
+    parser.add_argument(
+        "--separate-steps",
+        action="store_true",
+        help="Plot one line per case-step instead of aggregating all selected steps into one line per case.",
+    )
     parser.add_argument("--output-dir", default="", help="Output directory for PDFs.")
     parser.add_argument(
         "--hres-reference-name",
@@ -121,6 +134,8 @@ def main() -> None:
         for ie, conf in enumerate(expvers):
             miss = 0
             found = 0
+            step_w_curves: list[np.ndarray] = []
+            step_a_curves: list[np.ndarray] = []
             for step in steps:
                 member_w, member_a = [], []
                 for number in members:
@@ -140,18 +155,34 @@ def main() -> None:
                 if member_w and member_a:
                     avg_w = np.mean([arr.mean(axis=1) for arr in member_w], axis=0)
                     avg_a = np.mean([arr.mean(axis=1) for arr in member_a], axis=0)
-                    iok = range(3, len(avg_w))
-                    ax.plot(
-                        avg_w[iok],
-                        avg_a[iok],
-                        color=colors[ie],
-                        linestyle=type_style.get(conf["type"], "-"),
-                        linewidth=2.3,
-                        label=f"{conf['label']} step={step}",
-                    )
-                    any_data = True
+                    step_w_curves.append(avg_w)
+                    step_a_curves.append(avg_a)
+                    if args.separate_steps:
+                        iok = range(3, len(avg_w))
+                        ax.plot(
+                            avg_w[iok],
+                            avg_a[iok],
+                            color=colors[ie],
+                            linestyle=type_style.get(conf["type"], "-"),
+                            linewidth=2.3,
+                            label=f"{conf['label']} step={step}",
+                        )
+                        any_data = True
             if miss and not found:
                 warnings.warn(f"No spectra found for {conf['name']} param={param} level={level}")
+            if step_w_curves and step_a_curves and not args.separate_steps:
+                avg_w = _mean_curve(step_w_curves)
+                avg_a = _mean_curve(step_a_curves)
+                iok = range(3, len(avg_w))
+                ax.plot(
+                    avg_w[iok],
+                    avg_a[iok],
+                    color=colors[ie],
+                    linestyle=type_style.get(conf["type"], "-"),
+                    linewidth=2.3,
+                    label=conf["label"],
+                )
+                any_data = True
 
         ax.set_xscale("log")
         ax.set_yscale("log")

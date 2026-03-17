@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +66,52 @@ def test_generate_predictions_parse_int_list():
     assert mod.parse_int_list(" 10 , 1 , 5 ") == [1, 5, 10]
 
 
+def test_generate_predictions_wait_for_rank0_write_done(tmp_path: Path):
+    mod = _load_module(
+        "gen25_wait_done",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    out_path = tmp_path / "predictions_20230826_step024.nc"
+
+    def _writer():
+        time.sleep(0.05)
+        mod._rank0_done_marker(out_path).write_text("ok\n", encoding="utf-8")
+
+    thread = threading.Thread(target=_writer)
+    thread.start()
+    try:
+        mod._wait_for_rank0_write(
+            out_path=out_path,
+            global_rank=1,
+            timeout_seconds=1,
+            poll_seconds=0.01,
+        )
+    finally:
+        thread.join()
+
+
+def test_generate_predictions_wait_for_rank0_write_failure(tmp_path: Path):
+    mod = _load_module(
+        "gen25_wait_failed",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    out_path = tmp_path / "predictions_20230826_step024.nc"
+    mod._rank0_failed_marker(out_path).write_text(
+        "RuntimeError: boom\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="Rank-0 write failed"):
+        mod._wait_for_rank0_write(
+            out_path=out_path,
+            global_rank=1,
+            timeout_seconds=1,
+            poll_seconds=0.01,
+        )
+
+
 def test_generate_predictions_rejects_allow_missing_target(tmp_path: Path, monkeypatch):
     mod = _load_module(
         "gen25_reject_allow_missing_target",
@@ -88,6 +136,101 @@ def test_generate_predictions_rejects_allow_missing_target(tmp_path: Path, monke
     )
     with pytest.raises(SystemExit, match="no longer supported"):
         mod.main()
+
+
+def test_generate_predictions_allows_missing_target_unsafe(tmp_path: Path, monkeypatch):
+    mod = _load_module(
+        "gen25_allow_missing_target_unsafe",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    input_root = tmp_path / "input"
+    out_dir = tmp_path / "out"
+    input_root.mkdir(parents=True, exist_ok=True)
+    (
+        input_root
+        / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
+    ).write_text("bundle", encoding="utf-8")
+
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(mod, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(mod, "_resolve_device", lambda requested, local: "cpu")
+    monkeypatch.setattr(mod, "_init_model_comm_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mod,
+        "_load_objects",
+        lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
+    )
+
+    def _fake_predict_from_bundle(**kwargs):
+        x = np.zeros((1, 1, 2, 2), dtype=np.float32)
+        y = None
+        y_pred = np.ones((1, 1, 2, 2), dtype=np.float32)
+        lon_lres = np.zeros((2,), dtype=np.float32)
+        lat_lres = np.zeros((2,), dtype=np.float32)
+        lon_hres = np.zeros((2,), dtype=np.float32)
+        lat_hres = np.zeros((2,), dtype=np.float32)
+        weather_states = ["a", "b"]
+        return x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, None
+
+    monkeypatch.setattr(mod, "_predict_from_bundle", _fake_predict_from_bundle)
+
+    captured = {}
+
+    class _FakeDS:
+        def __init__(self):
+            self.attrs = {}
+            self.sizes = {"weather_state": 2}
+
+        def assign_coords(self, **kwargs):
+            return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type("_Arr", (), {"values": np.array(["a", "b"], dtype=object)})()
+
+        def __setitem__(self, key, value):
+            return None
+
+        def to_netcdf(self, path):
+            Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
+
+    def _fake_build_predictions_dataset(**kwargs):
+        captured["y"] = kwargs["y"]
+        return _FakeDS()
+
+    monkeypatch.setattr(mod, "build_predictions_dataset", _fake_build_predictions_dataset)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_predictions_25_files.py",
+            "--input-root",
+            str(input_root),
+            "--out-dir",
+            str(out_dir),
+            "--ckpt-id",
+            "dummy",
+            "--allow-missing-target-unsafe",
+            "--members",
+            "1",
+            "--steps",
+            "24",
+            "--dates",
+            "20230826",
+        ],
+    )
+
+    mod.main()
+
+    assert "y" in captured
+    assert captured["y"].shape == (1, 1, 2, 2)
+    assert np.isnan(captured["y"]).all()
 
 
 def test_generate_predictions_rejects_nonempty_out_dir(tmp_path: Path, monkeypatch):
@@ -160,15 +303,24 @@ def test_generate_predictions_accepts_explicit_name_ckpt(monkeypatch, tmp_path: 
     class _FakeDS:
         def __init__(self):
             self.attrs = {}
+            self.sizes = {"weather_state": 2}
 
         def assign_coords(self, **kwargs):
             return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type("_Arr", (), {"values": np.array(["a", "b"], dtype=object)})()
 
         def __setitem__(self, key, value):
             return None
 
         def to_netcdf(self, path):
             Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
 
     monkeypatch.setattr(mod, "build_predictions_dataset", lambda **kwargs: _FakeDS())
 
@@ -246,15 +398,24 @@ def test_generate_predictions_rejects_existing_prediction_file(monkeypatch, tmp_
     class _FakeDS:
         def __init__(self):
             self.attrs = {}
+            self.sizes = {"weather_state": 2}
 
         def assign_coords(self, **kwargs):
             return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type("_Arr", (), {"values": np.array(["a", "b"], dtype=object)})()
 
         def __setitem__(self, key, value):
             return None
 
         def to_netcdf(self, path):
             Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
 
     monkeypatch.setattr(mod, "build_predictions_dataset", lambda **kwargs: _FakeDS())
 
@@ -342,15 +503,24 @@ def test_generate_predictions_main_binds_cuda_device_and_gpu_override(
     class _FakeDS:
         def __init__(self):
             self.attrs = {}
+            self.sizes = {"weather_state": 2}
 
         def assign_coords(self, **kwargs):
             return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type("_Arr", (), {"values": np.array(["a", "b"], dtype=object)})()
 
         def __setitem__(self, key, value):
             return None
 
         def to_netcdf(self, path):
             Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
 
     monkeypatch.setattr(mod, "build_predictions_dataset", lambda **kwargs: _FakeDS())
 
@@ -437,6 +607,218 @@ def test_generate_predictions_rejects_world_size_mismatch(
 
     with pytest.raises(SystemExit, match="Expected world_size=4"):
         mod.main()
+
+
+def test_generate_predictions_passes_output_selection_and_slim_output(
+    monkeypatch, tmp_path: Path
+):
+    mod = _load_module(
+        "gen25_output_subset",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    input_root = tmp_path / "input"
+    out_dir = tmp_path / "out"
+    input_root.mkdir(parents=True, exist_ok=True)
+    (
+        input_root
+        / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
+    ).write_text("bundle", encoding="utf-8")
+
+    predict_calls = []
+    build_calls = []
+
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(mod, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(mod, "_resolve_device", lambda requested, local: "cpu")
+    monkeypatch.setattr(mod, "_init_model_comm_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mod,
+        "_load_objects",
+        lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
+    )
+
+    def _fake_predict_from_bundle(**kwargs):
+        predict_calls.append(kwargs)
+        x = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        y = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        y_pred = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        lon_lres = np.zeros((2,), dtype=np.float32)
+        lat_lres = np.zeros((2,), dtype=np.float32)
+        lon_hres = np.zeros((2,), dtype=np.float32)
+        lat_hres = np.zeros((2,), dtype=np.float32)
+        weather_states = ["10u", "t_850", "msl"]
+        return x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, None
+
+    monkeypatch.setattr(mod, "_predict_from_bundle", _fake_predict_from_bundle)
+
+    class _FakeDS:
+        def __init__(self):
+            self.attrs = {}
+            self.sizes = {"weather_state": 3}
+
+        def assign_coords(self, **kwargs):
+            return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type("_Arr", (), {"values": np.array(["10u", "t_850", "msl"], dtype=object)})()
+
+        def __setitem__(self, key, value):
+            return None
+
+        def to_netcdf(self, path):
+            Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
+
+    def _fake_build_predictions_dataset(**kwargs):
+        build_calls.append(kwargs)
+        return _FakeDS()
+
+    monkeypatch.setattr(mod, "build_predictions_dataset", _fake_build_predictions_dataset)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_predictions_25_files.py",
+            "--input-root",
+            str(input_root),
+            "--out-dir",
+            str(out_dir),
+            "--ckpt-id",
+            "dummy_ckpt",
+            "--device",
+            "cpu",
+            "--members",
+            "1",
+            "--steps",
+            "24",
+            "--dates",
+            "20230826",
+            "--output-weather-state-mode",
+            "surface-plus-core-pl",
+            "--slim-output",
+        ],
+    )
+
+    mod.main()
+
+    assert len(predict_calls) == 1
+    assert predict_calls[0]["output_weather_state_mode"] == "surface-plus-core-pl"
+    assert predict_calls[0]["output_weather_states"] is None
+    assert len(build_calls) == 1
+    assert build_calls[0]["include_member_views"] is False
+    assert (out_dir / "predictions_20230826_step024.nc").exists()
+
+
+def test_generate_predictions_defaults_to_surface_plus_core_pl_and_slim(
+    monkeypatch, tmp_path: Path
+):
+    mod = _load_module(
+        "gen25_default_subset",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    input_root = tmp_path / "input"
+    out_dir = tmp_path / "out"
+    input_root.mkdir(parents=True, exist_ok=True)
+    (
+        input_root
+        / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
+    ).write_text("bundle", encoding="utf-8")
+
+    predict_calls = []
+    build_calls = []
+
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(mod, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(mod, "_resolve_device", lambda requested, local: "cpu")
+    monkeypatch.setattr(mod, "_init_model_comm_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mod,
+        "_load_objects",
+        lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
+    )
+
+    def _fake_predict_from_bundle(**kwargs):
+        predict_calls.append(kwargs)
+        x = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        y = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        y_pred = np.zeros((1, 1, 2, 3), dtype=np.float32)
+        lon_lres = np.zeros((2,), dtype=np.float32)
+        lat_lres = np.zeros((2,), dtype=np.float32)
+        lon_hres = np.zeros((2,), dtype=np.float32)
+        lat_hres = np.zeros((2,), dtype=np.float32)
+        weather_states = ["10u", "t_850", "msl"]
+        return x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, None
+
+    monkeypatch.setattr(mod, "_predict_from_bundle", _fake_predict_from_bundle)
+
+    class _FakeDS:
+        def __init__(self):
+            self.attrs = {}
+            self.sizes = {"weather_state": 3}
+
+        def assign_coords(self, **kwargs):
+            return self
+
+        def __getitem__(self, key):
+            if key != "weather_state":
+                raise KeyError(key)
+            return type(
+                "_Arr",
+                (),
+                {"values": np.array(["10u", "t_850", "msl"], dtype=object)},
+            )()
+
+        def __setitem__(self, key, value):
+            return None
+
+        def to_netcdf(self, path):
+            Path(path).write_text("ok", encoding="utf-8")
+
+        def close(self):
+            return None
+
+    def _fake_build_predictions_dataset(**kwargs):
+        build_calls.append(kwargs)
+        return _FakeDS()
+
+    monkeypatch.setattr(mod, "build_predictions_dataset", _fake_build_predictions_dataset)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_predictions_25_files.py",
+            "--input-root",
+            str(input_root),
+            "--out-dir",
+            str(out_dir),
+            "--ckpt-id",
+            "dummy_ckpt",
+            "--device",
+            "cpu",
+            "--members",
+            "1",
+            "--steps",
+            "24",
+            "--dates",
+            "20230826",
+        ],
+    )
+
+    mod.main()
+
+    assert len(predict_calls) == 1
+    assert predict_calls[0]["output_weather_state_mode"] == "surface-plus-core-pl"
+    assert len(build_calls) == 1
+    assert build_calls[0]["include_member_views"] is False
+    assert (out_dir / "predictions_20230826_step024.nc").exists()
 
 
 def test_autopilot_submit_and_state_parsing(monkeypatch):

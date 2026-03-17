@@ -4,21 +4,32 @@ set -euo pipefail
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") --ckpt-id <CKPT_ID> [--run-id <RUN_ID>] [extra autopilot args]
+  $(basename "$0") --ckpt-id <CKPT_ID> [--run-id <RUN_ID>] [options]
+
+Default strategy (proxy-first):
+  1. Runs 10 proxy bundles (~30 min GPU, qos=dg) + TC extreme comparison.
+  2. STOPS — review 10-bundle scoreboard (another agent).
+  3. Rerun with --continue-full to submit full 250 predictions.
 
 If --run-id is omitted, one is generated as: manual_<4 random alphanumeric chars>.
 If --run-id is provided and does not start with manual_, it is normalized to manual_<RUN_ID>.
-Run-id must match: [A-Za-z0-9._-]+ and must not contain "/".
+
+Options:
+  --full-only          Skip proxy, go straight to full 250 predictions.
+  --continue-full      Continue from completed proxy to full 250.
 
 Examples:
+  # Default: proxy-first evaluation
   $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f
-  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id manual_abcd
-  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id abcd   # normalized to manual_abcd
-  # 9km/heavy checkpoints (recommended): 4 GPUs
+
+  # After reviewing scoreboard, continue to full 250:
+  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id manual_abcd --continue-full
+
+  # Skip proxy, go directly to full 250 (old behavior):
+  $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --full-only
+
+  # 9km/heavy checkpoints: 4 GPUs
   $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g --predict-gpus 4 --predict-mem 768G --predict-cpus 32
-  # QoS guidance: ng for short tests, dg for longer runs
-  $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g_test --predict-qos ng --predict-time 00:20:00 --predict-gpus 4 --predict-mem 768G --predict-cpus 32
-  $(basename "$0") --ckpt-id <CKPT_ID> --run-id manual_9km4g_full --predict-qos dg --predict-time 02:00:00 --predict-gpus 4 --predict-mem 768G --predict-cpus 32
 EOF
 }
 

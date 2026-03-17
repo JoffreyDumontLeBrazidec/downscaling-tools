@@ -139,6 +139,14 @@ def get_paths(conf, dir_name, date_in, step, param, level, number):
     return w, a
 
 
+def mean_curve(curves):
+    if not curves:
+        raise ValueError("Cannot average an empty list of curves.")
+    min_len = min(len(curve) for curve in curves)
+    trimmed = [curve[:min_len] for curve in curves]
+    return np.mean(trimmed, axis=0)
+
+
 for cfg in PARAM_CONFIGS:
     param, level, dir_name = cfg["param"], cfg["level"], cfg["dir_name"]
     print(f"{param} {level}")
@@ -150,6 +158,7 @@ for cfg in PARAM_CONFIGS:
     for ie, conf in enumerate(expvers):
         missing_counter = 0
         found_counter = 0
+        step_w_curves, step_a_curves = [], []
         for step in STEPS_TO_PLOT:
             mw, mA = [], []
             for number in ENSEMBLE_MEMBERS:
@@ -177,18 +186,22 @@ for cfg in PARAM_CONFIGS:
             if mw and mA:
                 avg_w = np.mean([arr.mean(axis=1) for arr in mw], axis=0)
                 avg_a = np.mean([arr.mean(axis=1) for arr in mA], axis=0)
-                iok = range(3, len(avg_w))
-                x = avg_w[iok]
-                y = avg_a[iok]
-                day_label = "day" if int(step / 24) == 1 else "days"
-                ax.plot(
-                    x,
-                    y,
-                    color=colors[ie],
-                    linestyle=TYPE_LINESTYLE.get(conf["type"], "-"),
-                    label=f"{conf.get('label',conf['name'])} {int(step/24)}{day_label}",
-                )
-                any_data = True
+                step_w_curves.append(avg_w)
+                step_a_curves.append(avg_a)
+        if step_w_curves and step_a_curves:
+            avg_w = mean_curve(step_w_curves)
+            avg_a = mean_curve(step_a_curves)
+            iok = range(3, len(avg_w))
+            x = avg_w[iok]
+            y = avg_a[iok]
+            ax.plot(
+                x,
+                y,
+                color=colors[ie],
+                linestyle=TYPE_LINESTYLE.get(conf["type"], "-"),
+                label=conf.get("label", conf["name"]),
+            )
+            any_data = True
     ax.set_yscale("log")
     ax.set_ylabel("Mean power")
     ax.set_xscale("log")

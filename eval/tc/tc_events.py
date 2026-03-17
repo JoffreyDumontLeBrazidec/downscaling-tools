@@ -19,8 +19,13 @@ class TCEvent:
     expid_enfo_o320: str
     expid_eefo_o96: str
     list_expid_ml: List[str]
+    area_north: float
+    area_west: float
+    area_south: float
+    area_east: float
 
     # Plot config
+    regrid_resolution: float = 0.25
     mslp_bin_range: Tuple[float, float, float] = (980, 1021, 1)
     wind_bin_range: Tuple[float, float, float] = (0, 35.01, 1)
     mslp_ylim: Tuple[float, float] = (0, 4)
@@ -39,6 +44,10 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
+        area_north=40.0,
+        area_west=-80.0,
+        area_south=10.0,
+        area_east=-50.0,
         plot_title="Franklin normed pdfs",
     ),
     "idalia": TCEvent(
@@ -53,6 +62,10 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
+        area_north=40.0,
+        area_west=-100.0,
+        area_south=10.0,
+        area_east=-70.0,
         plot_title="Idalia normed pdfs",
         mslp_bin_range=(980, 1021, 1),
         wind_bin_range=(0, 35.01, 1),
@@ -71,6 +84,10 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
+        area_north=35.0,
+        area_west=-125.0,
+        area_south=0.0,
+        area_east=-95.0,
         plot_title="Hilary normed pdfs",
         mslp_bin_range=(960, 1021, 1),
         wind_bin_range=(0, 30.01, 1),
@@ -109,6 +126,10 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
+        area_north=25.0,
+        area_west=175.0,
+        area_south=5.0,
+        area_east=-105.0,
         plot_title="Dora normed pdfs",
         mslp_bin_range=(970, 1021, 1),
         wind_bin_range=(0, 35.01, 1),
@@ -127,6 +148,10 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
+        area_north=30.0,
+        area_west=-135.0,
+        area_south=0.0,
+        area_east=-105.0,
         plot_title="Fernanda normed pdfs",
         mslp_bin_range=(980, 1021, 1),
         wind_bin_range=(0, 30.01, 1),

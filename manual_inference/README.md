@@ -8,7 +8,8 @@ Strict new-stack policy:
 - `y` truth must be present in `predictions.nc`.
 - `from-bundle` is the production path.
 - `from-dataloader` is debug-only and requires `--debug-from-dataloader`.
-- bundle build no longer supports missing targets.
+- bundle build requires target truth by default. `--allow-missing-target-unsafe` is an explicit
+  prediction-only escape hatch and produces non-canonical bundles without `target_hres_*`.
 
 ## Notebooks (Super Simple)
 - `manual_inference/notebooks/00_manual_inference_overview.ipynb`
@@ -46,6 +47,16 @@ python -m manual_inference.prediction.predict build-bundle \
   --hres-grib     /path/hres_static.grib \
   --target-sfc-grib /path/hres_target_sfc.grib \
   --target-pl-grib  /path/hres_target_pl.grib \
+  --out /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc
+```
+
+Unsafe bundle build when target GRIBs are missing:
+```bash
+python -m manual_inference.prediction.predict build-bundle \
+  --lres-sfc-grib /path/lres_sfc.grib \
+  --lres-pl-grib  /path/lres_pl.grib \
+  --hres-grib     /path/hres_static.grib \
+  --allow-missing-target-unsafe \
   --out /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc
 ```
 

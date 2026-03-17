@@ -1,7 +1,12 @@
+import sys
+import types
+
 import numpy as np
 import torch
 import pytest
 
+from manual_inference.prediction.dataset import build_predictions_dataset
+from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction import predict
 
 
@@ -454,6 +459,69 @@ def test_fail_if_missing_truth_raises():
         predict._fail_if_missing_truth(y=None, context="from-bundle")
 
 
+def test_coerce_missing_truth_to_nan_requires_explicit_override():
+    y_pred = np.ones((1, 1, 3, 2), dtype=np.float32)
+    with pytest.raises(SystemExit, match="Missing target truth `y`"):
+        predict._coerce_missing_truth_to_nan(
+            y=None,
+            y_pred=y_pred,
+            context="from-bundle",
+            allow_missing_target_unsafe=False,
+        )
+
+
+def test_coerce_missing_truth_to_nan_with_explicit_override():
+    y_pred = np.ones((1, 1, 3, 2), dtype=np.float32)
+    y, used_override = predict._coerce_missing_truth_to_nan(
+        y=None,
+        y_pred=y_pred,
+        context="from-bundle",
+        allow_missing_target_unsafe=True,
+    )
+    assert used_override is True
+    assert y.shape == y_pred.shape
+    assert np.isnan(y).all()
+
+
+def test_predict_main_build_bundle_forwards_allow_missing_target_unsafe(monkeypatch, tmp_path, capsys):
+    captured: dict[str, object] = {}
+
+    fake_bundle_module = types.ModuleType("manual_inference.input_data_construction.bundle")
+
+    def _fake_build_input_bundle_from_grib(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "bundle.nc"
+
+    fake_bundle_module.build_input_bundle_from_grib = _fake_build_input_bundle_from_grib
+    monkeypatch.setitem(
+        sys.modules,
+        "manual_inference.input_data_construction.bundle",
+        fake_bundle_module,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "predict.py",
+            "build-bundle",
+            "--lres-sfc-grib",
+            "lres_sfc.grib",
+            "--lres-pl-grib",
+            "lres_pl.grib",
+            "--hres-grib",
+            "hres.grib",
+            "--allow-missing-target-unsafe",
+            "--out",
+            str(tmp_path / "bundle.nc"),
+        ],
+    )
+
+    predict.main()
+
+    assert captured["require_target_fields"] is False
+    assert f"Saved bundle: {tmp_path / 'bundle.nc'}" in capsys.readouterr().out
+
+
 def test_validate_output_path_rejects_nonempty_parent(tmp_path):
     out_dir = tmp_path / "run_a"
     out_dir.mkdir(parents=True)
@@ -476,3 +544,134 @@ def test_validate_output_path_rejects_nested_run_layout(tmp_path):
             out_path=nested_out,
             allow_existing_output_dir=False,
         )
+
+
+def test_resolve_output_weather_states_surface_plus_core_pl():
+    weather_states = ["10u", "q_850", "msl", "u_850", "z_500", "t_850", "tcw"]
+
+    selected, indices = resolve_output_weather_states(
+        weather_states=weather_states,
+        mode="surface-plus-core-pl",
+    )
+
+    assert selected == ["10u", "msl", "z_500", "t_850", "tcw"]
+    assert indices == [0, 2, 4, 5, 6]
+
+
+def test_build_predictions_dataset_slim_output_skips_member_views():
+    x = np.zeros((1, 2, 3, 2), dtype=np.float32)
+    y = np.zeros((1, 2, 4, 2), dtype=np.float32)
+    y_pred = np.zeros((1, 2, 4, 2), dtype=np.float32)
+
+    ds = build_predictions_dataset(
+        x=x,
+        y=y,
+        y_pred=y_pred,
+        lon_lres=np.arange(3, dtype=np.float32),
+        lat_lres=np.arange(3, dtype=np.float32),
+        lon_hres=np.arange(4, dtype=np.float32),
+        lat_hres=np.arange(4, dtype=np.float32),
+        weather_states=["10u", "t_850"],
+        dates=None,
+        member_ids=[1, 2],
+        include_member_views=False,
+    )
+
+    assert "x_0" not in ds
+    assert "y_0" not in ds
+    assert "y_pred_0" not in ds
+    assert tuple(ds["y_pred"].shape) == (1, 2, 4, 2)
+
+
+def test_predict_from_bundle_applies_output_subset(monkeypatch):
+    point_lres = 3
+    point_hres = 4
+    requested_target_states = []
+
+    monkeypatch.setattr(
+        predict,
+        "load_inputs_from_bundle_numpy",
+        lambda *args, **kwargs: (
+            np.stack(
+                [
+                    np.full(point_lres, 1.0, dtype=np.float32),
+                    np.full(point_lres, 2.0, dtype=np.float32),
+                    np.full(point_lres, 3.0, dtype=np.float32),
+                    np.full(point_lres, 4.0, dtype=np.float32),
+                ],
+                axis=1,
+            ),
+            np.zeros((point_hres, 1), dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32),
+            np.arange(point_lres, dtype=np.float32) + 10,
+            np.arange(point_hres, dtype=np.float32),
+            np.arange(point_hres, dtype=np.float32) + 20,
+        ),
+    )
+
+    def _fake_extract_target(bundle_nc, weather_states):
+        requested_target_states.append(list(weather_states))
+        target = np.zeros((point_hres, len(weather_states)), dtype=np.float32)
+        return target, len(weather_states)
+
+    monkeypatch.setattr(predict, "extract_target_from_bundle", _fake_extract_target)
+
+    class _Indices:
+        def __init__(self):
+            self.data = type(
+                "_Data",
+                (),
+                {
+                    "input": [
+                        type("_In", (), {"name_to_index": {"10u": 0, "u_850": 1, "t_850": 2, "msl": 3}}),
+                        type("_In", (), {"name_to_index": {"z": 0}}),
+                    ]
+                },
+            )
+            self.model = type(
+                "_Model",
+                (),
+                {"output": type("_Out", (), {"name_to_index": {"10u": 0, "u_850": 1, "t_850": 2, "msl": 3}})},
+            )
+
+    class _DummyDM:
+        def __init__(self):
+            self.data_indices = _Indices()
+            self.ds_valid = type(
+                "_DS",
+                (),
+                {
+                    "data": type(
+                        "_Data",
+                        (),
+                        {
+                            "longitudes": [np.arange(point_lres), None, np.arange(point_hres)],
+                            "latitudes": [np.arange(point_lres) + 10, None, np.arange(point_hres) + 20],
+                        },
+                    )
+                },
+            )
+
+    model = _DummyModel(grid_hres=point_hres, n_states=4)
+    dm = _DummyDM()
+
+    out = predict._predict_from_bundle(
+        inference_model=model,
+        datamodule=dm,
+        device="cpu",
+        bundle_nc="/tmp/fake.nc",
+        batch_index=0,
+        member_index=0,
+        extra_args={},
+        precision="fp32",
+        model_comm_group=None,
+        output_weather_state_mode="surface-plus-core-pl",
+    )
+
+    x_out, y_out, y_pred, *_coords, states, dates = out
+    assert states == ["10u", "t_850", "msl"]
+    assert requested_target_states == [["10u", "t_850", "msl"]]
+    assert x_out.shape == (1, point_lres, 3)
+    assert y_out.shape == (1, 1, point_hres, 3)
+    assert y_pred.shape == (1, 1, point_hres, 3)
+    assert dates is None

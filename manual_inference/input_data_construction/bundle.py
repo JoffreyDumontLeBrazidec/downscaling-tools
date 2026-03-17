@@ -583,7 +583,7 @@ def build_input_bundle_from_grib(
         data_vars[dst] = ("point_hres", _to_1d_points(ds_hres[src]))
 
     auto_sfc, auto_pl = (None, None)
-    if target_sfc_grib is None and target_pl_grib is None:
+    if require_target_fields and target_sfc_grib is None and target_pl_grib is None:
         auto_sfc, auto_pl = _infer_target_gribs_from_hres(hres_grib)
     target_sfc_grib = target_sfc_grib or auto_sfc
     target_pl_grib = target_pl_grib or auto_pl
@@ -630,13 +630,12 @@ def build_input_bundle_from_grib(
                 )
             data_vars[f"target_hres_{var}"] = (("target_level", "point_hres"), vals)
 
-    if require_target_fields:
-        has_target = any(name.startswith("target_hres_") for name in data_vars)
-        if not has_target:
-            raise ValueError(
-                "No target_hres_* fields were added to bundle. "
-                "Provide --target-sfc-grib/--target-pl-grib or place matching enfo_o320 *_y.grib files near hres input."
-            )
+    has_target = any(name.startswith("target_hres_") for name in data_vars)
+    if require_target_fields and not has_target:
+        raise ValueError(
+            "No target_hres_* fields were added to bundle. "
+            "Provide --target-sfc-grib/--target-pl-grib or place matching enfo_o320 *_y.grib files near hres input."
+        )
 
     bundle = xr.Dataset(data_vars=data_vars, coords=coords)
     if target_level_coord is not None:
@@ -654,10 +653,19 @@ def build_input_bundle_from_grib(
         bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
     if target_pl_grib:
         bundle.attrs["source_target_pl"] = str(target_pl_grib)
-    bundle.attrs["description"] = (
-        "Combined low-res + high-res feature inputs for local inference. "
-        "Includes target_hres_* fields for truth-aware evaluation."
-    )
+    bundle.attrs["has_target_hres_fields"] = "yes" if has_target else "no"
+    if has_target:
+        bundle.attrs["description"] = (
+            "Combined low-res + high-res feature inputs for local inference. "
+            "Includes target_hres_* fields for truth-aware evaluation."
+        )
+    else:
+        bundle.attrs["description"] = (
+            "Combined low-res + high-res feature inputs for local inference. "
+            "Created without target_hres_* fields because --allow-missing-target-unsafe was used. "
+            "Prediction-only and non-canonical for truth-aware evaluation."
+        )
+        bundle.attrs["missing_target_policy"] = "bundle_without_target_hres_due_to_allow_missing_target_unsafe"
     if step_hours is not None:
         bundle.attrs["step_hours"] = int(step_hours)
     if member is not None:
@@ -705,7 +713,15 @@ def main() -> None:
     parser.add_argument(
         "--allow-missing-target",
         action="store_true",
-        help="Allow creating bundle without target_hres_* fields.",
+        help="Deprecated alias. Use --allow-missing-target-unsafe instead.",
+    )
+    parser.add_argument(
+        "--allow-missing-target-unsafe",
+        action="store_true",
+        help=(
+            "Explicitly allow creating bundle without target_hres_* fields. "
+            "Unsafe: output is prediction-only and non-canonical for truth-aware evaluation."
+        ),
     )
     parser.add_argument("--out", default="")
     parser.add_argument(
@@ -734,8 +750,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.allow_missing_target:
         raise SystemExit(
-            "--allow-missing-target is no longer supported in the new stack. "
-            "Bundles must include target_hres_* fields."
+            "--allow-missing-target is deprecated. "
+            "Use --allow-missing-target-unsafe for an explicit prediction-only escape hatch."
         )
 
     out_path = args.out
@@ -754,7 +770,7 @@ def main() -> None:
         out_zarr=args.out_zarr or None,
         target_sfc_grib=args.target_sfc_grib or None,
         target_pl_grib=args.target_pl_grib or None,
-        require_target_fields=True,
+        require_target_fields=not args.allow_missing_target_unsafe,
     )
     print(f"Saved bundle: {out}")
 
