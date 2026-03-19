@@ -1,12 +1,14 @@
-from logging import config
-import torch
 import os
-from hydra import initialize_config_dir, compose
+import inspect
+from dataclasses import asdict, is_dataclass
+from logging import config
+from pathlib import Path
+
+import torch
+from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 from scipy.sparse import load_npz
-from pathlib import Path
-from dataclasses import asdict, is_dataclass
 
 
 class ObjectFromCheckpointLoader:
@@ -32,7 +34,7 @@ class ObjectFromCheckpointLoader:
             weights_only=False,
         )
         self.graph_data = self.inference_model.graph_data
-        self.truncation_data = self.inference_model.truncation_data
+        self.truncation_data = getattr(self.inference_model, "truncation_data", None)
 
         self.datamodule = get_datamodule(self.config_for_datamodule, self.graph_data)
         self.interface = get_interface(
@@ -129,16 +131,25 @@ def get_datamodule(config, graph_data):
 def get_interface(
     config_checkpoint, datamodule, graph_data, truncation_data, checkpoint
 ):
-    from anemoi.models.interface import AnemoiModelInterface
+    try:
+        from anemoi.models.interface import AnemoiModelInterface as _InterfaceCls
+    except ImportError:
+        from anemoi.models.interface import DownscalingModelInterface as _InterfaceCls
 
-    interface = AnemoiModelInterface(
-        config=config_checkpoint,
-        graph_data=graph_data,
-        statistics=datamodule.statistics,
-        data_indices=datamodule.data_indices,
-        metadata=checkpoint["hyper_parameters"]["metadata"],
-        truncation_data=truncation_data,
-    )
+    kwargs = {
+        "config": config_checkpoint,
+        "graph_data": graph_data,
+        "statistics": datamodule.statistics,
+        "data_indices": datamodule.data_indices,
+        "metadata": checkpoint["hyper_parameters"]["metadata"],
+    }
+    params = inspect.signature(_InterfaceCls).parameters
+    if "truncation_data" in params and truncation_data is not None:
+        kwargs["truncation_data"] = truncation_data
+    if "interp_data" in params:
+        kwargs["interp_data"] = getattr(datamodule, "supporting_arrays", None)
+
+    interface = _InterfaceCls(**kwargs)
     return interface
 
 
@@ -152,7 +163,12 @@ def get_downscaler(
     datamodule,
     truncation_data,
 ):
-    from anemoi.training.train.tasks.downscaler import GraphDiffusionDownscaler
+    try:
+        from anemoi.training.train.tasks.downscaler import (
+            GraphDiffusionDownscaler as _DownscalerCls,
+        )
+    except Exception:
+        from anemoi.training.train.downscaler import GraphDownscaler as _DownscalerCls
 
     kwargs = {
         "config": config_checkpoint,
@@ -160,12 +176,15 @@ def get_downscaler(
         "graph_data": graph_data,
         "metadata": checkpoint["hyper_parameters"]["metadata"],
         "statistics": datamodule.statistics,
-        "statistics_tendencies": datamodule.statistics,
-        "supporting_arrays": datamodule.supporting_arrays,
-        "truncation_data": truncation_data,
     }
+    if hasattr(datamodule, "supporting_arrays"):
+        kwargs["supporting_arrays"] = datamodule.supporting_arrays
+    if truncation_data is not None:
+        kwargs["truncation_data"] = truncation_data
+    if hasattr(datamodule, "statistics_tendencies"):
+        kwargs["statistics_tendencies"] = datamodule.statistics_tendencies
 
-    downscaler = GraphDiffusionDownscaler.load_from_checkpoint(
+    downscaler = _DownscalerCls.load_from_checkpoint(
         os.path.join(dir_exp, name_exp, name_ckpt), strict=False, **kwargs
     )
     # downscaler = downscaler.to(device)

@@ -258,10 +258,21 @@ class LocalInferencePlotter:
     def save_plot(
         self,
         list_regions: list[str],
-        list_model_variables: list[str] = ["x_0", "y_0", "y_1", "y_pred_0", "y_pred_1"],
+        list_model_variables: list[str] = ["x", "y", "y_pred", "x_0", "y_0", "y_1", "y_pred_0", "y_pred_1"],
         weather_states: list[str] = ["10u", "10v", "2t", "z_500", "u_850", "v_850", "t_850"],
         num_samples_to_plot: int = 2,
     ) -> None:
+        selected_model_variables = [v for v in list_model_variables if v in self.ds.variables]
+        if not selected_model_variables:
+            raise ValueError(
+                f"None of the requested model variables are available in {self.name_predictions_file}. "
+                f"Requested={list_model_variables}"
+            )
+        available_weather_states = [str(v) for v in self.ds["weather_state"].values.tolist()]
+        selected_weather_states = [w for w in weather_states if w in available_weather_states]
+        if not selected_weather_states:
+            selected_weather_states = available_weather_states
+
         pdf_path = f"{self.dir_exp}/{self.name_exp}/all_regions_plots.pdf"
         if os.path.exists(pdf_path):
             LOG.info("Removing existing PDF at %s", pdf_path)
@@ -278,8 +289,8 @@ class LocalInferencePlotter:
                     for sample in range(n_to_plot):
                         fig = plot_x_y(
                             ds_sample=region_ds.sel(sample=sample),
-                            list_model_variables=list_model_variables,
-                            weather_states=weather_states,
+                            list_model_variables=selected_model_variables,
+                            weather_states=selected_weather_states,
                             title=f"{region} - sample {sample}",
                         )
                         pdf.savefig(fig)
@@ -292,8 +303,8 @@ class LocalInferencePlotter:
                                 break
                             fig = plot_x_y(
                                 ds_sample=region_ds.sel(step=step, forecast_reference_time=ft),
-                                list_model_variables=list_model_variables,
-                                weather_states=weather_states,
+                                list_model_variables=selected_model_variables,
+                                weather_states=selected_weather_states,
                                 title=f"{region} - step {step} - forecast {pd.to_datetime(ft).strftime('%Y-%m-%d')}",
                             )
                             pdf.savefig(fig)

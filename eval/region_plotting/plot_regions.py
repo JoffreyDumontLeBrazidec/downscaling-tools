@@ -16,7 +16,7 @@ from manual_inference.data import DownscalingDatasetProcessor
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DEFAULT_MODEL_VARIABLES = ["x_0", "y_0", "y_1", "y_pred_0", "y_pred_1"]
+DEFAULT_MODEL_VARIABLES = ["x", "y", "y_pred", "x_0", "y_0", "y_1", "y_pred_0", "y_pred_1"]
 DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "msl", "z_500", "u_850", "v_850", "t_850"]
 
 # Curated "interesting" O1280 regions discovered from the 2026-02-27 analysis workflow.
@@ -192,6 +192,10 @@ def run_region_plots_from_predictions(
                 f"None of the requested model variables are available in {predictions_path}. "
                 f"Requested={model_variables}"
             )
+        available_weather_states = [str(v) for v in ds_pred["weather_state"].values.tolist()]
+        selected_weather_states = [w for w in DEFAULT_WEATHER_STATES if w in available_weather_states]
+        if not selected_weather_states:
+            selected_weather_states = available_weather_states
         if ds_pred.attrs.get("grid") == "O1280":
             out_pdf = run_parent_dir / run_name / "all_regions_plots.pdf"
             LOG.info("Saving custom O1280 region plots for %s", run_name)
@@ -203,7 +207,11 @@ def run_region_plots_from_predictions(
             return
     lip = LocalInferencePlotter(str(run_parent_dir), run_name, predictions_filename)
     LOG.info("Saving default region plots for %s", run_name)
-    lip.save_plot(lip.regions, list_model_variables=selected_variables)
+    lip.save_plot(
+        lip.regions,
+        list_model_variables=selected_variables,
+        weather_states=selected_weather_states,
+    )
 
 
 def save_local_plots(

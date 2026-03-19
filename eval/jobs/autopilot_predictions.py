@@ -15,8 +15,10 @@ TERMINAL_ALL = TERMINAL_OK | TERMINAL_BAD
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Default evaluation strategy: proxy-first.
-# Phase 1: 10 proxy bundles (qos=dg, ~30 min GPU) + TC extreme comparison.
-# Phase 2: Pause — another agent fills the 10-bundle scoreboard and reviews.
+# Phase 1: 10 total proxy date-step-member predictions by default
+#          (canonical 10 date/step pairs × member 1, qos=dg, target ~30 min GPU)
+#          + TC extreme comparison.
+# Phase 2: Pause — another agent fills the proxy scoreboard and reviews.
 # Phase 3: Full 250 predictions (25 bundles × 10 members).
 PHASE_PROXY = "proxy"
 PHASE_FULL = "full"
@@ -220,8 +222,10 @@ def main() -> None:
         description=(
             "Autopilot for predictions→eval pipeline.\n\n"
             "Default strategy (proxy-first):\n"
-            "  Phase 1: Run 10 proxy bundles (qos=dg, ~30 min GPU) + TC comparison.\n"
-            "  Phase 2: STOP — review 10-bundle scoreboard (another agent).\n"
+            "  Phase 1: Run the canonical 10 proxy date/step pairs with proxy member scope "
+            "defaulting to member 1 only (10 total predictions, qos=dg, target ~30 min GPU) "
+            "+ TC comparison.\n"
+            "  Phase 2: STOP — review the proxy scoreboard (another agent).\n"
             "  Phase 3: Rerun with --continue-full to submit full 250 predictions.\n\n"
             "To skip proxy and go straight to full 250: --full-only"
         ),
@@ -240,6 +244,14 @@ def main() -> None:
     ap.add_argument("--predict-cpus", default="32")
     ap.add_argument("--predict-mem", default="256G")
     ap.add_argument("--predict-gpus", default="1")
+    ap.add_argument(
+        "--proxy-members",
+        default="1",
+        help=(
+            "CSV member ids for the proxy phase. Default '1' keeps the proxy gate at "
+            "10 total date-step-member predictions across the canonical 10 date/step pairs."
+        ),
+    )
     ap.add_argument("--eval-qos", default="nf")
     ap.add_argument("--eval-time", default="08:00:00")
     ap.add_argument("--eval-cpus", default="8")
@@ -262,7 +274,7 @@ def main() -> None:
         "--continue-full",
         action="store_true",
         help="Continue from completed proxy to full 250 predictions. "
-             "Use after reviewing the 10-bundle scoreboard.",
+             "Use after reviewing the proxy scoreboard.",
     )
     args = ap.parse_args()
 
@@ -313,10 +325,12 @@ def main() -> None:
             "--eval-root", args.eval_root,
             "--input-root", args.input_root,
             *ckpt_flag_args,
+            "--predict-qos", args.predict_qos,
             "--predict-time", args.predict_time,
             "--predict-cpus", args.predict_cpus,
             "--predict-mem", args.predict_mem,
             "--predict-gpus", str(args.predict_gpus),
+            "--members", args.proxy_members,
             "--eval-qos", args.eval_qos,
             "--eval-time", args.eval_time,
             "--eval-cpus", args.eval_cpus,
@@ -397,7 +411,7 @@ def main() -> None:
         print(f"  State file:    {state_file}")
         print()
         print("  Next steps:")
-        print("    1. Review the 10-bundle scoreboard (scoreboard agent).")
+        print("    1. Review the proxy scoreboard (scoreboard agent).")
         print("    2. If satisfied, continue to full 250 predictions:")
         print(f"       python -m eval.jobs.autopilot_predictions \\")
         print(f"         --run-id {args.run_id} --continue-full \\")

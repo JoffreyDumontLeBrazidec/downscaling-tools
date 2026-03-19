@@ -7,8 +7,10 @@ Usage:
   $(basename "$0") --ckpt-id <CKPT_ID> [--run-id <RUN_ID>] [options]
 
 Default strategy (proxy-first):
-  1. Runs 10 proxy bundles (~30 min GPU, qos=dg) + TC extreme comparison.
-  2. STOPS — review 10-bundle scoreboard (another agent).
+  1. Runs the canonical 10 proxy date/step pairs with proxy member scope defaulting
+     to member 1 only (10 total predictions, target ~30 min GPU, qos=dg)
+     + TC extreme comparison.
+  2. STOPS — review the proxy scoreboard (another agent).
   3. Rerun with --continue-full to submit full 250 predictions.
 
 If --run-id is omitted, one is generated as: manual_<4 random alphanumeric chars>.
@@ -22,7 +24,7 @@ Examples:
   # Default: proxy-first evaluation
   $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f
 
-  # After reviewing scoreboard, continue to full 250:
+  # After reviewing the proxy scoreboard, continue to full 250:
   $(basename "$0") --ckpt-id 4a5b2f1b24b84c52872bfcec1410b00f --run-id manual_abcd --continue-full
 
   # Skip proxy, go directly to full 250 (old behavior):

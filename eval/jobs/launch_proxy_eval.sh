@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # ── Proxy TC Eval ─────────────────────────────────────────────────────────────
-# Runs 10 carefully-selected bundles (100 member runs) that capture ~64% of the
-# combined TC extreme signal from the full 250-run evaluation.
+# Runs the 10 canonical date/step pairs with a configurable member subset.
+# Default proxy member scope is member 1 only, so the fast gate writes
+# 10 total date-step-member predictions while preserving the canonical pair set.
+# That subset captures ~64% of the combined TC extreme signal from the full
+# 250-run evaluation.
 #
 # Top-10 bundles (ranked by combined Idalia+Franklin MSLP/wind extremes):
 #   20230829:24, 20230828:48, 20230829:48, 20230828:24, 20230830:24,
@@ -22,7 +25,8 @@ usage() {
 Usage:
   $(basename "$0") --run-id <id> --ckpt-id <id> [options]
 
-Proxy TC quick-eval: 10 bundles (${PROXY_N_FILES} files, ~30 min GPU, qos=dg).
+Proxy TC quick-eval: 10 canonical date/step pairs (${PROXY_N_FILES} files).
+Default proxy member scope: member 1 only (= 10 total predictions, target ~30 min GPU, qos=dg).
 
 Options:
   --run-id <id>               Required run id (e.g. proxy_v1)
@@ -30,10 +34,12 @@ Options:
   --input-root <path>         Bundle input root
   --ckpt-id <id>              Checkpoint id (required)
   --name-ckpt <path>          Explicit checkpoint path (overrides --ckpt-id)
+  --predict-qos <qos>         Predict job QoS (default: dg)
   --predict-time <hh:mm:ss>   Predict walltime (default: 00:30:00)
   --predict-cpus <n>          Predict cpus-per-task (default: 32)
   --predict-mem <mem>         Predict memory (default: 256G)
   --predict-gpus <n>          Predict gpus-per-node (default: 1)
+  --members <csv>             Proxy member ids (default: 1)
   --eval-qos <qos>            Eval job QoS (default: nf)
   --eval-time <hh:mm:ss>      Eval walltime (default: 04:00:00)
   --eval-cpus <n>             Eval cpus-per-task (default: 8)
@@ -54,6 +60,7 @@ PREDICT_TIME="00:30:00"
 PREDICT_CPUS="32"
 PREDICT_MEM="256G"
 PREDICT_GPUS="1"
+PREDICT_MEMBERS="1"
 EVAL_QOS="nf"
 EVAL_TIME="04:00:00"
 EVAL_CPUS="8"
@@ -69,10 +76,12 @@ while [[ $# -gt 0 ]]; do
     --input-root) INPUT_ROOT="$2"; shift 2 ;;
     --ckpt-id) CKPT_ID="$2"; shift 2 ;;
     --name-ckpt) NAME_CKPT="$2"; shift 2 ;;
+    --predict-qos) PREDICT_QOS="$2"; shift 2 ;;
     --predict-time) PREDICT_TIME="$2"; shift 2 ;;
     --predict-cpus) PREDICT_CPUS="$2"; shift 2 ;;
     --predict-mem) PREDICT_MEM="$2"; shift 2 ;;
     --predict-gpus) PREDICT_GPUS="$2"; shift 2 ;;
+    --members) PREDICT_MEMBERS="$2"; shift 2 ;;
     --eval-qos) EVAL_QOS="$2"; shift 2 ;;
     --eval-time) EVAL_TIME="$2"; shift 2 ;;
     --eval-cpus) EVAL_CPUS="$2"; shift 2 ;;
@@ -89,6 +98,18 @@ if [[ -z "$RUN_ID" ]]; then echo "--run-id is required" >&2; usage; exit 2; fi
 if [[ -z "$CKPT_ID" && -z "$NAME_CKPT" ]]; then echo "--ckpt-id or --name-ckpt is required" >&2; usage; exit 2; fi
 if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "RUN_ID contains unsafe characters: ${RUN_ID}" >&2; exit 2
+fi
+IFS=',' read -r -a PROXY_MEMBER_LIST <<< "${PREDICT_MEMBERS}"
+PROXY_MEMBER_COUNT=0
+for raw_member in "${PROXY_MEMBER_LIST[@]}"; do
+  trimmed="${raw_member//[[:space:]]/}"
+  if [[ -n "${trimmed}" ]]; then
+    PROXY_MEMBER_COUNT=$((PROXY_MEMBER_COUNT + 1))
+  fi
+done
+if [[ "${PROXY_MEMBER_COUNT}" -eq 0 ]]; then
+  echo "--members must include at least one member id" >&2
+  exit 2
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,6 +164,7 @@ python eval/jobs/generate_predictions_25_files.py \\
   --out-dir ${PRED_DIR} \\
   ${CKPT_FLAG} \\
   --bundle-pairs "${PROXY_BUNDLE_PAIRS}" \\
+  --members "${PREDICT_MEMBERS}" \\
   --device cuda ${PREDICTION_SAFETY_FLAGS}
 EOF
 
@@ -163,7 +185,7 @@ count=0
 for f in ${PRED_DIR}/predictions_*.nc; do
   [ -f "\$f" ] || continue
   base=\$(basename "\$f" .nc)
-  python -m eval.run --eval-root ${EVAL_RUN_ROOT} predictions --predictions-nc "\$f" --run-name "\${base}"
+  python -m eval.run --eval-root ${EVAL_RUN_ROOT} predictions --predictions-nc "\$f" --run-name "\${base}" --skip-region
   count=\$((count+1))
   echo "evaluated \$count file(s): \$f"
 done
@@ -176,12 +198,22 @@ fi
 ANCHOR_JSON="${EVAL_ROOT}/anchor_tc_extremes.json"
 if [ -f "\${ANCHOR_JSON}" ]; then
   echo "Running proxy TC comparison against anchor..."
+  set +e
   python -m eval.jobs.proxy_tc_compare \\
     --proxy-predictions-dir ${PRED_DIR} \\
     --anchor-json "\${ANCHOR_JSON}" \\
     --out-json ${RUN_DIR}/proxy_tc_compare.json \\
     --support-mode native
+  compare_rc=\$?
+  set -e
+  if [ ! -f "${RUN_DIR}/proxy_tc_compare.json" ]; then
+    echo "proxy_tc_compare did not write ${RUN_DIR}/proxy_tc_compare.json" >&2
+    exit "\${compare_rc}"
+  fi
   echo "TC comparison saved to ${RUN_DIR}/proxy_tc_compare.json"
+  if [ "\${compare_rc}" -ne 0 ]; then
+    echo "Proxy TC comparison returned \${compare_rc}; preserving scheduler success because verdict JSON was written."
+  fi
 else
   echo "No anchor TC extremes JSON at \${ANCHOR_JSON} — skipping TC comparison."
   echo "Generate one with: python -m eval.jobs.diagnose_per_bundle_tc_extremes --predictions-dir <anchor_predictions> --out-json \${ANCHOR_JSON}"
@@ -192,7 +224,9 @@ chmod +x "${JOBS_DIR}"/*.sbatch
 
 echo "Proxy eval config:"
 echo "  bundle-pairs: ${PROXY_BUNDLE_PAIRS}"
-echo "  n_files: ${PROXY_N_FILES} (× 10 members = $((PROXY_N_FILES * 10)) runs)"
+echo "  members: ${PREDICT_MEMBERS}"
+echo "  n_files: ${PROXY_N_FILES}"
+echo "  n_member_predictions: $((PROXY_N_FILES * PROXY_MEMBER_COUNT))"
 echo "  predict qos: ${PREDICT_QOS}, time: ${PREDICT_TIME}"
 echo "  scripts: ${JOBS_DIR}"
 

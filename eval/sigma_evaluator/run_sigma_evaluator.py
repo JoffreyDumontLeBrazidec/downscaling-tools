@@ -105,6 +105,19 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
     object_loader.config_for_datamodule.dataloader.validation.frequency = (
         args.validation_frequency
     )
+    if hasattr(object_loader.config_for_datamodule.dataloader.validation, "num_workers"):
+        object_loader.config_for_datamodule.dataloader.validation.num_workers = 0
+    # Standalone sigma evaluation runs on a single process and needs full-grid validation
+    # tensors. Some checkpoints carry multi-GPU training reader settings that would
+    # otherwise hand back one grid shard (for example 10080 instead of 40320).
+    if hasattr(object_loader.config_checkpoint, "hardware"):
+        object_loader.config_checkpoint.hardware.num_gpus_per_model = 1
+    if hasattr(object_loader.config_checkpoint.dataloader, "read_group_size"):
+        object_loader.config_checkpoint.dataloader.read_group_size = 1
+    if hasattr(object_loader.config_for_datamodule, "hardware"):
+        object_loader.config_for_datamodule.hardware.num_gpus_per_model = 1
+    if hasattr(object_loader.config_for_datamodule.dataloader, "read_group_size"):
+        object_loader.config_for_datamodule.dataloader.read_group_size = 1
     object_loader.load()
 
     datamodule = object_loader.datamodule

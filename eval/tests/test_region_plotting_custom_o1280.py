@@ -77,3 +77,55 @@ def test_run_region_plots_uses_custom_path_for_o1280(tmp_path: Path, monkeypatch
 
     assert called["custom"] is True
     assert called["default"] is False
+
+
+def test_run_region_plots_accepts_slim_prediction_variables(tmp_path: Path, monkeypatch):
+    run_parent = tmp_path / "eval"
+    run_name = "slimrun"
+    run_dir = run_parent / run_name
+    run_dir.mkdir(parents=True)
+    pred_path = run_dir / "predictions.nc"
+
+    ds = xr.Dataset(
+        data_vars={
+            "x": (("sample", "grid_point_lres", "weather_state"), np.zeros((1, 1, 1), dtype=np.float32)),
+            "y": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), np.zeros((1, 1, 1, 1), dtype=np.float32)),
+            "y_pred": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), np.zeros((1, 1, 1, 1), dtype=np.float32)),
+            "lon_hres": (("grid_point_hres",), np.array([0.0], dtype=np.float32)),
+            "lat_hres": (("grid_point_hres",), np.array([0.0], dtype=np.float32)),
+            "lon_lres": (("grid_point_lres",), np.array([0.0], dtype=np.float32)),
+            "lat_lres": (("grid_point_lres",), np.array([0.0], dtype=np.float32)),
+        },
+        coords={
+            "sample": [0],
+            "ensemble_member": [0],
+            "grid_point_hres": [0],
+            "grid_point_lres": [0],
+            "weather_state": ["10u"],
+        },
+        attrs={"grid": "O320"},
+    )
+    ds.to_netcdf(pred_path)
+
+    captured: dict[str, list[str]] = {}
+
+    class _FakeLIP:
+        def __init__(self, *args, **kwargs):
+            self.regions = ["amazon_forest"]
+
+        def save_plot(self, list_regions, list_model_variables, weather_states, **kwargs):
+            captured["regions"] = list_regions
+            captured["model_variables"] = list_model_variables
+            captured["weather_states"] = weather_states
+
+    monkeypatch.setattr(mod, "LocalInferencePlotter", _FakeLIP)
+
+    mod.run_region_plots_from_predictions(
+        run_parent_dir=run_parent,
+        run_name=run_name,
+        predictions_filename="predictions.nc",
+    )
+
+    assert captured["regions"] == ["amazon_forest"]
+    assert captured["model_variables"] == ["x", "y", "y_pred"]
+    assert captured["weather_states"] == ["10u"]

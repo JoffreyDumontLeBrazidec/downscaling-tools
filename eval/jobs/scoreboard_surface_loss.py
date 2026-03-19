@@ -145,7 +145,7 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
 
     for pred_file in pred_files:
         print(f"Processing {pred_file.name}...")
-        with xr.open_dataset(pred_file) as ds:
+        with xr.open_dataset(pred_file, cache=False) as ds:
             for required_var in ("y_pred", "y", "weather_state"):
                 if required_var not in ds:
                     raise ValueError(f"{pred_file}: missing required variable '{required_var}'")
@@ -181,14 +181,14 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
                     f"{pred_file}: missing required surface weather_state entries: {missing_vars}"
                 )
 
-            y_pred_vals = np.asarray(y_pred.values, dtype=np.float64)
-            y_true_vals = np.asarray(y_true.values, dtype=np.float64)
-
             for var_name in SURFACE_VARIABLES:
                 idx = ws_index[var_name]
+                # Load one surface field at a time to keep memory bounded on large O320 files.
+                y_pred_vals = np.asarray(y_pred.isel(weather_state=idx).values, dtype=np.float64)
+                y_true_vals = np.asarray(y_true.isel(weather_state=idx).values, dtype=np.float64)
                 per_member_mse = _member_area_weighted_mse(
-                    y_pred_vals[:, :, idx],
-                    y_true_vals[:, :, idx],
+                    y_pred_vals,
+                    y_true_vals,
                     weights,
                 )
                 var_mse_values[var_name].extend(per_member_mse.tolist())

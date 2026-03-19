@@ -51,7 +51,7 @@ count=0
 for f in /home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_20230826_step*.nc; do
   [ -f "$f" ] || continue
   base=$(basename "$f" .nc)
-  python -m eval.run --eval-root /home/ecm5702/perm/eval/<RUN_ID>/eval_one_date predictions --predictions-nc "$f" --run-name "$base"
+  python -m eval.run --eval-root /home/ecm5702/perm/eval/<RUN_ID>/eval_one_date predictions --predictions-nc "$f" --run-name "$base" --skip-region
   count=$((count+1))
   echo "evaluated ${count} file(s): $f"
 done

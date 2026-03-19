@@ -871,9 +871,10 @@ def test_autopilot_write_state(tmp_path: Path):
             max_retries=1,
         ),
     }
-    mod._write_state(state_file, "manualabcd", jobs)
+    mod._write_state(state_file, "manualabcd", mod.PHASE_PROXY, jobs)
     text = state_file.read_text(encoding="utf-8")
     assert "\"run_id\": \"manualabcd\"" in text
+    assert f"\"phase\": \"{mod.PHASE_PROXY}\"" in text
     assert "\"predict25\"" in text
     assert "\"eval25\"" in text
 

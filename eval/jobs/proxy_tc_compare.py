@@ -2,8 +2,9 @@
 """
 Proxy TC extreme comparison.
 
-Compares TC extreme metrics from a proxy run (10 bundles) against the anchor
-baseline, producing a concise pass/warn/fail signal for quick screening.
+Compares TC extreme metrics from the canonical 10 proxy date/step files against
+the anchor baseline, producing a concise pass/warn/fail signal for quick
+screening.
 
 Usage:
     python -m eval.jobs.proxy_tc_compare \
@@ -26,7 +27,7 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
-# Proxy bundles (top 10 by combined Idalia+Franklin extreme signal on anchor)
+# Canonical proxy date/step pairs (top 10 by combined Idalia+Franklin extreme signal on anchor)
 PROXY_BUNDLES = [
     "20230829_step024",
     "20230828_step048",

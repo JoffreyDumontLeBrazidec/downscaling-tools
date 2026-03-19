@@ -179,7 +179,7 @@ count=0
 for f in ${PRED_DIR}/predictions_*.nc; do
   [ -f "\$f" ] || continue
   base=\$(basename "\$f" .nc)
-  python -m eval.run --eval-root ${EVAL_RUN_ROOT} predictions --predictions-nc "\$f" --run-name "\${base}"
+  python -m eval.run --eval-root ${EVAL_RUN_ROOT} predictions --predictions-nc "\$f" --run-name "\${base}" --skip-region
   count=\$((count+1))
   echo "evaluated \$count file(s): \$f"
 done
