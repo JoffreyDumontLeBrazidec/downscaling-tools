@@ -83,8 +83,11 @@ def test_load_spectra_metrics_falls_back_to_raw_surface_fields(tmp_path):
         ref_field_dir = ref_root / field_dir
         run_field_dir.mkdir()
         ref_field_dir.mkdir()
-        np.save(run_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", np.array([1.0, 2.0, 3.0, 4.0]))
-        np.save(ref_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", np.array([1.0, 2.0, 3.0, 5.0]))
+        run_curve = np.ones(200, dtype=np.float64)
+        ref_curve = np.ones(200, dtype=np.float64)
+        run_curve[149] = 2.0
+        np.save(run_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", run_curve)
+        np.save(ref_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", ref_curve)
 
     result = metrics.load_spectra_metrics(spectra_dir)
 
@@ -93,6 +96,91 @@ def test_load_spectra_metrics_falls_back_to_raw_surface_fields(tmp_path):
     assert result["2t"] is not None
     assert result["mean"] is not None
     assert result["n_curves"] == 1
+
+
+def test_load_spectra_metrics_ignores_differences_below_high_wavenumber_threshold(tmp_path):
+    spectra_dir = tmp_path / "spectra_step120_5dates_m10_ecmwf"
+    ref_root = tmp_path / "reference"
+    spectra_dir.mkdir()
+    ref_root.mkdir()
+
+    (spectra_dir / "staging_summary.json").write_text(
+        json.dumps(
+            {
+                "dates": [20230826],
+                "steps_hours": [120],
+                "ensemble_members": [1],
+                "template_root": str(ref_root),
+            }
+        )
+    )
+
+    wvn = np.arange(1.0, 201.0, dtype=np.float64)
+    ref_curve = np.ones(200, dtype=np.float64)
+    run_curve = ref_curve.copy()
+    run_curve[49] = 5.0  # wavenumber 50 should be ignored by the scoreboard metric
+
+    for field_dir in metrics.RAW_FIELD_DIRS.values():
+        run_field_dir = spectra_dir / field_dir
+        ref_field_dir = ref_root / field_dir
+        run_field_dir.mkdir()
+        ref_field_dir.mkdir()
+        np.save(run_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", run_curve)
+        np.save(ref_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", ref_curve)
+        np.save(run_field_dir / f"wvn_20230826_120_{field_dir}_1_n1.npy", wvn)
+        np.save(ref_field_dir / f"wvn_20230826_120_{field_dir}_1_n1.npy", wvn)
+
+    result = metrics.load_spectra_metrics(spectra_dir)
+
+    assert result["10u"] == pytest.approx(0.0)
+    assert result["10v"] == pytest.approx(0.0)
+    assert result["2t"] == pytest.approx(0.0)
+    assert result["mean"] == pytest.approx(0.0)
+    assert result["score_wavenumber_min_exclusive"] == pytest.approx(100.0)
+
+
+def test_load_spectra_metrics_prefers_raw_arrays_over_stale_summary(tmp_path):
+    spectra_dir = tmp_path / "spectra_step120_5dates_m10_ecmwf"
+    ref_root = tmp_path / "reference"
+    spectra_dir.mkdir()
+    ref_root.mkdir()
+
+    (spectra_dir / "staging_summary.json").write_text(
+        json.dumps(
+            {
+                "dates": [20230826],
+                "steps_hours": [120],
+                "ensemble_members": [1],
+                "template_root": str(ref_root),
+            }
+        )
+    )
+    (spectra_dir / "spectra_summary.json").write_text(
+        json.dumps(
+            {
+                "method": "ecmwf_mean_curve_reference_l2",
+                "10u": {"relative_l2_mean_curve": 0.5, "n_pairs": 1},
+                "10v": {"relative_l2_mean_curve": 0.5, "n_pairs": 1},
+                "2t": {"relative_l2_mean_curve": 0.5, "n_pairs": 1},
+            }
+        )
+    )
+
+    wvn = np.arange(1.0, 201.0, dtype=np.float64)
+    curve = np.ones(200, dtype=np.float64)
+    for field_dir in metrics.RAW_FIELD_DIRS.values():
+        run_field_dir = spectra_dir / field_dir
+        ref_field_dir = ref_root / field_dir
+        run_field_dir.mkdir()
+        ref_field_dir.mkdir()
+        np.save(run_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", curve)
+        np.save(ref_field_dir / f"ampl_20230826_120_{field_dir}_1_n1.npy", curve)
+        np.save(run_field_dir / f"wvn_20230826_120_{field_dir}_1_n1.npy", wvn)
+        np.save(ref_field_dir / f"wvn_20230826_120_{field_dir}_1_n1.npy", wvn)
+
+    result = metrics.load_spectra_metrics(spectra_dir)
+
+    assert result["mean"] == pytest.approx(0.0)
 
 
 def test_build_scoreboard_rows_merges_prefix_related_run_ids():

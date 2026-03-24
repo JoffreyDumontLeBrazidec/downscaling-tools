@@ -19,9 +19,9 @@ from manual_inference.checkpoints import (
     instantiate_config,
     to_omegaconf,
 )
-from manual_inference.input_data_construction.bundle import fill_inputs_from_bundle
-from manual_inference.input_data_construction.bundle import extract_target_from_bundle
+from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
+from manual_inference.input_data_construction.bundle import open_bundle_dataset
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.dataset import resolve_output_weather_states
@@ -138,37 +138,6 @@ def _resolve_ckpt_path(name_ckpt: str, ckpt_root: str) -> str:
     raise FileNotFoundError(
         f"Multiple base checkpoint files found under {run_dir} ({names}). Pass an explicit --name-ckpt path."
     )
-
-
-def _get_template_batch(datamodule, batch_index: int, device: str):
-    val_loader = datamodule.val_dataloader()
-    for idx, sample in enumerate(val_loader):
-        if idx == batch_index:
-            batch = [x.to(device) for x in sample]
-            return batch[0], batch[1], batch[2]
-    raise RuntimeError(f"Could not find validation batch index {batch_index}")
-
-
-def _get_full_grid_template(datamodule, sample_index: int, device: str):
-    """Build template tensors from the full (unsharded) dataset.
-
-    The dataloader may shard grid points across GPUs, making its batches
-    too small for bundle-based inference which requires the full grid.
-    This reads directly from the dataset and transposes to match the
-    dataloader batch layout: (1, 1, 1, n_grid, n_vars).
-    """
-    data = datamodule.ds_valid.data
-    sample = data[sample_index : sample_index + 1]
-    # Dataset returns (dates, vars, ens, grid).
-    # Dataloader convention is (batch, ?, ens, grid, vars).
-    x_np = np.asarray(sample[0])   # (1, n_vars_lres, n_ens, n_grid_lres)
-    xh_np = np.asarray(sample[1])  # (1, n_vars_hres, n_ens, n_grid_hres)
-    y_np = np.asarray(sample[2])   # (1, n_vars_target, n_ens, n_grid_hres)
-
-    x = torch.from_numpy(np.transpose(x_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
-    xh = torch.from_numpy(np.transpose(xh_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
-    y = torch.from_numpy(np.transpose(y_np, (0, 2, 3, 1))).unsqueeze(1).to(device)
-    return x, xh, y
 
 
 
@@ -325,7 +294,6 @@ def _predict_from_bundle(
     datamodule,
     device: str,
     bundle_nc: str,
-    batch_index: int,
     member_index: int,
     extra_args: dict,
     precision: str,
@@ -335,79 +303,86 @@ def _predict_from_bundle(
 ):
     name_to_idx_lres = datamodule.data_indices.data.input[0].name_to_index
     name_to_idx_hres = datamodule.data_indices.data.input[1].name_to_index
-    (
-        x_lres_np,
-        x_hres_np,
-        lon_lres,
-        lat_lres,
-        lon_hres,
-        lat_hres,
-    ) = load_inputs_from_bundle_numpy(
-        bundle_nc,
-        name_to_idx_lres,
-        name_to_idx_hres,
-    )
-    if member_index != 0:
-        raise ValueError(
-            "Bundle inputs are single-member bundles. Use member_index=0 and select the desired "
-            "ensemble member while building the bundle."
+    bundle = open_bundle_dataset(bundle_nc)
+    try:
+        (
+            x_lres_np,
+            x_hres_np,
+            lon_lres,
+            lat_lres,
+            lon_hres,
+            lat_hres,
+        ) = load_inputs_from_bundle_numpy(
+            bundle,
+            name_to_idx_lres,
+            name_to_idx_hres,
         )
-    x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
-    x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
-
-    amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
-    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
-
-    with torch.inference_mode():
-        with torch.autocast(
-            device_type="cuda",
-            dtype=amp_dtype,
-            enabled=amp_enabled,
-        ):
-            pred = inference_model.predict_step(
-                x_in[0:1],
-                x_in_hres[0:1],
-                model_comm_group=model_comm_group,
-                extra_args=extra_args,
+        if member_index != 0:
+            raise ValueError(
+                "Bundle inputs are single-member bundles. Use member_index=0 and select the desired "
+                "ensemble member while building the bundle."
             )
+        x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
+        x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
 
-    weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
-    weather_states, selected_indices = resolve_output_weather_states(
-        weather_states=weather_states_full,
-        mode=output_weather_state_mode,
-        explicit_weather_states=output_weather_states,
-    )
+        amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
+        amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
-    x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
-    pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
-    dates = None
+        with torch.inference_mode():
+            with torch.autocast(
+                device_type="cuda",
+                dtype=amp_dtype,
+                enabled=amp_enabled,
+            ):
+                pred = inference_model.predict_step(
+                    x_in[0:1],
+                    x_in_hres[0:1],
+                    model_comm_group=model_comm_group,
+                    extra_args=extra_args,
+                )
 
-    x_np, _ = extract_filtered_input_from_output(
-        x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
-    )
-    x_np = x_np[..., selected_indices]
+        weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
+        weather_states, selected_indices = resolve_output_weather_states(
+            weather_states=weather_states_full,
+            mode=output_weather_state_mode,
+            explicit_weather_states=output_weather_states,
+        )
 
-    y_np = None
-    target_np, found_target_channels = extract_target_from_bundle(bundle_nc, weather_states)
-    if target_np is not None:
-        y_np = target_np[None, None, ...]
-        if found_target_channels < len(weather_states):
-            print(
-                f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
-                f"(missing channels will be NaN in y)."
-            )
+        x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+        pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
+        dates = None
 
-    return (
-        x_np[None, ...],
-        y_np,
-        pred_np[None, None, ...],
-        lon_lres,
-        lat_lres,
-        lon_hres,
-        lat_hres,
-        weather_states,
-        dates,
-    )
+        x_np, _ = extract_filtered_input_from_output(
+            x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
+        )
+        x_np = x_np[..., selected_indices]
+
+        y_np = None
+        target_np, found_target_channels = extract_target_from_bundle_dataset(bundle, weather_states)
+        if target_np is not None:
+            y_np = target_np[None, None, ...]
+            if found_target_channels < len(weather_states):
+                print(
+                    f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
+                    f"(missing channels will be NaN in y)."
+                )
+
+        return (
+            x_np[None, ...],
+            y_np,
+            pred_np[None, None, ...],
+            lon_lres,
+            lat_lres,
+            lon_hres,
+            lat_hres,
+            weather_states,
+            dates,
+        )
+    finally:
+        try:
+            bundle.close()
+        except Exception:
+            pass
 
 
 
@@ -529,7 +504,6 @@ def main() -> None:
     p_bundle.add_argument("--ckpt-root", default=ckpt_root_default)
     p_bundle.add_argument("--device", default="cuda")
     p_bundle.add_argument("--bundle-nc", required=True)
-    p_bundle.add_argument("--batch-index", type=int, default=0)
     p_bundle.add_argument("--member-index", type=int, default=0)
     p_bundle.add_argument("--validation-frequency", default="50h")
     p_bundle.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
@@ -683,7 +657,6 @@ def main() -> None:
             datamodule=datamodule,
             device=args.device,
             bundle_nc=args.bundle_nc,
-            batch_index=args.batch_index,
             member_index=args.member_index,
             extra_args=extra_args,
             precision=args.precision,

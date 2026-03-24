@@ -26,8 +26,11 @@ For background full-suite orchestration with retries and auto-monitoring, use:
 
 Predictions + eval flow (from checkpoint):
 ```bash
-/home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval --run-id <RUN_ID> --ckpt-id <CKPT_ID>
+/home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval_predictions --run-id <RUN_ID> --ckpt-id <CKPT_ID>
 ```
+
+Repo-owned launch templates live under `eval/jobs/templates/`.
+Use `eval/jobs/templates/README.md` as the canonical template entry point.
 
 All artifacts are stored under:
 `/home/ecm5702/perm/eval/<run_name>/`

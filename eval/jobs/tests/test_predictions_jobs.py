@@ -821,29 +821,30 @@ def test_generate_predictions_defaults_to_surface_plus_core_pl_and_slim(
     assert (out_dir / "predictions_20230826_step024.nc").exists()
 
 
-def test_autopilot_submit_and_state_parsing(monkeypatch):
+def test_autopilot_submit_and_state_parsing():
     mod = _load_module(
-        "autopred",
-        ROOT / "eval/jobs/autopilot_predictions.py",
+        "slurm_jobs_parse",
+        ROOT / "eval/jobs/slurm_jobs.py",
     )
 
-    monkeypatch.setattr(mod, "_run", lambda cmd: "Submitted batch job 123456")
-    jid = mod._submit(Path("/tmp/fake.sbatch"))
-    assert jid == "123456"
+    assert mod.parse_submitted_job_id("Submitted batch job 123456") == "123456"
+    assert mod.parse_sacct_state("UNKNOWN|\nRUNNING|\n", job_id="123456") == "RUNNING"
+    assert mod.parse_squeue_state("") == (None, None)
+    assert mod.parse_squeue_state(" running | Resources \n") == ("RUNNING", "Resources")
 
-    # sacct parsing skips UNKNOWN and takes first meaningful state.
-    monkeypatch.setattr(
-        mod,
-        "_run",
-        lambda cmd: "UNKNOWN|\nRUNNING|\n",
+
+def test_slurm_jobs_marks_dependency_never_satisfied_failed():
+    mod = _load_module(
+        "slurm_jobs_state",
+        ROOT / "eval/jobs/slurm_jobs.py",
     )
-    assert mod._sacct_state("123456") == "RUNNING"
 
-    # squeue parser returns None for empty output and uppercase state otherwise.
-    monkeypatch.setattr(mod.subprocess, "check_output", lambda *a, **k: "")
-    assert mod._squeue_state("123456") is None
-    monkeypatch.setattr(mod.subprocess, "check_output", lambda *a, **k: " running \n")
-    assert mod._squeue_state("123456") == "RUNNING"
+    def _run(cmd: list[str]) -> str:
+        if cmd[0] == "squeue":
+            return "PENDING|DependencyNeverSatisfied\n"
+        raise AssertionError(f"Unexpected command: {cmd}")
+
+    assert mod.job_state(_run, "123456") == "FAILED"
 
 
 def test_autopilot_write_state(tmp_path: Path):
@@ -919,13 +920,14 @@ def test_autopilot_rejects_eval_root_that_looks_like_run(monkeypatch, tmp_path: 
         mod.main()
 
 
-def test_launch_predictions_eval_suite_dry_run_generates_scripts():
+def test_launch_predictions_eval_suite_dry_run_generates_scripts(tmp_path: Path):
     import subprocess
     import uuid
 
     run_id = f"manual_{uuid.uuid4().hex[:8]}"
     script = ROOT / "eval/jobs/launch_predictions_eval_suite.sh"
-    run_dir = Path("/home/ecm5702/perm/eval") / run_id
+    eval_root = tmp_path / "eval_root"
+    run_dir = eval_root / run_id
     generated_dir = run_dir / "jobs"
 
     out = subprocess.check_output(
@@ -933,6 +935,8 @@ def test_launch_predictions_eval_suite_dry_run_generates_scripts():
             str(script),
             "--run-id",
             run_id,
+            "--eval-root",
+            str(eval_root),
             "--ckpt-id",
             "4a5b2f1b24b84c52872bfcec1410b00f",
             "--dry-run",
@@ -955,3 +959,40 @@ def test_launch_predictions_eval_suite_dry_run_generates_scripts():
     assert "python -m eval.run" in evl_text
     assert f"--eval-root {run_dir}/eval" in evl_text
     assert "Expected 25 prediction files" in evl_text
+
+
+def test_launch_proxy_eval_dry_run_uses_repo_owned_spectra_helper(tmp_path: Path):
+    import subprocess
+    import uuid
+
+    run_id = f"proxy_{uuid.uuid4().hex[:8]}"
+    script = ROOT / "eval/jobs/launch_proxy_eval.sh"
+    eval_root = tmp_path / "eval_root"
+    run_dir = eval_root / run_id
+    generated_dir = run_dir / "jobs"
+
+    out = subprocess.check_output(
+        [
+            str(script),
+            "--run-id",
+            run_id,
+            "--eval-root",
+            str(eval_root),
+            "--ckpt-id",
+            "4a5b2f1b24b84c52872bfcec1410b00f",
+            "--write-scoreboard-artifacts",
+            "--dry-run",
+        ],
+        text=True,
+    )
+    assert "Dry run. Scripts written" in out
+
+    evl = generated_dir / f"eval_proxy_{run_id}.sbatch"
+    assert evl.exists()
+
+    evl_text = evl.read_text(encoding="utf-8")
+    helper_path = ROOT / "eval/jobs/templates/predictions_dir_spectra.py"
+    assert str(helper_path) in evl_text
+    assert "/dev/docs/scratch/predictions_dir_spectra.py" not in evl_text
+    assert "preserving scheduler success" not in evl_text
+    assert "Proxy TC comparison failed with exit code" in evl_text

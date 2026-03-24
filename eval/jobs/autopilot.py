@@ -1,118 +1,41 @@
 from __future__ import annotations
 
 import argparse
-import json
-import re
 import subprocess
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from eval.jobs import slurm_jobs
 
-TERMINAL_OK = {"COMPLETED"}
-TERMINAL_BAD = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"}
-TERMINAL_ALL = TERMINAL_OK | TERMINAL_BAD
-
-
-@dataclass
-class JobTrack:
-    name: str
-    script: Path
-    dependency: str | None = None
-    job_id: str | None = None
-    retries: int = 0
-    max_retries: int = 2
-    state: str = "PENDING"
-    deps: list[str] = field(default_factory=list)
+TERMINAL_OK = slurm_jobs.TERMINAL_OK
+TERMINAL_BAD = slurm_jobs.TERMINAL_BAD
+TERMINAL_ALL = slurm_jobs.TERMINAL_ALL
+JobTrack = slurm_jobs.JobTrack
 
 
 def _run(cmd: list[str]) -> str:
-    out = subprocess.check_output(cmd, text=True)
-    return out.strip()
+    return slurm_jobs.run_checked(cmd)
 
 
 def _submit(script: Path, dependency: str | None = None) -> str:
-    cmd = ["sbatch"]
-    if dependency:
-        cmd += [f"--dependency=afterok:{dependency}"]
-    cmd += [str(script)]
-    out = _run(cmd)
-    match = re.search(r"(\d+)$", out)
-    if not match:
-        raise RuntimeError(f"Could not parse job id from sbatch output: {out}")
-    return match.group(1)
+    return slurm_jobs.submit(_run, script, dependency)
 
 
 def _cancel(job_id: str) -> None:
-    subprocess.run(["scancel", job_id], check=False)
-
-
-def _sacct_state(job_id: str) -> str:
-    try:
-        out = _run(
-            [
-                "sacct",
-                "-j",
-                job_id,
-                "--format=State",
-                "-n",
-                "-P",
-            ]
-        )
-    except subprocess.CalledProcessError:
-        return "PENDING"
-    for line in out.splitlines():
-        state = line.strip()
-        if not state:
-            continue
-        state = state.split("|")[0].strip().upper()
-        if state and state != "UNKNOWN":
-            return state
-    return "PENDING"
-
-
-def _squeue_reason(job_id: str) -> tuple[str | None, str | None]:
-    try:
-        out = _run(["squeue", "-h", "-j", job_id, "-o", "%T|%r"])
-    except subprocess.CalledProcessError:
-        return None, None
-    if not out:
-        return None, None
-    line = out.splitlines()[0].strip()
-    if not line:
-        return None, None
-    if "|" in line:
-        state, reason = line.split("|", 1)
-        return state.strip().upper() or None, reason.strip()
-    return line.strip().upper() or None, None
+    slurm_jobs.cancel(job_id)
 
 
 def _job_state(job_id: str) -> str:
-    sq_state, sq_reason = _squeue_reason(job_id)
-    if sq_state:
-        if sq_reason and "DEPENDENCYNEVERSATISFIED" in sq_reason.upper():
-            return "FAILED"
-        return sq_state
-    return _sacct_state(job_id)
+    return slurm_jobs.job_state(_run, job_id)
 
 
 def _write_state(state_file: Path, jobs: dict[str, JobTrack], expver: str) -> None:
     payload = {
         "expver": expver,
-        "updated_epoch": int(time.time()),
-        "jobs": {
-            k: {
-                "job_id": v.job_id,
-                "state": v.state,
-                "retries": v.retries,
-                "max_retries": v.max_retries,
-                "script": str(v.script),
-                "dependency": v.dependency,
-            }
-            for k, v in jobs.items()
-        },
+        "updated_epoch": slurm_jobs.updated_epoch(),
+        "jobs": slurm_jobs.jobs_payload(jobs),
     }
-    state_file.write_text(json.dumps(payload, indent=2))
+    slurm_jobs.write_json(state_file, payload)
 
 
 def _all_terminal(jobs: dict[str, JobTrack]) -> bool:

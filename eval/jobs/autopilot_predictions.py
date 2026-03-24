@@ -5,13 +5,13 @@ import json
 import re
 import subprocess
 import sys
-import time
-from dataclasses import dataclass
 from pathlib import Path
 
-TERMINAL_OK = {"COMPLETED"}
-TERMINAL_BAD = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"}
-TERMINAL_ALL = TERMINAL_OK | TERMINAL_BAD
+from eval.jobs import slurm_jobs
+
+TERMINAL_OK = slurm_jobs.TERMINAL_OK
+TERMINAL_BAD = slurm_jobs.TERMINAL_BAD
+TERMINAL_ALL = slurm_jobs.TERMINAL_ALL
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Default evaluation strategy: proxy-first.
@@ -22,74 +22,23 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Phase 3: Full 250 predictions (25 bundles × 10 members).
 PHASE_PROXY = "proxy"
 PHASE_FULL = "full"
-
-
-@dataclass
-class JobTrack:
-    name: str
-    script: Path
-    dependency: str | None = None
-    job_id: str | None = None
-    retries: int = 0
-    max_retries: int = 1
-    state: str = "PENDING"
+JobTrack = slurm_jobs.JobTrack
 
 
 def _run(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True).strip()
+    return slurm_jobs.run_checked(cmd)
 
 
 def _submit(script: Path, dependency: str | None = None) -> str:
-    cmd = ["sbatch"]
-    if dependency:
-        cmd += [f"--dependency=afterok:{dependency}"]
-    cmd += [str(script)]
-    out = _run(cmd)
-    m = re.search(r"(\d+)$", out)
-    if not m:
-        raise RuntimeError(f"Could not parse job id from sbatch output: {out}")
-    return m.group(1)
+    return slurm_jobs.submit(_run, script, dependency)
 
 
 def _cancel(job_id: str) -> None:
-    subprocess.run(["scancel", job_id], check=False)
+    slurm_jobs.cancel(job_id)
 
 
-def _sacct_state(job_id: str) -> str:
-    try:
-        out = _run(["sacct", "-j", job_id, "--format=State", "-n", "-P"])
-    except subprocess.CalledProcessError:
-        return "PENDING"
-    for line in out.splitlines():
-        s = line.strip()
-        if not s:
-            continue
-        s = s.split("|")[0].strip().upper()
-        if s and s != "UNKNOWN":
-            return s
-    return "PENDING"
-
-
-def _squeue_state(job_id: str) -> str | None:
-    try:
-        out = subprocess.check_output(
-            ["squeue", "-h", "-j", job_id, "-o", "%T|%r"],
-            text=True,
-        ).strip()
-    except subprocess.CalledProcessError:
-        return None
-    if not out:
-        return None
-    line = out.splitlines()[0].strip()
-    if not line:
-        return None
-    state = line.split("|", 1)[0].strip().upper()
-    reason = ""
-    if "|" in line:
-        reason = line.split("|", 1)[1].strip().upper()
-    if "DEPENDENCYNEVERSATISFIED" in reason:
-        return "FAILED"
-    return state or None
+def _job_state(job_id: str) -> str:
+    return slurm_jobs.job_state(_run, job_id)
 
 
 def _write_state(state_file: Path, run_id: str, phase: str, jobs: dict[str, JobTrack],
@@ -98,22 +47,12 @@ def _write_state(state_file: Path, run_id: str, phase: str, jobs: dict[str, JobT
         "run_id": run_id,
         "phase": phase,
         "proxy_verdict": proxy_verdict,
-        "updated_epoch": int(time.time()),
-        "jobs": {
-            k: {
-                "job_id": v.job_id,
-                "state": v.state,
-                "retries": v.retries,
-                "max_retries": v.max_retries,
-                "script": str(v.script),
-                "dependency": v.dependency,
-            }
-            for k, v in jobs.items()
-        },
+        "updated_epoch": slurm_jobs.updated_epoch(),
+        "jobs": slurm_jobs.jobs_payload(jobs),
     }
     if extra:
         payload.update(extra)
-    state_file.write_text(json.dumps(payload, indent=2))
+    slurm_jobs.write_json(state_file, payload)
 
 
 def _validate_safe_name(name: str, *, label: str) -> None:
@@ -138,11 +77,7 @@ def _poll_jobs(jobs: dict[str, JobTrack], state_file: Path, run_id: str, phase: 
     while True:
         for j in jobs.values():
             if j.job_id:
-                sq = _squeue_state(j.job_id)
-                if sq:
-                    j.state = sq
-                else:
-                    j.state = _sacct_state(j.job_id)
+                j.state = _job_state(j.job_id)
 
         if all(j.state in TERMINAL_ALL for j in jobs.values()):
             break
@@ -203,18 +138,26 @@ def _run_proxy_tc_compare(project_root: Path, run_dir: Path, eval_root: Path) ->
         if result.stderr:
             print(result.stderr, file=sys.stderr)
     except subprocess.TimeoutExpired:
-        print("TC comparison timed out after 600s", file=sys.stderr)
-        return "SKIPPED"
+        raise RuntimeError("TC comparison timed out after 600s")
     except Exception as exc:
-        print(f"TC comparison failed: {exc}", file=sys.stderr)
-        return "SKIPPED"
+        raise RuntimeError(f"TC comparison failed: {exc}") from exc
 
-    # Read verdict from output JSON
+    if not out_json.exists():
+        raise RuntimeError(f"TC comparison did not write verdict JSON: {out_json}")
+
     try:
-        compare_data = json.loads(out_json.read_text())
-        return compare_data.get("overall_verdict", "SKIPPED")
-    except Exception:
-        return "PASS" if result.returncode == 0 else "FAIL"
+        compare_data = json.loads(out_json.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"TC comparison wrote invalid JSON: {out_json}") from exc
+
+    verdict = str(compare_data.get("overall_verdict", "")).strip().upper()
+    if not verdict:
+        raise RuntimeError(f"TC comparison JSON missing overall_verdict: {out_json}")
+    if result.returncode != 0 and verdict not in {"PASS", "WARN", "FAIL", "SKIPPED"}:
+        raise RuntimeError(
+            f"TC comparison exited with {result.returncode} and returned unusable verdict {verdict!r}"
+        )
+    return verdict
 
 
 def main() -> None:
@@ -239,6 +182,11 @@ def main() -> None:
     ap.add_argument("--ckpt-id", default="4a5b2f1b24b84c52872bfcec1410b00f")
     ap.add_argument("--name-ckpt", default="",
                      help="Explicit checkpoint path. Overrides --ckpt-id.")
+    ap.add_argument(
+        "--extra-args-json",
+        default="",
+        help="Optional sampler override JSON passed through to the generated prediction jobs.",
+    )
     ap.add_argument("--predict-qos", default="dg")
     ap.add_argument("--predict-time", default="00:30:00")
     ap.add_argument("--predict-cpus", default="32")
@@ -256,6 +204,14 @@ def main() -> None:
     ap.add_argument("--eval-time", default="08:00:00")
     ap.add_argument("--eval-cpus", default="8")
     ap.add_argument("--eval-mem", default="64G")
+    ap.add_argument(
+        "--proxy-scoreboard-artifacts",
+        action="store_true",
+        help=(
+            "During proxy phase, also write strict proxy TC JSON/PDF and spectra summary "
+            "using the canonical proxy bundle helper path."
+        ),
+    )
     ap.add_argument(
         "--allow-existing-run-dir",
         action="store_true",
@@ -316,8 +272,8 @@ def main() -> None:
         ckpt_flag_args = ["--ckpt-id", args.ckpt_id]
 
     # ── Phase: PROXY ──────────────────────────────────────────────────────────
-    if PHASE_PROXY in phases:
-        proxy_launch = project_root / "eval/jobs/launch_proxy_eval.sh"
+        if PHASE_PROXY in phases:
+            proxy_launch = project_root / "eval/jobs/launch_proxy_eval.sh"
 
         proxy_args = [
             str(proxy_launch),
@@ -337,6 +293,10 @@ def main() -> None:
             "--eval-mem", args.eval_mem,
             "--dry-run",
         ]
+        if args.extra_args_json:
+            proxy_args += ["--extra-args-json", args.extra_args_json]
+        if args.proxy_scoreboard_artifacts:
+            proxy_args.append("--write-scoreboard-artifacts")
         if args.allow_existing_run_dir:
             proxy_args.append("--allow-existing-run-dir")
         subprocess.check_call(proxy_args)

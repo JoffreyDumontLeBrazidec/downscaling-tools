@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -30,10 +31,13 @@ def _resolve_ckpt_path(name_ckpt: str, ckpt_root: str) -> Path:
 
 
 def _default_checkpoint_run_name(name_ckpt: str, ckpt_root: str) -> str:
-    resolved = _resolve_ckpt_path(name_ckpt, ckpt_root)
-    stem = resolved.stem if resolved.suffix == ".ckpt" else resolved.name
-    exp = resolved.parent.name
-    return _sanitize_name(f"{exp}-{stem}")
+    raw = Path(os.path.expanduser(name_ckpt))
+    if raw.suffix == ".ckpt":
+        exp = raw.parent.name or Path(ckpt_root).name or "checkpoint"
+        return _sanitize_name(f"{exp}-{raw.stem}")
+    if len(raw.parts) > 1:
+        return _sanitize_name(f"{raw.parent.name}-{raw.name}")
+    return _sanitize_name(f"{name_ckpt}-last")
 
 
 def _prepare_run_dir(eval_root: str, run_name: str) -> Path:
@@ -132,7 +136,7 @@ def run_from_checkpoint(args: argparse.Namespace) -> Path:
         str(predictions_path),
     ]
     if args.bundle_nc:
-        predict_cmd = ["from-bundle", "--bundle-nc", args.bundle_nc, "--batch-index", str(args.batch_index)]
+        predict_cmd = ["from-bundle", "--bundle-nc", args.bundle_nc]
     else:
         predict_cmd = [
             "from-dataloader",
@@ -261,7 +265,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ckpt.add_argument("--validation-frequency", default="50h")
     p_ckpt.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
     p_ckpt.add_argument("--bundle-nc", default="", help="If set, run prediction from bundle.")
-    p_ckpt.add_argument("--batch-index", type=int, default=0)
     p_ckpt.add_argument("--idx", type=int, default=0)
     p_ckpt.add_argument("--n-samples", type=int, default=1)
     p_ckpt.add_argument("--members", default="0")

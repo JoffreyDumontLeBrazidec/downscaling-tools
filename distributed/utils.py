@@ -1,35 +1,17 @@
 import os
-import sys
-import torch
-import numpy as np
-import xarray as xr
-
-from icecream import ic
-
-import torch.distributed as dist
-import torch.multiprocessing as mp  # For launching processes
 import datetime
-import socket
 import subprocess
-
 import logging
+
+import numpy as np
+import torch
+import torch.distributed as dist
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
 def get_parallel_info():
-    """Reads Slurm env vars, if they exist, to determine if inference is running in parallel"""
-    local_rank = int(
-        os.environ.get("SLURM_LOCALID", 0)
-    )  # Rank within a node, between 0 and num_gpus
-    global_rank = int(os.environ.get("SLURM_PROCID", 0))  # Rank within all nodes
-    world_size = int(os.environ.get("SLURM_NTASKS", 1))  # Total number of processes
-
-    return global_rank, local_rank, world_size
-
-
-def __get_parallel_info():
     """Reads Slurm env vars, if they exist, to determine if inference is running in parallel"""
     local_rank = int(
         os.environ.get("SLURM_LOCALID", 0)

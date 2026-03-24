@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from eval.jobs import scoreboard_metrics as metrics
 
@@ -75,10 +80,21 @@ def load_spectra_results(eval_root: Path) -> dict[str, float]:
     """Load full25 spectra metrics using the 3-field scoreboard contract."""
     results: dict[str, float] = {}
 
+    def spectra_candidate_rank(path: Path) -> tuple[int, int, str]:
+        name = path.name.lower()
+        return (
+            0 if "proxy10_subset" in name else 1,
+            0 if "ecmwf" in name else 1,
+            name,
+        )
+
     for run_root in sorted(path for path in eval_root.glob("manual_*") if path.is_dir()):
         if not (run_root / "surface_loss_summary.json").exists():
             continue
-        spectra_dirs = sorted(run_root.glob("spectra_step120_5dates_m10_ecmwf*"))
+        spectra_dirs = sorted(
+            (path for path in run_root.glob("spectra*") if path.is_dir()),
+            key=spectra_candidate_rank,
+        )
         for spectra_dir in spectra_dirs:
             try:
                 spectra_data = metrics.load_spectra_metrics(spectra_dir)

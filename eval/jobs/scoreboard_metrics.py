@@ -15,6 +15,7 @@ SPECTRA_FIELDS = ("10u", "10v", "2t")
 RAW_FIELD_DIRS = {"10u": "10u_sfc", "10v": "10v_sfc", "2t": "2t_sfc"}
 AMP_FILE_RE = re.compile(r"^ampl_(\d{8})_(\d+)_([a-z0-9]+)_([a-z0-9]+)_([^_]+)_n(\d+)\.npy$")
 CHECKPOINT_TOKEN_RE = re.compile(r"(?:^|manual_)([0-9a-f]{7,64})(?:_|$)")
+SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE = 100.0
 
 
 def finite_float(value: Any) -> float | None:
@@ -40,6 +41,7 @@ def empty_spectra_metrics(source_path: str = "na") -> dict[str, Any]:
         "n_curves": None,
         "counts": {},
         "missing_reference_pairs": {},
+        "score_wavenumber_min_exclusive": SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
     }
 
 
@@ -160,13 +162,19 @@ def load_tc_extreme_scores_from_json(stats_path: Path, *, run_id: str) -> dict[s
     return scores
 
 
-def finite_positive_mask(arr: np.ndarray) -> np.ndarray:
-    idx = np.arange(arr.shape[0], dtype=np.int32)
-    return (idx >= 3) & np.isfinite(arr) & (arr > 0.0)
+def _default_wavenumbers(length: int) -> np.ndarray:
+    return np.arange(1, length + 1, dtype=np.float64)
 
 
-def relative_l2(pred: np.ndarray, truth: np.ndarray) -> float:
-    keep = finite_positive_mask(pred) & finite_positive_mask(truth)
+def finite_positive_mask(arr: np.ndarray, *, wavenumbers: np.ndarray | None = None) -> np.ndarray:
+    wvn = _default_wavenumbers(arr.shape[0]) if wavenumbers is None else np.asarray(wavenumbers, dtype=np.float64)
+    if wvn.shape != arr.shape:
+        raise ValueError(f"wavenumber length mismatch: curve={arr.shape[0]} wavenumbers={wvn.shape[0]}")
+    return np.isfinite(arr) & (arr > 0.0) & np.isfinite(wvn) & (wvn > SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE)
+
+
+def relative_l2(pred: np.ndarray, truth: np.ndarray, *, wavenumbers: np.ndarray | None = None) -> float:
+    keep = finite_positive_mask(pred, wavenumbers=wavenumbers) & finite_positive_mask(truth, wavenumbers=wavenumbers)
     if not np.any(keep):
         return float("nan")
     return float(np.linalg.norm((pred - truth)[keep]) / max(np.linalg.norm(truth[keep]), 1e-12))
@@ -223,6 +231,20 @@ def _infer_spectra_token(spectra_dir: Path) -> str:
     return "1"
 
 
+def _has_raw_spectra_arrays(spectra_dir: Path) -> bool:
+    for field_dir in RAW_FIELD_DIRS.values():
+        if any(spectra_field_root(spectra_dir, field_dir).glob("ampl_*.npy")):
+            return True
+    return False
+
+
+def _load_curve_wavenumbers(root: Path, *, date: int, step: int, field_dir: str, token: str, member: int) -> np.ndarray | None:
+    path = root / f"wvn_{date}_{step}_{field_dir}_{token}_n{member}.npy"
+    if not path.exists():
+        return None
+    return np.asarray(np.load(path), dtype=np.float64)
+
+
 def _extract_spectra_metrics_from_summary(data: dict[str, Any], source_path: str) -> dict[str, Any]:
     source: dict[str, Any] | None = None
     if isinstance(data.get("weather_states"), dict) and data["weather_states"]:
@@ -269,6 +291,8 @@ def _extract_spectra_metrics_from_summary(data: dict[str, Any], source_path: str
         "n_curves": curve_counts[0] if curve_counts and len(set(curve_counts)) == 1 else None,
         "counts": {field: entry.get("n_pairs", entry.get("n_curves", 0)) for field, entry in source.items() if field in SPECTRA_FIELDS and isinstance(entry, dict)},
         "missing_reference_pairs": missing_reference_pairs,
+        "score_wavenumber_min_exclusive": finite_float(data.get("score_wavenumber_min_exclusive"))
+        or SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
     }
 
 
@@ -291,6 +315,7 @@ def _load_raw_spectra_metrics(spectra_dir: Path, reference_root: Path, metadata:
     for field, field_dir in RAW_FIELD_DIRS.items():
         exp_curves: list[np.ndarray] = []
         ref_curves: list[np.ndarray] = []
+        wavenumbers: np.ndarray | None = None
         used_dates: set[int] = set()
         used_steps: set[int] = set()
         used_members: set[int] = set()
@@ -309,6 +334,32 @@ def _load_raw_spectra_metrics(spectra_dir: Path, reference_root: Path, metadata:
                         continue
                     exp_curves.append(np.load(exp_file))
                     ref_curves.append(np.load(ref_file))
+                    curve_wavenumbers = _load_curve_wavenumbers(
+                        exp_dir,
+                        date=date,
+                        step=step,
+                        field_dir=field_dir,
+                        token=token,
+                        member=member,
+                    )
+                    if curve_wavenumbers is None:
+                        curve_wavenumbers = _load_curve_wavenumbers(
+                            ref_dir,
+                            date=date,
+                            step=step,
+                            field_dir=field_dir,
+                            token=ref_token,
+                            member=member,
+                        )
+                    if curve_wavenumbers is not None:
+                        if wavenumbers is None:
+                            wavenumbers = curve_wavenumbers
+                        elif curve_wavenumbers.shape != wavenumbers.shape or not np.allclose(curve_wavenumbers, wavenumbers):
+                            raise ValueError(
+                                f"wavenumber mismatch for field={field}: "
+                                f"candidate={curve_wavenumbers.shape} reference={wavenumbers.shape} "
+                                f"(root={spectra_dir}, reference_root={reference_root})"
+                            )
                     used_dates.add(date)
                     used_steps.add(step)
                     used_members.add(member)
@@ -328,7 +379,7 @@ def _load_raw_spectra_metrics(spectra_dir: Path, reference_root: Path, metadata:
                 f"candidate={exp_mean.shape[0]} reference={ref_mean.shape[0]} "
                 f"(root={spectra_dir}, reference_root={reference_root})"
             )
-        score = relative_l2(exp_mean, ref_mean)
+        score = relative_l2(exp_mean, ref_mean, wavenumbers=wavenumbers)
         scores[field] = score if math.isfinite(score) else None
         if scores[field] is not None:
             values.append(scores[field])
@@ -349,19 +400,15 @@ def _load_raw_spectra_metrics(spectra_dir: Path, reference_root: Path, metadata:
         "n_curves": curve_count,
         "counts": counts,
         "missing_reference_pairs": missing_reference_pairs,
+        "score_wavenumber_min_exclusive": SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
     }
 
 
 def load_spectra_metrics(spectra_dir: Path, *, reference_root: Path | None = None) -> dict[str, Any]:
     summary_path = spectra_dir / "spectra_summary.json"
+    summary_data: dict[str, Any] = {}
     if summary_path.exists():
         summary_data = load_json(summary_path)
-        summary_metrics = _extract_spectra_metrics_from_summary(summary_data, str(summary_path))
-        if summary_metrics["mean"] is not None or any(summary_metrics[field] is not None for field in SPECTRA_FIELDS):
-            return summary_metrics
-    else:
-        summary_data = {}
-
     metadata = _load_spectra_metadata(spectra_dir)
     ref_path: Path | None = reference_root
     if ref_path is None:
@@ -372,10 +419,15 @@ def load_spectra_metrics(spectra_dir: Path, *, reference_root: Path | None = Non
         template_root = str(metadata.get("template_root", "")).strip()
         if template_root:
             ref_path = Path(template_root)
-    if ref_path is None or not ref_path.exists():
-        return empty_spectra_metrics(str(summary_path if summary_path.exists() else spectra_dir))
-
-    return _load_raw_spectra_metrics(spectra_dir, ref_path, metadata)
+    if ref_path is not None and ref_path.exists() and _has_raw_spectra_arrays(spectra_dir):
+        raw_metrics = _load_raw_spectra_metrics(spectra_dir, ref_path, metadata)
+        if raw_metrics["mean"] is not None or any(raw_metrics[field] is not None for field in SPECTRA_FIELDS):
+            return raw_metrics
+    if summary_path.exists():
+        summary_metrics = _extract_spectra_metrics_from_summary(summary_data, str(summary_path))
+        if summary_metrics["mean"] is not None or any(summary_metrics[field] is not None for field in SPECTRA_FIELDS):
+            return summary_metrics
+    return empty_spectra_metrics(str(summary_path if summary_path.exists() else spectra_dir))
 
 
 def build_spectra_summary(spectra_dir: Path, *, reference_root: Path | None = None) -> dict[str, Any]:
@@ -390,6 +442,7 @@ def build_spectra_summary(spectra_dir: Path, *, reference_root: Path | None = No
         "relative_to": relative_to,
         "spectra_output_dir": str(spectra_dir),
         "scoreboard_fields": list(SPECTRA_FIELDS),
+        "score_wavenumber_min_exclusive": SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
     }
     if metrics["mean"] is not None:
         summary["mean_relative_l2"] = float(metrics["mean"])

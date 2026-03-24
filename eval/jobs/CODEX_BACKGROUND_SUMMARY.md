@@ -2,6 +2,8 @@
 
 This directory has Codex-launchable background workflows.
 
+Canonical repo-owned templates live under `eval/jobs/templates/`.
+
 ## 1) Full Eval Suite From `expver`
 
 Use:
@@ -93,7 +95,7 @@ Where to check:
 /home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval_predictions \
   --ckpt-id <CKPT_ID> \
   --run-id manual_9km4g_full \
-  --predict-qos dg \
+  --predict-qos ng \
   --predict-time 02:00:00 \
   --predict-gpus 4 \
   --predict-cpus 32 \

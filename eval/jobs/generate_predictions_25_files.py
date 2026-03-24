@@ -151,7 +151,6 @@ def main() -> None:
     ap.add_argument("--num-gpus-per-model", type=int, default=1)
     ap.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
     ap.add_argument("--validation-frequency", default="50h")
-    ap.add_argument("--batch-index", type=int, default=0)
     ap.add_argument("--members", default="1,2,3,4,5,6,7,8,9,10")
     ap.add_argument("--steps", default="24,48,72,96,120")
     ap.add_argument("--dates", default="20230826,20230827,20230828,20230829,20230830")
@@ -335,7 +334,6 @@ def main() -> None:
                         datamodule=datamodule,
                         device=device,
                         bundle_nc=str(bundle_path),
-                        batch_index=args.batch_index,
                         member_index=0,
                         extra_args=extra_args,
                         precision=args.precision,

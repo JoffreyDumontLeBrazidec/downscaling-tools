@@ -19,6 +19,15 @@ set -euo pipefail
 
 PROXY_BUNDLE_PAIRS="20230829:24,20230828:48,20230829:48,20230828:24,20230830:24,20230828:72,20230827:72,20230830:48,20230829:72,20230827:48"
 PROXY_N_FILES=10
+SCOREBOARD_SUBSET_DIR_NAME="proxy10total_subset"
+SCOREBOARD_SPECTRA_DIR_NAME="spectra_harmonized_proxy10total"
+SCOREBOARD_TC_EVENTS="idalia,franklin"
+SCOREBOARD_TC_SUPPORT_MODE="regridded"
+SCOREBOARD_BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+SCOREBOARD_SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
+SCOREBOARD_SPECTRA_NSIDE=128
+SCOREBOARD_SPECTRA_LMAX=319
+SCOREBOARD_SPECTRA_MEMBER_AGG="per-file-mean"
 
 usage() {
   cat <<EOF
@@ -40,10 +49,13 @@ Options:
   --predict-mem <mem>         Predict memory (default: 256G)
   --predict-gpus <n>          Predict gpus-per-node (default: 1)
   --members <csv>             Proxy member ids (default: 1)
+  --extra-args-json <json>    Optional sampler override JSON passed to prediction generation
   --eval-qos <qos>            Eval job QoS (default: nf)
   --eval-time <hh:mm:ss>      Eval walltime (default: 04:00:00)
   --eval-cpus <n>             Eval cpus-per-task (default: 8)
   --eval-mem <mem>            Eval memory (default: 64G)
+  --write-scoreboard-artifacts
+                              Also write strict proxy TC JSON/PDF + spectra summary
   --allow-existing-run-dir    Allow reusing an existing run directory
   --skip-eval                 Only run predictions, skip evaluation
   --dry-run                   Generate scripts only
@@ -61,10 +73,12 @@ PREDICT_CPUS="32"
 PREDICT_MEM="256G"
 PREDICT_GPUS="1"
 PREDICT_MEMBERS="1"
+EXTRA_ARGS_JSON=""
 EVAL_QOS="nf"
 EVAL_TIME="04:00:00"
 EVAL_CPUS="8"
 EVAL_MEM="64G"
+WRITE_SCOREBOARD_ARTIFACTS=0
 ALLOW_EXISTING_RUN_DIR=0
 SKIP_EVAL=0
 DRY_RUN=0
@@ -82,10 +96,12 @@ while [[ $# -gt 0 ]]; do
     --predict-mem) PREDICT_MEM="$2"; shift 2 ;;
     --predict-gpus) PREDICT_GPUS="$2"; shift 2 ;;
     --members) PREDICT_MEMBERS="$2"; shift 2 ;;
+    --extra-args-json) EXTRA_ARGS_JSON="$2"; shift 2 ;;
     --eval-qos) EVAL_QOS="$2"; shift 2 ;;
     --eval-time) EVAL_TIME="$2"; shift 2 ;;
     --eval-cpus) EVAL_CPUS="$2"; shift 2 ;;
     --eval-mem) EVAL_MEM="$2"; shift 2 ;;
+    --write-scoreboard-artifacts) WRITE_SCOREBOARD_ARTIFACTS=1; shift ;;
     --allow-existing-run-dir) ALLOW_EXISTING_RUN_DIR=1; shift ;;
     --skip-eval) SKIP_EVAL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -114,10 +130,17 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCOREBOARD_SPECTRA_SCRIPT="${PROJECT_ROOT}/eval/jobs/templates/predictions_dir_spectra.py"
+
+if [[ "${WRITE_SCOREBOARD_ARTIFACTS}" -eq 1 && ! -f "${SCOREBOARD_SPECTRA_SCRIPT}" ]]; then
+  echo "Missing spectra helper: ${SCOREBOARD_SPECTRA_SCRIPT}" >&2
+  exit 2
+fi
 RUN_DIR="${EVAL_ROOT}/${RUN_ID}"
 JOBS_DIR="${RUN_DIR}/jobs"
 PRED_DIR="${RUN_DIR}/predictions"
 EVAL_RUN_ROOT="${RUN_DIR}/eval"
+EXTRA_ARGS_JSON_ESCAPED="$(printf '%q' "${EXTRA_ARGS_JSON}")"
 
 if [[ -e "${RUN_DIR}" && "${ALLOW_EXISTING_RUN_DIR}" -ne 1 ]]; then
   echo "Run directory already exists: ${RUN_DIR}" >&2
@@ -125,6 +148,62 @@ if [[ -e "${RUN_DIR}" && "${ALLOW_EXISTING_RUN_DIR}" -ne 1 ]]; then
   exit 2
 fi
 mkdir -p "${JOBS_DIR}" "${RUN_DIR}/logs" "${PRED_DIR}" "${EVAL_RUN_ROOT}"
+
+python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${CKPT_ID}" "${NAME_CKPT}" "${INPUT_ROOT}" "${PROXY_BUNDLE_PAIRS}" "${PREDICT_MEMBERS}" "${EXTRA_ARGS_JSON}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def parse_int_list(raw: str) -> list[int]:
+    return [int(part.strip()) for part in raw.split(",") if part.strip()]
+
+
+out_path = Path(sys.argv[1])
+run_id = sys.argv[2]
+run_dir = sys.argv[3]
+ckpt_id = sys.argv[4].strip()
+name_ckpt = sys.argv[5].strip()
+input_root = sys.argv[6]
+bundle_pairs = sys.argv[7]
+members = parse_int_list(sys.argv[8])
+sampling_config_json = sys.argv[9]
+
+dates: set[int] = set()
+steps: set[int] = set()
+for pair in bundle_pairs.split(","):
+    pair = pair.strip()
+    if not pair:
+        continue
+    date_text, step_text = pair.split(":", 1)
+    dates.add(int(date_text))
+    steps.add(int(step_text))
+
+config = {
+    "run_id": run_id,
+    "artifacts_root": run_dir,
+    "sampling_config_json": sampling_config_json,
+    "checkpoint": {
+        "run_id": ckpt_id or (Path(name_ckpt).parts[0] if name_ckpt else "na"),
+        "path": name_ckpt or "na",
+    },
+    "source": {
+        "input_root": input_root,
+        "bundle_scope": {
+            "dates": sorted(dates),
+            "members": members,
+            "steps_hours": sorted(steps),
+        },
+    },
+}
+if sampling_config_json:
+    try:
+        config["model"] = {"development_hacks": {"extra_args": json.loads(sampling_config_json)}}
+    except json.JSONDecodeError:
+        pass
+
+out_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+PY
 
 PREDICTION_SAFETY_FLAGS=""
 if [[ "${ALLOW_EXISTING_RUN_DIR}" -eq 1 ]]; then
@@ -159,12 +238,18 @@ export INTER_MAT_DIR=/home/ecm5702/hpcperm/data/inter_mat
 export RESIDUAL_STATISTICS_DIR=/home/ecm5702/hpcperm/data/residuals_statistics/
 export BUNDLE_MODULE_DIR=/home/ecm5702/dev/experiments/2026_02_16_clean_grib_prediction
 cd ${PROJECT_ROOT}
+EXTRA_ARGS_JSON=${EXTRA_ARGS_JSON_ESCAPED}
+extra_args=()
+if [[ -n "\${EXTRA_ARGS_JSON}" ]]; then
+  extra_args+=(--extra-args-json "\${EXTRA_ARGS_JSON}")
+fi
 python eval/jobs/generate_predictions_25_files.py \\
   --input-root ${INPUT_ROOT} \\
   --out-dir ${PRED_DIR} \\
   ${CKPT_FLAG} \\
   --bundle-pairs "${PROXY_BUNDLE_PAIRS}" \\
   --members "${PREDICT_MEMBERS}" \\
+  "\${extra_args[@]}" \\
   --device cuda ${PREDICTION_SAFETY_FLAGS}
 EOF
 
@@ -180,9 +265,23 @@ cat > "${JOBS_DIR}/eval_proxy_${RUN_ID}.sbatch" <<EOF
 set -euo pipefail
 source /home/ecm5702/dev/.ds-dyn/bin/activate
 export PYTHONPATH="${PROJECT_ROOT}:\${PYTHONPATH:-}"
+RUN_ID="${RUN_ID}"
+RUN_DIR="${RUN_DIR}"
+PRED_DIR="${PRED_DIR}"
+WRITE_SCOREBOARD_ARTIFACTS=${WRITE_SCOREBOARD_ARTIFACTS}
+SCOREBOARD_SUBSET_DIR_NAME="${SCOREBOARD_SUBSET_DIR_NAME}"
+SCOREBOARD_SPECTRA_DIR_NAME="${SCOREBOARD_SPECTRA_DIR_NAME}"
+SCOREBOARD_TC_EVENTS="${SCOREBOARD_TC_EVENTS}"
+SCOREBOARD_TC_SUPPORT_MODE="${SCOREBOARD_TC_SUPPORT_MODE}"
+SCOREBOARD_BASE_TC_DIR="${SCOREBOARD_BASE_TC_DIR}"
+SCOREBOARD_SPECTRA_SCRIPT="${SCOREBOARD_SPECTRA_SCRIPT}"
+SCOREBOARD_SPECTRA_WEATHER_STATES="${SCOREBOARD_SPECTRA_WEATHER_STATES}"
+SCOREBOARD_SPECTRA_NSIDE=${SCOREBOARD_SPECTRA_NSIDE}
+SCOREBOARD_SPECTRA_LMAX=${SCOREBOARD_SPECTRA_LMAX}
+SCOREBOARD_SPECTRA_MEMBER_AGG="${SCOREBOARD_SPECTRA_MEMBER_AGG}"
 cd ${PROJECT_ROOT}
 count=0
-for f in ${PRED_DIR}/predictions_*.nc; do
+for f in \${PRED_DIR}/predictions_*.nc; do
   [ -f "\$f" ] || continue
   base=\$(basename "\$f" .nc)
   python -m eval.run --eval-root ${EVAL_RUN_ROOT} predictions --predictions-nc "\$f" --run-name "\${base}" --skip-region
@@ -212,11 +311,54 @@ if [ -f "\${ANCHOR_JSON}" ]; then
   fi
   echo "TC comparison saved to ${RUN_DIR}/proxy_tc_compare.json"
   if [ "\${compare_rc}" -ne 0 ]; then
-    echo "Proxy TC comparison returned \${compare_rc}; preserving scheduler success because verdict JSON was written."
+    echo "Proxy TC comparison failed with exit code \${compare_rc}" >&2
+    exit "\${compare_rc}"
   fi
 else
   echo "No anchor TC extremes JSON at \${ANCHOR_JSON} — skipping TC comparison."
   echo "Generate one with: python -m eval.jobs.diagnose_per_bundle_tc_extremes --predictions-dir <anchor_predictions> --out-json \${ANCHOR_JSON}"
+fi
+
+if [[ "\${WRITE_SCOREBOARD_ARTIFACTS}" -eq 1 ]]; then
+  [[ -f "\${SCOREBOARD_SPECTRA_SCRIPT}" ]] || {
+    echo "Missing spectra helper: \${SCOREBOARD_SPECTRA_SCRIPT}" >&2
+    exit 4
+  }
+  SUBSET_DIR="\${RUN_DIR}/\${SCOREBOARD_SUBSET_DIR_NAME}"
+  SUBSET_PRED_DIR="\${SUBSET_DIR}/predictions"
+  SPECTRA_DIR="\${RUN_DIR}/\${SCOREBOARD_SPECTRA_DIR_NAME}"
+  mkdir -p "\${SUBSET_PRED_DIR}" "\${SPECTRA_DIR}"
+  for f in \${PRED_DIR}/predictions_*.nc; do
+    [ -f "\$f" ] || continue
+    ln -sfn "\$f" "\${SUBSET_PRED_DIR}/\$(basename "\$f")"
+  done
+  if [[ "\${SCOREBOARD_TC_SUPPORT_MODE}" == "regridded" ]]; then
+    module load ecmwf-toolbox
+    METVIEW_BIN="\$(command -v metview || true)"
+    if [[ -n "\${METVIEW_BIN}" ]]; then
+      export PATH="\$(dirname "\${METVIEW_BIN}"):\${PATH}"
+    fi
+    python -c "import metview" >/dev/null 2>&1
+  fi
+  TC_EVENT_TAG="\${SCOREBOARD_TC_EVENTS//,/_}"
+  TC_EVENT_TAG="\${TC_EVENT_TAG// /}"
+  python -m eval.tc.plot_pdf_tc_from_predictions \\
+    --predictions-dir "\${SUBSET_PRED_DIR}" \\
+    --outdir "\${SUBSET_DIR}" \\
+    --run-label "\${RUN_ID}" \\
+    --out-name "tc_normed_pdfs_\${TC_EVENT_TAG}_\${RUN_ID}_strict.pdf" \\
+    --base-tc-dir "\${SCOREBOARD_BASE_TC_DIR}" \\
+    --support-mode "\${SCOREBOARD_TC_SUPPORT_MODE}" \\
+    --events "\${SCOREBOARD_TC_EVENTS}"
+  python "\${SCOREBOARD_SPECTRA_SCRIPT}" \\
+    --predictions-dir "\${SUBSET_PRED_DIR}" \\
+    --out-dir "\${SPECTRA_DIR}" \\
+    --run-label "\${RUN_ID}" \\
+    --weather-states "\${SCOREBOARD_SPECTRA_WEATHER_STATES}" \\
+    --nside "\${SCOREBOARD_SPECTRA_NSIDE}" \\
+    --lmax "\${SCOREBOARD_SPECTRA_LMAX}" \\
+    --member-aggregation "\${SCOREBOARD_SPECTRA_MEMBER_AGG}"
+  echo "Strict proxy scoreboard artifacts saved under \${SUBSET_DIR} and \${SPECTRA_DIR}"
 fi
 EOF
 
@@ -227,6 +369,8 @@ echo "  bundle-pairs: ${PROXY_BUNDLE_PAIRS}"
 echo "  members: ${PREDICT_MEMBERS}"
 echo "  n_files: ${PROXY_N_FILES}"
 echo "  n_member_predictions: $((PROXY_N_FILES * PROXY_MEMBER_COUNT))"
+echo "  extra_args_json: ${EXTRA_ARGS_JSON:-<none>}"
+echo "  scoreboard_artifacts: ${WRITE_SCOREBOARD_ARTIFACTS}"
 echo "  predict qos: ${PREDICT_QOS}, time: ${PREDICT_TIME}"
 echo "  scripts: ${JOBS_DIR}"
 

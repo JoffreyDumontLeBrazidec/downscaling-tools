@@ -89,6 +89,18 @@ def _open_bundle_dataset(path: str | Path) -> xr.Dataset:
     return xr.open_dataset(bundle_path)
 
 
+def open_bundle_dataset(path: str | Path) -> xr.Dataset:
+    return _open_bundle_dataset(path)
+
+
+def _borrow_or_open_bundle_dataset(
+    bundle_nc: str | Path | xr.Dataset,
+) -> tuple[xr.Dataset, bool]:
+    if isinstance(bundle_nc, xr.Dataset):
+        return bundle_nc, False
+    return open_bundle_dataset(bundle_nc), True
+
+
 def _get_pl_level_coord(ds_pl: xr.Dataset) -> str:
     for name in ds_pl.coords:
         if "isobaric" in name.lower() or name.lower() == "level":
@@ -259,14 +271,14 @@ def fill_hres_features(
 
 
 def load_inputs_from_bundle_numpy(
-    bundle_nc: str | Path,
+    bundle_nc: str | Path | xr.Dataset,
     name_to_idx_lres: Mapping[str, int],
     name_to_idx_hres: Mapping[str, int],
     *,
     valid_time_override=None,
     constant_forcings_npz: str | Path | None = DEFAULT_CONSTANT_FORCINGS_NPZ,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    bundle = _open_bundle_dataset(bundle_nc)
+    bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
     try:
         n_lres = int(bundle.sizes["point_lres"])
         n_hres = int(bundle.sizes["point_hres"])
@@ -299,7 +311,6 @@ def load_inputs_from_bundle_numpy(
         lon_lres = bundle["lon_lres"].values.astype(np.float32)
         lat_hres = bundle["lat_hres"].values.astype(np.float32)
         lon_hres = bundle["lon_hres"].values.astype(np.float32)
-
         z = bundle["in_hres_z"].values.astype(np.float32) if "in_hres_z" in bundle else None
         lsm = bundle["in_hres_lsm"].values.astype(np.float32) if "in_hres_lsm" in bundle else None
         dt = parse_valid_time(valid_time_override, bundle.attrs.get("case_valid_time"))
@@ -322,10 +333,11 @@ def load_inputs_from_bundle_numpy(
 
         return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
     finally:
-        try:
-            bundle.close()
-        except Exception:
-            pass
+        if should_close:
+            try:
+                bundle.close()
+            except Exception:
+                pass
 
 
 def fill_inputs_from_bundle(
@@ -355,8 +367,8 @@ def fill_inputs_from_bundle(
     x_hres[0, 0, 0, :, :] = torch.from_numpy(x_hres_np).to(device)
 
 
-def extract_target_from_bundle(
-    bundle_nc: str | Path,
+def extract_target_from_bundle_dataset(
+    bundle: xr.Dataset,
     weather_states: Sequence[str],
 ) -> tuple[np.ndarray | None, int]:
     """Return optional high-res target truth from bundle as [point_hres, weather_state].
@@ -366,68 +378,76 @@ def extract_target_from_bundle(
     - level fields: `target_hres_<base>` with level-like coord (`target_level`/`level`/`isobaricInhPa`)
       where weather state names use `<base>_<level>` (e.g. `t_850`).
     """
-    bundle = _open_bundle_dataset(bundle_nc)
-    try:
-        n_points = int(bundle.sizes["point_hres"])
-        y = np.full((n_points, len(weather_states)), np.nan, dtype=np.float32)
-        found_channels = 0
-        prefixes = ("target_hres_", "out_hres_", "y_hres_")
+    n_points = int(bundle.sizes["point_hres"])
+    y = np.full((n_points, len(weather_states)), np.nan, dtype=np.float32)
+    found_channels = 0
+    prefixes = ("target_hres_", "out_hres_", "y_hres_")
 
-        for i, name in enumerate(weather_states):
-            base, level = split_level_channel(name)
-            candidates: list[str] = []
-            for pref in prefixes:
-                candidates.append(f"{pref}{name}")
-                candidates.append(f"{pref}{base}")
+    for i, name in enumerate(weather_states):
+        base, level = split_level_channel(name)
+        candidates: list[str] = []
+        for pref in prefixes:
+            candidates.append(f"{pref}{name}")
+            candidates.append(f"{pref}{base}")
 
-            channel = None
-            for var_name in candidates:
-                if var_name not in bundle:
-                    continue
-                da = bundle[var_name]
-                if level is not None:
-                    selected = False
-                    for lev_name in ("target_level", "level", "isobaricInhPa"):
-                        if lev_name in da.coords:
-                            levels = np.asarray(da[lev_name].values).astype(int).tolist()
-                            if int(level) not in levels:
-                                break
-                            da = da.sel({lev_name: int(level)})
-                            selected = True
-                            break
-                    if not selected and any(n in da.coords for n in ("target_level", "level", "isobaricInhPa")):
-                        continue
-
-                ok = True
-                for dim in list(da.dims):
-                    if dim == "point_hres":
-                        continue
-                    if da.sizes[dim] != 1:
-                        ok = False
-                        break
-                    da = da.isel({dim: 0})
-                if not ok:
-                    continue
-
-                vals = np.asarray(da.values, dtype=np.float32).reshape(-1)
-                if vals.size != n_points:
-                    continue
-                channel = vals
-                break
-
-            if channel is None:
+        channel = None
+        for var_name in candidates:
+            if var_name not in bundle:
                 continue
-            y[:, i] = channel
-            found_channels += 1
+            da = bundle[var_name]
+            if level is not None:
+                selected = False
+                for lev_name in ("target_level", "level", "isobaricInhPa"):
+                    if lev_name in da.coords:
+                        levels = np.asarray(da[lev_name].values).astype(int).tolist()
+                        if int(level) not in levels:
+                            break
+                        da = da.sel({lev_name: int(level)})
+                        selected = True
+                        break
+                if not selected and any(n in da.coords for n in ("target_level", "level", "isobaricInhPa")):
+                    continue
 
-        if found_channels == 0:
-            return None, 0
-        return y, found_channels
+            ok = True
+            for dim in list(da.dims):
+                if dim == "point_hres":
+                    continue
+                if da.sizes[dim] != 1:
+                    ok = False
+                    break
+                da = da.isel({dim: 0})
+            if not ok:
+                continue
+
+            vals = np.asarray(da.values, dtype=np.float32).reshape(-1)
+            if vals.size != n_points:
+                continue
+            channel = vals
+            break
+
+        if channel is None:
+            continue
+        y[:, i] = channel
+        found_channels += 1
+
+    if found_channels == 0:
+        return None, 0
+    return y, found_channels
+
+
+def extract_target_from_bundle(
+    bundle_nc: str | Path | xr.Dataset,
+    weather_states: Sequence[str],
+) -> tuple[np.ndarray | None, int]:
+    bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
+    try:
+        return extract_target_from_bundle_dataset(bundle, weather_states)
     finally:
-        try:
-            bundle.close()
-        except Exception:
-            pass
+        if should_close:
+            try:
+                bundle.close()
+            except Exception:
+                pass
 
 
 def _to_1d_points(da: xr.DataArray) -> np.ndarray:

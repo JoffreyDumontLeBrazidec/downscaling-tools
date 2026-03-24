@@ -167,7 +167,7 @@ def get_downscaler(
         from anemoi.training.train.tasks.downscaler import (
             GraphDiffusionDownscaler as _DownscalerCls,
         )
-    except Exception:
+    except ImportError:
         from anemoi.training.train.downscaler import GraphDownscaler as _DownscalerCls
 
     kwargs = {
