@@ -11,7 +11,7 @@
 #   3. Compute spectra amplitudes via compute_spectra-3.py
 #
 # For the AG-side healpy proxy alternative, use:
-#   o1280_spectra_from_predictions_ag.sbatch
+#   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/spectra_proxy_from_predictions.sbatch
 #
 # IMPORTANT: This template is AC-only. gptosp.ser and the required modules
 # (ifs, eclib, pifsenv) are not available on AG nodes.
@@ -63,8 +63,7 @@ COMPUTE_SPECTRA_PY="/home/ecm5702/dev/post_prepml/spectra/spectra_ml/individual_
 WRITE_EXPERIMENT_CONFIG=0
 ###############################################################################
 
-TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${TEMPLATE_DIR}/../../.." && pwd)"
+PROJECT_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 
 die() {
   echo "ERROR: $*" >&2

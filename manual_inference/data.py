@@ -20,6 +20,31 @@ LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+def _ensure_forecast_reference_time_dim(ds: xr.Dataset) -> xr.Dataset:
+    if "forecast_reference_time" in ds.dims:
+        return ds
+    if "forecast_reference_time" in ds.coords:
+        values = np.atleast_1d(ds["forecast_reference_time"].values)
+        return ds.expand_dims(forecast_reference_time=values)
+
+    raw_date = ds.attrs.get("date")
+    if raw_date is None:
+        raise ValueError(
+            "Reference dataset is missing forecast_reference_time and date metadata."
+        )
+
+    raw_date = str(raw_date)
+    if len(raw_date) != 8 or not raw_date.isdigit():
+        raise ValueError(f"Unsupported reference date metadata: {raw_date!r}")
+
+    raw_time = str(ds.attrs.get("time", 0)).zfill(4)
+    forecast_reference_time = np.datetime64(
+        f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}T"
+        f"{raw_time[:2]}:{raw_time[2:4]}"
+    )
+    return ds.expand_dims(forecast_reference_time=[forecast_reference_time])
+
+
 @dataclass
 class DownscalingDatasetProcessor:
 
@@ -161,7 +186,7 @@ class DownscalingDatasetProcessor:
             target_ds_file,
         ).to_xarray()
 
-        ds_enfo = ds_enfo.copy()
+        ds_enfo = _ensure_forecast_reference_time_dim(ds_enfo).copy()
         step_hours = ds_enfo.step.values.astype("timedelta64[h]").astype(int)
         ds_enfo = ds_enfo.assign_coords(step=step_hours)
         ds_enfo = ds_enfo.rename(
@@ -236,7 +261,7 @@ class DownscalingDatasetProcessor:
             input_ds_file,
         ).to_xarray()
 
-        ds_eefo = ds_eefo.copy()
+        ds_eefo = _ensure_forecast_reference_time_dim(ds_eefo).copy()
         step_hours = ds_eefo.step.values.astype("timedelta64[h]").astype(int)
         ds_eefo = ds_eefo.assign_coords(step=step_hours)
 

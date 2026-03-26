@@ -54,8 +54,7 @@ BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
 WRITE_EXPERIMENT_CONFIG=0       # 1 => write ${RUN_ROOT}/EXPERIMENT_CONFIG.yaml
 ###############################################################################
 
-TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${TEMPLATE_DIR}/../../.." && pwd)"
+PROJECT_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 
 die() {
   echo "ERROR: $*" >&2

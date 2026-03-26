@@ -111,3 +111,10 @@ python -m eval.region_plotting.plot_intermediate_presets \
 - `eval/quaver` (quaver workflows)
 - `eval/spectra` (spectral analysis)
 - `eval/tc` (tropical cyclone evaluation)
+
+Canonical one-date non-TC local plots:
+```bash
+python -m eval.region_plotting.plot_one_date_local \
+  --run-root /home/ecm5702/perm/eval/<RUN_ID> \
+  --date 20230826
+```

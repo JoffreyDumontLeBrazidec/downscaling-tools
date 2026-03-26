@@ -27,6 +27,7 @@ preflight_summary
   - Submits sigma eval, full25 inference, then the scoreboard post-writer with `afterok` dependencies.
 - `strict_manual_predict_x_bundle.sbatch`
   - Batch generation of `predictions_YYYYMMDD_stepXXX.nc` from any chosen bundle-date set.
+  - Supports explicit `BUNDLE_PAIRS=YYYYMMDD:HH,...` subsets so proxy-like scopes can stay on the canonical template.
   - Works for `new` and `old` stack.
   - Enforces fresh run folder and explicit lane/input compatibility.
   - New stack path keeps `y` mandatory in output files.
@@ -40,6 +41,12 @@ preflight_summary
   - Auto-detects missing prediction files and relaunches only remaining date/step combos.
   - Targets an existing run directory and reruns only the missing files.
   - Works for `new` and `old` stack, AC and AG.
+
+### Local Plots
+- `local_plots_one_date_from_predictions.sbatch`
+  - **Canonical one-date local-plot template — works on both AC and AG.**
+  - Renders the standard `local_plots_one_date/` tree from an existing `predictions_*.nc` run root using `plot_one_date_local`.
+  - Preferred launch path for the `o320 -> o1280` weak-agent route is the combined helper below, which patches the CPU scheduler posture automatically.
 
 ### TC Evaluation
 - `tc_eval_from_predictions.sbatch`
@@ -69,6 +76,10 @@ preflight_summary
     3. `compute_spectra-3.py` → spectra amplitudes
   - Resumable: skips already-completed `gptosp` transforms on resubmission.
   - Uses short `$TMPDIR` symlinks to avoid `gptosp` path-length truncation.
+- `spectra_proxy_from_predictions.sbatch`
+  - **Canonical lightweight proxy spectra template — works on both AC and AG.**
+  - Builds a filtered symlink subset of `predictions_*.nc` and runs `predictions_dir_spectra.py` on that subset.
+  - Preferred AG-side spectra path for the weak-agent `o320 -> o1280` flow.
 - `predictions_dir_spectra.py`
   - Helper used by `launch_proxy_eval.sh` for proxy scoreboard spectra artifacts.
 - `stage_prediction_spectra_gribs.py`
@@ -76,6 +87,17 @@ preflight_summary
   - Used by `scoreboard_write_from_predictions.sbatch` for the trusted full-scoreboard spectra route.
 
 ### Submission Helper
+- `submit_o320_o1280_manual_eval_flow.sh`
+  - Login-node helper for the weak-agent-safe `o320 -> o1280` lane.
+  - Validates checkpoint profile, auto-resolves stack flavor, and renders run-local copies of:
+    - `strict_manual_predict_x_bundle.sbatch`
+    - `local_plots_one_date_from_predictions.sbatch`
+    - `spectra_proxy_from_predictions.sbatch` or `spectra_ecmwf_from_predictions.sbatch`
+    - `tc_eval_from_predictions.sbatch`
+  - Default policy:
+    - AG submit host → proxy spectra + native TC
+    - AC submit host → ECMWF spectra + regridded TC
+  - Enforces the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`) and supports render-only mode via `NO_SUBMIT=1`.
 - `submit_tc_eval_from_predictions.sh`
   - Login-node helper for standalone TC reruns on an existing predictions tree.
   - Renders a host-safe copy of `tc_eval_from_predictions.sbatch` under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
@@ -152,6 +174,9 @@ Common mistakes to avoid:
 For the canonical Aug 26-30 production bundle with minimal manual steps, prefer:
 edit and submit `submit_aug26_30_scoreboard_flow.sh`.
 
+For the canonical weak-agent-safe `o320 -> o1280` manual inference + local plots + spectra + TC route, prefer:
+edit and run `submit_o320_o1280_manual_eval_flow.sh`.
+
 For standalone TC reruns on an existing predictions tree, prefer:
 `bash eval/jobs/templates/submit_tc_eval_from_predictions.sh /path/to/edited_copy.sbatch`
 
@@ -162,11 +187,17 @@ For standalone TC reruns on an existing predictions tree, prefer:
   - `codex_eval_predictions --ckpt-id <ID> --run-id <same_run_id> --continue-full`
 - Manual full250 fallback:
   - edit `submit_aug26_30_scoreboard_flow.sh`
+- Manual `o320 -> o1280` inference + eval fallback:
+  - edit `submit_o320_o1280_manual_eval_flow.sh`
 - Recovery:
   - edit `predict_recovery.sbatch`
 - Standalone TC eval on existing predictions:
   - edit `tc_eval_from_predictions.sbatch`, then run `bash eval/jobs/templates/submit_tc_eval_from_predictions.sh /path/to/edited_copy.sbatch`
+- Standalone one-date local plots on existing predictions:
+  - edit `local_plots_one_date_from_predictions.sbatch`
+- Standalone proxy spectra on existing predictions:
+  - edit `spectra_proxy_from_predictions.sbatch`
 
 ## Notes
 - Resolver tests for the strict inference templates live in:
-  - `/home/ecm5702/dev/downscaling-tools/eval/jobs/tests/test_checkpoint_profile.py`
+  - `/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/tests/test_checkpoint_profile.py`

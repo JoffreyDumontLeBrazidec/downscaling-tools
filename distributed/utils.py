@@ -2,6 +2,7 @@ import os
 import datetime
 import subprocess
 import logging
+import socket
 
 import numpy as np
 import torch

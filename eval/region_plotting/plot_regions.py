@@ -186,7 +186,20 @@ def run_region_plots_from_predictions(
     predictions_path = run_parent_dir / run_name / predictions_filename
     with xr.open_dataset(predictions_path) as ds_pred:
         available = set(ds_pred.data_vars)
-        selected_variables = [v for v in model_variables if v in available]
+        selected_variables = []
+        for model_var in model_variables:
+            if model_var not in available:
+                continue
+            if (
+                "ensemble_member" in ds_pred[model_var].dims
+                and ds_pred.sizes.get("ensemble_member", 1) > 1
+            ):
+                LOG.info(
+                    "Skipping multi-member aggregate variable %s for plotting",
+                    model_var,
+                )
+                continue
+            selected_variables.append(model_var)
         if not selected_variables:
             raise ValueError(
                 f"None of the requested model variables are available in {predictions_path}. "

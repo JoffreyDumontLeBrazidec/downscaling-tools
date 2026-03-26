@@ -25,81 +25,93 @@ Use this as the default when a user asks to evaluate a run.
   - the absolute path to the generated comparison table file,
   - the absolute output directory path(s),
   - experiment config used for the target run (checkpoint/run_id, sampling params, script/command, job id(s)).
-- Record all submitted jobs and monitor commands in `in_progress/tasks/<task>.md`.
+- Record all submitted jobs and monitor commands in the active epic task note under `/nfs/dh2_home_a/ecm5702/dev/docs/epics/checkpoint-eval-pipeline/in-progress/`.
 
-## A) Predictions Run (`run-id`) - Eval Only
+## A) O320 -> O1280 Manual Inference + Eval Bundle
+
+Use the canonical helper below as the default weak-agent route for fresh `o320 -> o1280` manual-inference work:
+
+```bash
+bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+```
+
+Edit only the `USER SETTINGS` block first. The helper will:
+- validate the checkpoint profile and ensure the lane is `o320_o1280`
+- auto-resolve the stack flavor from the checkpoint
+- force the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`)
+- render host-safe dated submit copies under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`
+- submit, with `afterok` dependencies:
+  - `strict_manual_predict_x_bundle.sbatch`
+  - `local_plots_one_date_from_predictions.sbatch`
+  - `spectra_proxy_from_predictions.sbatch` on AG or `spectra_ecmwf_from_predictions.sbatch` on AC
+  - `tc_eval_from_predictions.sbatch` with `native` on AG or `regridded` on AC
+
+For proxy-like reduced scopes, set:
+- `BUNDLE_PAIRS=YYYYMMDD:HH,...`
+- optionally `LOCAL_PLOT_DATE`
+- optionally `LOCAL_PLOT_EXPECTED_COUNT=auto`
+
+Do **not** fork ad hoc `/tmp/*.sbatch` launchers for this lane.
+
+## B) Predictions Run (`run-id`) - Eval Only
 
 Assumes predictions already exist at:
 `/home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_*.nc`
 
-1) One-date local plots (5 files, example date `20230826`):
+1) One-date local plots:
 
 ```bash
-cat > /tmp/eval_one_date_<RUN_ID>.sbatch <<'EOF'
-#!/bin/bash
-#SBATCH --job-name=e5_<RUN_ID>_d20230826
-#SBATCH --qos=nf
-#SBATCH --time=03:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --output=/home/ecm5702/perm/eval/<RUN_ID>/logs/eval5_20230826_<RUN_ID>_%j.out
-set -euo pipefail
-source /home/ecm5702/dev/.ds-dyn/bin/activate
-export PYTHONPATH="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools:${PYTHONPATH:-}"
-cd /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools
-count=0
-for f in /home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_20230826_step*.nc; do
-  [ -f "$f" ] || continue
-  base=$(basename "$f" .nc)
-  python -m eval.run --eval-root /home/ecm5702/perm/eval/<RUN_ID>/eval_one_date predictions --predictions-nc "$f" --run-name "$base" --skip-region
-  count=$((count+1))
-  echo "evaluated ${count} file(s): $f"
-done
-if [ "$count" -ne 5 ]; then
-  echo "Expected 5 prediction files for 20230826 but evaluated $count" >&2
-  exit 3
-fi
-EOF
-sbatch /tmp/eval_one_date_<RUN_ID>.sbatch
+cp \
+  /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/local_plots_one_date_from_predictions.sbatch \
+  /home/ecm5702/dev/jobscripts/local_plots_one_date_<RUN_ID>.sbatch
+# Edit RUN_ROOT, RUN_ID, DATE, and EXPECTED_COUNT in the copied file, then:
+sbatch /home/ecm5702/dev/jobscripts/local_plots_one_date_<RUN_ID>.sbatch
 ```
 
-2) TC plots in parallel:
+This writes canonical non-TC local plots under:
+- `/home/ecm5702/perm/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step024/`
+- ...
+- `/home/ecm5702/perm/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step120/`
+
+For new outputs, prefer the baseline filenames emitted by the canonical helper, for example:
+- `amazon_forest_member01_baseline.pdf`
+- `amazon_forest_member01_baseline.png`
+
+2) TC plots:
 
 ```bash
-sbatch --job-name=tcplot_<RUN_ID> --qos=nf --time=03:00:00 --cpus-per-task=4 --mem=32G \
-  --output=/home/ecm5702/perm/eval/<RUN_ID>/logs/tc_plot_<RUN_ID>_%j.out \
-  --wrap='set -euo pipefail; source /home/ecm5702/dev/.ds-dyn/bin/activate; module unload ifs || true; module load ecmwf-toolbox; export PYTHONPATH="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools:${PYTHONPATH:-}"; cd /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools; python -m eval.tc.plot_members_tc --expver 0001 --outdir /home/ecm5702/perm/eval/<RUN_ID>; python -m eval.tc.plot_pdf_tc_from_predictions --predictions-dir /home/ecm5702/perm/eval/<RUN_ID>/predictions --outdir /home/ecm5702/perm/eval/<RUN_ID> --run-label <RUN_ID> --out-name tc_normed_pdfs_idalia_<RUN_ID>_from_predictions.pdf; cat /home/ecm5702/perm/eval/<RUN_ID>/tc_normed_pdfs_idalia_<RUN_ID>_from_predictions.pdf > /home/ecm5702/perm/eval/<RUN_ID>/tc_normed_pdfs_all_events_<RUN_ID>.pdf'
+cp \
+  /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/tc_eval_from_predictions.sbatch \
+  /home/ecm5702/dev/jobscripts/tc_eval_<RUN_ID>.sbatch
+# Edit RUN_ROOT and RUN_ID in the copied file, then:
+bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_tc_eval_from_predictions.sh \
+  /home/ecm5702/dev/jobscripts/tc_eval_<RUN_ID>.sbatch
 ```
-This plotting path always includes `ip6y` (`ENFO_O320_ip6y`) as an additional fixed reference.
 
-3) Reference spectra generation in parallel:
+3) Spectra generation:
 
 ```bash
-sbatch --export=ALL,TARGETS=enfo_o1280,eefo_o320,DATE_RANGE=20230826/to/20230827/by/1,STEPS=144,NUMBERS=1/2,DATE_START=2023-08-26,DATE_END=2023-08-27,STEP_LIST=144,NUMBERS_LIST=1,2 \
-  /home/ecm5702/dev/post_prepml/spectra/generate_reference_spectra.sbatch
+cp \
+  /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/spectra_proxy_from_predictions.sbatch \
+  /home/ecm5702/dev/jobscripts/spectra_proxy_<RUN_ID>.sbatch
+# Edit RUN_ROOT, RUN_ID, and filter settings in the copied file, then:
+sbatch /home/ecm5702/dev/jobscripts/spectra_proxy_<RUN_ID>.sbatch
 ```
 
-4) Write run manifest (required):
+On AC, when trusted ECMWF spectra are explicitly needed, switch to:
 
 ```bash
-cat > /home/ecm5702/perm/eval/<RUN_ID>/EXPERIMENT_CONFIG.yaml <<'EOF'
-run_id: <RUN_ID>
-purpose: "Prediction-run eval bundle"
-predictions:
-  source_dir: /home/ecm5702/perm/eval/<RUN_ID>/predictions
-  file_pattern: predictions_YYYYMMDD_stepXXX.nc
-  sampling_parameters:
-    source_attribute: sampling_config_json
-    parsed: {}
-tc_evaluation:
-  method: prediction-driven
-  script: /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/tc/plot_pdf_tc_from_predictions.py
-  canonical_pdf: /home/ecm5702/perm/eval/<RUN_ID>/tc_normed_pdfs_all_events_<RUN_ID>.pdf
-  canonical_stats_json: /home/ecm5702/perm/eval/<RUN_ID>/tc_normed_pdfs_all_events_<RUN_ID>.stats.json
-EOF
+cp \
+  /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/spectra_ecmwf_from_predictions.sbatch \
+  /home/ecm5702/dev/jobscripts/spectra_ecmwf_<RUN_ID>.sbatch
+sbatch /home/ecm5702/dev/jobscripts/spectra_ecmwf_<RUN_ID>.sbatch
 ```
 
-## B) Expver Run (Full Eval Family)
+4) Run manifest:
+
+Prediction-first routes should already have `/home/ecm5702/perm/eval/<RUN_ID>/EXPERIMENT_CONFIG.yaml` from the strict manual-inference template. If it is missing, treat that as a workflow bug and backfill it immediately rather than inventing a second manifest surface.
+
+## C) Expver Run (Full Eval Family)
 
 Use existing launcher and let it submit components in parallel:
 

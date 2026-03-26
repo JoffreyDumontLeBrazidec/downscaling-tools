@@ -1,5 +1,11 @@
 #!/bin/bash --login
+# Canonical batch manual-inference template for multi-bundle prediction runs.
+# For `LANE=o320_o1280`, prefer the repo-owned login-node helper:
+#   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+# It renders this template with the tested 4-GPU / 32-CPU / 24h posture and
+# wires local plots, spectra, and TC follow-ups without ad hoc script forks.
 #SBATCH --job-name=manual_predict_x_bundle
+#SBATCH --qos=ng
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
@@ -29,6 +35,10 @@ INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 DATE_PRESET="default"      # default | aug16_30
 DATES=""                   # explicit CSV override (example: 20230816,20230817)
 STEPS="24,48,72,96,120"
+# Optional exact date:step list. When set, it overrides the cartesian product
+# of DATES × STEPS for prediction-file selection.
+# Example: 20230828:24,20230829:48,20230830:72
+BUNDLE_PAIRS=""
 MEMBERS="1,2,3,4,5,6,7,8,9,10"
 
 OUTPUT_ROOT="/home/ecm5702/perm/eval"
@@ -38,7 +48,7 @@ RUN_SUFFIX=""              # optional, safe chars only
 DEVICE="cuda"
 PRECISION="fp32"
 VALIDATION_FREQUENCY="50h"  # used by new stack only
-NUM_GPUS_PER_MODEL=1        # used by new stack only
+NUM_GPUS_PER_MODEL=1        # used by new stack only; o320_o1280 should use 4
 # Keep the whole JSON blob shell-quoted as one string; outer single quotes are safest.
 EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 
@@ -73,6 +83,46 @@ print(json.dumps(parsed, separators=(",", ":")))
 PYJSON
 }
 
+normalize_bundle_pairs() {
+  local raw="$1"
+  python - "${raw}" <<'PYBUNDLE'
+import sys
+
+raw = sys.argv[1].strip()
+if not raw:
+    print("")
+    raise SystemExit(0)
+
+seen: set[str] = set()
+normalized: list[str] = []
+for token in raw.split(","):
+    token = token.strip()
+    if not token:
+        continue
+    if ":" not in token:
+        raise SystemExit(
+            "BUNDLE_PAIRS entries must use date:step format, for example 20230828:24."
+        )
+    date_raw, step_raw = token.split(":", 1)
+    date_raw = date_raw.strip()
+    step_raw = step_raw.strip()
+    if len(date_raw) != 8 or not date_raw.isdigit():
+        raise SystemExit(
+            f"Invalid BUNDLE_PAIRS date {date_raw!r}; expected YYYYMMDD."
+        )
+    if not step_raw.isdigit():
+        raise SystemExit(
+            f"Invalid BUNDLE_PAIRS step {step_raw!r}; expected integer hours."
+        )
+    key = f"{date_raw}:{int(step_raw)}"
+    if key in seen:
+        continue
+    seen.add(key)
+    normalized.append(key)
+print(",".join(normalized))
+PYBUNDLE
+}
+
 require_choice() {
   local value="$1"; shift
   local ok=1
@@ -104,6 +154,12 @@ if [[ -z "${DATES}" ]]; then
   fi
 fi
 
+BUNDLE_PAIRS="$(normalize_bundle_pairs "${BUNDLE_PAIRS}")"
+
+if [[ "${LANE}" == "o320_o1280" && "${NUM_GPUS_PER_MODEL}" -lt 4 ]]; then
+  die "LANE=o320_o1280 requires NUM_GPUS_PER_MODEL>=4. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh or submit this template with matching 4-GPU scheduler overrides."
+fi
+
 HOST_SHORT="$(hostname -s)"
 case "${HOST_SHORT}" in
   ac*) HOST_FAMILY="ac" ;;
@@ -111,7 +167,7 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 
 if [[ "${STACK_FLAVOR}" == "new" ]]; then
   CODE_ROOT="${REPO_ROOT}"
@@ -200,6 +256,7 @@ python -m eval.jobs.checkpoint_profile \
   echo "date_preset=${DATE_PRESET}"
   echo "dates=${DATES}"
   echo "steps=${STEPS}"
+  echo "bundle_pairs=${BUNDLE_PAIRS:-none}"
   echo "members=${MEMBERS}"
   echo "output_predictions_dir=${PRED_DIR}"
   echo "manifest=${MANIFEST_PATH}"
@@ -210,7 +267,7 @@ python -m eval.jobs.checkpoint_profile \
   echo "extra_args_json=${EXTRA_ARGS_JSON}"
 } > "${RUN_DIR}/manual_inference_run_info.txt"
 
-python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${DATES}" "${MEMBERS}" "${STEPS}" "${EXTRA_ARGS_JSON}" <<'PY'
+python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${DATES}" "${MEMBERS}" "${STEPS}" "${BUNDLE_PAIRS}" "${EXTRA_ARGS_JSON}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -218,6 +275,22 @@ from pathlib import Path
 
 def parse_int_list(raw: str) -> list[int]:
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
+
+
+def parse_bundle_pairs(raw: str) -> list[dict[str, int]]:
+    pairs: list[dict[str, int]] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        date_raw, step_raw = token.split(":", 1)
+        pairs.append(
+            {
+                "date": int(date_raw.strip()),
+                "step_hours": int(step_raw.strip()),
+            }
+        )
+    return pairs
 
 
 out_path = Path(sys.argv[1])
@@ -235,12 +308,13 @@ input_root = sys.argv[12]
 dates = parse_int_list(sys.argv[13])
 members = parse_int_list(sys.argv[14])
 steps = parse_int_list(sys.argv[15])
-sampling_config_json = sys.argv[16]
+bundle_pairs = parse_bundle_pairs(sys.argv[16])
+sampling_config_json = sys.argv[17]
 
-checkpoint_token = checkpoint_ref.split("/", 1)[0]
 checkpoint_path = Path(checkpoint_ref)
 if not checkpoint_path.is_absolute():
     checkpoint_path = Path(ckpt_root) / checkpoint_ref
+checkpoint_token = checkpoint_path.parent.name or checkpoint_path.stem
 
 config = {
     "run_id": run_id,
@@ -262,9 +336,12 @@ config = {
             "dates": dates,
             "members": members,
             "steps_hours": steps,
+            "selection_mode": "explicit_pairs" if bundle_pairs else "cartesian_dates_steps",
         },
     },
 }
+if bundle_pairs:
+    config["source"]["bundle_scope"]["bundle_pairs"] = bundle_pairs
 try:
     config["model"] = {"development_hacks": {"extra_args": json.loads(sampling_config_json)}}
 except json.JSONDecodeError:
@@ -290,6 +367,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
       --members "${MEMBERS}" \
       --steps "${STEPS}" \
       --dates "${DATES}" \
+      --bundle-pairs "${BUNDLE_PAIRS}" \
       --extra-args-json "${EXTRA_ARGS_JSON}" \
       --manifest "${MANIFEST_PATH}"
   else
@@ -305,6 +383,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
       --members "${MEMBERS}" \
       --steps "${STEPS}" \
       --dates "${DATES}" \
+      --bundle-pairs "${BUNDLE_PAIRS}" \
       --extra-args-json "${EXTRA_ARGS_JSON}" \
       --manifest "${MANIFEST_PATH}"
   fi
@@ -323,6 +402,7 @@ else
     --members "${MEMBERS}" \
     --steps "${STEPS}" \
     --dates "${DATES}" \
+    --bundle-pairs "${BUNDLE_PAIRS}" \
     --extra-args-json "${EXTRA_ARGS_JSON}" \
     --manifest "${MANIFEST_PATH}" \
     "${OLD_ALLOW_FLAG[@]}"
