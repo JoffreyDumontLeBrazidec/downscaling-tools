@@ -61,6 +61,34 @@ def test_load_tc_extreme_scores_falls_back_to_normalized_tail_fractions(tmp_path
     assert result["franklin"] == pytest.approx(1.0)
 
 
+def test_load_tc_extreme_scores_supports_custom_event_names(tmp_path):
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(
+        json.dumps(
+            {
+                "events": {
+                    "humberto": {
+                        "extreme_tail": {
+                            "rows": [
+                                {"exp": "ENFO_O320", "mslp_980_990_fraction": 0.1, "wind_gt_25_fraction": 0.1},
+                                {"exp": "manual_95a07500_new_o48_o96", "mslp_980_990_fraction": 0.9, "wind_gt_25_fraction": 0.8},
+                            ]
+                        }
+                    }
+                }
+            }
+        )
+    )
+
+    result = metrics.load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_95a07500_new_o48_o96",
+        event_names=("humberto",),
+    )
+
+    assert result == {"humberto": pytest.approx(1.0)}
+
+
 def test_load_spectra_metrics_falls_back_to_raw_surface_fields(tmp_path):
     spectra_dir = tmp_path / "spectra_step120_5dates_m10_ecmwf"
     ref_root = tmp_path / "reference"

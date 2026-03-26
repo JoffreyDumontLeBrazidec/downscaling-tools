@@ -135,14 +135,20 @@ def _choose_tc_row(rows: list[dict[str, Any]], run_id: str) -> dict[str, Any] | 
     return None
 
 
-def load_tc_extreme_scores_from_json(stats_path: Path, *, run_id: str) -> dict[str, float]:
+def load_tc_extreme_scores_from_json(
+    stats_path: Path,
+    *,
+    run_id: str,
+    event_names: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, float]:
     data = load_json(stats_path)
     events = data.get("events")
     if not isinstance(events, dict):
         return {}
 
+    requested_events = tuple(event_names or ("idalia", "franklin"))
     scores: dict[str, float] = {}
-    for event_name in ("idalia", "franklin"):
+    for event_name in requested_events:
         event_data = events.get(event_name)
         if not isinstance(event_data, dict):
             continue
@@ -479,6 +485,7 @@ def build_run_scoreboard_metrics(
     tc_stats_path: Path,
     spectra_dir: Path,
     surface_json_path: Path,
+    event_names: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"run_id": run_id}
 
@@ -494,7 +501,7 @@ def build_run_scoreboard_metrics(
 
     tc_scores = {}
     if tc_stats_path.exists():
-        tc_scores = load_tc_extreme_scores_from_json(tc_stats_path, run_id=run_id)
+        tc_scores = load_tc_extreme_scores_from_json(tc_stats_path, run_id=run_id, event_names=event_names)
     out["tc_extreme_scores"] = tc_scores
 
     spectra_metrics = load_spectra_metrics(spectra_dir)

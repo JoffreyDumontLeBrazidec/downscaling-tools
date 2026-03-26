@@ -18,7 +18,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────────
 
 PROXY_BUNDLE_PAIRS="20230829:24,20230828:48,20230829:48,20230828:24,20230830:24,20230828:72,20230827:72,20230830:48,20230829:72,20230827:48"
-PROXY_N_FILES=10
+PROXY_N_FILES=""
 SCOREBOARD_SUBSET_DIR_NAME="proxy10total_subset"
 SCOREBOARD_SPECTRA_DIR_NAME="spectra_harmonized_proxy10total"
 SCOREBOARD_TC_EVENTS="idalia,franklin"
@@ -34,13 +34,15 @@ usage() {
 Usage:
   $(basename "$0") --run-id <id> --ckpt-id <id> [options]
 
-Proxy TC quick-eval: 10 canonical date/step pairs (${PROXY_N_FILES} files).
-Default proxy member scope: member 1 only (= 10 total predictions, target ~30 min GPU, qos=dg).
+Proxy TC quick-eval: configurable proxy DATE:STEP pairs (default 10 files).
+Default proxy member scope: member 1 only (default 10 total predictions under the canonical proxy10 contract, target ~30 min GPU, qos=dg).
 
 Options:
   --run-id <id>               Required run id (e.g. proxy_v1)
   --eval-root <path>          Eval root (default: /home/ecm5702/perm/eval)
   --input-root <path>         Bundle input root
+  --proxy-bundle-pairs <csv>  Explicit proxy DATE:STEP pairs
+  --proxy-n-files <n>         Expected proxy prediction/eval file count
   --ckpt-id <id>              Checkpoint id (required)
   --name-ckpt <path>          Explicit checkpoint path (overrides --ckpt-id)
   --predict-qos <qos>         Predict job QoS (default: dg)
@@ -56,6 +58,24 @@ Options:
   --eval-mem <mem>            Eval memory (default: 64G)
   --write-scoreboard-artifacts
                               Also write strict proxy TC JSON/PDF + spectra summary
+  --scoreboard-subset-dir-name <name>
+                              Override proxy strict-artifact subset directory name
+  --scoreboard-spectra-dir-name <name>
+                              Override proxy strict-artifact spectra directory name
+  --scoreboard-tc-events <csv>
+                              Override TC event list used for strict artifacts
+  --scoreboard-tc-support-mode <mode>
+                              TC support mode for strict artifacts (native|regridded)
+  --scoreboard-base-tc-dir <path>
+                              Base TC directory for strict artifacts
+  --scoreboard-spectra-weather-states <csv>
+                              Weather states for strict spectra generation
+  --scoreboard-spectra-nside <n>
+                              NSIDE for strict proxy spectra generation
+  --scoreboard-spectra-lmax <n>
+                              LMAX for strict proxy spectra generation
+  --scoreboard-spectra-member-agg <mode>
+                              Member aggregation for strict proxy spectra
   --allow-existing-run-dir    Allow reusing an existing run directory
   --skip-eval                 Only run predictions, skip evaluation
   --dry-run                   Generate scripts only
@@ -88,6 +108,8 @@ while [[ $# -gt 0 ]]; do
     --run-id) RUN_ID="$2"; shift 2 ;;
     --eval-root) EVAL_ROOT="$2"; shift 2 ;;
     --input-root) INPUT_ROOT="$2"; shift 2 ;;
+    --proxy-bundle-pairs) PROXY_BUNDLE_PAIRS="$2"; shift 2 ;;
+    --proxy-n-files) PROXY_N_FILES="$2"; shift 2 ;;
     --ckpt-id) CKPT_ID="$2"; shift 2 ;;
     --name-ckpt) NAME_CKPT="$2"; shift 2 ;;
     --predict-qos) PREDICT_QOS="$2"; shift 2 ;;
@@ -102,6 +124,15 @@ while [[ $# -gt 0 ]]; do
     --eval-cpus) EVAL_CPUS="$2"; shift 2 ;;
     --eval-mem) EVAL_MEM="$2"; shift 2 ;;
     --write-scoreboard-artifacts) WRITE_SCOREBOARD_ARTIFACTS=1; shift ;;
+    --scoreboard-subset-dir-name) SCOREBOARD_SUBSET_DIR_NAME="$2"; shift 2 ;;
+    --scoreboard-spectra-dir-name) SCOREBOARD_SPECTRA_DIR_NAME="$2"; shift 2 ;;
+    --scoreboard-tc-events) SCOREBOARD_TC_EVENTS="$2"; shift 2 ;;
+    --scoreboard-tc-support-mode) SCOREBOARD_TC_SUPPORT_MODE="$2"; shift 2 ;;
+    --scoreboard-base-tc-dir) SCOREBOARD_BASE_TC_DIR="$2"; shift 2 ;;
+    --scoreboard-spectra-weather-states) SCOREBOARD_SPECTRA_WEATHER_STATES="$2"; shift 2 ;;
+    --scoreboard-spectra-nside) SCOREBOARD_SPECTRA_NSIDE="$2"; shift 2 ;;
+    --scoreboard-spectra-lmax) SCOREBOARD_SPECTRA_LMAX="$2"; shift 2 ;;
+    --scoreboard-spectra-member-agg) SCOREBOARD_SPECTRA_MEMBER_AGG="$2"; shift 2 ;;
     --allow-existing-run-dir) ALLOW_EXISTING_RUN_DIR=1; shift ;;
     --skip-eval) SKIP_EVAL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -114,6 +145,29 @@ if [[ -z "$RUN_ID" ]]; then echo "--run-id is required" >&2; usage; exit 2; fi
 if [[ -z "$CKPT_ID" && -z "$NAME_CKPT" ]]; then echo "--ckpt-id or --name-ckpt is required" >&2; usage; exit 2; fi
 if [[ ! "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "RUN_ID contains unsafe characters: ${RUN_ID}" >&2; exit 2
+fi
+IFS=',' read -r -a PROXY_PAIR_LIST <<< "${PROXY_BUNDLE_PAIRS}"
+PROXY_PAIR_COUNT=0
+for raw_pair in "${PROXY_PAIR_LIST[@]}"; do
+  trimmed="${raw_pair//[[:space:]]/}"
+  if [[ -n "${trimmed}" ]]; then
+    PROXY_PAIR_COUNT=$((PROXY_PAIR_COUNT + 1))
+  fi
+done
+if [[ "${PROXY_PAIR_COUNT}" -eq 0 ]]; then
+  echo "--proxy-bundle-pairs must include at least one DATE:STEP pair" >&2
+  exit 2
+fi
+if [[ -z "${PROXY_N_FILES}" ]]; then
+  PROXY_N_FILES="${PROXY_PAIR_COUNT}"
+fi
+if [[ ! "${PROXY_N_FILES}" =~ ^[0-9]+$ ]] || [[ "${PROXY_N_FILES}" -le 0 ]]; then
+  echo "--proxy-n-files must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${PROXY_N_FILES}" -ne "${PROXY_PAIR_COUNT}" ]]; then
+  echo "--proxy-n-files=${PROXY_N_FILES} does not match the ${PROXY_PAIR_COUNT} configured DATE:STEP pairs" >&2
+  exit 2
 fi
 IFS=',' read -r -a PROXY_MEMBER_LIST <<< "${PREDICT_MEMBERS}"
 PROXY_MEMBER_COUNT=0
@@ -369,6 +423,8 @@ echo "  bundle-pairs: ${PROXY_BUNDLE_PAIRS}"
 echo "  members: ${PREDICT_MEMBERS}"
 echo "  n_files: ${PROXY_N_FILES}"
 echo "  n_member_predictions: $((PROXY_N_FILES * PROXY_MEMBER_COUNT))"
+echo "  tc_events: ${SCOREBOARD_TC_EVENTS}"
+echo "  spectra_weather_states: ${SCOREBOARD_SPECTRA_WEATHER_STATES}"
 echo "  extra_args_json: ${EXTRA_ARGS_JSON:-<none>}"
 echo "  scoreboard_artifacts: ${WRITE_SCOREBOARD_ARTIFACTS}"
 echo "  predict qos: ${PREDICT_QOS}, time: ${PREDICT_TIME}"

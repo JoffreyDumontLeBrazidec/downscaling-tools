@@ -42,6 +42,11 @@ def _cfg_for_pair(lres: int, hres: int, *, stack: str) -> dict:
     }
 
 
+def test_infer_lane_from_config_o48_o96():
+    cfg = _cfg_for_pair(48, 96, stack="new")
+    assert mod.infer_lane_from_config(cfg) == "o48_o96"
+
+
 def test_infer_lane_from_config_o96_o320():
     cfg = _cfg_for_pair(96, 320, stack="old")
     assert mod.infer_lane_from_config(cfg) == "o96_o320"

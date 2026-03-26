@@ -99,7 +99,7 @@ for file in "${PREDICTIONS_SOURCE_DIR}"/predictions_*.nc; do
   base="$(basename "${file}")"
   if [[ "${base}" =~ ^predictions_([0-9]{8})_step([0-9]{2,3})\.nc$ ]]; then
     date_key="${BASH_REMATCH[1]}"
-    step_key="${BASH_REMATCH[2]}"
+    step_key="$((10#${BASH_REMATCH[2]}))"
     if csv_matches "${DATE_LIST}" "${date_key}" && csv_matches "${STEP_LIST}" "${step_key}"; then
       ln -sf "${file}" "${SUBSET_DIR}/${base}"
       count=$((count + 1))

@@ -20,7 +20,7 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 STACK_FLAVOR="new"         # new | old
-LANE="o96_o320"            # o96_o320 | o320_o1280 | o1280_o2560
+LANE="o96_o320"            # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
 SOURCE_HPC="ac"            # ac | ag | leonardo | jupiter
 
 CHECKPOINT_REF="REPLACE_CHECKPOINT_REF"
@@ -138,7 +138,7 @@ require_choice() {
 }
 
 require_choice "${STACK_FLAVOR}" new old
-require_choice "${LANE}" o96_o320 o320_o1280 o1280_o2560
+require_choice "${LANE}" o48_o96 o96_o320 o320_o1280 o1280_o2560
 require_choice "${SOURCE_HPC}" ac ag leonardo jupiter
 require_choice "${DATE_PRESET}" default aug16_30
 [[ "${CHECKPOINT_REF}" != REPLACE_* ]] || die "Set CHECKPOINT_REF."

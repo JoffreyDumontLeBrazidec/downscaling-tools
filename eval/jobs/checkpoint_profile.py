@@ -13,6 +13,7 @@ from typing import Any
 from manual_inference.prediction.predict import _resolve_ckpt_path
 
 LANE_BY_RESOLUTION_PAIR = {
+    (48, 96): "o48_o96",
     (96, 320): "o96_o320",
     (320, 1280): "o320_o1280",
     (1280, 2560): "o1280_o2560",
