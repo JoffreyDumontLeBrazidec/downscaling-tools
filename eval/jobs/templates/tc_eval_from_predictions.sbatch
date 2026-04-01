@@ -46,7 +46,7 @@ RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_DIR="${RUN_ROOT}/predictions"
 OUT_DIR="${RUN_ROOT}"
-EVENTS="idalia"                 # comma-separated subset; blank => all events
+EVENTS="idalia,franklin"        # comma-separated subset; blank => all events
 SUPPORT_MODE="native"           # native | regridded
 EXTRA_REFERENCE_EXPIDS=""       # example: ENFO_O320_j138,ENFO_O1280_0001
 OUT_STEM=""                     # blank => auto-generated from events + RUN_ID

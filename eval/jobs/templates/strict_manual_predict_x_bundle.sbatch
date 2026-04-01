@@ -44,6 +44,7 @@ MEMBERS="1,2,3,4,5,6,7,8,9,10"
 OUTPUT_ROOT="/home/ecm5702/perm/eval"
 RUN_DATE_UTC="$(date -u +%Y%m%d)"
 RUN_SUFFIX=""              # optional, safe chars only
+RUN_ID_OVERRIDE=""         # optional full run-id override
 
 DEVICE="cuda"
 PRECISION="fp32"
@@ -56,6 +57,7 @@ EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma
 ALLOW_MISSING_TARGET_OLD=0
 # Keep this at 0 unless you intentionally overwrite a previous run.
 ALLOW_EXISTING_RUN_DIR=0
+ALLOW_REBUILT_BUNDLE_ROOT=0
 ###############################################################################
 
 die() {
@@ -65,7 +67,7 @@ die() {
 
 normalize_extra_args_json() {
   local raw="$1"
-  python - "${raw}" <<'PYJSON'
+  python3 - "${raw}" <<'PYJSON'
 import json
 import sys
 
@@ -85,7 +87,7 @@ PYJSON
 
 normalize_bundle_pairs() {
   local raw="$1"
-  python - "${raw}" <<'PYBUNDLE'
+  python3 - "${raw}" <<'PYBUNDLE'
 import sys
 
 raw = sys.argv[1].strip()
@@ -144,7 +146,26 @@ require_choice "${DATE_PRESET}" default aug16_30
 [[ "${CHECKPOINT_REF}" != REPLACE_* ]] || die "Set CHECKPOINT_REF."
 [[ "${CHECKPOINT_SHORT}" != REPLACE_* ]] || die "Set CHECKPOINT_SHORT."
 [[ -d "${INPUT_ROOT}" ]] || die "INPUT_ROOT does not exist: ${INPUT_ROOT}"
-[[ "${INPUT_ROOT}" == *"/${LANE}/"* ]] || die "INPUT_ROOT does not match lane ${LANE}: ${INPUT_ROOT}"
+[[ "${ALLOW_EXISTING_RUN_DIR}" == "0" || "${ALLOW_EXISTING_RUN_DIR}" == "1" ]] || die "ALLOW_EXISTING_RUN_DIR must be 0 or 1."
+[[ "${ALLOW_REBUILT_BUNDLE_ROOT}" == "0" || "${ALLOW_REBUILT_BUNDLE_ROOT}" == "1" ]] || die "ALLOW_REBUILT_BUNDLE_ROOT must be 0 or 1."
+if [[ -n "${RUN_ID_OVERRIDE}" && ! "${RUN_ID_OVERRIDE}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  die "Unsafe RUN_ID_OVERRIDE: ${RUN_ID_OVERRIDE}"
+fi
+
+if [[ "${INPUT_ROOT}" == *"/${LANE}/"* ]]; then
+  INPUT_ROOT_MODE="lane_canonical_root"
+elif [[ "${ALLOW_REBUILT_BUNDLE_ROOT}" -eq 1 ]]; then
+  case "$(basename "${INPUT_ROOT}")" in
+    bundles_with_y*)
+      INPUT_ROOT_MODE="rebuilt_truth_bundle_root"
+      ;;
+    *)
+      die "ALLOW_REBUILT_BUNDLE_ROOT=1 requires INPUT_ROOT basename like bundles_with_y*: ${INPUT_ROOT}"
+      ;;
+  esac
+else
+  die "INPUT_ROOT does not match lane ${LANE}: ${INPUT_ROOT}. For rebuilt truth-aware bundle roots, set ALLOW_REBUILT_BUNDLE_ROOT=1."
+fi
 
 if [[ -z "${DATES}" ]]; then
   if [[ "${DATE_PRESET}" == "default" ]]; then
@@ -190,9 +211,13 @@ fi
 CHECKPOINT_PROFILE_ROOT="${REPO_ROOT}"
 [[ -d "${CHECKPOINT_PROFILE_ROOT}" ]] || die "Checkpoint profile root not found: ${CHECKPOINT_PROFILE_ROOT}"
 
-RUN_ID="manual_${CHECKPOINT_SHORT}_${STACK_FLAVOR}_${LANE}_${RUN_DATE_UTC}"
-if [[ -n "${RUN_SUFFIX}" ]]; then
-  RUN_ID="${RUN_ID}_${RUN_SUFFIX}"
+if [[ -n "${RUN_ID_OVERRIDE}" ]]; then
+  RUN_ID="${RUN_ID_OVERRIDE}"
+else
+  RUN_ID="manual_${CHECKPOINT_SHORT}_${STACK_FLAVOR}_${LANE}_${RUN_DATE_UTC}"
+  if [[ -n "${RUN_SUFFIX}" ]]; then
+    RUN_ID="${RUN_ID}_${RUN_SUFFIX}"
+  fi
 fi
 [[ "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Unsafe RUN_ID: ${RUN_ID}"
 
@@ -253,6 +278,7 @@ python -m eval.jobs.checkpoint_profile \
   echo "checkpoint_ref=${CHECKPOINT_REF}"
   echo "ckpt_root=${CKPT_ROOT}"
   echo "input_root=${INPUT_ROOT}"
+  echo "input_root_mode=${INPUT_ROOT_MODE}"
   echo "date_preset=${DATE_PRESET}"
   echo "dates=${DATES}"
   echo "steps=${STEPS}"
@@ -267,7 +293,7 @@ python -m eval.jobs.checkpoint_profile \
   echo "extra_args_json=${EXTRA_ARGS_JSON}"
 } > "${RUN_DIR}/manual_inference_run_info.txt"
 
-python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${DATES}" "${MEMBERS}" "${STEPS}" "${BUNDLE_PAIRS}" "${EXTRA_ARGS_JSON}" <<'PY'
+python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${INPUT_ROOT_MODE}" "${DATES}" "${MEMBERS}" "${STEPS}" "${BUNDLE_PAIRS}" "${EXTRA_ARGS_JSON}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -305,11 +331,12 @@ code_root = sys.argv[9]
 checkpoint_ref = sys.argv[10]
 ckpt_root = sys.argv[11]
 input_root = sys.argv[12]
-dates = parse_int_list(sys.argv[13])
-members = parse_int_list(sys.argv[14])
-steps = parse_int_list(sys.argv[15])
-bundle_pairs = parse_bundle_pairs(sys.argv[16])
-sampling_config_json = sys.argv[17]
+input_root_mode = sys.argv[13]
+dates = parse_int_list(sys.argv[14])
+members = parse_int_list(sys.argv[15])
+steps = parse_int_list(sys.argv[16])
+bundle_pairs = parse_bundle_pairs(sys.argv[17])
+sampling_config_json = sys.argv[18]
 
 checkpoint_path = Path(checkpoint_ref)
 if not checkpoint_path.is_absolute():
@@ -332,6 +359,8 @@ config = {
     },
     "source": {
         "input_root": input_root,
+        "input_root_mode": input_root_mode,
+        "rebuilt_truth_bundle_root": input_root_mode == "rebuilt_truth_bundle_root",
         "bundle_scope": {
             "dates": dates,
             "members": members,
@@ -357,6 +386,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
     srun --ntasks="${NUM_GPUS_PER_MODEL}" --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
       python eval/jobs/generate_predictions_25_files.py \
       --input-root "${INPUT_ROOT}" \
+      --input-root-mode "${INPUT_ROOT_MODE}" \
       --out-dir "${PRED_DIR}" \
       --name-ckpt "${CHECKPOINT_REF}" \
       --ckpt-root "${CKPT_ROOT}" \
@@ -373,6 +403,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
   else
     python eval/jobs/generate_predictions_25_files.py \
       --input-root "${INPUT_ROOT}" \
+      --input-root-mode "${INPUT_ROOT_MODE}" \
       --out-dir "${PRED_DIR}" \
       --name-ckpt "${CHECKPOINT_REF}" \
       --ckpt-root "${CKPT_ROOT}" \

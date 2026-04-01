@@ -4,6 +4,7 @@ import types
 import numpy as np
 import torch
 import pytest
+import xarray as xr
 
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import resolve_output_weather_states
@@ -58,6 +59,10 @@ class _DummyModel:
         )
         shape = (1, 1, 1, self.grid_hres, self.n_states)
         return torch.ones(shape, dtype=torch.float32)
+
+    def interpolate_down(self, x, grad_checkpoint=False):
+        mean_state = x.mean(dim=1, keepdim=True)
+        return mean_state.repeat(1, self.grid_hres, 1)
 
 
 def test_predict_from_dataloader_shapes_and_members():
@@ -325,6 +330,22 @@ def test_resolve_ckpt_path_rejects_inference_companion_input(tmp_path):
         predict._resolve_ckpt_path(str(inference_ckpt), str(ckpt_root))
 
 
+def test_resolve_ckpt_path_allows_inference_companion_when_opted_in(tmp_path):
+    ckpt_root = tmp_path / "ckpts"
+    run_dir = ckpt_root / "run123"
+    run_dir.mkdir(parents=True)
+    inference_ckpt = run_dir / "inference-anemoi-by_epoch-epoch_021-step_100000.ckpt"
+    inference_ckpt.write_text("inference", encoding="utf-8")
+
+    resolved = predict._resolve_ckpt_path(
+        str(inference_ckpt),
+        str(ckpt_root),
+        allow_inference_companion=True,
+    )
+
+    assert resolved == str(inference_ckpt)
+
+
 def test_predict_from_bundle_forwards_classic_sampling_args(monkeypatch):
     point_lres = 3
     point_hres = 4
@@ -578,6 +599,59 @@ def test_build_predictions_dataset_slim_output_skips_member_views():
     assert "y_0" not in ds
     assert "y_pred_0" not in ds
     assert tuple(ds["y_pred"].shape) == (1, 2, 4, 2)
+
+
+def test_predict_main_from_bundle_writes_x_interp(tmp_path, monkeypatch):
+    out_path = tmp_path / "predictions.nc"
+    model = _DummyModel(grid_hres=4, n_states=2)
+
+    monkeypatch.setattr(predict, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(predict, "_resolve_ckpt_path", lambda *args, **kwargs: str(tmp_path / "model.ckpt"))
+    monkeypatch.setattr(predict, "_load_objects", lambda **kwargs: (model, object(), str(tmp_path), "demo-exp"))
+    monkeypatch.setattr(
+        predict,
+        "_predict_from_bundle",
+        lambda **kwargs: (
+            np.array([[[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]], dtype=np.float32),
+            np.zeros((1, 1, 4, 2), dtype=np.float32),
+            np.ones((1, 1, 4, 2), dtype=np.float32),
+            np.arange(3, dtype=np.float32),
+            np.arange(3, dtype=np.float32) + 10,
+            np.arange(4, dtype=np.float32),
+            np.arange(4, dtype=np.float32) + 20,
+            ["10u", "2t"],
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "predict.py",
+            "from-bundle",
+            "--name-ckpt",
+            "demo.ckpt",
+            "--ckpt-root",
+            str(tmp_path),
+            "--device",
+            "cpu",
+            "--bundle-nc",
+            str(tmp_path / "bundle.nc"),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    predict.main()
+
+    with xr.open_dataset(out_path) as ds:
+        assert "x_interp" in ds
+        assert tuple(ds["x_interp"].shape) == (1, 1, 4, 2)
+        np.testing.assert_allclose(
+            ds["x_interp"].values,
+            np.array([[[[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]]]], dtype=np.float32),
+        )
+        assert ds.attrs["x_interp_exported"] == 1
 
 
 def test_predict_from_bundle_applies_output_subset(monkeypatch):

@@ -31,6 +31,7 @@ class TCEvent:
     mslp_ylim: Tuple[float, float] = (0, 4)
     wind_ylim: Tuple[float, float] = (0, 2)
     plot_title: str = ""
+    reference_expids: Tuple[str, ...] = ()
 
 
 EVENTS: Dict[str, TCEvent] = {
@@ -49,6 +50,7 @@ EVENTS: Dict[str, TCEvent] = {
         area_south=10.0,
         area_east=-50.0,
         plot_title="Franklin normed pdfs",
+        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
     ),
     "idalia": TCEvent(
         name="idalia",
@@ -71,6 +73,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 35.01, 1),
         mslp_ylim=(0, 4),
         wind_ylim=(0, 2),
+        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
     ),
     "hilary": TCEvent(
         name="hilary",
@@ -93,6 +96,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 30.01, 1),
         mslp_ylim=(0, 2),
         wind_ylim=(0, 2),
+        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
     ),
     "dora": TCEvent(
         name="dora",
@@ -135,6 +139,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 35.01, 1),
         mslp_ylim=(0, 4),
         wind_ylim=(0, 2),
+        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
     ),
     "fernanda": TCEvent(
         name="fernanda",
@@ -157,5 +162,29 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 30.01, 1),
         mslp_ylim=(0, 10),
         wind_ylim=(0, 5),
+        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+    ),
+    "humberto": TCEvent(
+        name="humberto",
+        year="2025",
+        month="09",
+        dates=["26", "27", "28", "29", "30"],
+        analysis="OPER_O96_0001",
+        analysis_dates=[
+            "20250926",
+        ],
+        list_expid_ml=[],
+        expid_enfo_o320="ENFO_O48_0001",
+        expid_eefo_o96="ENFO_O96_0001",
+        area_north=45.0,
+        area_west=-90.0,
+        area_south=15.0,
+        area_east=-50.0,
+        plot_title="Humberto normed pdfs",
+        mslp_bin_range=(980, 1021, 1),
+        wind_bin_range=(0, 35.01, 1),
+        mslp_ylim=(0, 4),
+        wind_ylim=(0, 2),
+        reference_expids=("ENFO_O48_0001",),
     ),
 }

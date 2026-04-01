@@ -30,6 +30,8 @@ Where to check:
 
 ## 2) Predictions (25 files) Then Eval (Automatic Chain)
 
+This route is the canonical checkpoint path for the mature `o96 -> o320` flow. It is not the default front door for `o320 -> o1280`.
+
 Use:
 
 ```bash
@@ -104,6 +106,30 @@ Where to check:
 
 - `manual_inference.prediction.predict` now supports distributed model-comm-group inference (Slurm/Torch distributed env), so multi-rank GPU launches can shard model work without changing output format.
 - The prediction loader now uses checkpoint-native dataloader config (instead of hardcoded O320 assumptions), which is required for non-O320 checkpoints.
+
+## 3) O320 -> O1280 Manual Eval Flow (Proxy -> Continue-Full)
+
+Use the lane helper:
+
+```bash
+CHECKPOINT_PATH=<CKPT_PATH> PHASE=proxy \
+  bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+```
+
+Continue the same run after a passing proxy:
+
+```bash
+CHECKPOINT_PATH=<CKPT_PATH> PHASE=continue-full RUN_ID_OVERRIDE=<same_run_id> \
+  bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+```
+
+What it does:
+- renders run-local submit copies under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`
+- rebuilds truth-aware bundles under `<RUN_ROOT>/bundles_with_y`
+- launches strict prediction from that rebuilt bundle root
+- chains one-date local plots, spectra, and TC evaluation
+
+Do not point strict `o320 -> o1280` prediction directly at `/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia`; that is the raw source GRIB tree, not the strict prediction input root.
 
 
 ## Quick Monitoring Commands

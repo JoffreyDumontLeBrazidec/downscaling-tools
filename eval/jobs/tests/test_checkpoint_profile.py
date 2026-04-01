@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import zipfile
+
 import pytest
 
 from eval.jobs import checkpoint_profile as mod
@@ -57,6 +60,30 @@ def test_infer_lane_from_config_o320_o1280():
     assert mod.infer_lane_from_config(cfg) == "o320_o1280"
 
 
+def test_infer_lane_from_config_accepts_downscaling_od_paths():
+    cfg = {
+        "dataloader": {
+            "validation": {
+                "dataset": {
+                    "zip": [
+                        {"name": "lres", "dataset": "/home/ecm5702/hpcperm/data/downscaling_od_o48.zarr"},
+                        {"name": "hres", "dataset": "/home/ecm5702/hpcperm/data/downscaling_od_o96_forcings.zarr"},
+                        {"name": "out", "dataset": "/home/ecm5702/hpcperm/data/downscaling_od_o96_out.zarr"},
+                    ]
+                }
+            }
+        },
+        "data": {
+            "processors": {
+                "normalizer": {
+                    "_target_": "anemoi.models.preprocessing.multi_dataset_normalizer.TopNormalizer",
+                }
+            }
+        },
+    }
+    assert mod.infer_lane_from_config(cfg) == "o48_o96"
+
+
 def test_infer_lane_fails_for_unknown_pair():
     cfg = _cfg_for_pair(320, 2560, stack="new")
     with pytest.raises(RuntimeError, match="Unsupported lane resolution pair"):
@@ -75,7 +102,7 @@ def test_infer_stack_old_marker():
 
 def test_resolve_profile_checks_expected_lane_stack_and_venv(monkeypatch):
     cfg = _cfg_for_pair(320, 1280, stack="new")
-    monkeypatch.setattr(mod, "_load_checkpoint_config", lambda _: cfg)
+    monkeypatch.setattr(mod, "_load_checkpoint_config", lambda *_args, **_kwargs: cfg)
     prof = mod.resolve_profile(
         checkpoint_path="/tmp/ckpt.ckpt",
         source_hpc="ac",
@@ -91,7 +118,7 @@ def test_resolve_profile_checks_expected_lane_stack_and_venv(monkeypatch):
 
 def test_resolve_profile_mismatch_fails(monkeypatch):
     cfg = _cfg_for_pair(96, 320, stack="old")
-    monkeypatch.setattr(mod, "_load_checkpoint_config", lambda _: cfg)
+    monkeypatch.setattr(mod, "_load_checkpoint_config", lambda *_args, **_kwargs: cfg)
     with pytest.raises(RuntimeError, match="Stack mismatch"):
         mod.resolve_profile(
             checkpoint_path="/tmp/ckpt.ckpt",
@@ -99,3 +126,43 @@ def test_resolve_profile_mismatch_fails(monkeypatch):
             host_short="ag-login-01",
             expected_stack_flavor="new",
         )
+
+
+def test_load_checkpoint_config_uses_anemoi_metadata_for_inference_companion(tmp_path):
+    cfg = _cfg_for_pair(1280, 2560, stack="new")
+    ckpt = tmp_path / "inference-demo.ckpt"
+    with zipfile.ZipFile(ckpt, "w") as zf:
+        zf.writestr(
+            "inference-demo/anemoi-metadata/anemoi.json",
+            json.dumps({"config": cfg}),
+        )
+
+    loaded = mod._load_checkpoint_config(
+        str(ckpt),
+        prefer_anemoi_metadata=True,
+    )
+
+    assert loaded == cfg
+
+
+def test_resolve_profile_uses_metadata_path_for_inference_companion(tmp_path):
+    cfg = _cfg_for_pair(1280, 2560, stack="new")
+    ckpt = tmp_path / "inference-demo.ckpt"
+    with zipfile.ZipFile(ckpt, "w") as zf:
+        zf.writestr(
+            "inference-demo/anemoi-metadata/anemoi.json",
+            json.dumps({"config": cfg}),
+        )
+
+    prof = mod.resolve_profile(
+        checkpoint_path=str(ckpt),
+        source_hpc="ag",
+        host_short="ag-login-01",
+        allow_inference_companion=True,
+        expected_lane="o1280_o2560",
+        expected_stack_flavor="new",
+        expected_venv="/home/ecm5702/dev/.ds-ag/bin/activate",
+    )
+
+    assert prof.lane == "o1280_o2560"
+    assert prof.stack_flavor == "new"

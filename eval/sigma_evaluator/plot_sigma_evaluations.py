@@ -7,10 +7,10 @@
 
 from __future__ import annotations
 
+import argparse
 
 import os
 from pathlib import Path
-from tkinter import ALL
 from typing import Iterable, Sequence
 
 import numpy as np
@@ -271,100 +271,113 @@ def filter_specs(
         raise ValueError("No experiments left after filtering.")
     return specs
 
-
-# --------------------s--------
-# Example usage
-# ----------------------------
-ALL_SPECS: list[tuple[str, str]] = [
-    (
-        "end 1e6 pretraining",
-        "8ef18bfef7804fcda809f032261a2d39/sigma_eval_table_998784.csv",
-    ),
-    (
-        "ft noise 100 e43a0c68c14e41c48d685c2e77d4c0bd",
-        "4a5b2f1b24b84c52872bfcec1410b00f/sigma_eval_table__100000.csv",
-    ),
-    (
-        "ft noise 1000 e1112845862540318da83bfac1c90841",
-        "4a5b2f1b24b84c52872bfcec1410b00f/sigma_eval_table__100000.csv",
-    ),
-    (
-        "ft noise 10000 4a5b2f1b24b84c52872bfcec1410b00f",
-        "4a5b2f1b24b84c52872bfcec1410b00f/sigma_eval_table_100000.csv",
-    ),
-]
-
-ALL_SPECS: list[tuple[str, str]] = [
-    (
-        "iz2r (epoch 21, step 101728)",
-        "ec4d16fb6f8c402992e1e29ec7ddfc0e/sigma_eval_table_101728.csv",
-    ),
-    (
-        "iyl7 (epoch 21, step 101728)",
-        "69f04ba99f034d3894787fb845159dbf/sigma_eval_table_101728.csv",
-    ),
-    (
-        "j10e (epoch 21, step 100000)",
-        "4a5b2f1b24b84c52872bfcec1410b00f/sigma_eval_table_100000.csv",
-    ),
-    (
-        "iz2s (epoch 21, step 100000, by_time)",
-        "d980b237c109481b9ae432d762967ac2/sigma_eval_table_100000.csv",
-    ),
-]
-
-ALL_SPECS: list[tuple[str, str]] = [
-    (
-        "1e6 iter training - low noise lognormal",
-        "8ef18bfef7804fcda809f032261a2d39/sigma_eval_table_998784.csv",
-    ),
-    (
-        "1e5 iter training - low noise lognormal",
-        "3aeb36edfa954fcf81f5d1db2d82b72f/sigma_eval_table_100000.csv",
-    ),
-    (
-        "1.16 iter training - low noise lognormal then finetuning high noise",
-        "4a5b2f1b24b84c52872bfcec1410b00f/sigma_eval_table_100000.csv",
-    ),
-    (
-        "1e5 iter training - moderate noise lognormal",
-        "f27ed37e541c4b86bc80610a175abca0/sigma_eval_table_100000.csv",
-    ),
-]
+def _parse_bool_token(value: str) -> bool:
+    value = value.strip().lower()
+    if value in {"true", "1", "yes"}:
+        return True
+    if value in {"false", "0", "no"}:
+        return False
+    raise ValueError(f"Unsupported boolean token: {value}")
 
 
-# Choose which experiments to load:
-SELECT_EXPS = None  # Select all experiments
-specs = filter_specs(ALL_SPECS, include=SELECT_EXPS)
+def _parse_spec(spec: str) -> tuple[str, str]:
+    if "=" in spec:
+        label, run_and_csv = spec.split("=", 1)
+        label = label.strip()
+        run_and_csv = run_and_csv.strip()
+        if not label or not run_and_csv:
+            raise ValueError(f"Invalid --spec value: {spec}")
+        return label, run_and_csv
 
-# Load
-all_df = build_all_df(specs, dir_exp=DIR_EXP)
-print(all_df.head())
-print("rows:", len(all_df), "exps:", all_df["exp"].nunique())
+    run_and_csv = spec.strip()
+    if not run_and_csv:
+        raise ValueError("Empty --spec value")
+    run_id = Path(run_and_csv).parent.name
+    return run_id, run_and_csv
 
-# Print which metrics exist
-print_available_metrics(all_df)
 
-# Choose metrics to plot (examples)
-METRICS_TO_PLOT = [
-    "loss",
-    "metric__diff_all_var_non_weighted",
-    "metric__mse_metric/sfc_10u/1",
-    "metric__mse_10u_non_weighted",
-    "metric__mse_metric/sfc_10v/1",
-    "metric__mse_10v_non_weighted",
-    "metric__mse_metric/z_500/1",
-    "metric__mse_z_500_non_weighted",
-    "metric__mse_metric/sfc_2t/1",
-    "metric__mse_2t_non_weighted",
-]
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Plot sigma-evaluator CSV overlays.")
+    parser.add_argument(
+        "--spec",
+        action="append",
+        required=True,
+        help="Either <label>=<run_id/file.csv> or <run_id/file.csv>. Repeat for each curve family.",
+    )
+    parser.add_argument(
+        "--dir-exp",
+        default=str(DIR_EXP),
+        help="Base directory used to resolve RUNID/file.csv specs.",
+    )
+    parser.add_argument(
+        "--metrics",
+        default="loss,diff_all_var_non_weighted",
+        help="Comma-separated metric columns to plot.",
+    )
+    parser.add_argument(
+        "--pdf-path",
+        required=True,
+        help="Output PDF path for the sigma curves.",
+    )
+    parser.add_argument(
+        "--merged-csv",
+        default="",
+        help="Optional output CSV path for the merged sigma table.",
+    )
+    parser.add_argument("--sigma-min", type=float, default=0.02)
+    parser.add_argument("--agg", choices=["mean", "median"], default="mean")
+    parser.add_argument(
+        "--pred-flags",
+        default="false",
+        help="Comma-separated booleans for prediction_on_pure_noise, e.g. false,true",
+    )
+    parser.add_argument(
+        "--list-metrics",
+        action="store_true",
+        help="Print available metrics after loading the merged table.",
+    )
+    return parser
 
-pdf_path = save_sigma_curves_pdf(
-    all_df,
-    metrics=METRICS_TO_PLOT,
-    pdf_path="sigma_eval_plots.pdf",
-    sigma_min=0.02,
-    figsize=(22, 10),  # big pages
-    legend_outside=True,  # keeps curves large
-)
-print("Wrote:", pdf_path)
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    specs = [_parse_spec(spec) for spec in args.spec]
+    all_df = build_all_df(specs, dir_exp=Path(args.dir_exp))
+    print(all_df.head())
+    print("rows:", len(all_df), "exps:", all_df["exp"].nunique())
+
+    if args.list_metrics:
+        print_available_metrics(all_df)
+
+    metrics = []
+    for metric in (token.strip() for token in args.metrics.split(",")):
+        if not metric:
+            continue
+        if metric == "diff_all_var_non_weighted" and metric not in all_df.columns:
+            metric = "metric__diff_all_var_non_weighted"
+        metrics.append(metric)
+    if not metrics:
+        raise SystemExit("No metrics requested.")
+
+    if args.merged_csv:
+        merged_csv = Path(args.merged_csv)
+        merged_csv.parent.mkdir(parents=True, exist_ok=True)
+        all_df.to_csv(merged_csv, index=False)
+        print("Wrote merged CSV:", merged_csv)
+
+    pred_flags = tuple(_parse_bool_token(token) for token in args.pred_flags.split(",") if token.strip())
+    pdf_path = save_sigma_curves_pdf(
+        all_df,
+        metrics=metrics,
+        pdf_path=args.pdf_path,
+        sigma_min=args.sigma_min,
+        pred_flags=pred_flags,
+        agg=args.agg,
+    )
+    print("Wrote:", pdf_path)
+
+
+if __name__ == "__main__":
+    main()

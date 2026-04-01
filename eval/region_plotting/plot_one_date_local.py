@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval.region_plotting.local_plotting import get_region_ds, plot_x_y
+from eval.region_plotting.local_plotting import ensure_x_interp_for_plotting, get_region_ds, plot_x_y, supports_plot_variable
 from eval.region_plotting.plot_regions import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES
 
 DEFAULT_LOCAL_PLOT_OUT_SUBDIR = "local_plots_one_date"
@@ -35,6 +36,40 @@ def _scalar_text(ds: xr.Dataset, name: str) -> str:
 
 def _default_region_for_grid(grid: str) -> str:
     return "amazon_forest_central" if str(grid).strip() == "O1280" else "amazon_forest"
+
+
+def _write_one_date_manifest(
+    *,
+    out_root: Path,
+    run_root: Path,
+    date: str,
+    region: str,
+    sample_index: int,
+    ensemble_member_index: int,
+    model_variables: list[str],
+    weather_states: list[str],
+    results: list[tuple[Path, Path | None]],
+) -> Path:
+    manifest_path = out_root / "manifest.json"
+    payload = {
+        "suite_kind": "one_date_smoke",
+        "plot_style": "region_six_panel",
+        "run_root": str(run_root),
+        "date": str(date),
+        "region": str(region),
+        "sample_index": int(sample_index),
+        "ensemble_member_index": int(ensemble_member_index),
+        "model_variables": list(model_variables),
+        "weather_states": list(weather_states),
+        "generated_files": [
+            str(path)
+            for pair in results
+            for path in pair
+            if path is not None
+        ],
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
 
 
 def _member_label(ds_member: xr.Dataset, ensemble_member_index: int) -> str:
@@ -124,8 +159,9 @@ def render_prediction_file(
             sample_index=sample_index,
             ensemble_member_index=ensemble_member_index,
         )
+        ds_member = ensure_x_interp_for_plotting(ds_member, predictions_path=predictions_path)
 
-        selected_model_variables = [v for v in requested_model_variables if v in ds_member.data_vars]
+        selected_model_variables = [v for v in requested_model_variables if supports_plot_variable(ds_member, v)]
         if not selected_model_variables:
             raise ValueError(
                 f"No requested model variables available in {predictions_path}. Requested={requested_model_variables}"
@@ -150,7 +186,6 @@ def render_prediction_file(
             ds_sample=ds_region,
             list_model_variables=selected_model_variables,
             weather_states=selected_weather_states,
-            consistent_cbar=["x", "y", "y_pred"],
             title=title,
         )
 
@@ -198,6 +233,8 @@ def render_one_date_local_plots(
 
     results: list[tuple[Path, Path | None]] = []
     effective_run_label = run_label or run_root_path.name
+    effective_model_variables = model_variables or DEFAULT_MODEL_VARIABLES
+    effective_weather_states = weather_states or DEFAULT_WEATHER_STATES
     for predictions_path in matches:
         with xr.open_dataset(predictions_path) as ds:
             resolved_region = region
@@ -226,6 +263,19 @@ def render_one_date_local_plots(
                 weather_states=weather_states,
             )
         )
+    out_root = run_root_path / out_subdir
+    manifest_path = _write_one_date_manifest(
+        out_root=out_root,
+        run_root=run_root_path,
+        date=date,
+        region=region,
+        sample_index=sample_index,
+        ensemble_member_index=ensemble_member_index,
+        model_variables=effective_model_variables,
+        weather_states=effective_weather_states,
+        results=results,
+    )
+    print(manifest_path)
     return results
 
 

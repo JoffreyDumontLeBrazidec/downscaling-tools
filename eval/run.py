@@ -14,7 +14,7 @@ from manual_inference.prediction.predict import _resolve_ckpt_path as _shared_re
 DEFAULT_EVAL_ROOT = "/home/ecm5702/perm/eval"
 DEFAULT_CKPT_ROOT = "/home/ecm5702/scratch/aifs/checkpoint"
 DEFAULT_EXTRA_ARGS_JSON = (
-    '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun","S_max":1000.0}'
+    '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 )
 
 

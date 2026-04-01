@@ -57,6 +57,23 @@ def test_generate_predictions_parse_and_discover(tmp_path: Path):
     assert discovered[k3] == p3
 
 
+def test_generate_predictions_discover_non_recursive_ignores_nested_cache(tmp_path: Path):
+    mod = _load_module(
+        "gen25_non_recursive",
+        ROOT / "eval/jobs/generate_predictions_25_files.py",
+    )
+
+    top = tmp_path / "top_level.txt"
+    nested_dir = tmp_path / "bundles_with_y_proxy10"
+    nested_dir.mkdir()
+    nested_bundle = nested_dir / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
+    top.write_text("x", encoding="utf-8")
+    nested_bundle.write_text("bundle", encoding="utf-8")
+
+    discovered = mod.discover_bundles(tmp_path, recursive=False)
+    assert discovered == {}
+
+
 def test_generate_predictions_parse_int_list():
     mod = _load_module(
         "gen25_ints",
@@ -160,6 +177,11 @@ def test_generate_predictions_allows_missing_target_unsafe(tmp_path: Path, monke
         mod,
         "_load_objects",
         lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_compute_x_interp_for_export",
+        lambda **kwargs: np.zeros((1, 1, 2, 3), dtype=np.float32),
     )
 
     def _fake_predict_from_bundle(**kwargs):
@@ -817,6 +839,8 @@ def test_generate_predictions_passes_output_selection_and_slim_output(
     assert predict_calls[0]["output_weather_state_mode"] == "surface-plus-core-pl"
     assert predict_calls[0]["output_weather_states"] is None
     assert len(build_calls) == 1
+    assert build_calls[0]["x_interp"] is not None
+    assert tuple(build_calls[0]["x_interp"].shape) == (1, 1, 2, 3)
     assert build_calls[0]["include_member_views"] is False
     assert (out_dir / "predictions_20230826_step024.nc").exists()
 
@@ -848,6 +872,11 @@ def test_generate_predictions_defaults_to_surface_plus_core_pl_and_slim(
         mod,
         "_load_objects",
         lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_compute_x_interp_for_export",
+        lambda **kwargs: np.zeros((1, 1, 2, 3), dtype=np.float32),
     )
 
     def _fake_predict_from_bundle(**kwargs):
@@ -923,6 +952,8 @@ def test_generate_predictions_defaults_to_surface_plus_core_pl_and_slim(
     assert len(predict_calls) == 1
     assert predict_calls[0]["output_weather_state_mode"] == "surface-plus-core-pl"
     assert len(build_calls) == 1
+    assert build_calls[0]["x_interp"] is not None
+    assert tuple(build_calls[0]["x_interp"].shape) == (1, 1, 2, 3)
     assert build_calls[0]["include_member_views"] is False
     assert (out_dir / "predictions_20230826_step024.nc").exists()
 

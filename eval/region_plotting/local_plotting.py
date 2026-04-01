@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Union
 
 import matplotlib.pyplot as plt
@@ -13,8 +14,43 @@ import xarray as xr
 from anemoi.training.diagnostics.maps import Coastlines
 from matplotlib.backends.backend_pdf import PdfPages
 
+from eval.checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
+
 continents = Coastlines()
 LOG = logging.getLogger(__name__)
+
+DERIVED_MODEL_VARIABLE_SPECS: dict[str, dict[str, str]] = {
+    "residuals_pred_0": {
+        "left": "x_interp_0",
+        "right": "y_pred_0",
+        "title": "residuals_pred_0",
+    },
+    "residuals_pred": {
+        "left": "x_interp",
+        "right": "y_pred",
+        "title": "residuals_pred",
+    },
+    "x_interp_minus_y_pred": {
+        "left": "x_interp",
+        "right": "y_pred",
+        "title": "residuals_pred",
+    },
+    "residuals_0": {
+        "left": "x_interp_0",
+        "right": "y_0",
+        "title": "residuals_0",
+    },
+    "residuals": {
+        "left": "x_interp",
+        "right": "y",
+        "title": "residuals",
+    },
+    "x_interp_minus_y": {
+        "left": "x_interp",
+        "right": "y",
+        "title": "residuals",
+    },
+}
 
 
 def get_minmax_weather_states(
@@ -22,15 +58,135 @@ def get_minmax_weather_states(
 ) -> dict[str, list[float]]:
     minmax_weather_states: dict[str, list[float]] = {}
     for weather_state in weather_states:
-        fields_val = np.concatenate(
-            [
-                ds.sel(weather_state=weather_state)[model_var].values.flatten().ravel()
-                for model_var in list_model_variables
-                if model_var in ds.variables
-            ]
-        ).tolist()
-        minmax_weather_states[weather_state] = [np.min(fields_val), np.max(fields_val)]
+        fields: list[np.ndarray] = []
+        for model_var in list_model_variables:
+            if not supports_plot_variable(ds, model_var):
+                continue
+            da = get_plot_data_array(ds, model_var)
+            if "weather_state" in da.dims:
+                da = da.sel(weather_state=weather_state)
+            fields.append(np.asarray(da.values).reshape(-1))
+        if not fields:
+            continue
+        fields_val = np.concatenate(fields)
+        minmax_weather_states[weather_state] = [
+            float(np.nanmin(fields_val)),
+            float(np.nanmax(fields_val)),
+        ]
     return minmax_weather_states
+
+
+def supports_plot_variable(ds: xr.Dataset, model_var: str) -> bool:
+    if model_var in ds.variables:
+        return True
+    spec = DERIVED_MODEL_VARIABLE_SPECS.get(model_var)
+    if spec is None:
+        return False
+    return spec["left"] in ds.variables and spec["right"] in ds.variables
+
+
+def _coord_name_for_array(ds: xr.Dataset, da: xr.DataArray, axis: str) -> str:
+    attr_name = da.attrs.get(axis)
+    if attr_name in ds.variables or attr_name in ds.coords:
+        return attr_name
+
+    dim_candidates = {
+        "grid_point_hres": f"{axis}_hres",
+        "grid_point_lres": f"{axis}_lres",
+    }
+    for dim_name, coord_name in dim_candidates.items():
+        if dim_name in da.dims and (coord_name in ds.variables or coord_name in ds.coords):
+            return coord_name
+
+    raise KeyError(f"Could not infer {axis} coordinate for {da.name}")
+
+
+def get_plot_data_array(ds: xr.Dataset, model_var: str) -> xr.DataArray:
+    if model_var in ds.variables:
+        return ds[model_var]
+
+    spec = DERIVED_MODEL_VARIABLE_SPECS.get(model_var)
+    if spec is None:
+        raise KeyError(f"Unsupported model variable: {model_var}")
+
+    derived = (ds[spec["left"]] - ds[spec["right"]]).rename(model_var)
+    attrs = dict(ds[spec["left"]].attrs)
+    if "lon" not in attrs and "lon" in ds[spec["right"]].attrs:
+        attrs["lon"] = ds[spec["right"]].attrs["lon"]
+    if "lat" not in attrs and "lat" in ds[spec["right"]].attrs:
+        attrs["lat"] = ds[spec["right"]].attrs["lat"]
+    derived.attrs = attrs
+    return derived
+
+
+def ensure_x_interp_for_plotting(
+    ds: xr.Dataset,
+    *,
+    predictions_path: str | Path | None = None,
+    checkpoint_path: str = "",
+) -> xr.Dataset:
+    if "x_interp" not in ds.variables:
+        if "x" not in ds.variables:
+            return ensure_member_zero_plot_variables(ds)
+
+        pred_dir = Path(predictions_path).expanduser().resolve().parent if predictions_path else Path.cwd()
+        resolved_checkpoint = resolve_checkpoint_path(pred_dir=pred_dir, ds=ds, explicit_path=checkpoint_path)
+        if resolved_checkpoint is None:
+            return ensure_member_zero_plot_variables(ds)
+
+        interpolator = CheckpointResidualInterpolator(resolved_checkpoint)
+        interpolated = interpolator.interpolate(np.asarray(ds["x"].values))
+        x_interp = xr.DataArray(
+            interpolated.astype(np.float32),
+            dims=ds["y_pred"].dims,
+            coords={dim: ds.coords[dim] for dim in ds["y_pred"].dims if dim in ds.coords},
+            attrs=dict(ds["y_pred"].attrs),
+            name="x_interp",
+        )
+        if "lon" not in x_interp.attrs and "lon_hres" in ds.coords:
+            x_interp.attrs["lon"] = "lon_hres"
+        if "lat" not in x_interp.attrs and "lat_hres" in ds.coords:
+            x_interp.attrs["lat"] = "lat_hres"
+        ds = ds.assign(x_interp=x_interp)
+    return ensure_member_zero_plot_variables(ds)
+
+
+def ensure_member_zero_plot_variables(ds: xr.Dataset) -> xr.Dataset:
+    alias_specs = (
+        ("x", "x_0"),
+        ("x_interp", "x_interp_0"),
+        ("y", "y_0"),
+        ("y_pred", "y_pred_0"),
+    )
+    updates: dict[str, xr.DataArray] = {}
+    for base_name, alias_name in alias_specs:
+        if alias_name in ds.variables or base_name not in ds.variables:
+            continue
+        da = ds[base_name]
+        alias = da.isel(ensemble_member=0) if "ensemble_member" in da.dims else da
+        alias = alias.rename(alias_name)
+        alias.attrs = dict(da.attrs)
+        updates[alias_name] = alias
+    if updates:
+        ds = ds.assign(**updates)
+    return ds
+
+
+def plot_variable_title(model_var: str) -> str:
+    return DERIVED_MODEL_VARIABLE_SPECS.get(model_var, {}).get("title", model_var)
+
+
+def is_residual_plot_variable(model_var: str) -> bool:
+    return model_var == "y_diff" or model_var in DERIVED_MODEL_VARIABLE_SPECS
+
+
+def _residual_vmax(da: xr.DataArray) -> float:
+    values = np.asarray(da.values, dtype=float)
+    finite = np.abs(values[np.isfinite(values)])
+    if finite.size == 0:
+        return 1.0
+    vmax = float(np.max(finite))
+    return vmax if vmax > 0 else 1.0
 
 
 def plot_x_y(
@@ -38,12 +194,20 @@ def plot_x_y(
     list_model_variables: list[str],
     weather_states: list[str],
     consistent_cbar: list[str] = [
+        "x_0",
+        "x_interp_0",
+        "y_0",
+        "y_pred_0",
         "x",
+        "x_interp",
         "y",
         "y_pred",
+        "x_interp_0",
         "y_pred_0",
         "y_pred_1",
         "y_pred_2",
+        "x_interp_1",
+        "x_interp_2",
         "x_0",
         "x_1",
         "x_2",
@@ -53,7 +217,12 @@ def plot_x_y(
     ],
     title: str | None = None,
 ):
-    overlap = list(set(consistent_cbar) & set(list_model_variables))
+    list_model_variables = [v for v in list_model_variables if supports_plot_variable(ds_sample, v)]
+    overlap = [
+        model_var
+        for model_var in list_model_variables
+        if model_var in consistent_cbar and supports_plot_variable(ds_sample, model_var)
+    ]
     minmax_weather_states = get_minmax_weather_states(ds_sample, weather_states, overlap)
 
     figsize = (len(list_model_variables) * 4, len(weather_states) * 3)
@@ -68,27 +237,32 @@ def plot_x_y(
     cbars = {}
     for i_ax0, weather_state in enumerate(weather_states):
         for i_ax1, model_var in enumerate(list_model_variables):
+            da = get_plot_data_array(ds_sample, model_var)
+            lon_name = _coord_name_for_array(ds_sample, da, "lon")
+            lat_name = _coord_name_for_array(ds_sample, da, "lat")
+            if "weather_state" in da.dims:
+                da = da.sel(weather_state=weather_state)
             scatter_params = dict(
-                x=ds_sample[ds_sample[model_var].attrs.get("lon", None)].values,
-                y=ds_sample[ds_sample[model_var].attrs.get("lat", None)].values,
-                c=ds_sample[model_var].sel(weather_state=weather_state).values,
-                s=75_000 / len(ds_sample[ds_sample[model_var].attrs.get("lon", None)].values),
+                x=ds_sample[lon_name].values,
+                y=ds_sample[lat_name].values,
+                c=da.values,
+                s=75_000 / len(ds_sample[lon_name].values),
                 alpha=1.0,
                 rasterized=True,
             )
 
-            if model_var in consistent_cbar:
+            if model_var in consistent_cbar and weather_state in minmax_weather_states:
                 scatter_params.update(
                     vmin=minmax_weather_states[weather_state][0],
                     vmax=minmax_weather_states[weather_state][1],
                     cmap="viridis",
                 )
-            elif model_var == "y_diff":
-                vmax = np.max(np.abs(ds_sample[model_var].sel(weather_state=weather_state)))
+            elif is_residual_plot_variable(model_var):
+                vmax = _residual_vmax(da)
                 scatter_params.update(vmin=-vmax, vmax=vmax, cmap="bwr")
             else:
-                vmax = np.max(ds_sample[model_var].sel(weather_state=weather_state))
-                vmin = np.min(ds_sample[model_var].sel(weather_state=weather_state))
+                vmax = float(np.nanmax(da.values))
+                vmin = float(np.nanmin(da.values))
                 scatter_params.update(vmin=vmin, vmax=vmax, cmap="viridis")
 
             ims[(i_ax0, i_ax1)] = axs[i_ax0, i_ax1].scatter(**scatter_params)
@@ -109,7 +283,7 @@ def plot_x_y(
             axs[i_ax0, i_ax1].xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
             axs[i_ax0, i_ax1].yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
             axs[i_ax0, i_ax1].tick_params(axis="both", which="major", labelsize=10)
-            axs[i_ax0, i_ax1].set_title(f"{model_var} - {weather_state}")
+            axs[i_ax0, i_ax1].set_title(f"{plot_variable_title(model_var)} - {weather_state}")
 
             if "region" in ds_sample.attrs:
                 axs[i_ax0, i_ax1].set_xlim(ds_sample.attrs["region"][2], ds_sample.attrs["region"][3])
@@ -186,7 +360,7 @@ def get_region_ds(ds: xr.Dataset, region_box: Union[str, list[int]] = "default")
         & (ds["lat_hres"] >= lat_min)
         & (ds["lat_hres"] <= lat_max)
     )
-    region_hres = ds.sel(grid_point_hres=ds.grid_point_hres.where(mask_hres, drop=True))
+    region_hres = ds.isel(grid_point_hres=np.flatnonzero(np.asarray(mask_hres.values)))
     if "lon_lres" in ds.variables:
         mask_lres = (
             (ds["lon_lres"] >= lon_min)
@@ -194,8 +368,8 @@ def get_region_ds(ds: xr.Dataset, region_box: Union[str, list[int]] = "default")
             & (ds["lat_lres"] >= lat_min)
             & (ds["lat_lres"] <= lat_max)
         )
-        region_lres = region_hres.sel(
-            grid_point_lres=ds.grid_point_lres.where(mask_lres, drop=True)
+        region_lres = region_hres.isel(
+            grid_point_lres=np.flatnonzero(np.asarray(mask_lres.values))
         )
     else:
         region_lres = region_hres
@@ -212,6 +386,10 @@ class LocalInferencePlotter:
 
     def __post_init__(self):
         self.ds = xr.open_dataset(os.path.join(self.dir_exp, self.name_exp, self.name_predictions_file))
+        self.ds = ensure_x_interp_for_plotting(
+            self.ds,
+            predictions_path=Path(self.dir_exp) / self.name_exp / self.name_predictions_file,
+        )
         if self.ds.attrs["grid"] == "O320":
             self.regions = [
                 "amazon_forest",
@@ -258,11 +436,11 @@ class LocalInferencePlotter:
     def save_plot(
         self,
         list_regions: list[str],
-        list_model_variables: list[str] = ["x", "y", "y_pred", "x_0", "y_0", "y_1", "y_pred_0", "y_pred_1"],
+        list_model_variables: list[str] = ["x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0"],
         weather_states: list[str] = ["10u", "10v", "2t", "z_500", "u_850", "v_850", "t_850"],
         num_samples_to_plot: int = 2,
     ) -> None:
-        selected_model_variables = [v for v in list_model_variables if v in self.ds.variables]
+        selected_model_variables = [v for v in list_model_variables if supports_plot_variable(self.ds, v)]
         if not selected_model_variables:
             raise ValueError(
                 f"None of the requested model variables are available in {self.name_predictions_file}. "

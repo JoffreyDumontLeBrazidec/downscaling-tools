@@ -38,18 +38,33 @@ bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates
 Edit only the `USER SETTINGS` block first. The helper will:
 - validate the checkpoint profile and ensure the lane is `o320_o1280`
 - auto-resolve the stack flavor from the checkpoint
+- default to `PHASE=proxy` unless the operator explicitly selects `continue-full` or `full-only`
+- validate the raw source GRIB tree and rebuild strict truth-aware bundles into `<RUN_ROOT>/bundles_with_y`
 - force the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`)
 - render host-safe dated submit copies under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`
 - submit, with `afterok` dependencies:
+  - `build_o320_o1280_truth_bundles.sbatch`
   - `strict_manual_predict_x_bundle.sbatch`
   - `local_plots_one_date_from_predictions.sbatch`
   - `spectra_proxy_from_predictions.sbatch` on AG or `spectra_ecmwf_from_predictions.sbatch` on AC
   - `tc_eval_from_predictions.sbatch` with `native` on AG or `regridded` on AC
 
+Default commands:
+
+```bash
+CHECKPOINT_PATH=<CKPT_PATH> PHASE=proxy \
+  bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+
+CHECKPOINT_PATH=<CKPT_PATH> PHASE=continue-full RUN_ID_OVERRIDE=<same_run_id> \
+  bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+```
+
 For proxy-like reduced scopes, set:
 - `BUNDLE_PAIRS=YYYYMMDD:HH,...`
 - optionally `LOCAL_PLOT_DATE`
 - optionally `LOCAL_PLOT_EXPECTED_COUNT=auto`
+
+Do **not** use `/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia` as the strict prediction input root. That tree is the raw source GRIB root; strict prediction must read from rebuilt `bundles_with_y`.
 
 Do **not** fork ad hoc `/tmp/*.sbatch` launchers for this lane.
 

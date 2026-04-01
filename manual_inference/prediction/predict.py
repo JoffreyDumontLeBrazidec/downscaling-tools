@@ -19,16 +19,15 @@ from manual_inference.checkpoints import (
     instantiate_config,
     to_omegaconf,
 )
-from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
+from manual_inference.input_data_construction.bundle import extract_target_from_bundle
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
-from manual_inference.input_data_construction.bundle import open_bundle_dataset
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction.utils import extract_filtered_input_from_output
 
 DEFAULT_EXTRA_ARGS_JSON = (
-    '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun","S_max":1000.0}'
+    '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 )
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -47,9 +46,15 @@ def _rewrite_dataset_paths_in_place(node):
     if isinstance(node, tuple):
         return tuple(_rewrite_dataset_paths_in_place(v) for v in node)
     if isinstance(node, str):
+        # Imported checkpoints may carry absolute dataset roots from multiple remote
+        # sites. Rewrite those to the canonical local mirror when the target exists.
         prefixes = (
             "/leonardo_work/DestE_340_25/ai-ml/datasets///",
             "/leonardo_work/DestE_340_25/ai-ml/datasets/",
+            "/e/data1/jureap-data/ai-ml/datasets///",
+            "/e/data1/jureap-data/ai-ml/datasets/",
+            "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets///",
+            "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets/",
         )
         for pref in prefixes:
             if node.startswith(pref):
@@ -102,10 +107,17 @@ def _init_model_comm_group(device: str, global_rank: int, world_size: int):
     return init_parallel(device, global_rank, world_size)
 
 
-def _resolve_ckpt_path(name_ckpt: str, ckpt_root: str) -> str:
+def _resolve_ckpt_path(
+    name_ckpt: str,
+    ckpt_root: str,
+    *,
+    allow_inference_companion: bool = False,
+) -> str:
     raw = os.path.expanduser(name_ckpt)
     raw_name = os.path.basename(raw)
     if raw_name.startswith("inference-") and raw_name.endswith(".ckpt"):
+        if allow_inference_companion:
+            return raw if os.path.isabs(raw) else os.path.join(os.path.expanduser(ckpt_root), raw)
         raise ValueError(
             "Pass the base checkpoint path, not the inference companion. "
             f"Got {raw_name}; expected the matching non-inference .ckpt file."
@@ -301,89 +313,129 @@ def _predict_from_bundle(
     output_weather_state_mode: str = "all",
     output_weather_states: Sequence[str] | None = None,
 ):
+    if member_index != 0:
+        raise ValueError(
+            "Bundle inputs are single-member bundles. Use member_index=0 and select the desired "
+            "ensemble member while building the bundle."
+        )
+
     name_to_idx_lres = datamodule.data_indices.data.input[0].name_to_index
     name_to_idx_hres = datamodule.data_indices.data.input[1].name_to_index
-    bundle = open_bundle_dataset(bundle_nc)
-    try:
-        (
-            x_lres_np,
-            x_hres_np,
-            lon_lres,
-            lat_lres,
-            lon_hres,
-            lat_hres,
-        ) = load_inputs_from_bundle_numpy(
-            bundle,
-            name_to_idx_lres,
-            name_to_idx_hres,
-        )
-        if member_index != 0:
-            raise ValueError(
-                "Bundle inputs are single-member bundles. Use member_index=0 and select the desired "
-                "ensemble member while building the bundle."
+    (
+        x_lres_np,
+        x_hres_np,
+        lon_lres,
+        lat_lres,
+        lon_hres,
+        lat_hres,
+    ) = load_inputs_from_bundle_numpy(
+        bundle_nc,
+        name_to_idx_lres,
+        name_to_idx_hres,
+    )
+    x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
+    x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
+
+    amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
+    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+
+    with torch.inference_mode():
+        with torch.autocast(
+            device_type="cuda",
+            dtype=amp_dtype,
+            enabled=amp_enabled,
+        ):
+            pred = inference_model.predict_step(
+                x_in[0:1],
+                x_in_hres[0:1],
+                model_comm_group=model_comm_group,
+                extra_args=extra_args,
             )
-        x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
-        x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
 
-        amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
-        amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
+    weather_states, selected_indices = resolve_output_weather_states(
+        weather_states=weather_states_full,
+        mode=output_weather_state_mode,
+        explicit_weather_states=output_weather_states,
+    )
 
-        with torch.inference_mode():
-            with torch.autocast(
-                device_type="cuda",
-                dtype=amp_dtype,
-                enabled=amp_enabled,
-            ):
-                pred = inference_model.predict_step(
-                    x_in[0:1],
-                    x_in_hres[0:1],
+    x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+    pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
+    dates = None
+
+    x_np, _ = extract_filtered_input_from_output(
+        x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
+    )
+    x_np = x_np[..., selected_indices]
+
+    y_np = None
+    target_np, found_target_channels = extract_target_from_bundle(bundle_nc, weather_states)
+    if target_np is not None:
+        y_np = target_np[None, None, ...]
+        if found_target_channels < len(weather_states):
+            print(
+                f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
+                f"(missing channels will be NaN in y)."
+            )
+
+    return (
+        x_np[None, ...],
+        y_np,
+        pred_np[None, None, ...],
+        lon_lres,
+        lat_lres,
+        lon_hres,
+        lat_hres,
+        weather_states,
+        dates,
+    )
+
+
+def _compute_x_interp_for_export(
+    *,
+    inference_model,
+    x: np.ndarray,
+    device: str,
+    model_comm_group,
+) -> np.ndarray:
+    x_arr = np.asarray(x, dtype=np.float32)
+    if x_arr.ndim == 3:
+        x_arr = x_arr[:, None, ...]
+    elif x_arr.ndim != 4:
+        raise ValueError(f"Unsupported x shape for x_interp export: {x_arr.shape}")
+
+    x_tensor = torch.from_numpy(x_arr).to(device)
+    with torch.inference_mode():
+        if hasattr(inference_model, "interpolate_down"):
+            member_interp = []
+            for member_idx in range(x_tensor.shape[1]):
+                member_x = x_tensor[:, member_idx, ...]
+                try:
+                    interp = inference_model.interpolate_down(member_x, grad_checkpoint=False)
+                except TypeError:
+                    interp = inference_model.interpolate_down(member_x)
+                if interp.ndim != 3:
+                    raise ValueError(
+                        f"Unexpected interpolate_down output shape {tuple(interp.shape)} for member {member_idx}"
+                    )
+                member_interp.append(interp)
+            x_interp = torch.stack(member_interp, dim=1)
+        else:
+            model = getattr(inference_model, "model", inference_model)
+            if not hasattr(model, "apply_interpolate_to_high_res"):
+                raise RuntimeError(
+                    "Inference model cannot export x_interp: missing interpolate_down and apply_interpolate_to_high_res."
+                )
+            try:
+                x_interp = model.apply_interpolate_to_high_res(
+                    x_tensor,
+                    grid_shard_shapes=None,
                     model_comm_group=model_comm_group,
-                    extra_args=extra_args,
                 )
+            except TypeError:
+                x_interp = model.apply_interpolate_to_high_res(x_tensor)
 
-        weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
-        weather_states, selected_indices = resolve_output_weather_states(
-            weather_states=weather_states_full,
-            mode=output_weather_state_mode,
-            explicit_weather_states=output_weather_states,
-        )
-
-        x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
-        pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
-        dates = None
-
-        x_np, _ = extract_filtered_input_from_output(
-            x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
-        )
-        x_np = x_np[..., selected_indices]
-
-        y_np = None
-        target_np, found_target_channels = extract_target_from_bundle_dataset(bundle, weather_states)
-        if target_np is not None:
-            y_np = target_np[None, None, ...]
-            if found_target_channels < len(weather_states):
-                print(
-                    f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
-                    f"(missing channels will be NaN in y)."
-                )
-
-        return (
-            x_np[None, ...],
-            y_np,
-            pred_np[None, None, ...],
-            lon_lres,
-            lat_lres,
-            lon_hres,
-            lat_hres,
-            weather_states,
-            dates,
-        )
-    finally:
-        try:
-            bundle.close()
-        except Exception:
-            pass
-
+    return x_interp.detach().cpu().numpy().astype(np.float32)
 
 
 
@@ -674,6 +726,13 @@ def main() -> None:
     else:
         raise SystemExit("Unknown command")
 
+    x_interp = _compute_x_interp_for_export(
+        inference_model=inference_model,
+        x=x,
+        device=args.device,
+        model_comm_group=model_comm_group,
+    )
+
     ds = build_predictions_dataset(
         x=x,
         y=y,
@@ -685,10 +744,15 @@ def main() -> None:
         weather_states=weather_states,
         dates=dates,
         member_ids=member_ids,
+        x_interp=x_interp,
         include_member_views=not getattr(args, "slim_output", False),
     )
     if used_missing_target_unsafe:
         ds.attrs["missing_target_policy"] = "all_nan_due_to_allow_missing_target_unsafe"
+    ds.attrs["checkpoint_path"] = resolved_ckpt
+    ds.attrs["sampling_config_json"] = args.extra_args_json
+    ds.attrs["validation_frequency"] = args.validation_frequency
+    ds.attrs["x_interp_exported"] = 1
     ds.attrs["output_weather_state_mode"] = args.output_weather_state_mode
     ds.attrs["output_weather_states"] = ",".join(weather_states)
     ds.attrs["slim_output"] = int(bool(getattr(args, "slim_output", False)))

@@ -29,6 +29,12 @@ Predictions + eval flow (from checkpoint):
 /home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval_predictions --run-id <RUN_ID> --ckpt-id <CKPT_ID>
 ```
 
+For `o320 -> o1280`, do not use `codex_eval_predictions` as the default front door. Use the lane helper instead:
+```bash
+CHECKPOINT_PATH=<CKPT_PATH> PHASE=proxy \
+  bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+```
+
 Repo-owned launch templates live under `eval/jobs/templates/`.
 Use `eval/jobs/templates/README.md` as the canonical template entry point.
 

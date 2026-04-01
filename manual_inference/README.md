@@ -28,7 +28,7 @@ python -m manual_inference.prediction.predict from-dataloader \
   --debug-from-dataloader \
   --name-ckpt <exp_or_ckpt> \
   --idx 0 --n-samples 1 --members 0 \
-  --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
+  --extra-args-json '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 ```
 
 From input bundle:
@@ -36,7 +36,7 @@ From input bundle:
 python -m manual_inference.prediction.predict from-bundle \
   --name-ckpt <exp_or_ckpt> \
   --bundle-nc /home/ecm5702/hpcperm/data/input_data/o96/<bundle>.nc \
-  --extra-args-json '{"num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun"}'
+  --extra-args-json '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 ```
 
 Build bundle:

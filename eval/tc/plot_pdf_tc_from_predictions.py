@@ -10,7 +10,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 try:
     from .tc_events import EVENTS
-    from .tc_pdf_plot import REFERENCE_ORDER, plot_event_curves
+    from .tc_pdf_plot import plot_event_curves
     from .tc_vector_loading import (
         analysis_dates_for_event,
         discover_prediction_files,
@@ -23,7 +23,7 @@ try:
     )
 except ImportError:  # allow running as a script
     from tc_events import EVENTS
-    from tc_pdf_plot import REFERENCE_ORDER, plot_event_curves
+    from tc_pdf_plot import plot_event_curves
     from tc_vector_loading import (
         analysis_dates_for_event,
         discover_prediction_files,
@@ -124,6 +124,7 @@ def run_tc_pdf_from_predictions(
                 run_label: prediction_curve,
                 **reference_curves,
             }
+            reference_curve_order = list(dict.fromkeys([*extra_reference_expids, *cfg.reference_expids]))
             exp_labels = {
                 run_label: display_label or run_label,
                 **{
@@ -134,7 +135,7 @@ def run_tc_pdf_from_predictions(
             fig, event_stats = plot_event_curves(
                 cfg,
                 curves=curves,
-                curve_order=[run_label, *extra_reference_expids, *REFERENCE_ORDER],
+                curve_order=[run_label, *reference_curve_order],
                 exp_labels=exp_labels,
                 return_stats=True,
             )

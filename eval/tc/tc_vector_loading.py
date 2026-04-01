@@ -16,6 +16,7 @@ except ImportError:  # allow running as a script
 
 
 SupportMode = Literal["native", "regridded"]
+FORECAST_STEP_COUNT = 5
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,13 @@ def analysis_dates_for_event(cfg: TCEvent, days: Iterable[int] | None = None) ->
     return [f"{cfg.year}{cfg.month}{int(day):02d}" for day in sorted(set(days))]
 
 
+def _analysis_row_indices(frame_count: int, step_indices: list[int] | None) -> slice | list[int]:
+    offset = 1 if frame_count > FORECAST_STEP_COUNT else 0
+    if step_indices is None:
+        return slice(offset, None)
+    return [offset + idx for idx in step_indices]
+
+
 def regridded_target_points_from_grib(
     cfg: TCEvent,
     *,
@@ -131,18 +139,12 @@ def load_grib_event_curves(
     analysis_dates = list(analysis_dates or analysis_dates_for_event(cfg))
     step_indices = None if steps is None else [step_to_index(step) for step in steps]
 
-    expids = [
-        *list(ml_exps),
-        cfg.expid_enfo_o320,
-        cfg.expid_eefo_o96,
-        "ENFO_O320_ip6y",
-        *list(extra_reference_expids),
-    ]
+    expids = list(dict.fromkeys([*list(ml_exps), *list(cfg.reference_expids), *list(extra_reference_expids)]))
     event_dir = Path(dir_data_base) / cfg.name
 
     if support_mode == "native":
         curves: dict[str, CurveVectors] = {}
-        curves["OPER_O320_0001"] = _load_native_curve(
+        curves[cfg.analysis] = _load_native_curve(
             [
                 str(event_dir / f"surface_an_{cfg.analysis}_{date}.grib")
                 for date in analysis_dates
@@ -164,7 +166,7 @@ def load_grib_event_curves(
 
     if support_mode == "regridded":
         curves = {}
-        curves["OPER_O320_0001"] = _load_regridded_curve(
+        curves[cfg.analysis] = _load_regridded_curve(
             [
                 str(event_dir / f"surface_an_{cfg.analysis}_{date}.grib")
                 for date in analysis_dates
@@ -346,10 +348,7 @@ def _extract_regridded_values(
     for holder in holders:
         arr = _read_regridded_variable(holder, cfg=cfg, parameter=parameter)
         if is_analysis:
-            if step_indices is None:
-                arr = arr[1:, :, :]
-            else:
-                arr = arr[[1 + idx for idx in step_indices], :, :]
+            arr = arr[_analysis_row_indices(arr.shape[0], step_indices), :, :]
         else:
             if max_pf_members is not None:
                 arr = arr[:max_pf_members, :, :, :]
@@ -373,10 +372,7 @@ def _extract_regridded_wind(
         v10 = _read_regridded_variable(holder, cfg=cfg, parameter="10v")
         arr = np.sqrt(u10 * u10 + v10 * v10)
         if is_analysis:
-            if step_indices is None:
-                arr = arr[1:, :, :]
-            else:
-                arr = arr[[1 + idx for idx in step_indices], :, :]
+            arr = arr[_analysis_row_indices(arr.shape[0], step_indices), :, :]
         else:
             if max_pf_members is not None:
                 arr = arr[:max_pf_members, :, :, :]

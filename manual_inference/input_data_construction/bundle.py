@@ -10,6 +10,7 @@ import xarray as xr
 
 DEFAULT_CONSTANT_FORCINGS_NPZ = "/home/ecm5702/hpcperm/data/o320-forcings.npz"
 FALLBACK_CONSTANT_FORCINGS_NPZ = (
+    "/home/ecm5702/hpcperm/data/o48-forcings.npz",
     "/home/ecm5702/hpcperm/data/o1280-forcings.npz",
     "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o320.npz",
     "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o1280.npz",
@@ -20,11 +21,26 @@ SFC_TO_CFGRIB = {
     "10v": "v10",
     "2d": "d2m",
     "2t": "t2m",
+    "cp": "cp",
     "msl": "msl",
     "skt": "skt",
     "sp": "sp",
     "tcw": "tcw",
+    "tp": "tp",
 }
+
+OPTIONAL_ZERO_LRES_SFC_VARS = frozenset(
+    {
+        "cp",
+        "hcc",
+        "lcc",
+        "mcc",
+        "ssrd",
+        "strd",
+        "tcc",
+        "tp",
+    }
+)
 
 
 def split_level_channel(name: str) -> tuple[str, int | None]:
@@ -32,6 +48,23 @@ def split_level_channel(name: str) -> tuple[str, int | None]:
     if match is None:
         return name, None
     return match.group(1), int(match.group(2))
+
+
+def _cleanup_empty_cfgrib_indexes(grib_path: str | Path) -> None:
+    path = Path(grib_path)
+    for idx_path in path.parent.glob(f"{path.name}.*.idx"):
+        try:
+            if idx_path.is_file() and idx_path.stat().st_size == 0:
+                idx_path.unlink()
+        except FileNotFoundError:
+            continue
+
+
+def _open_cfgrib_dataset(grib_path: str | Path) -> xr.Dataset:
+    _cleanup_empty_cfgrib_indexes(grib_path)
+    import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
+
+    return ekd.from_source("file", str(grib_path)).to_xarray(engine="cfgrib")
 
 
 def _infer_target_gribs_from_hres(
@@ -43,34 +76,64 @@ def _infer_target_gribs_from_hres(
       enfo_o320_0001_date20230829_time0000_step24to120_sfc.grib
     -> enfo_o320_0001_date20230829_time0000_mem1to10_step24to120_sfc_y.grib
        enfo_o320_0001_date20230829_time0000_mem1to10_step24to120_pl_y.grib
+
+      enfo_o96_0001_date20250926_time0000_step24to120_sfc.grib
+    -> iekm_o96_iekm_date20250926_time0000_step24to120_sfc_y.grib
+       iekm_o96_iekm_date20250926_time0000_step24to120_pl_y.grib
     """
     hres_path = Path(hres_grib)
     name = hres_path.name
-    if not name.startswith("enfo_o320_") or "_sfc.grib" not in name:
-        return None, None
+    candidate_pairs: list[tuple[str, str]] = []
 
     m = re.match(
         r"^(enfo_o320_[^_]+_date\d{8}_time\d{4})_(step[^_]+)_sfc\.grib$",
         name,
     )
-    if m is None:
-        return None, None
-    prefix = m.group(1)
-    step_token = m.group(2)
-    sfc_y = f"{prefix}_mem1to10_{step_token}_sfc_y.grib"
-    pl_y = f"{prefix}_mem1to10_{step_token}_pl_y.grib"
+    if m is not None:
+        prefix = m.group(1)
+        step_token = m.group(2)
+        candidate_pairs.append(
+            (
+                f"{prefix}_mem1to10_{step_token}_sfc_y.grib",
+                f"{prefix}_mem1to10_{step_token}_pl_y.grib",
+            )
+        )
 
-    candidates = [
-        hres_path.with_name(sfc_y),
-        hres_path.parent.parent / sfc_y,
-    ]
-    sfc_path = next((p for p in candidates if p.exists()), None)
-    candidates = [
-        hres_path.with_name(pl_y),
-        hres_path.parent.parent / pl_y,
-    ]
-    pl_path = next((p for p in candidates if p.exists()), None)
-    return sfc_path, pl_path
+    m = re.match(
+        r"^enfo_o96_[^_]+_date(\d{8})_time(\d{4})_(step[^_]+)_sfc\.grib$",
+        name,
+    )
+    if m is not None:
+        date_token = m.group(1)
+        time_token = m.group(2)
+        step_token = m.group(3)
+        candidate_pairs.append(
+            (
+                f"iekm_o96_iekm_date{date_token}_time{time_token}_{step_token}_sfc_y.grib",
+                f"iekm_o96_iekm_date{date_token}_time{time_token}_{step_token}_pl_y.grib",
+            )
+        )
+
+    if not candidate_pairs:
+        return None, None
+
+    search_roots: list[Path] = [hres_path.parent]
+    if hres_path.parent != hres_path.parent.parent:
+        search_roots.append(hres_path.parent.parent)
+
+    def _resolve(filename: str) -> Path | None:
+        for root in search_roots:
+            candidate = root / filename
+            if candidate.exists():
+                return candidate
+        return None
+
+    for sfc_name, pl_name in candidate_pairs:
+        sfc_path = _resolve(sfc_name)
+        pl_path = _resolve(pl_name)
+        if sfc_path is not None or pl_path is not None:
+            return sfc_path, pl_path
+    return None, None
 
 
 def parse_valid_time(value, fallback) -> datetime:
@@ -87,6 +150,26 @@ def _open_bundle_dataset(path: str | Path) -> xr.Dataset:
     if bundle_path.suffix == ".zarr" or bundle_path.is_dir():
         return xr.open_zarr(bundle_path, consolidated=False)
     return xr.open_dataset(bundle_path)
+
+
+def _interpolate_level_points(
+    field: xr.DataArray,
+    available_levels: Sequence[int],
+    target_level: int,
+) -> np.ndarray:
+    levels_np = np.asarray(available_levels, dtype=np.int32)
+    order = np.argsort(levels_np)
+    sorted_levels = levels_np[order]
+    if target_level < int(sorted_levels[0]) or target_level > int(sorted_levels[-1]):
+        raise KeyError(f"Missing level {target_level}")
+    if "level" not in field.dims:
+        raise KeyError("Missing 'level' dimension for pressure-level interpolation")
+    values = np.asarray(field.transpose("level", ...).values, dtype=np.float32).reshape(len(levels_np), -1)
+    values = values[order, :]
+    interp = np.empty(values.shape[1], dtype=np.float32)
+    for idx in range(values.shape[1]):
+        interp[idx] = np.interp(float(target_level), sorted_levels, values[:, idx])
+    return interp
 
 
 def open_bundle_dataset(path: str | Path) -> xr.Dataset:
@@ -155,10 +238,8 @@ def load_lres_fields_from_grib(
     pl_grib: str | Path,
     lres_channel_names: Sequence[str],
 ) -> tuple[dict[str, np.ndarray], np.ndarray | None]:
-    import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
-
-    ds_sfc = ekd.from_source("file", str(sfc_grib)).to_xarray(engine="cfgrib")
-    ds_pl = ekd.from_source("file", str(pl_grib)).to_xarray(engine="cfgrib")
+    ds_sfc = _open_cfgrib_dataset(sfc_grib)
+    ds_pl = _open_cfgrib_dataset(pl_grib)
     fields: dict[str, np.ndarray] = {}
     for name in lres_channel_names:
         base, level = split_level_channel(name)
@@ -174,7 +255,7 @@ def load_lres_fields_from_grib(
 def read_hres_static_from_grib(hres_grib: str | Path) -> tuple[np.ndarray | None, np.ndarray | None]:
     import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
 
-    ds_hr = ekd.from_source("file", str(hres_grib)).to_xarray(engine="cfgrib")
+    ds_hr = _open_cfgrib_dataset(hres_grib)
     z = np.asarray(ds_hr["z"].values, dtype=np.float32).squeeze() if "z" in ds_hr else None
     lsm = np.asarray(ds_hr["lsm"].values, dtype=np.float32).squeeze() if "lsm" in ds_hr else None
     return z, lsm
@@ -229,6 +310,16 @@ def fill_hres_features(
             arr = np.asarray(z, dtype=np.float32).reshape(-1)
         elif name == "lsm" and lsm is not None:
             arr = np.asarray(lsm, dtype=np.float32).reshape(-1)
+        elif name in {"cos_latitude", "sin_latitude", "cos_longitude", "sin_longitude"}:
+            lat_rad = np.deg2rad(lat_hres.astype(np.float64))
+            lon_rad = np.deg2rad(lon_hres.astype(np.float64))
+            geometric = {
+                "cos_latitude": np.cos(lat_rad),
+                "sin_latitude": np.sin(lat_rad),
+                "cos_longitude": np.cos(lon_rad),
+                "sin_longitude": np.sin(lon_rad),
+            }
+            arr = geometric[name].astype(np.float32)
         else:
             tried = ", ".join(tried_constant_npz) if tried_constant_npz else "(no existing NPZ found)"
             raise KeyError(
@@ -291,22 +382,9 @@ def load_inputs_from_bundle_numpy(
             if "level" in bundle
             else set()
         )
-        for name, idx in name_to_idx_lres.items():
-            base, level = split_level_channel(name)
-            if level is None:
-                field_name = f"in_lres_{name}"
-                if field_name not in bundle:
-                    raise KeyError(f"Missing bundle field: {field_name}")
-                raw = bundle[field_name].values.astype(np.float32)
-            else:
-                field_name = f"in_lres_{base}"
-                if field_name not in bundle:
-                    raise KeyError(f"Missing bundle field: {field_name}")
-                if level not in levels_bundle:
-                    raise KeyError(f"Missing level {level} for {base}")
-                raw = bundle[field_name].sel(level=int(level)).values.astype(np.float32)
-            x_lres[:, idx] = np.asarray(raw, dtype=np.float32).reshape(-1)
 
+        # Read grid coordinates and valid time early so they are available for
+        # computing dynamic temporal features on the LR side when absent from bundle.
         lat_lres = bundle["lat_lres"].values.astype(np.float32)
         lon_lres = bundle["lon_lres"].values.astype(np.float32)
         lat_hres = bundle["lat_hres"].values.astype(np.float32)
@@ -314,6 +392,101 @@ def load_inputs_from_bundle_numpy(
         z = bundle["in_hres_z"].values.astype(np.float32) if "in_hres_z" in bundle else None
         lsm = bundle["in_hres_lsm"].values.astype(np.float32) if "in_hres_lsm" in bundle else None
         dt = parse_valid_time(valid_time_override, bundle.attrs.get("case_valid_time"))
+
+        _DYNAMIC_TEMPORAL_FEATURES = frozenset(
+            (
+                "cos_julian_day", "sin_julian_day",
+                "cos_local_time", "sin_local_time",
+                "cos_solar_zenith_angle",
+                "insolation",
+            )
+        )
+        # Geometric constants computable directly from grid coordinates.
+        _GEOMETRIC_CONSTANT_FEATURES = frozenset(
+            ("cos_latitude", "sin_latitude", "cos_longitude", "sin_longitude")
+        )
+        _lres_dynamic_cache: dict[str, np.ndarray] = {}
+
+        # Load LR constant forcings (z, lsm, …) from npz if available for this grid size.
+        _lres_npz_constants: dict[str, np.ndarray] = {}
+        _lres_npz_candidates = [constant_forcings_npz] + list(FALLBACK_CONSTANT_FORCINGS_NPZ)
+        _lres_npz_constants, _, _ = _load_constant_forcings_for_size(
+            _lres_npz_candidates, lat_lres.size
+        )
+
+        for name, idx in name_to_idx_lres.items():
+            base, level = split_level_channel(name)
+            if level is None:
+                field_name = f"in_lres_{name}"
+                if field_name not in bundle:
+                    if name in _DYNAMIC_TEMPORAL_FEATURES:
+                        # Compute via earthkit on the LR grid (same approach as HRES).
+                        if not _lres_dynamic_cache:
+                            import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
+                            from anemoi.transform.grids.unstructured import (
+                                UnstructuredGridFieldList,
+                            )  # pylint: disable=import-outside-toplevel
+
+                            needed = [
+                                n for n in _DYNAMIC_TEMPORAL_FEATURES if f"in_lres_{n}" not in bundle
+                                and n in name_to_idx_lres
+                            ]
+                            source_lres = UnstructuredGridFieldList.from_values(
+                                latitudes=np.asarray(lat_lres, dtype=np.float64),
+                                longitudes=np.asarray(lon_lres, dtype=np.float64),
+                            )
+                            forcings_lres = ekd.from_source(
+                                "forcings", source_lres, date=[dt], param=needed
+                            )
+                            _lres_dynamic_cache = {
+                                f.metadata("param"): np.asarray(
+                                    f.to_numpy(flatten=True), dtype=np.float32
+                                )
+                                for f in forcings_lres
+                            }
+                        if name not in _lres_dynamic_cache:
+                            raise KeyError(
+                                f"Missing bundle field: {field_name} (dynamic feature not returned by earthkit)"
+                            )
+                        raw = _lres_dynamic_cache[name]
+                    elif name in _GEOMETRIC_CONSTANT_FEATURES:
+                        # Trivially computable from grid coordinates.
+                        lat_rad = np.deg2rad(lat_lres.astype(np.float64))
+                        lon_rad = np.deg2rad(lon_lres.astype(np.float64))
+                        _geo = {
+                            "cos_latitude": np.cos(lat_rad),
+                            "sin_latitude": np.sin(lat_rad),
+                            "cos_longitude": np.cos(lon_rad),
+                            "sin_longitude": np.sin(lon_rad),
+                        }
+                        raw = _geo[name].astype(np.float32)
+                    elif name in _lres_npz_constants:
+                        # Load from pre-built forcings npz (z, lsm, slor, …).
+                        raw = _lres_npz_constants[name]
+                    elif name in OPTIONAL_ZERO_LRES_SFC_VARS:
+                        raw = np.zeros(n_lres, dtype=np.float32)
+                    else:
+                        raise KeyError(f"Missing bundle field: {field_name}")
+                else:
+                    candidate = bundle[field_name]
+                    if "level" in candidate.dims:
+                        if name in _lres_npz_constants:
+                            raw = _lres_npz_constants[name]
+                        else:
+                            raise KeyError(
+                                f"Missing bundle field: {field_name} (found pressure-level field where single-level input was expected)"
+                            )
+                    else:
+                        raw = candidate.values.astype(np.float32)
+            else:
+                field_name = f"in_lres_{base}"
+                if field_name not in bundle:
+                    raise KeyError(f"Missing bundle field: {field_name}")
+                if level not in levels_bundle:
+                    raw = _interpolate_level_points(bundle[field_name], sorted(levels_bundle), int(level))
+                else:
+                    raw = bundle[field_name].sel(level=int(level)).values.astype(np.float32)
+            x_lres[:, idx] = np.asarray(raw, dtype=np.float32).reshape(-1)
 
         import torch  # pylint: disable=import-outside-toplevel
 
@@ -541,11 +714,9 @@ def build_input_bundle_from_grib(
     target_pl_grib: str | Path | None = None,
     require_target_fields: bool = True,
 ) -> Path:
-    import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
-
-    ds_sfc = ekd.from_source("file", str(lres_sfc_grib)).to_xarray(engine="cfgrib")
-    ds_pl = ekd.from_source("file", str(lres_pl_grib)).to_xarray(engine="cfgrib")
-    ds_hres = ekd.from_source("file", str(hres_grib)).to_xarray(engine="cfgrib")
+    ds_sfc = _open_cfgrib_dataset(lres_sfc_grib)
+    ds_pl = _open_cfgrib_dataset(lres_pl_grib)
+    ds_hres = _open_cfgrib_dataset(hres_grib)
 
     ds_sfc = _select_step(ds_sfc, step_hours)
     ds_pl = _select_step(ds_pl, step_hours)
@@ -580,13 +751,24 @@ def build_input_bundle_from_grib(
         "v10": "in_lres_10v",
         "d2m": "in_lres_2d",
         "t2m": "in_lres_2t",
+        "cp": "in_lres_cp",
+        "hcc": "in_lres_hcc",
+        "lcc": "in_lres_lcc",
+        "mcc": "in_lres_mcc",
         "msl": "in_lres_msl",
         "skt": "in_lres_skt",
         "sp": "in_lres_sp",
+        "ssrd": "in_lres_ssrd",
+        "strd": "in_lres_strd",
+        "tcc": "in_lres_tcc",
         "tcw": "in_lres_tcw",
+        "tp": "in_lres_tp",
     }
     for src, dst in sfc_map.items():
         if src not in ds_sfc:
+            if src in OPTIONAL_ZERO_LRES_SFC_VARS:
+                data_vars[dst] = ("point_lres", np.zeros(lat_lres.shape[0], dtype=np.float32))
+                continue
             raise KeyError(f"Missing SFC variable in input: {src}")
         data_vars[dst] = ("point_lres", _to_1d_points(ds_sfc[src]))
 
@@ -610,7 +792,7 @@ def build_input_bundle_from_grib(
 
     target_level_coord: np.ndarray | None = None
     if target_sfc_grib:
-        ds_target_sfc = ekd.from_source("file", str(target_sfc_grib)).to_xarray(engine="cfgrib")
+        ds_target_sfc = _open_cfgrib_dataset(target_sfc_grib)
         ds_target_sfc = _select_step(ds_target_sfc, step_hours)
         ds_target_sfc = _select_member(ds_target_sfc, member, allow_missing=True)
         target_map_sfc = {
@@ -634,7 +816,7 @@ def build_input_bundle_from_grib(
             data_vars[dst] = ("point_hres", vals)
 
     if target_pl_grib:
-        ds_target_pl = ekd.from_source("file", str(target_pl_grib)).to_xarray(engine="cfgrib")
+        ds_target_pl = _open_cfgrib_dataset(target_pl_grib)
         ds_target_pl = _select_step(ds_target_pl, step_hours)
         ds_target_pl = _select_member(ds_target_pl, member, allow_missing=True)
         level_coord_target = _get_pl_level_coord(ds_target_pl)
@@ -654,7 +836,7 @@ def build_input_bundle_from_grib(
     if require_target_fields and not has_target:
         raise ValueError(
             "No target_hres_* fields were added to bundle. "
-            "Provide --target-sfc-grib/--target-pl-grib or place matching enfo_o320 *_y.grib files near hres input."
+            "Provide --target-sfc-grib/--target-pl-grib or place matching target *_y.grib files near hres input."
         )
 
     bundle = xr.Dataset(data_vars=data_vars, coords=coords)

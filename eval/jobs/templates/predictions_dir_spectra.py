@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -17,13 +18,48 @@ try:
 except ImportError:
     _healpy_cl_from_unstructured = None
 
+from eval.checkpoint_interpolation import (
+    CheckpointResidualInterpolator,
+    resolve_checkpoint_path,
+)
+
 
 SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE_DEFAULT = 100.0
 
 
+@dataclass(frozen=True)
+class ScopeSpec:
+    name: str
+    title: str
+    curve_a_label: str
+    curve_b_label: str
+    pdf_name: str
+
+
+SCOPE_SPECS = {
+    "full_field": ScopeSpec(
+        name="full_field",
+        title="full-field spectra",
+        curve_a_label="prediction mean",
+        curve_b_label="truth mean",
+        pdf_name="spectra_{state}.pdf",
+    ),
+    "residual": ScopeSpec(
+        name="residual",
+        title="residual spectra",
+        curve_a_label="prediction residual mean",
+        curve_b_label="truth residual mean",
+        pdf_name="spectra_residual_{state}.pdf",
+    ),
+}
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Compute simple prediction-vs-truth spectra diagnostics from predictions_*.nc files."
+        description=(
+            "Compute prediction-vs-truth spectra diagnostics from predictions_*.nc files "
+            "for both reconstructed full fields and canonical residuals."
+        )
     )
     p.add_argument("--predictions-dir", required=True)
     p.add_argument("--out-dir", required=True)
@@ -31,6 +67,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--weather-states", default="10u,10v,2t,msl,t_850,z_500")
     p.add_argument("--nside", type=int, default=64)
     p.add_argument("--lmax", type=int, default=319)
+    p.add_argument(
+        "--checkpoint-path",
+        default="",
+        help=(
+            "Optional base checkpoint path used to reconstruct the interpolated high-resolution "
+            "input for residual spectra. When omitted, the helper resolves it from predictions "
+            "metadata or the run EXPERIMENT_CONFIG.yaml."
+        ),
+    )
     p.add_argument(
         "--spectra-method",
         choices=["auto", "healpy", "fft_proxy"],
@@ -163,6 +208,151 @@ def mean_curve(curves: list[np.ndarray]) -> np.ndarray:
     return np.nanmean(np.stack(curves, axis=0), axis=0)
 
 
+def select_member_array(da: xr.DataArray, member_idx: int) -> np.ndarray:
+    member_da = da.isel(sample=0)
+    if "ensemble_member" in member_da.dims:
+        member_da = member_da.isel(ensemble_member=member_idx)
+    return member_da.values.astype(np.float64)
+
+
+def build_scope_curves(
+    *,
+    pred_dir: Path,
+    files: list[Path],
+    states: list[str],
+    cl_from_unstructured,
+    nside: int,
+    lmax: int,
+    member_aggregation: str,
+    checkpoint_path_override: str,
+) -> tuple[dict[str, dict[str, list[np.ndarray]]], dict[str, int], Path | None, list[str]]:
+    scope_curves: dict[str, dict[str, list[np.ndarray]]] = {
+        scope_name: {
+            f"pred::{state}": []
+            for state in states
+        }
+        for scope_name in SCOPE_SPECS
+    }
+    for scope_name in SCOPE_SPECS:
+        for state in states:
+            scope_curves[scope_name][f"truth::{state}"] = []
+
+    raw_member_curve_counts: dict[str, int] = {state: 0 for state in states}
+    checkpoint_path: Path | None = None
+    residualizer: CheckpointResidualInterpolator | None = None
+    residualization_methods_used: set[str] = set()
+
+    for file_path in files:
+        with xr.open_dataset(file_path) as ds:
+            if "x" not in ds:
+                raise RuntimeError(f"Predictions file missing low-resolution input x required for residual spectra: {file_path}")
+            if "y" not in ds:
+                raise RuntimeError(f"Predictions file missing truth y required for spectra comparison: {file_path}")
+
+            weather_states = [str(value) for value in ds["weather_state"].values.tolist()]
+            state_to_index = {state: idx for idx, state in enumerate(weather_states)}
+            lat = ds["lat_hres"].values
+            lon = ds["lon_hres"].values
+
+            file_has_x_interp = "x_interp" in ds
+            if file_has_x_interp:
+                residualization_methods_used.add("predictions_x_interp")
+            else:
+                residualization_methods_used.add("checkpoint_apply_interpolate_to_high_res_from_predictions_x")
+                if checkpoint_path is None:
+                    checkpoint_path = resolve_checkpoint_path(
+                        pred_dir=pred_dir,
+                        ds=ds,
+                        explicit_path=checkpoint_path_override,
+                    )
+                    if checkpoint_path is None:
+                        raise RuntimeError(
+                            "Could not resolve checkpoint path for residual spectra reconstruction. "
+                            "Set --checkpoint-path or ensure predictions metadata / EXPERIMENT_CONFIG.yaml carries checkpoint.path."
+                        )
+                    residualizer = CheckpointResidualInterpolator(checkpoint_path)
+
+            per_file_curves: dict[str, dict[str, list[np.ndarray]]] = {
+                scope_name: {f"pred::{state}": [] for state in states}
+                for scope_name in SCOPE_SPECS
+            }
+            for scope_name in SCOPE_SPECS:
+                for state in states:
+                    per_file_curves[scope_name][f"truth::{state}"] = []
+
+            for member_idx in member_indices(ds):
+                x_member = select_member_array(ds["x"], member_idx)
+                pred_member = select_member_array(ds["y_pred"], member_idx)
+                truth_member = select_member_array(ds["y"], member_idx)
+                if file_has_x_interp:
+                    interp_member = select_member_array(ds["x_interp"], member_idx)
+                else:
+                    interp_member = residualizer.interpolate(x_member) if residualizer is not None else None
+
+                if interp_member is None:
+                    raise RuntimeError("Residual interpolator was not initialized.")
+                if pred_member.ndim != 2 or truth_member.ndim != 2 or interp_member.ndim != 2:
+                    raise ValueError(
+                        "Expected per-member arrays with shape [grid_point, weather_state], got "
+                        f"pred={pred_member.shape} truth={truth_member.shape} interp={interp_member.shape}"
+                    )
+                if pred_member.shape != truth_member.shape:
+                    raise ValueError(
+                        f"Prediction/truth shape mismatch in {file_path}: pred={pred_member.shape} truth={truth_member.shape}"
+                    )
+                if pred_member.shape != interp_member.shape:
+                    raise ValueError(
+                        "Interpolated low-resolution state shape does not match high-resolution outputs in "
+                        f"{file_path}: interp={interp_member.shape} output={pred_member.shape}"
+                    )
+
+                for state in states:
+                    state_index = state_to_index.get(state)
+                    if state_index is None:
+                        continue
+                    pred_curve = cl_from_unstructured(lat, lon, pred_member[:, state_index], nside=nside, lmax=lmax)
+                    truth_curve = cl_from_unstructured(lat, lon, truth_member[:, state_index], nside=nside, lmax=lmax)
+                    residual_pred_curve = cl_from_unstructured(
+                        lat,
+                        lon,
+                        pred_member[:, state_index] - interp_member[:, state_index],
+                        nside=nside,
+                        lmax=lmax,
+                    )
+                    residual_truth_curve = cl_from_unstructured(
+                        lat,
+                        lon,
+                        truth_member[:, state_index] - interp_member[:, state_index],
+                        nside=nside,
+                        lmax=lmax,
+                    )
+                    per_file_curves["full_field"][f"pred::{state}"].append(pred_curve)
+                    per_file_curves["full_field"][f"truth::{state}"].append(truth_curve)
+                    per_file_curves["residual"][f"pred::{state}"].append(residual_pred_curve)
+                    per_file_curves["residual"][f"truth::{state}"].append(residual_truth_curve)
+
+            for state in states:
+                member_count = len(per_file_curves["full_field"][f"pred::{state}"])
+                raw_member_curve_counts[state] += member_count
+                if member_count == 0:
+                    continue
+                for scope_name in SCOPE_SPECS:
+                    pred_key = f"pred::{state}"
+                    truth_key = f"truth::{state}"
+                    pred_curves = per_file_curves[scope_name][pred_key]
+                    truth_curves = per_file_curves[scope_name][truth_key]
+                    if member_aggregation == "raw-members":
+                        scope_curves[scope_name][pred_key].extend(pred_curves)
+                        scope_curves[scope_name][truth_key].extend(truth_curves)
+                    else:
+                        scope_curves[scope_name][pred_key].append(mean_curve(pred_curves))
+                        scope_curves[scope_name][truth_key].append(mean_curve(truth_curves))
+
+    if not residualization_methods_used:
+        raise RuntimeError("No residualization method was available while building spectra curves.")
+    return scope_curves, raw_member_curve_counts, checkpoint_path, sorted(residualization_methods_used)
+
+
 def plot_one_state(
     *,
     state: str,
@@ -171,15 +361,16 @@ def plot_one_state(
     out_pdf: Path,
     run_label: str,
     show_individual_curves: bool,
-    scope_label: str,
+    aggregate_label: str,
     score_wavenumber_min_exclusive: float,
+    scope: ScopeSpec,
 ) -> dict[str, float]:
     pred_mean = mean_curve(pred_cls)
     truth_mean = mean_curve(truth_cls)
 
     ell = np.arange(pred_mean.shape[0], dtype=np.float64)
-    kp = finite_positive_mask(pred_mean, wavenumbers=ell, score_wavenumber_min_exclusive=1.0)
-    kt = finite_positive_mask(truth_mean, wavenumbers=ell, score_wavenumber_min_exclusive=1.0)
+    kp = finite_positive_mask(pred_mean, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
+    kt = finite_positive_mask(truth_mean, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
     score_keep = finite_positive_mask(
         pred_mean,
         wavenumbers=ell,
@@ -194,19 +385,19 @@ def plot_one_state(
 
     if show_individual_curves:
         for arr in truth_cls:
-            keep = finite_positive_mask(arr)
+            keep = finite_positive_mask(arr, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
             ax.plot(ell[keep], arr[keep], color="#888888", alpha=0.18, linewidth=0.8)
         for arr in pred_cls:
-            keep = finite_positive_mask(arr)
+            keep = finite_positive_mask(arr, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
             ax.plot(ell[keep], arr[keep], color="#1f77b4", alpha=0.18, linewidth=0.8)
 
-    ax.plot(ell[kt], truth_mean[kt], color="#333333", linewidth=2.2, label="truth mean")
-    ax.plot(ell[kp], pred_mean[kp], color="#1f77b4", linewidth=2.2, label="prediction mean")
+    ax.plot(ell[kt], truth_mean[kt], color="#333333", linewidth=2.2, label=scope.curve_b_label)
+    ax.plot(ell[kp], pred_mean[kp], color="#1f77b4", linewidth=2.2, label=scope.curve_a_label)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Wavenumber l")
     ax.set_ylabel("Power")
-    ax.set_title(f"{run_label} | {state} | spectra ({scope_label})")
+    ax.set_title(f"{run_label} | {state} | {scope.title} ({aggregate_label})")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     fig.tight_layout()
@@ -220,100 +411,160 @@ def plot_one_state(
     return {"relative_l2_mean_curve": rel_l2}
 
 
+def build_spectra_artifacts(
+    *,
+    pred_dir: Path,
+    out_dir: Path,
+    run_label: str,
+    states: list[str],
+    nside: int,
+    lmax: int,
+    spectra_method: str,
+    member_aggregation: str,
+    show_individual_curves: bool,
+    score_wavenumber_min_exclusive: float,
+    checkpoint_path_override: str = "",
+) -> tuple[dict[str, object], dict[str, object]]:
+    files = valid_prediction_files(pred_dir)
+    cl_from_unstructured, spectra_method_used = resolve_spectra_method(spectra_method)
+    scope_curves, raw_member_curve_counts, checkpoint_path, residualization_methods = build_scope_curves(
+        pred_dir=pred_dir,
+        files=files,
+        states=states,
+        cl_from_unstructured=cl_from_unstructured,
+        nside=nside,
+        lmax=lmax,
+        member_aggregation=member_aggregation,
+        checkpoint_path_override=checkpoint_path_override,
+    )
+
+    summary: dict[str, object] = {
+        "run_label": run_label,
+        "predictions_dir": str(pred_dir),
+        "num_files": len(files),
+        "nside": nside,
+        "lmax": lmax,
+        "score_wavenumber_min_exclusive": score_wavenumber_min_exclusive,
+        "spectra_method_requested": spectra_method,
+        "spectra_method_used": spectra_method_used,
+        "member_aggregation": member_aggregation,
+        "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        "residualization": {
+            "method": residualization_methods[0] if len(residualization_methods) == 1 else "mixed",
+            "methods": residualization_methods,
+            "checkpoint_path": str(checkpoint_path) if checkpoint_path is not None else None,
+        },
+        "scopes": list(SCOPE_SPECS),
+        "weather_states": {},
+    }
+    curve_summary: dict[str, object] = {
+        "run_label": run_label,
+        "predictions_dir": str(pred_dir),
+        "spectra_method_used": spectra_method_used,
+        "score_wavenumber_min_exclusive": score_wavenumber_min_exclusive,
+        "weather_states": {},
+    }
+    aggregate_label = f"{len(files)}-file aggregate"
+
+    for state in states:
+        full_pred = scope_curves["full_field"][f"pred::{state}"]
+        full_truth = scope_curves["full_field"][f"truth::{state}"]
+        residual_pred = scope_curves["residual"][f"pred::{state}"]
+        residual_truth = scope_curves["residual"][f"truth::{state}"]
+
+        if not full_pred or not full_truth:
+            summary["weather_states"][state] = {
+                "status": "missing",
+                "scopes": {
+                    scope_name: {"status": "missing"}
+                    for scope_name in SCOPE_SPECS
+                },
+            }
+            curve_summary["weather_states"][state] = {
+                "status": "missing",
+                "scopes": {scope_name: {"status": "missing"} for scope_name in SCOPE_SPECS},
+            }
+            continue
+        if not residual_pred or not residual_truth:
+            raise RuntimeError(f"Residual spectra missing for weather state {state}; refusing to write a full-field-only summary.")
+
+        scope_summaries: dict[str, object] = {}
+        curve_summary["weather_states"][state] = {"status": "ok", "scopes": {}}
+        for scope_name, spec in SCOPE_SPECS.items():
+            pred_curves = scope_curves[scope_name][f"pred::{state}"]
+            truth_curves = scope_curves[scope_name][f"truth::{state}"]
+            out_pdf = out_dir / spec.pdf_name.format(state=state)
+            metrics = plot_one_state(
+                state=state,
+                pred_cls=pred_curves,
+                truth_cls=truth_curves,
+                out_pdf=out_pdf,
+                run_label=run_label,
+                show_individual_curves=show_individual_curves,
+                aggregate_label=aggregate_label,
+                score_wavenumber_min_exclusive=score_wavenumber_min_exclusive,
+                scope=spec,
+            )
+            pred_mean = mean_curve(pred_curves)
+            truth_mean = mean_curve(truth_curves)
+            wavenumbers = np.arange(pred_mean.shape[0], dtype=np.float64)
+            scope_summaries[scope_name] = {
+                "status": "ok",
+                "n_curves": len(pred_curves),
+                "n_member_curves": raw_member_curve_counts[state],
+                "pdf": str(out_pdf),
+                **metrics,
+            }
+            curve_summary["weather_states"][state]["scopes"][scope_name] = {
+                "status": "ok",
+                "n_curves": len(pred_curves),
+                "wavenumbers": wavenumbers.tolist(),
+                "prediction_mean": pred_mean.tolist(),
+                "truth_mean": truth_mean.tolist(),
+                "pdf": str(out_pdf),
+                "relative_l2_mean_curve": metrics["relative_l2_mean_curve"],
+            }
+
+        full_summary = dict(scope_summaries["full_field"])
+        summary["weather_states"][state] = {
+            "status": "ok",
+            "n_curves": full_summary["n_curves"],
+            "n_member_curves": full_summary["n_member_curves"],
+            "pdf": full_summary["pdf"],
+            "relative_l2_mean_curve": full_summary["relative_l2_mean_curve"],
+            "scopes": scope_summaries,
+        }
+
+    return summary, curve_summary
+
+
 def main() -> None:
     args = parse_args()
     pred_dir = Path(args.predictions_dir).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    cl_from_unstructured, spectra_method_used = resolve_spectra_method(args.spectra_method)
 
-    files = valid_prediction_files(pred_dir)
-    states = parse_weather_states(args.weather_states)
-
-    # Collect per-state spectra across all prediction files.
-    all_pred: dict[str, list[np.ndarray]] = {s: [] for s in states}
-    all_truth: dict[str, list[np.ndarray]] = {s: [] for s in states}
-    raw_member_curve_counts: dict[str, int] = {s: 0 for s in states}
-
-    for f in files:
-        with xr.open_dataset(f) as ds:
-            weather_states = set(map(str, ds["weather_state"].values.tolist()))
-            lat = ds["lat_hres"].values
-            lon = ds["lon_hres"].values
-            for state in states:
-                if state not in weather_states:
-                    continue
-                pred_member_curves: list[np.ndarray] = []
-                truth_member_curves: list[np.ndarray] = []
-                for member_idx in member_indices(ds):
-                    pred = (
-                        ds["y_pred"]
-                        .isel(sample=0, ensemble_member=member_idx)
-                        .sel(weather_state=state)
-                        .values
-                        .astype(np.float64)
-                    )
-                    truth = (
-                        ds["y"]
-                        .isel(sample=0, ensemble_member=member_idx)
-                        .sel(weather_state=state)
-                        .values
-                        .astype(np.float64)
-                    )
-                    pred_member_curves.append(
-                        cl_from_unstructured(lat, lon, pred, nside=args.nside, lmax=args.lmax)
-                    )
-                    truth_member_curves.append(
-                        cl_from_unstructured(lat, lon, truth, nside=args.nside, lmax=args.lmax)
-                    )
-                raw_member_curve_counts[state] += len(pred_member_curves)
-                if args.member_aggregation == "raw-members":
-                    all_pred[state].extend(pred_member_curves)
-                    all_truth[state].extend(truth_member_curves)
-                else:
-                    all_pred[state].append(mean_curve(pred_member_curves))
-                    all_truth[state].append(mean_curve(truth_member_curves))
-
-    summary: dict[str, object] = {
-        "run_label": args.run_label,
-        "predictions_dir": str(pred_dir),
-        "num_files": len(files),
-        "nside": args.nside,
-        "lmax": args.lmax,
-        "score_wavenumber_min_exclusive": args.score_wavenumber_min_exclusive,
-        "spectra_method_requested": args.spectra_method,
-        "spectra_method_used": spectra_method_used,
-        "member_aggregation": args.member_aggregation,
-        "weather_states": {},
-    }
-    scope_label = f"{len(files)}-file aggregate"
-
-    for state in states:
-        if not all_pred[state] or not all_truth[state]:
-            summary["weather_states"][state] = {"status": "missing"}
-            continue
-        out_pdf = out_dir / f"spectra_{state}.pdf"
-        metrics = plot_one_state(
-            state=state,
-            pred_cls=all_pred[state],
-            truth_cls=all_truth[state],
-            out_pdf=out_pdf,
-            run_label=args.run_label,
-            show_individual_curves=args.show_individual_curves,
-            scope_label=scope_label,
-            score_wavenumber_min_exclusive=args.score_wavenumber_min_exclusive,
-        )
-        summary["weather_states"][state] = {
-            "status": "ok",
-            "n_curves": len(all_pred[state]),
-            "n_member_curves": raw_member_curve_counts[state],
-            "pdf": str(out_pdf),
-            **metrics,
-        }
+    summary, curve_summary = build_spectra_artifacts(
+        pred_dir=pred_dir,
+        out_dir=out_dir,
+        run_label=args.run_label,
+        states=parse_weather_states(args.weather_states),
+        nside=args.nside,
+        lmax=args.lmax,
+        spectra_method=args.spectra_method,
+        member_aggregation=args.member_aggregation,
+        show_individual_curves=args.show_individual_curves,
+        score_wavenumber_min_exclusive=args.score_wavenumber_min_exclusive,
+        checkpoint_path_override=args.checkpoint_path,
+    )
 
     out_json = out_dir / "spectra_summary.json"
     out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"Wrote spectra summary: {out_json}")
+
+    out_curves = out_dir / "spectra_curve_summary.json"
+    out_curves.write_text(json.dumps(curve_summary, indent=2), encoding="utf-8")
+    print(f"Wrote spectra curve summary: {out_curves}")
 
 
 if __name__ == "__main__":

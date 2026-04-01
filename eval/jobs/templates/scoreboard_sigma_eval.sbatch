@@ -26,7 +26,7 @@ OUT_CSV=""                     # blank => /home/ecm5702/perm/eval/scoreboards/si
 SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
-EXPECTED_LANE="o96_o320"       # o96_o320 | o320_o1280 | o1280_o2560
+EXPECTED_LANE="o96_o320"       # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
 ###############################################################################
 
 die() {
@@ -52,7 +52,7 @@ require_choice() {
 [[ "${CKPT_NAME}" != REPLACE_* ]] || die "Set CKPT_NAME."
 [[ "${CKPT_NAME}" != inference-* ]] || die \
   "CKPT_NAME='${CKPT_NAME}' looks like an inference checkpoint. Use a non-inference anemoi-*.ckpt for sigma evaluator."
-require_choice "${EXPECTED_LANE}" o96_o320 o320_o1280 o1280_o2560
+require_choice "${EXPECTED_LANE}" o48_o96 o96_o320 o320_o1280 o1280_o2560
 require_choice "${EXPECTED_STACK_FLAVOR}" new old
 
 if [[ -z "${CHECKPOINT_REF}" ]]; then
@@ -78,7 +78,7 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 [[ -d "${REPO_ROOT}" ]] || die "Repo root not found: ${REPO_ROOT}"
 
 [[ -f "${VENV}" ]] || die "Missing venv activate script: ${VENV}"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import inspect
 import json
 import os
 import re
@@ -18,6 +19,7 @@ from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.predict import (
     DEFAULT_EXTRA_ARGS_JSON,
+    _compute_x_interp_for_export,
     _get_parallel_info,
     _init_model_comm_group,
     _load_objects,
@@ -48,9 +50,10 @@ def parse_bundle_key(path: Path) -> BundleKey | None:
     return BundleKey(date=m.group("date"), step=int(m.group("step")), member=int(m.group("member")))
 
 
-def discover_bundles(input_root: Path) -> dict[BundleKey, Path]:
+def discover_bundles(input_root: Path, *, recursive: bool = True) -> dict[BundleKey, Path]:
     out: dict[BundleKey, Path] = {}
-    for p in sorted(input_root.rglob("*_input_bundle.nc")):
+    paths = input_root.rglob("*_input_bundle.nc") if recursive else input_root.glob("*_input_bundle.nc")
+    for p in sorted(paths):
         key = parse_bundle_key(p)
         if key is None:
             continue
@@ -140,6 +143,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Generate 25 predictions_YYYYMMDD_stepXXX.nc files from bundle inputs.")
     ap.add_argument("--input-root", required=True)
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument(
+        "--input-root-mode",
+        choices=["auto", "lane_canonical_root", "rebuilt_truth_bundle_root"],
+        default="auto",
+        help=(
+            "Interpretation of --input-root. lane_canonical_root disables recursive bundle discovery "
+            "so nested bundle caches under raw source trees are ignored."
+        ),
+    )
     ap.add_argument("--ckpt-id", default="")
     ap.add_argument(
         "--name-ckpt",
@@ -183,7 +195,7 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Write only canonical x/y/y_pred ensemble arrays and skip duplicate "
+            "Write only canonical x/x_interp/y/y_pred ensemble arrays and skip duplicate "
             "x_*/y_*/y_pred_* member views. Defaults to slim output."
         ),
     )
@@ -272,7 +284,8 @@ def main() -> None:
         else:
             date_step_pairs = [(d, s) for d in dates for s in steps]
 
-        bundle_map = discover_bundles(input_root)
+        recursive_bundle_search = args.input_root_mode != "lane_canonical_root"
+        bundle_map = discover_bundles(input_root, recursive=recursive_bundle_search)
         if not bundle_map:
             raise SystemExit(f"No bundle files found in {input_root}")
 
@@ -342,8 +355,8 @@ def main() -> None:
                         output_weather_states=output_weather_states,
                     )
 
+                    x_members.append(x[0])
                     if keep_outputs:
-                        x_members.append(x[0])
                         y_members.append(None if y is None else y[0, 0])
                         if y is None:
                             members_missing_target.append(m)
@@ -352,14 +365,31 @@ def main() -> None:
 
                     del x, y, y_pred
 
-                if keep_outputs:
-                    _clear_rank0_write_markers(out_path)
-                    x_stack = np.stack(x_members, axis=0)[None, ...]
-                    yp_stack = np.stack(yp_members, axis=0)[None, ...]
-                    y_stack = None
-                    used_missing_target_unsafe = False
-                    ds = None
+                x_stack = np.stack(x_members, axis=0)[None, ...]
+                x_interp_stack = None
+                yp_stack = None
+                y_stack = None
+                used_missing_target_unsafe = False
+                ds = None
+                try:
                     try:
+                        x_interp_stack = _compute_x_interp_for_export(
+                            inference_model=inference_model,
+                            x=x_stack,
+                            device=device,
+                            model_comm_group=model_comm_group,
+                        )
+                    except RuntimeError as exc:
+                        if "cannot export x_interp" not in str(exc):
+                            raise
+                        x_interp_stack = None
+                        print(
+                            f"WARNING date={date} step={step}: skipping x_interp export because the "
+                            f"inference model does not expose interpolation hooks ({exc})."
+                        )
+                    if keep_outputs:
+                        _clear_rank0_write_markers(out_path)
+                        yp_stack = np.stack(yp_members, axis=0)[None, ...]
                         if any(y is not None for y in y_members):
                             template = next(y for y in y_members if y is not None)
                             y_filled = [
@@ -386,19 +416,22 @@ def main() -> None:
                                 "Treat this file as prediction-only and non-canonical for truth-aware evaluation."
                             )
 
-                        ds = build_predictions_dataset(
-                            x=x_stack,
-                            y=y_stack,
-                            y_pred=yp_stack,
-                            lon_lres=lon_lres,
-                            lat_lres=lat_lres,
-                            lon_hres=lon_hres,
-                            lat_hres=lat_hres,
-                            weather_states=weather_states,
-                            dates=None,
-                            member_ids=members,
-                            include_member_views=not args.slim_output,
-                        )
+                        build_dataset_kwargs = {
+                            "x": x_stack,
+                            "y": y_stack,
+                            "y_pred": yp_stack,
+                            "lon_lres": lon_lres,
+                            "lat_lres": lat_lres,
+                            "lon_hres": lon_hres,
+                            "lat_hres": lat_hres,
+                            "weather_states": weather_states,
+                            "dates": None,
+                            "member_ids": members,
+                            "include_member_views": not args.slim_output,
+                        }
+                        if "x_interp" in inspect.signature(build_predictions_dataset).parameters:
+                            build_dataset_kwargs["x_interp"] = x_interp_stack
+                        ds = build_predictions_dataset(**build_dataset_kwargs)
                         if used_missing_target_unsafe:
                             ds.attrs["missing_target_policy"] = "all_nan_due_to_allow_missing_target_unsafe"
                         ds = ds.assign_coords(sample=[0])
@@ -421,6 +454,7 @@ def main() -> None:
                         ds.attrs["output_weather_states"] = ",".join(
                             str(v) for v in ds["weather_state"].values.tolist()
                         )
+                        ds.attrs["x_interp_exported"] = int(x_interp_stack is not None)
                         ds.attrs["slim_output"] = int(bool(args.slim_output))
 
                         if out_path.exists():
@@ -440,13 +474,25 @@ def main() -> None:
 
                         done_files += 1
                         print(f"[{done_files}/{total_files}] wrote {out_path}")
-                    except BaseException as exc:
+                except BaseException as exc:
+                    if keep_outputs:
                         _write_rank0_failure_marker(out_path, exc)
-                        raise
-                    finally:
-                        if ds is not None:
-                            ds.close()
-                        del ds, x_stack, y_stack, yp_stack, x_members, y_members, yp_members, source_paths, members_missing_target
+                    raise
+                finally:
+                    if ds is not None:
+                        ds.close()
+                    del (
+                        ds,
+                        x_stack,
+                        x_interp_stack,
+                        y_stack,
+                        yp_stack,
+                        x_members,
+                        y_members,
+                        yp_members,
+                        source_paths,
+                        members_missing_target,
+                    )
 
                 gc.collect()
                 _wait_for_rank0_write(

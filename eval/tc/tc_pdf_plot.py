@@ -33,11 +33,11 @@ warnings.filterwarnings(
 sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 np.seterr(divide="ignore", invalid="ignore")
 
-OPER_KEY = "OPER_O320_0001"
-REFERENCE_ORDER = ["ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"]
 REFERENCE_STYLES = {
     "ENFO_O320_0001": {"label": "enfo_o320", "color": "black", "linestyle": "-.", "linewidth": 2},
+    "ENFO_O48_0001": {"label": "enfo_o48", "color": "black", "linestyle": "-.", "linewidth": 2},
     "EEFO_O96_0001": {"label": "eefo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
+    "ENFO_O96_0001": {"label": "enfo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
     "ENFO_O320_ip6y": {"label": "ip6y", "color": "orange", "linestyle": ":", "linewidth": 2},
 }
 
@@ -198,10 +198,10 @@ def _extreme_fraction_wind(vals: np.ndarray, wind_gt: float) -> float:
     return float(np.mean(vals > wind_gt))
 
 
-def _curve_label(curve_key: str, exp_labels: dict[str, str]) -> str:
+def _curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
     if curve_key in REFERENCE_STYLES:
         return REFERENCE_STYLES[curve_key]["label"]
-    if curve_key == OPER_KEY:
+    if curve_key == oper_key:
         return "OPER AN"
     if curve_key in exp_labels:
         return exp_labels[curve_key]
@@ -286,12 +286,13 @@ def plot_event_curves(
     return_stats: bool = False,
 ) -> plt.Figure | tuple[plt.Figure, dict]:
     exp_labels = exp_labels or {}
-    curve_order = [curve_key for curve_key in curve_order if curve_key in curves and curve_key != OPER_KEY]
+    oper_key = cfg.analysis
+    curve_order = [curve_key for curve_key in curve_order if curve_key in curves and curve_key != oper_key]
     ml_like_keys = [curve_key for curve_key in curve_order if curve_key not in REFERENCE_STYLES]
     ml_palette = cm.batlow(np.linspace(0, 1, max(1, len(ml_like_keys))))
     ml_indices = {curve_key: idx for idx, curve_key in enumerate(ml_like_keys)}
 
-    oper_curve = curves[OPER_KEY]
+    oper_curve = curves[oper_key]
     oper_msl = _finite_1d(oper_curve.msl)
     oper_wind = _finite_1d(oper_curve.wind)
 
@@ -340,12 +341,12 @@ def plot_event_curves(
         },
     }
     extreme_series: dict[str, tuple[np.ndarray, np.ndarray]] = {
-        OPER_KEY: (oper_msl, oper_wind),
+        oper_key: (oper_msl, oper_wind),
     }
 
     for curve_key in curve_order:
         curve = curves[curve_key]
-        label = _curve_label(curve_key, exp_labels)
+        label = _curve_label(curve_key, exp_labels, oper_key=oper_key)
         style = _curve_style(
             curve_key,
             ml_palette=ml_palette,
@@ -422,7 +423,7 @@ def plot_event_curves(
     axs[0].set_ylim(*cfg.mslp_ylim)
     axs[0].set_xlabel("Mean Sea Level Pressure (hPa)", fontsize=14)
     axs[0].set_ylabel("Normalized Probability Density", fontsize=14)
-    axs[0].set_title("Normalized (by AN O320) Distribution MSLP", fontsize=14)
+    axs[0].set_title("Normalized (by analysis) Distribution MSLP", fontsize=14)
     axs[0].legend()
 
     axs[1].plot(
@@ -436,7 +437,7 @@ def plot_event_curves(
     axs[1].set_ylim(*cfg.wind_ylim)
     axs[1].set_xlabel("10m wind speed (m/s)", fontsize=14)
     axs[1].set_ylabel("Normalized Probability Density", fontsize=14)
-    axs[1].set_title("Normalized (by AN O320) Distribution 10m Wind Speed", fontsize=14)
+    axs[1].set_title("Normalized (by analysis) Distribution 10m Wind Speed", fontsize=14)
     axs[1].legend()
 
     fig.suptitle(cfg.plot_title)
@@ -474,7 +475,7 @@ def plot_event(
         ml_exps=ml_exps,
         support_mode=support_mode,
     )
-    curve_order = [*ml_exps, *REFERENCE_ORDER]
+    curve_order = [*ml_exps, *cfg.reference_expids]
     return plot_event_curves(
         cfg,
         curves=curves,

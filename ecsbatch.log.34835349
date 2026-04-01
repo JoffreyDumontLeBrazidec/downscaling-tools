@@ -1,0 +1,38 @@
+[ECMWF-INFO -sbatch] - -------------------------------------------------------------------------------------
+[ECMWF-INFO -sbatch] -  This is the ECMWF jobfilter
+[ECMWF-INFO -sbatch] -  +++ Please report issues using the Support portal +++
+[ECMWF-INFO -sbatch] -  +++ https://support.ecmwf.int                     +++
+[ECMWF-INFO -sbatch] -  /usr/local/bin/ecsbatch: size: 53801, mtime: Tue Nov 25 12:31:30 2025
+[ECMWF-INFO -sbatch] - -------------------------------------------------------------------------------------
+[ECMWF-INFO -sbatch] - Time at submit: Mon Mar 30 15:59:36 2026 (1774886376.6979628) on ac6-102.bullx:/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools, std(out|err): (/proc/2729826/fd/pipe:[535477418]|/dev/pts/113)
+[ECMWF-INFO -sbatch] - --- SLURM VARIABLES ---
+[ECMWF-INFO -sbatch] - SLURM_GPUS_PER_NODE=1
+[ECMWF-INFO -sbatch] - SLURM_NNODES=1
+[ECMWF-INFO -sbatch] - EC_CLUSTER=ac
+[ECMWF-INFO -sbatch] - SLURM_EXPORT_ENV=ALL
+[ECMWF-INFO -sbatch] - SBATCH_EXPORT=NONE
+[ECMWF-INFO -sbatch] - -----------------------
+[ECMWF-INFO -sbatch] - jobscript: /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/jobscripts/submit/20260330/manual_95a07500_new_o48_o96_20260330_full_eval_autonomous_storms_step024.sbatch
+[ECMWF-INFO -sbatch] - --- SCRIPT OPTIONS ---
+[ECMWF-INFO -sbatch] - #SBATCH --job-name=o48_storms024_95a07500
+[ECMWF-INFO -sbatch] - #SBATCH --qos=nf
+[ECMWF-INFO -sbatch] - #SBATCH --time=06:00:00
+[ECMWF-INFO -sbatch] - #SBATCH --cpus-per-task=8
+[ECMWF-INFO -sbatch] - #SBATCH --mem=128G
+[ECMWF-INFO -sbatch] - #SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+[ECMWF-INFO -sbatch] - -----------------------
+[ECMWF-INFO -sbatch] - --- POST-PROCESSED OPTIONS ---
+[ECMWF-INFO -sbatch] - ARG --positional=['/home/ecm5702/dev/jobscripts/submit/20260330/manual_95a07500_new_o48_o96_20260330_full_eval_autonomous_storms_step024.sbatch']
+[ECMWF-INFO -sbatch] - ARG --cpus_per_task=8
+[ECMWF-INFO -sbatch] - ARG --dependency=afterok:34835326
+[ECMWF-INFO -sbatch] - ARG --job_name=o48_storms024_95a07500
+[ECMWF-INFO -sbatch] - ARG --output=/home/ecm5702/perm/eval/%x_%j.out
+[ECMWF-INFO -sbatch] - ARG --qos=nf
+[ECMWF-INFO -sbatch] - ARG --time=06:00:00
+[ECMWF-INFO -sbatch] - ARG --mem=128G
+[ECMWF-INFO -sbatch] - ------------------------------
+[ECMWF-INFO -sbatch] - jobtag: ecm5702-o48_storms_4_95a07500-1x8-/home/ecm5702/perm/eval/o48_storms_4_95a07500__JOBID_.out
+[ECMWF-INFO -sbatch] - ['/usr/bin/sbatch', '--cpus-per-task=8', '--dependency=afterok:34835326', '--job-name=o48_storms024_95a07500', '--output=/home/ecm5702/perm/eval/%x_%j.out', '--qos=nf', '--time=06:00:00', '--mem=128G', '--licenses=h2resw01', '--export=EC_user_time_limit=06:00:00', '/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/jobscripts/submit/20260330/manual_95a07500_new_o48_o96_20260330_full_eval_autonomous_storms_step024.sbatch']
+[ECMWF-INFO -sbatch] - sbatch executed on ac
+[ECMWF-INFO -sbatch] - Job queued on ac using method local
+[ECMWF-INFO -sbatch] - Submitted batch job 34835349

@@ -51,6 +51,13 @@ def add_member_views(ds: xr.Dataset) -> xr.Dataset:
         elif "y_0" not in ds:
             ds["y_0"] = ds["y"]
             ds["y_0"].attrs.update(ds["y"].attrs)
+    if "x_interp" in ds and "ensemble_member" in ds["x_interp"].dims:
+        for i in range(ds["x_interp"].sizes["ensemble_member"]):
+            name = f"x_interp_{i}"
+            if name in ds:
+                continue
+            ds[name] = ds["x_interp"].isel(ensemble_member=i)
+            ds[name].attrs.update(ds["x_interp"].attrs)
     if "y_pred" in ds and "ensemble_member" in ds["y_pred"].dims:
         for i in range(ds["y_pred"].sizes["ensemble_member"]):
             name = f"y_pred_{i}"
@@ -109,6 +116,7 @@ def build_predictions_dataset(
     weather_states: Sequence[str],
     dates: Sequence | None,
     member_ids: Sequence[int],
+    x_interp: np.ndarray | None = None,
     include_member_views: bool = True,
 ) -> xr.Dataset:
     dates = np.asarray(dates) if dates is not None else np.arange(x.shape[0])
@@ -135,6 +143,29 @@ def build_predictions_dataset(
         "lon_hres": (["grid_point_hres"], lon_hres),
         "lat_hres": (["grid_point_hres"], lat_hres),
     }
+    if x_interp is not None:
+        if x_interp.ndim != 4:
+            raise ValueError(f"Unsupported x_interp shape {x_interp.shape}. Expected 4D array.")
+        if x_interp.shape[0] != x.shape[0]:
+            raise ValueError(
+                f"x_interp sample dimension ({x_interp.shape[0]}) does not match x sample dimension ({x.shape[0]})."
+            )
+        if x_interp.shape[1] != len(member_ids):
+            raise ValueError(
+                f"x_interp ensemble dimension ({x_interp.shape[1]}) does not match member_ids length ({len(member_ids)})."
+            )
+        if x_interp.shape[2] != lon_hres.shape[0]:
+            raise ValueError(
+                f"x_interp hres grid dimension ({x_interp.shape[2]}) does not match lon_hres length ({lon_hres.shape[0]})."
+            )
+        if x_interp.shape[3] != len(weather_states):
+            raise ValueError(
+                f"x_interp weather-state dimension ({x_interp.shape[3]}) does not match weather_states length ({len(weather_states)})."
+            )
+        ds_vars["x_interp"] = (
+            ["sample", "ensemble_member", "grid_point_hres", "weather_state"],
+            x_interp,
+        )
     if y is not None:
         if y.ndim == 3:
             y_dims = ["sample", "grid_point_hres", "weather_state"]
@@ -163,6 +194,10 @@ def build_predictions_dataset(
     ds["x"].attrs["lat"] = "lat_lres"
     ds["y_pred"].attrs["lon"] = "lon_hres"
     ds["y_pred"].attrs["lat"] = "lat_hres"
+    if "x_interp" in ds:
+        ds["x_interp"].attrs["lon"] = "lon_hres"
+        ds["x_interp"].attrs["lat"] = "lat_hres"
+        ds["x_interp"].attrs["long_name"] = "low-resolution inputs interpolated to the high-resolution output grid"
     if "y" in ds:
         ds["y"].attrs["lon"] = "lon_hres"
         ds["y"].attrs["lat"] = "lat_hres"
