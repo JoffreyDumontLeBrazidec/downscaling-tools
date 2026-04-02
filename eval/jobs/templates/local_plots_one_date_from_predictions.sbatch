@@ -11,12 +11,17 @@
 #   the directives below stay cross-cluster-compatible for deliberate direct
 #   `sbatch`, but the preferred helper path patches them to a host-safe CPU
 #   posture (`nf` without GPUs on AC, `ng` with `--gpus-per-node=0` on AG).
+#
+# Canonical host/env rule for new-stack O1280 work:
+#   - AG login host -> `/home/ecm5702/dev/.ds-ag/bin/activate`
+#   - AC login host -> `/home/ecm5702/dev/.ds-dyn/bin/activate`
+# Never reuse the env choice from the wrong host family.
 
 #SBATCH --job-name=local_plots_one_date
 #SBATCH --qos=ng
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --gpus-per-node=1
 #SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
 
@@ -70,8 +75,12 @@ case "${CLUSTER}" in
     PYTHON=/home/ecm5702/dev/.ds-ag/bin/python
     ;;
 esac
+[[ -x "${PYTHON}" ]] || die "Expected host-matched Python not found: ${PYTHON}"
 
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+export TORCHINDUCTOR_COMPILE_THREADS="${TORCHINDUCTOR_COMPILE_THREADS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
 echo "[INFO] cluster=${CLUSTER} host=${HOST_SHORT}"
 echo "[INFO] run_root=${RUN_ROOT}"

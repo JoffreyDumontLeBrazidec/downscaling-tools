@@ -144,9 +144,9 @@ def test_o48_o96_helper_proxy_render_uses_truth_bundle_stage(tmp_path: Path):
     assert 'EXPECTED_LANE="o48_o96"' in sigma_text
     assert 'SIGMAS="0.02,0.05,0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000"' in sigma_text
     assert 'CKPT_NAME="anemoi-by_step-epoch_013-step_100000.ckpt"' in sigma_text
-    assert 'NAME_FILTER="95a07500"' in loss_text
-    assert 'REGION_NAMES="amazon_forest,eastern_us,idalia,himalayas,southeast_asia,central_africa"' in regional_text
-    assert 'REGION_NAMES="eastern_us,idalia"' in storm_text
+    assert 'NAME_FILTER="95a07500,o48_o96"' in loss_text
+    assert 'REGION_NAMES="amazon_forest_core,eastern_us_coast,andes_central,himalayas_central,maritime_continent,congo_basin"' in regional_text
+    assert 'REGION_NAMES="eastern_us_coast,idalia_center"' in storm_text
     assert 'PREDICTIONS_DIR="' in spectra_text
     assert "phase=proxy" in result.stdout
 

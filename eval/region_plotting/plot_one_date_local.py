@@ -35,7 +35,12 @@ def _scalar_text(ds: xr.Dataset, name: str) -> str:
 
 
 def _default_region_for_grid(grid: str) -> str:
-    return "amazon_forest_central" if str(grid).strip() == "O1280" else "amazon_forest"
+    grid = str(grid).strip()
+    if grid == "O1280":
+        return "amazon_forest_central"
+    if grid == "O96":
+        return "amazon_forest_core"
+    return "amazon_forest"
 
 
 def _write_one_date_manifest(

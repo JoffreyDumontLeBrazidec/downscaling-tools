@@ -39,7 +39,7 @@ BUNDLE_PAIRS="${BUNDLE_PAIRS:-}"
 MEMBERS="${MEMBERS:-}"                               # blank => phase default (member 1)
 
 MLFLOW_EXPERIMENT_DIR="${MLFLOW_EXPERIMENT_DIR:-/home/ecm5702/scratch/aifs/logs/mlflow/909682684414341917}"
-TRAINING_RUN_FILTER="${TRAINING_RUN_FILTER:-}"       # blank => defaults to checkpoint short
+TRAINING_RUN_FILTER="${TRAINING_RUN_FILTER:-}"       # blank => defaults to checkpoint short,lane
 TRAINING_RUN_MIN_STEPS="${TRAINING_RUN_MIN_STEPS:-0}"
 
 SIGMAS="${SIGMAS:-0.02,0.05,0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000}"
@@ -54,12 +54,12 @@ LOCAL_PLOT_OUT_SUBDIR="${LOCAL_PLOT_OUT_SUBDIR:-local_plots_one_date}"
 RUN_REGIONAL_SUITES="${RUN_REGIONAL_SUITES:-1}"
 REGIONAL_SUITE_DATE="${REGIONAL_SUITE_DATE:-}"       # blank => prefer 20250928 when available
 REGIONAL_SUITE_STEPS="${REGIONAL_SUITE_STEPS:-24,48,120}"
-REGIONAL_SUITE_REGION_NAMES="${REGIONAL_SUITE_REGION_NAMES:-amazon_forest,eastern_us,idalia,himalayas,southeast_asia,central_africa}"
+REGIONAL_SUITE_REGION_NAMES="${REGIONAL_SUITE_REGION_NAMES:-amazon_forest_core,eastern_us_coast,andes_central,himalayas_central,maritime_continent,congo_basin}"
 REGIONAL_SUITE_MODEL_VARIABLES="${REGIONAL_SUITE_MODEL_VARIABLES:-x_0,x_interp_0,y_0,y_pred_0,residuals_0,residuals_pred_0}"
 REGIONAL_SUITE_OUT_PREFIX="${REGIONAL_SUITE_OUT_PREFIX:-local_plots_regions}"
 
 RUN_STORM_PLOTS="${RUN_STORM_PLOTS:-1}"
-STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-eastern_us,idalia}"
+STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-eastern_us_coast,idalia_center}"
 STORM_PLOT_OUT_PREFIX="${STORM_PLOT_OUT_PREFIX:-storm_local_plots}"
 
 SPECTRA_METHOD="${SPECTRA_METHOD:-auto}"             # auto | proxy | ecmwf

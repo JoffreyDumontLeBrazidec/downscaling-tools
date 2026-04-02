@@ -24,7 +24,20 @@ LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 DEFAULT_MODEL_VARIABLES = ["x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0"]
-DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "msl", "z_500", "u_850", "v_850", "t_850"]
+DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "msl", "tp", "z_500", "u_850", "v_850", "t_850"]
+
+# O96-scale crops for o48->o96 evaluation. These are intentionally tighter than the
+# older broad boxes so O96 structure can look smooth and spatially coherent while the
+# O48 input remains visibly coarse/blocky. They emphasize terrain, coastline/island
+# structure, rainforest convection, and tropical-cyclone-sensitive flow.
+O96_INTERESTING_REGIONS: dict[str, list[float]] = {
+    "amazon_forest_core": [-8.0, 2.0, -72.0, -62.0],
+    "congo_basin": [-5.0, 5.0, 15.0, 25.0],
+    "andes_central": [-34.0, -26.0, -74.0, -66.0],
+    "himalayas_central": [30.0, 35.0, 80.0, 90.0],
+    "maritime_continent": [-2.0, 8.0, 108.0, 118.0],
+    "eastern_us_coast": [30.0, 40.0, -82.0, -72.0],
+}
 
 # Curated "interesting" O1280 regions discovered from the 2026-02-27 analysis workflow.
 O1280_INTERESTING_REGIONS: dict[str, list[float]] = {
@@ -40,8 +53,26 @@ O1280_INTERESTING_REGIONS: dict[str, list[float]] = {
     "japan_hokkaido": [37.5, 45.5, 134.5, 146.5],
 }
 
+# Tighter crops for o1280->o2560 residual-focused inspection. These aim to reduce
+# large synoptic context and emphasize terrain/coastline/island structure where
+# x_interp versus high-resolution truth/prediction differences should be easier to see.
+O1280_DETAIL_REGIONS: dict[str, list[float]] = {
+    "tibet_karakoram_core": [34.5, 38.5, 78.5, 84.5],
+    "andes_central_core": [-35.5, -31.5, -72.5, -68.5],
+    "greenland_south_fjords": [60.0, 63.5, -49.5, -44.5],
+    "horn_of_africa_highlands": [7.0, 11.5, 38.0, 43.5],
+    "zagros_core": [32.0, 36.5, 48.0, 54.5],
+    "rockies_front_range": [42.0, 46.0, -110.0, -105.0],
+    "himalayas_west_core": [32.0, 36.0, 72.0, 78.0],
+    "new_zealand_north_core": [-39.0, -35.0, 173.0, 178.0],
+    "hawaii_big_island_core": [18.0, 21.5, -157.5, -154.0],
+    "hokkaido_core": [41.0, 44.5, 140.0, 145.5],
+}
+
 PREDICTION_REGION_BOXES: dict[str, list[float]] = {
+    **O96_INTERESTING_REGIONS,
     **O1280_INTERESTING_REGIONS,
+    **O1280_DETAIL_REGIONS,
     "amazon_forest": [-15.0, 5.0, -75.0, -45.0],
     "eastern_us": [25.0, 45.0, -90.0, -70.0],
     "himalayas": [25.0, 40.0, 75.0, 100.0],
@@ -180,6 +211,8 @@ def _region_boxes_for_names(region_names: list[str] | None, *, grid: str) -> dic
 
     if grid == "O1280":
         return O1280_INTERESTING_REGIONS
+    if grid == "O96":
+        return O96_INTERESTING_REGIONS
 
     return {"amazon_forest": [-15.0, 5.0, -75.0, -45.0]}
 

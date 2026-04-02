@@ -22,8 +22,8 @@
 #
 # Resource baselines (empirical):
 #   O320 five-date:  --mem=128G --time=04:00:00
-#   O1280 five-date: --mem=256G --time=06:00:00
-#   O1280 regridded: --mem=256G --time=06:00:00
+#   O1280 prediction-only TC PDF: --mem=128G --time=06:00:00 on AC `nf`
+#   raise above 128G only when a measured queue/memory decision is recorded explicitly
 #
 # Submission compatibility note:
 #   direct sbatch is still allowed, but raw AC `qos=ng` with `--gpus-per-node=0` can fail with `QOSMinGRES`.

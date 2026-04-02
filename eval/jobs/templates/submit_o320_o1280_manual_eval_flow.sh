@@ -10,6 +10,11 @@
 #   5) TC evaluation (auto: native on AG, regridded on AC),
 # with `afterok` dependencies across the chain.
 #
+# Canonical host/env rule for this lane:
+#   - AG login host -> new-stack env `/home/ecm5702/dev/.ds-ag/bin/activate`
+#   - AC login host -> new-stack env `/home/ecm5702/dev/.ds-dyn/bin/activate`
+# Never copy the env choice from another host family.
+#
 # Usage:
 #   bash submit_o320_o1280_manual_eval_flow.sh
 
@@ -51,6 +56,10 @@ STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-idalia,franklin}"
 STORM_PLOT_OUT_PREFIX="${STORM_PLOT_OUT_PREFIX:-tc_local_plots}"
 RUN_TC_CONTOUR_PLOTS="${RUN_TC_CONTOUR_PLOTS:-1}"   # 1 => render contour-style TC suites for selected steps
 TC_CONTOUR_OUT_PREFIX="${TC_CONTOUR_OUT_PREFIX:-tc_contour_plots}"
+RUN_TC_THREE_ROUTE_COMPARE="${RUN_TC_THREE_ROUTE_COMPARE:-0}"  # 1 => select representative TC cases and render all three TC routes
+TC_THREE_ROUTE_OUT_DIR="${TC_THREE_ROUTE_OUT_DIR:-${RUN_ROOT}/tc_three_route_compare}"
+TC_THREE_ROUTE_EVENTS="${TC_THREE_ROUTE_EVENTS:-idalia,franklin}"
+TC_THREE_ROUTE_SELECTION_METRIC="${TC_THREE_ROUTE_SELECTION_METRIC:-maxwind}"
 
 SPECTRA_METHOD="${SPECTRA_METHOD:-auto}"             # auto | proxy | ecmwf
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded
@@ -62,6 +71,8 @@ NO_SUBMIT="${NO_SUBMIT:-0}"                          # 1 => render only
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"              # 1 => overwrite rendered files
 SUBMIT_ROOT="${SUBMIT_ROOT:-/home/ecm5702/dev/jobscripts/submit}"
 PROFILE_PYTHON="${PROFILE_PYTHON:-}"                 # optional override for checkpoint_profile
+O1280_PLOT_MEM="${O1280_PLOT_MEM:-256G}"            # high-memory default for O1280 local/regional/storm six-panel CPU follow-ups
+O1280_TC_MEM="${O1280_TC_MEM:-128G}"                # prediction-only TC PDFs/contours on AC nf should stay within the tested 128G posture
 ###############################################################################
 
 PROJECT_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
@@ -195,6 +206,8 @@ require_bool "${RUN_TC_CONTOUR_PLOTS}"
 [[ "${RUN_SUFFIX}" =~ ^[A-Za-z0-9._-]*$ ]] || die "Unsafe RUN_SUFFIX: ${RUN_SUFFIX}"
 [[ "${RUN_ID_OVERRIDE}" =~ ^[A-Za-z0-9._-]*$ ]] || die "Unsafe RUN_ID_OVERRIDE: ${RUN_ID_OVERRIDE}"
 [[ "${PREBUILT_BUNDLE_ROOT}" =~ ^[A-Za-z0-9._/:-]*$ ]] || die "Unsafe PREBUILT_BUNDLE_ROOT: ${PREBUILT_BUNDLE_ROOT}"
+[[ "${O1280_PLOT_MEM}" =~ ^[0-9]+[KMGTP]$ ]] || die "O1280_PLOT_MEM must look like 256G (got '${O1280_PLOT_MEM}')"
+[[ "${O1280_TC_MEM}" =~ ^[0-9]+[KMGTP]$ ]] || die "O1280_TC_MEM must look like 128G (got '${O1280_TC_MEM}')"
 if [[ "${PHASE}" == "continue-full" && -z "${RUN_ID_OVERRIDE}" ]]; then
   die "PHASE=continue-full requires RUN_ID_OVERRIDE so the full run reuses the proxy run id."
 fi
@@ -209,12 +222,21 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
+case "${HOST_FAMILY}" in
+  ac)
+    EXPECTED_PROFILE_PYTHON="/home/ecm5702/dev/.ds-dyn/bin/python"
+    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-dyn"
+    ;;
+  ag)
+    EXPECTED_PROFILE_PYTHON="/home/ecm5702/dev/.ds-ag/bin/python"
+    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-ag"
+    ;;
+esac
+
 if [[ -z "${PROFILE_PYTHON}" ]]; then
-  if [[ "${HOST_FAMILY}" == "ac" ]]; then
-    PROFILE_PYTHON="/home/ecm5702/dev/.ds-dyn/bin/python"
-  else
-    PROFILE_PYTHON="/home/ecm5702/dev/.ds-ag/bin/python"
-  fi
+  PROFILE_PYTHON="${EXPECTED_PROFILE_PYTHON}"
+elif [[ "${PROFILE_PYTHON}" != "${EXPECTED_PROFILE_PYTHON}" ]]; then
+  die "Host/env mismatch for o320->o1280: ${HOST_FAMILY} requires ${EXPECTED_PROFILE_PYTHON}, got ${PROFILE_PYTHON}"
 fi
 [[ -x "${PROFILE_PYTHON}" ]] || die "PROFILE_PYTHON is not executable: ${PROFILE_PYTHON}"
 
@@ -254,6 +276,7 @@ CHECKPOINT_SHORT="${PROFILE_FIELDS[5]}"
 
 [[ "${LANE}" == "o320_o1280" ]] || die "Expected o320_o1280 checkpoint lane, got ${LANE}"
 [[ "${PROFILE_HOST_FAMILY}" == "${HOST_FAMILY}" ]] || die "Checkpoint-profile host mismatch: expected ${HOST_FAMILY}, got ${PROFILE_HOST_FAMILY}"
+[[ "${RECOMMENDED_VENV}" == "${EXPECTED_NEW_STACK_VENV}" ]] || die "Host/env mismatch for o320->o1280: ${HOST_FAMILY} requires ${EXPECTED_NEW_STACK_VENV}, checkpoint_profile recommended ${RECOMMENDED_VENV}"
 
 if [[ -n "${MEMBERS}" ]]; then
   EFFECTIVE_MEMBERS="${MEMBERS}"
@@ -508,6 +531,7 @@ PREDICT_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_predict.sbatch"
 LOCAL_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_local_plots.sbatch"
 SPECTRA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_spectra.sbatch"
 TC_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_eval.sbatch"
+TC_THREE_ROUTE_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_three_route_compare.sbatch"
 REGIONAL_SCRIPTS=()
 STORM_SCRIPTS=()
 TC_CONTOUR_SCRIPTS=()
@@ -562,6 +586,9 @@ if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   TARGET_SCRIPTS=("${BUILD_SCRIPT}" "${TARGET_SCRIPTS[@]}")
 fi
 TARGET_SCRIPTS+=("${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}")
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  TARGET_SCRIPTS+=("${TC_THREE_ROUTE_SCRIPT}")
+fi
 for target in "${TARGET_SCRIPTS[@]}"; do
   if [[ -e "${target}" && "${ALLOW_OVERWRITE}" -ne 1 ]]; then
     die "Refusing to overwrite existing generated file: ${target} (set ALLOW_OVERWRITE=1 to replace)"
@@ -588,6 +615,9 @@ done
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   cp "${TC_CONTOUR_TEMPLATE}" "${tc_contour_script}"
 done
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  cp "${TC_THREE_ROUTE_TEMPLATE}" "${TC_THREE_ROUTE_SCRIPT}"
+fi
 
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   set_var "${BUILD_SCRIPT}" STACK_FLAVOR "${STACK_FLAVOR}"
@@ -636,6 +666,7 @@ set_var "${LOCAL_SCRIPT}" OUT_SUBDIR "${LOCAL_PLOT_OUT_SUBDIR}"
 set_var "${LOCAL_SCRIPT}" EXPECTED_COUNT "${RESOLVED_LOCAL_PLOT_EXPECTED_COUNT}"
 set_var "${LOCAL_SCRIPT}" MODEL_VARIABLES "${REGIONAL_SUITE_MODEL_VARIABLES}"
 set_sbatch_directive "${LOCAL_SCRIPT}" job-name "o1280_local_${CHECKPOINT_SHORT}"
+set_sbatch_directive "${LOCAL_SCRIPT}" mem "${O1280_PLOT_MEM}"
 
 set_var "${TC_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
 set_var "${TC_SCRIPT}" RUN_ID "${RUN_ID}"
@@ -644,6 +675,7 @@ set_var "${TC_SCRIPT}" EVENTS "${TC_EVENTS}"
 set_var "${TC_SCRIPT}" SUPPORT_MODE "${RESOLVED_TC_SUPPORT_MODE}"
 set_var "${TC_SCRIPT}" EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
 set_sbatch_directive "${TC_SCRIPT}" job-name "o1280_tc_${CHECKPOINT_SHORT}"
+set_sbatch_directive "${TC_SCRIPT}" mem "${O1280_TC_MEM}"
 
 if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   set_var "${SPECTRA_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
@@ -676,6 +708,7 @@ for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
   set_var "${regional_script}" SUITE_KIND "regions"
   set_var "${regional_script}" MODEL_VARIABLES "${REGIONAL_SUITE_MODEL_VARIABLES}"
   set_sbatch_directive "${regional_script}" job-name "o1280_regions${step_padded}_${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${regional_script}" mem "${O1280_PLOT_MEM}"
 done
 
 for storm_script in "${STORM_SCRIPTS[@]}"; do
@@ -689,6 +722,7 @@ for storm_script in "${STORM_SCRIPTS[@]}"; do
   set_var "${storm_script}" SUITE_KIND "storm"
   set_var "${storm_script}" MODEL_VARIABLES "${REGIONAL_SUITE_MODEL_VARIABLES}"
   set_sbatch_directive "${storm_script}" job-name "o1280_storms${step_padded}_${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${storm_script}" mem "${O1280_PLOT_MEM}"
 done
 
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
@@ -700,7 +734,22 @@ for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   set_var "${tc_contour_script}" OUT_DIR "${RUN_ROOT}/${TC_CONTOUR_OUT_PREFIX}_step${step_padded}"
   set_var "${tc_contour_script}" REGION_NAMES "${STORM_PLOT_REGIONS}"
   set_sbatch_directive "${tc_contour_script}" job-name "o1280_tcmap${step_padded}_${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${tc_contour_script}" mem "${O1280_TC_MEM}"
 done
+
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  set_var "${TC_THREE_ROUTE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" BUNDLE_DIR "${BUNDLE_DIR}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" CHECKPOINT_REF "${RESOLVED_CKPT_PATH}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" OUT_DIR "${TC_THREE_ROUTE_OUT_DIR}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" EVENTS "${TC_THREE_ROUTE_EVENTS}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" SELECTION_METRIC "${TC_THREE_ROUTE_SELECTION_METRIC}"
+  set_var "${TC_THREE_ROUTE_SCRIPT}" MODEL_VARIABLES "${REGIONAL_SUITE_MODEL_VARIABLES}"
+  set_sbatch_directive "${TC_THREE_ROUTE_SCRIPT}" job-name "o1280_tc3cmp_${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${TC_THREE_ROUTE_SCRIPT}" mem "${O1280_PLOT_MEM}"
+fi
 
 if [[ "${HOST_FAMILY}" == "ac" ]]; then
   CPU_QOS="nf"
@@ -760,9 +809,17 @@ if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
 fi
 
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
-  bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
+  if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}" "${TC_THREE_ROUTE_SCRIPT}"
+  else
+    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
+  fi
 else
-  bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
+  if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+    bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}" "${TC_THREE_ROUTE_SCRIPT}"
+  else
+    bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
+  fi
 fi
 
 echo "[o1280-flow] checkpoint=${RESOLVED_CKPT_PATH}"
@@ -775,6 +832,8 @@ echo "[o1280-flow] bundle_dir=${BUNDLE_DIR}"
 echo "[o1280-flow] use_prebuilt_bundles=${USE_PREBUILT_BUNDLES}"
 echo "[o1280-flow] run_id=${RUN_ID}"
 echo "[o1280-flow] run_root=${RUN_ROOT}"
+echo "[o1280-flow] o1280_plot_mem=${O1280_PLOT_MEM}"
+echo "[o1280-flow] o1280_tc_mem=${O1280_TC_MEM}"
 echo "[o1280-flow] dates=${RESOLVED_DATES}"
 echo "[o1280-flow] steps=${RESOLVED_STEPS}"
 echo "[o1280-flow] bundle_pairs=${RESOLVED_BUNDLE_PAIRS:-none}"
@@ -790,6 +849,10 @@ echo "[o1280-flow] run_storm_plots=${RUN_STORM_PLOTS}"
 echo "[o1280-flow] storm_plot_regions=${STORM_PLOT_REGIONS}"
 echo "[o1280-flow] run_tc_contour_plots=${RUN_TC_CONTOUR_PLOTS}"
 echo "[o1280-flow] tc_contour_out_prefix=${TC_CONTOUR_OUT_PREFIX}"
+echo "[o1280-flow] run_tc_three_route_compare=${RUN_TC_THREE_ROUTE_COMPARE}"
+echo "[o1280-flow] tc_three_route_out_dir=${TC_THREE_ROUTE_OUT_DIR}"
+echo "[o1280-flow] tc_three_route_events=${TC_THREE_ROUTE_EVENTS}"
+echo "[o1280-flow] tc_three_route_selection_metric=${TC_THREE_ROUTE_SELECTION_METRIC}"
 echo "[o1280-flow] spectra_method=${RESOLVED_SPECTRA_METHOD}"
 echo "[o1280-flow] tc_support_mode=${RESOLVED_TC_SUPPORT_MODE}"
 echo "[o1280-flow] generated_scripts:"
@@ -809,6 +872,9 @@ done
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   echo "  - ${tc_contour_script}"
 done
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  echo "  - ${TC_THREE_ROUTE_SCRIPT}"
+fi
 
 SBATCH_ARGS=()
 if [[ "${HOLD}" == "1" ]]; then
@@ -869,9 +935,17 @@ for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   echo "[o1280-flow] ${tc_contour_submit}"
 done
 
+tc_three_route_job=""
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  tc_three_route_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${TC_THREE_ROUTE_SCRIPT}")"
+  tc_three_route_job="$(extract_job_id "${tc_three_route_submit}")"
+  echo "[o1280-flow] ${tc_three_route_submit}"
+fi
+
 regional_job_summary="${regional_jobs[*]:-skipped}"
 storm_job_summary="${storm_jobs[*]:-skipped}"
 tc_contour_job_summary="${tc_contour_jobs[*]:-skipped}"
+tc_three_route_job_summary="${tc_three_route_job:-skipped}"
 monitor_jobs=()
 if [[ -n "${build_job}" ]]; then
   monitor_jobs+=("${build_job}")
@@ -880,6 +954,9 @@ monitor_jobs+=("${predict_job}" "${local_job}" "${spectra_job}" "${tc_job}")
 monitor_jobs+=("${regional_jobs[@]}")
 monitor_jobs+=("${storm_jobs[@]}")
 monitor_jobs+=("${tc_contour_jobs[@]}")
+if [[ -n "${tc_three_route_job}" ]]; then
+  monitor_jobs+=("${tc_three_route_job}")
+fi
 monitor_job_csv="$(IFS=,; echo "${monitor_jobs[*]}")"
 GENERATED_SCRIPT_LINES=""
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
@@ -888,6 +965,9 @@ fi
 for script_path in "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"; do
   GENERATED_SCRIPT_LINES+="  - ${script_path}"$'\n'
 done
+if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
+  GENERATED_SCRIPT_LINES+="  - ${TC_THREE_ROUTE_SCRIPT}"$'\n'
+fi
 
 cat <<EOF
 

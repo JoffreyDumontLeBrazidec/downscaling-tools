@@ -61,19 +61,36 @@ preflight_summary
 - `local_plots_one_date_from_predictions.sbatch`
   - **Canonical one-date local-plot template — works on both AC and AG.**
   - Renders the standard `local_plots_one_date/` tree from an existing `predictions_*.nc` run root using `plot_one_date_local`.
+  - Enforces the host/env rule explicitly: `ag -> /home/ecm5702/dev/.ds-ag/bin/activate`, `ac -> /home/ecm5702/dev/.ds-dyn/bin/activate`.
+  - Uses a higher default memory posture for O1280 plot-heavy work (`256G`).
   - Preferred launch path for the `o320 -> o1280` weak-agent route is the combined helper below, which patches the CPU scheduler posture automatically.
+- `tc_three_route_compare_from_run.sbatch`
+  - **Canonical representative intermediate-state TC route-compare template for `o320 -> o1280`.**
+  - Selects one representative case per requested event from an existing full predictions tree, then renders:
+    - storm-centered six-panel local plots,
+    - contour-style six-panel TC plots,
+    - O96-style center-track `tcstyle` plus `regionstyle` plots from a cached intermediate bundle.
+  - This is a separate intermediate-state diagnostic, not part of the default prediction-only TC package.
+  - Uses the same host/env rule explicitly: `ag -> .ds-ag`, `ac -> .ds-dyn`.
+  - Uses a high-memory O1280 posture (`256G`) and keeps the GPU requirement because route 3 rebuilds a cached intermediate trajectory.
 
 ### TC Evaluation
 - `tc_eval_from_predictions.sbatch`
-  - **Canonical TC evaluation template — works on both AC and AG.**
+  - **Canonical TC PDF template — works on both AC and AG.**
   - Generates normalized TC PDF plots from `predictions_*.nc`.
   - Uses `eval/tc/plot_pdf_tc_from_predictions.py` from this repo.
+  - This is a prediction-only CPU path: no generation and no intermediate-state rebuild.
   - Supports `native` and `regridded` modes (`regridded` requires metview, AC-only).
   - Checks TC reference data exists; points to request script if missing.
   - Preferred submit helper:
     - `eval/jobs/templates/submit_tc_eval_from_predictions.sh`
     - default auto profile: `ac -> qos=nf with no GPU request`, `ag -> qos=ng with --gpus-per-node=0`
-    - leaves template memory/time untouched unless `TC_SUBMIT_MEM_OVERRIDE` or `TC_SUBMIT_TIME_OVERRIDE` is set
+    - on AC, keep the tested prediction-only posture within `128G` unless a different queue decision is recorded
+- `tc_contour_suite_from_predictions.sbatch`
+  - **Canonical TC contour template from predictions.**
+  - Renders contour-style storm-centered TC plots from one `predictions_*.nc` file.
+  - This is also a prediction-only CPU path: no generation and no intermediate-state rebuild.
+  - In the `o320 -> o1280` lane helper, AC submissions are patched to `qos=nf` with no GPU request and the tested `128G` TC posture.
 
 ### Spectra
 - `scoreboard_write_from_predictions.sbatch`
@@ -127,7 +144,10 @@ preflight_summary
   - Default policy:
     - AG submit host → proxy spectra + native TC
     - AC submit host → ECMWF spectra + regridded TC
-  - Enforces the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`) and supports render-only mode via `NO_SUBMIT=1`.
+  - Enforces the host/env rule explicitly for future agents: `ag -> .ds-ag`, `ac -> .ds-dyn`.
+  - Enforces the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`) and a high-memory default for O1280 plot-heavy CPU follow-ups (`256G`).
+  - Optionally stages a representative three-route TC compare via `RUN_TC_THREE_ROUTE_COMPARE=1`, using `tc_three_route_compare_from_run.sbatch`.
+  - Supports render-only mode via `NO_SUBMIT=1`.
 - `submit_tc_eval_from_predictions.sh`
   - Login-node helper for standalone TC reruns on an existing predictions tree.
   - Renders a host-safe copy of `tc_eval_from_predictions.sbatch` under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
@@ -184,9 +204,11 @@ These are based on observed job outcomes from the checkpoint-eval-pipeline epic.
 | predict75 (O320, GPU) | 48:00:00 | default | ng | 61/75 in 12h observed; use 48h |
 | predict25 (O1280, GPU) | 24:00:00 | default | ng | ~2-3x slower than O320 |
 | TC eval (O320) | 04:00:00 | 128G | ng | Cross-cluster default uses `gpus-per-node=1` for submission compatibility |
-| TC eval (O1280) | 06:00:00 | 256G | ng | O1280 five-date ten-member |
+| TC eval / contours (O1280, prediction-only) | 06:00:00 | 128G on AC `nf` | nf/ng | CPU-only plotting from predictions; no generation or intermediate rebuild |
 | Spectra ECMWF (AC) | 48:00:00 | 128G | nf | 300 gptosp transforms; resumable |
 | Spectra proxy (AG) | 08:00:00 | 128G | ng | healpy-based, CPU-only |
+| Local or regional plots (O1280) | 06:00:00 | 256G | ng/nf | Use the high-memory default for O1280 local/regional/storm six-panel follow-ups |
+| Representative TC three-route compare (O1280) | 08:00:00 | 256G | ng | GPU job: route 3 builds cached intermediates before plotting |
 
 ## Cluster / QOS Rules
 

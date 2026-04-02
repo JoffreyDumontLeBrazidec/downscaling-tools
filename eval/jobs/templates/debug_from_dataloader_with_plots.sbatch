@@ -6,7 +6,7 @@
 # via `eval.region_plotting.plot_one_date_local`.
 #
 # Designed for the o1280_o2560 lane (256 G model, 4-GPU DDP required) but accepts
-# o96_o320 and o320_o1280 with NTASKS=1 and no EXTRA_PREDICT_FLAGS.
+# o48_o96, o96_o320, and o320_o1280 with NTASKS=1 and no EXTRA_PREDICT_FLAGS.
 #
 # For predict-only (no plots) see:
 #   codex_login_node_templates/strict_debug_from_dataloader.sbatch
@@ -29,7 +29,7 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 STACK_FLAVOR="REPLACE_STACK_FLAVOR"     # new | old
-LANE="REPLACE_LANE"                      # o96_o320 | o320_o1280 | o1280_o2560
+LANE="REPLACE_LANE"                      # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
 SOURCE_HPC="REPLACE_SOURCE_HPC"         # ac | ag | leonardo | jupiter
 
 # Full training checkpoint — used for the predict step.
@@ -53,10 +53,10 @@ MEMBERS="0"
 VALIDATION_FREQUENCY="50h"
 EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
 
-# Number of GPU ranks for srun DDP. Use 4 for o1280_o2560; 1 for o96_o320/o320_o1280.
+# Number of GPU ranks for srun DDP. Use 4 for o1280_o2560; 1 for o48_o96/o96_o320/o320_o1280.
 NTASKS=4
 
-# Lane-specific extra predict flags. Leave empty for o96_o320 / o320_o1280.
+# Lane-specific extra predict flags. Leave empty for o48_o96 / o96_o320 / o320_o1280.
 # For o1280_o2560: EXTRA_PREDICT_FLAGS=(--output-weather-state-mode surface-plus-core-pl --slim-output)
 EXTRA_PREDICT_FLAGS=()
 
@@ -83,7 +83,7 @@ require_choice() {
 }
 
 require_choice "${STACK_FLAVOR}" new old
-require_choice "${LANE}" o96_o320 o320_o1280 o1280_o2560
+require_choice "${LANE}" o48_o96 o96_o320 o320_o1280 o1280_o2560
 require_choice "${SOURCE_HPC}" ac ag leonardo jupiter
 [[ "${CHECKPOINT_REF}" != REPLACE_* ]] || die "Set CHECKPOINT_REF."
 [[ "${CHECKPOINT_SHORT}" != REPLACE_* ]] || die "Set CHECKPOINT_SHORT."
@@ -213,6 +213,7 @@ srun --ntasks="${NTASKS}" --ntasks-per-node="${NTASKS}" \
   --validation-frequency "${VALIDATION_FREQUENCY}" \
   --extra-args-json "${EXTRA_ARGS_JSON}" \
   "${NEW_DEBUG_FLAG[@]}" \
+  --allow-existing-output-dir \
   "${EXTRA_PREDICT_FLAGS[@]}" \
   --out "${PRED_NC}"
 

@@ -261,22 +261,22 @@ def test_select_prediction_variables_accepts_derived_residuals(tmp_path: Path):
 def test_region_boxes_accept_o48_helper_regions():
     boxes = mod._region_boxes_for_names(
         [
-            "amazon_forest",
-            "eastern_us",
-            "idalia",
-            "himalayas",
-            "southeast_asia",
-            "central_africa",
+            "amazon_forest_core",
+            "eastern_us_coast",
+            "andes_central",
+            "himalayas_central",
+            "maritime_continent",
+            "congo_basin",
         ],
         grid="O96",
     )
     assert sorted(boxes) == [
-        "amazon_forest",
-        "central_africa",
-        "eastern_us",
-        "himalayas",
-        "idalia",
-        "southeast_asia",
+        "amazon_forest_core",
+        "andes_central",
+        "congo_basin",
+        "eastern_us_coast",
+        "himalayas_central",
+        "maritime_continent",
     ]
 
 

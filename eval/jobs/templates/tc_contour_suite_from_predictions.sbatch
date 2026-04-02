@@ -4,14 +4,21 @@
 # Renders contour-style storm-centered plots from one predictions file using:
 #   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/region_plotting/plot_tc_contours_from_predictions.py
 #
+# This is a prediction-only CPU plotting path: no generation and no intermediate-state rebuild.
+#
 # Preferred launch path for the `o320 -> o1280` manual-eval lane:
 #   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
+#
+# Canonical host/env rule for new-stack O1280 work:
+#   - AG login host -> `/home/ecm5702/dev/.ds-ag/bin/activate`
+#   - AC login host -> `/home/ecm5702/dev/.ds-dyn/bin/activate`
+# Never reuse the env choice from the wrong host family.
 
 #SBATCH --job-name=tc_contours
 #SBATCH --qos=ng
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --gpus-per-node=1
 #SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
 
@@ -60,8 +67,12 @@ case "${CLUSTER}" in
     PYTHON=/home/ecm5702/dev/.ds-ag/bin/python
     ;;
 esac
+[[ -x "${PYTHON}" ]] || die "Expected host-matched Python not found: ${PYTHON}"
 
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+export TORCHINDUCTOR_COMPILE_THREADS="${TORCHINDUCTOR_COMPILE_THREADS:-1}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
 mkdir -p "${OUT_DIR}" "${RUN_ROOT}/logs"
 
