@@ -163,6 +163,8 @@ def test_predict_from_dataloader_no_members():
 def test_predict_from_bundle_minimal(monkeypatch):
     point_lres = 3
     point_hres = 4
+    monkeypatch.setattr(predict, "open_bundle_dataset", lambda path: xr.Dataset())
+    monkeypatch.setattr(predict, "find_missing_explicit_hres_inputs", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         predict,
         "load_inputs_from_bundle_numpy",
@@ -241,6 +243,65 @@ def test_predict_from_bundle_minimal(monkeypatch):
     assert dates is None
     assert np.allclose(lon_l, np.arange(point_lres))
     assert np.allclose(lat_h, np.arange(point_hres) + 20)
+
+
+def test_predict_from_bundle_rejects_missing_explicit_hres_inputs(tmp_path):
+    bundle_path = tmp_path / "bundle.nc"
+    xr.Dataset(
+        data_vars={
+            "in_lres_b": ("point_lres", np.array([1.0, 2.0, 3.0], dtype=np.float32)),
+            "in_hres_z": ("point_hres", np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float32)),
+        },
+        coords={
+            "point_lres": np.arange(3, dtype=np.int32),
+            "point_hres": np.arange(4, dtype=np.int32),
+            "lat_lres": ("point_lres", np.array([10.0, 11.0, 12.0], dtype=np.float32)),
+            "lon_lres": ("point_lres", np.array([20.0, 21.0, 22.0], dtype=np.float32)),
+            "lat_hres": ("point_hres", np.array([30.0, 31.0, 32.0, 33.0], dtype=np.float32)),
+            "lon_hres": ("point_hres", np.array([40.0, 41.0, 42.0, 43.0], dtype=np.float32)),
+        },
+        attrs={"case_valid_time": "2024-01-01T00:00:00"},
+    ).to_netcdf(bundle_path)
+
+    class _Indices:
+        def __init__(self):
+            self.data = type(
+                "_Data",
+                (),
+                {
+                    "input": [
+                        type("_In", (), {"name_to_index": {"b": 0}}),
+                        type("_In", (), {"name_to_index": {"2t": 0, "z": 1}}),
+                    ]
+                },
+            )
+            self.model = type(
+                "_Model",
+                (),
+                {"output": type("_Out", (), {"name_to_index": {"2t": 0, "msl": 1}})},
+            )
+
+    class _DummyDM:
+        def __init__(self):
+            self.data_indices = _Indices()
+
+    model = _DummyModel(grid_hres=4, n_states=2)
+    dm = _DummyDM()
+
+    with pytest.raises(
+        ValueError,
+        match="Bundle inference is incompatible with this checkpoint/bundle combination",
+    ):
+        predict._predict_from_bundle(
+            inference_model=model,
+            datamodule=dm,
+            device="cpu",
+            bundle_nc=str(bundle_path),
+            member_index=0,
+            extra_args={},
+            precision="fp32",
+            model_comm_group=None,
+        )
 
 
 def test_predict_from_dataloader_forwards_classic_sampling_args():
@@ -349,6 +410,8 @@ def test_resolve_ckpt_path_allows_inference_companion_when_opted_in(tmp_path):
 def test_predict_from_bundle_forwards_classic_sampling_args(monkeypatch):
     point_lres = 3
     point_hres = 4
+    monkeypatch.setattr(predict, "open_bundle_dataset", lambda path: xr.Dataset())
+    monkeypatch.setattr(predict, "find_missing_explicit_hres_inputs", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         predict,
         "load_inputs_from_bundle_numpy",
@@ -658,6 +721,8 @@ def test_predict_from_bundle_applies_output_subset(monkeypatch):
     point_lres = 3
     point_hres = 4
     requested_target_states = []
+    monkeypatch.setattr(predict, "open_bundle_dataset", lambda path: xr.Dataset())
+    monkeypatch.setattr(predict, "find_missing_explicit_hres_inputs", lambda *args, **kwargs: [])
 
     monkeypatch.setattr(
         predict,
@@ -745,3 +810,63 @@ def test_predict_from_bundle_applies_output_subset(monkeypatch):
     assert y_out.shape == (1, 1, point_hres, 3)
     assert y_pred.shape == (1, 1, point_hres, 3)
     assert dates is None
+
+
+def test_predict_build_bundle_forwards_channel_subset_overrides(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def _fake_build_input_bundle_from_grib(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "bundle.nc"
+
+    fake_bundle_module = types.ModuleType("manual_inference.input_data_construction.bundle")
+    fake_bundle_module.build_input_bundle_from_grib = _fake_build_input_bundle_from_grib
+    monkeypatch.setitem(sys.modules, "manual_inference.input_data_construction.bundle", fake_bundle_module)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "predict.py",
+            "build-bundle",
+            "--lres-sfc-grib",
+            "lres_input.grib",
+            "--lres-pl-grib",
+            "lres_input.grib",
+            "--hres-grib",
+            "hres_sfc.grib",
+            "--target-sfc-grib",
+            "target_y.grib",
+            "--lres-sfc-channels",
+            "10u,10v,2t,msl",
+            "--lres-pl-channels",
+            "NONE",
+            "--target-sfc-channels",
+            "10u,10v,2t,msl",
+            "--target-pl-channels",
+            "NONE",
+            "--out",
+            str(tmp_path / "bundle.nc"),
+        ],
+    )
+
+    predict.main()
+
+    assert captured["lres_sfc_channels"] == ["10u", "10v", "2t", "msl"]
+    assert captured["lres_pl_channels"] == []
+    assert captured["target_sfc_channels"] == ["10u", "10v", "2t", "msl"]
+    assert captured["target_pl_channels"] == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", None),
+        ("10u,10v,2t,msl", ["10u", "10v", "2t", "msl"]),
+        ("NONE", []),
+        ("-", []),
+        ("[]", []),
+        ("empty", []),
+    ],
+)
+def test_predict_parse_channel_subset_csv_supports_explicit_empty_override(raw, expected):
+    assert predict._parse_channel_subset_csv(raw) == expected

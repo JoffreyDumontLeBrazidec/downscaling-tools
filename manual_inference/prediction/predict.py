@@ -19,8 +19,12 @@ from manual_inference.checkpoints import (
     instantiate_config,
     to_omegaconf,
 )
+from manual_inference.input_data_construction.bundle import BUNDLE_IMPLICIT_HRES_FEATURES
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle
+from manual_inference.input_data_construction.bundle import find_missing_explicit_hres_inputs
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
+from manual_inference.input_data_construction.bundle import open_bundle_dataset
+from manual_inference.input_data_construction.bundle import parse_channel_subset_csv as _parse_channel_subset_csv
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.dataset import resolve_output_weather_states
@@ -55,6 +59,8 @@ def _rewrite_dataset_paths_in_place(node):
             "/e/data1/jureap-data/ai-ml/datasets/",
             "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets///",
             "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets/",
+            "/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523//",
+            "/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523/",
         )
         for pref in prefixes:
             if node.startswith(pref):
@@ -211,6 +217,45 @@ def _parse_output_weather_states(value: str) -> list[str] | None:
     return requested or None
 
 
+def _validate_bundle_hres_contract(
+    *,
+    bundle=None,
+    bundle_nc=None,
+    name_to_idx_hres: dict[str, int],
+    name_to_idx_out: dict[str, int],
+) -> None:
+    source = bundle if bundle is not None else bundle_nc
+    if source is None:
+        raise TypeError("Either bundle or bundle_nc must be provided")
+    missing_hres = find_missing_explicit_hres_inputs(source, list(name_to_idx_hres.keys()))
+    if not missing_hres:
+        return
+
+    missing_preview = ", ".join(missing_hres[:10])
+    if len(missing_hres) > 10:
+        missing_preview += f", ... ({len(missing_hres)} total)"
+    overlap = sorted(set(name_to_idx_hres) & set(name_to_idx_out))
+    supported_preview = ", ".join(sorted(BUNDLE_IMPLICIT_HRES_FEATURES))
+    if set(name_to_idx_hres) == set(name_to_idx_out):
+        overlap_note = (
+            " The checkpoint's full HRES input channel set matches the model outputs exactly, "
+            "which indicates target-like HRES inputs and is incompatible with forcings-only bundle inference."
+        )
+    elif overlap:
+        overlap_note = (
+            f" The checkpoint's HRES inputs overlap with model outputs on {len(overlap)} channel(s) "
+            f"(for example: {', '.join(overlap[:5])})."
+        )
+    else:
+        overlap_note = ""
+    raise ValueError(
+        "Bundle inference is incompatible with this checkpoint/bundle combination. "
+        f"The bundle loader can synthesize only forcing/static HRES inputs ({supported_preview}); "
+        f"the checkpoint also requires explicit HRES channel(s) that are missing from the bundle: {missing_preview}."
+        f"{overlap_note} Rebuild the bundle with matching in_hres_* fields or use a checkpoint trained with forcings-only HRES inputs."
+    )
+
+
 def _predict_from_dataloader(
     *,
     inference_model,
@@ -321,74 +366,88 @@ def _predict_from_bundle(
 
     name_to_idx_lres = datamodule.data_indices.data.input[0].name_to_index
     name_to_idx_hres = datamodule.data_indices.data.input[1].name_to_index
-    (
-        x_lres_np,
-        x_hres_np,
-        lon_lres,
-        lat_lres,
-        lon_hres,
-        lat_hres,
-    ) = load_inputs_from_bundle_numpy(
-        bundle_nc,
-        name_to_idx_lres,
-        name_to_idx_hres,
-    )
-    x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
-    x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
+    name_to_idx_out = datamodule.data_indices.model.output.name_to_index
 
-    amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
-    amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
+    bundle = open_bundle_dataset(bundle_nc)
+    try:
+        _validate_bundle_hres_contract(
+            bundle=bundle,
+            name_to_idx_hres=name_to_idx_hres,
+            name_to_idx_out=name_to_idx_out,
+        )
+        (
+            x_lres_np,
+            x_hres_np,
+            lon_lres,
+            lat_lres,
+            lon_hres,
+            lat_hres,
+        ) = load_inputs_from_bundle_numpy(
+            bundle,
+            name_to_idx_lres,
+            name_to_idx_hres,
+        )
+        x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
+        x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
 
-    with torch.inference_mode():
-        with torch.autocast(
-            device_type="cuda",
-            dtype=amp_dtype,
-            enabled=amp_enabled,
-        ):
-            pred = inference_model.predict_step(
-                x_in[0:1],
-                x_in_hres[0:1],
-                model_comm_group=model_comm_group,
-                extra_args=extra_args,
-            )
+        amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
+        amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
-    weather_states_full = list(datamodule.data_indices.model.output.name_to_index.keys())
-    weather_states, selected_indices = resolve_output_weather_states(
-        weather_states=weather_states_full,
-        mode=output_weather_state_mode,
-        explicit_weather_states=output_weather_states,
-    )
+        with torch.inference_mode():
+            with torch.autocast(
+                device_type="cuda",
+                dtype=amp_dtype,
+                enabled=amp_enabled,
+            ):
+                pred = inference_model.predict_step(
+                    x_in[0:1],
+                    x_in_hres[0:1],
+                    model_comm_group=model_comm_group,
+                    extra_args=extra_args,
+                )
 
-    x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
-    pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
-    dates = None
+        weather_states_full = list(name_to_idx_out.keys())
+        weather_states, selected_indices = resolve_output_weather_states(
+            weather_states=weather_states_full,
+            mode=output_weather_state_mode,
+            explicit_weather_states=output_weather_states,
+        )
 
-    x_np, _ = extract_filtered_input_from_output(
-        x_np, datamodule.data_indices.data.input[0].name_to_index, datamodule.data_indices.model.output.name_to_index
-    )
-    x_np = x_np[..., selected_indices]
+        x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
+        pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
+        dates = None
 
-    y_np = None
-    target_np, found_target_channels = extract_target_from_bundle(bundle_nc, weather_states)
-    if target_np is not None:
-        y_np = target_np[None, None, ...]
-        if found_target_channels < len(weather_states):
-            print(
-                f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
-                f"(missing channels will be NaN in y)."
-            )
+        x_np, _ = extract_filtered_input_from_output(
+            x_np, datamodule.data_indices.data.input[0].name_to_index, name_to_idx_out
+        )
+        x_np = x_np[..., selected_indices]
 
-    return (
-        x_np[None, ...],
-        y_np,
-        pred_np[None, None, ...],
-        lon_lres,
-        lat_lres,
-        lon_hres,
-        lat_hres,
-        weather_states,
-        dates,
-    )
+        y_np = None
+        target_np, found_target_channels = extract_target_from_bundle(bundle, weather_states)
+        if target_np is not None:
+            y_np = target_np[None, None, ...]
+            if found_target_channels < len(weather_states):
+                print(
+                    f"Bundle target coverage: {found_target_channels}/{len(weather_states)} weather states "
+                    f"(missing channels will be NaN in y)."
+                )
+
+        return (
+            x_np[None, ...],
+            y_np,
+            pred_np[None, None, ...],
+            lon_lres,
+            lat_lres,
+            lon_hres,
+            lat_hres,
+            weather_states,
+            dates,
+        )
+    finally:
+        try:
+            bundle.close()
+        except Exception:
+            pass
 
 
 def _compute_x_interp_for_export(
@@ -595,8 +654,33 @@ def main() -> None:
     p_bundle_build.add_argument("--lres-sfc-grib", required=True)
     p_bundle_build.add_argument("--lres-pl-grib", required=True)
     p_bundle_build.add_argument("--hres-grib", required=True)
+    p_bundle_build.add_argument(
+        "--hres-static-grib",
+        default="",
+        help="Optional GRIB file used only for high-resolution static fields such as z and lsm.",
+    )
     p_bundle_build.add_argument("--target-sfc-grib", default="")
     p_bundle_build.add_argument("--target-pl-grib", default="")
+    p_bundle_build.add_argument(
+        "--lres-sfc-channels",
+        default="",
+        help="Optional CSV override for low-resolution surface bundle channels.",
+    )
+    p_bundle_build.add_argument(
+        "--lres-pl-channels",
+        default="",
+        help="Optional CSV override for low-resolution pressure-level bundle channels.",
+    )
+    p_bundle_build.add_argument(
+        "--target-sfc-channels",
+        default="",
+        help="Optional CSV override for target high-resolution surface bundle channels.",
+    )
+    p_bundle_build.add_argument(
+        "--target-pl-channels",
+        default="",
+        help="Optional CSV override for target high-resolution pressure-level bundle channels.",
+    )
     p_bundle_build.add_argument("--allow-missing-target", action="store_true")
     p_bundle_build.add_argument(
         "--allow-missing-target-unsafe",
@@ -627,19 +711,27 @@ def main() -> None:
             lres_sfc_grib=args.lres_sfc_grib,
             lres_pl_grib=args.lres_pl_grib,
             hres_grib=args.hres_grib,
+            hres_static_grib=args.hres_static_grib or None,
             out_nc=args.out,
             step_hours=args.step_hours,
             member=args.member,
             target_sfc_grib=args.target_sfc_grib or None,
             target_pl_grib=args.target_pl_grib or None,
             require_target_fields=not args.allow_missing_target_unsafe,
+            lres_sfc_channels=_parse_channel_subset_csv(args.lres_sfc_channels),
+            lres_pl_channels=_parse_channel_subset_csv(args.lres_pl_channels),
+            target_sfc_channels=_parse_channel_subset_csv(args.target_sfc_channels),
+            target_pl_channels=_parse_channel_subset_csv(args.target_pl_channels),
         )
         print(f"Saved bundle: {out}")
         return
 
     resolved_ckpt = _resolve_ckpt_path(args.name_ckpt, args.ckpt_root)
     if args.device == "cuda" and not torch.cuda.is_available():
-        args.device = "cpu"
+        raise SystemExit(
+            "Requested --device cuda, but CUDA is not available on this host. "
+            "Refusing to fall back to CPU for diffusion sampling."
+        )
     args.device = _resolve_device(args.device, local_rank)
     if str(args.device).startswith("cuda"):
         torch.cuda.set_device(int(str(args.device).split(":")[1]))

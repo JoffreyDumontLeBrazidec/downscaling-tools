@@ -42,6 +42,22 @@ OPTIONAL_ZERO_LRES_SFC_VARS = frozenset(
     }
 )
 
+BUNDLE_IMPLICIT_HRES_FEATURES = frozenset(
+    {
+        "z",
+        "lsm",
+        "cos_latitude",
+        "sin_latitude",
+        "cos_longitude",
+        "sin_longitude",
+        "cos_julian_day",
+        "sin_julian_day",
+        "cos_local_time",
+        "sin_local_time",
+        "insolation",
+    }
+)
+
 
 def split_level_channel(name: str) -> tuple[str, int | None]:
     match = re.match(r"^(.*)_([0-9]+)$", name)
@@ -60,11 +76,21 @@ def _cleanup_empty_cfgrib_indexes(grib_path: str | Path) -> None:
             continue
 
 
-def _open_cfgrib_dataset(grib_path: str | Path) -> xr.Dataset:
+def _open_cfgrib_dataset(
+    grib_path: str | Path,
+    *,
+    filter_by_keys: Mapping[str, str] | None = None,
+) -> xr.Dataset:
     _cleanup_empty_cfgrib_indexes(grib_path)
     import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
 
-    return ekd.from_source("file", str(grib_path)).to_xarray(engine="cfgrib")
+    backend_kwargs = {}
+    if filter_by_keys:
+        backend_kwargs["filter_by_keys"] = dict(filter_by_keys)
+    return ekd.from_source("file", str(grib_path)).to_xarray(
+        engine="cfgrib",
+        backend_kwargs=backend_kwargs,
+    )
 
 
 def _infer_target_gribs_from_hres(
@@ -184,6 +210,70 @@ def _borrow_or_open_bundle_dataset(
     return open_bundle_dataset(bundle_nc), True
 
 
+def _extract_explicit_hres_input_channel(bundle: xr.Dataset, name: str) -> np.ndarray | None:
+    n_points = int(bundle.sizes["point_hres"])
+    base, level = split_level_channel(name)
+    candidate_names = [f"in_hres_{name}"]
+    if base != name:
+        candidate_names.append(f"in_hres_{base}")
+
+    for var_name in candidate_names:
+        if var_name not in bundle:
+            continue
+        da = bundle[var_name]
+        if level is not None:
+            selected = False
+            for lev_name in ("level", "target_level", "isobaricInhPa"):
+                if lev_name not in da.coords:
+                    continue
+                levels = np.asarray(da[lev_name].values).astype(int).tolist()
+                if int(level) not in levels:
+                    break
+                da = da.sel({lev_name: int(level)})
+                selected = True
+                break
+            if not selected and any(n in da.coords for n in ("level", "target_level", "isobaricInhPa")):
+                continue
+
+        ok = True
+        for dim in list(da.dims):
+            if dim == "point_hres":
+                continue
+            if da.sizes[dim] != 1:
+                ok = False
+                break
+            da = da.isel({dim: 0})
+        if not ok:
+            continue
+
+        vals = np.asarray(da.values, dtype=np.float32).reshape(-1)
+        if vals.size != n_points:
+            continue
+        return vals
+    return None
+
+
+def find_missing_explicit_hres_inputs(
+    bundle_nc: str | Path | xr.Dataset,
+    requested_hres_names: Sequence[str],
+) -> list[str]:
+    bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
+    try:
+        missing: list[str] = []
+        for name in requested_hres_names:
+            if name in BUNDLE_IMPLICIT_HRES_FEATURES:
+                continue
+            if _extract_explicit_hres_input_channel(bundle, name) is None:
+                missing.append(name)
+        return missing
+    finally:
+        if should_close:
+            try:
+                bundle.close()
+            except Exception:
+                pass
+
+
 def _get_pl_level_coord(ds_pl: xr.Dataset) -> str:
     for name in ds_pl.coords:
         if "isobaric" in name.lower() or name.lower() == "level":
@@ -206,6 +296,44 @@ def _extract_pl_field(ds_pl: xr.Dataset, base: str, level: int) -> np.ndarray:
     if int(level) not in levels:
         raise KeyError(f"Missing PL level {level} for variable {base}")
     return np.asarray(ds_pl[base].sel({level_coord: int(level)}).values, dtype=np.float32).squeeze()
+
+
+def _normalize_channel_subset(
+    channels: Sequence[str] | None,
+    *,
+    default: Sequence[str],
+) -> list[str]:
+    if channels is None:
+        return list(default)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in channels:
+        name = str(raw).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    return normalized
+
+
+def parse_channel_subset_csv(raw: str) -> list[str] | None:
+    """Parse a CSV channel string with explicit-empty sentinel support.
+
+    Returns ``None`` for empty/whitespace input (meaning "use defaults"),
+    ``[]`` for sentinel values ``NONE``, ``empty``, ``-``, ``[]``
+    (meaning "explicitly no channels"), or a list of stripped channel names.
+    """
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if stripped.lower() in {"none", "empty", "-", "[]"}:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+# Keep underscore alias so in-module callers and tests using the old name
+# continue to work without a separate migration.
+_parse_channel_subset_csv = parse_channel_subset_csv
 
 
 def _load_constant_forcings_for_size(
@@ -409,7 +537,10 @@ def load_inputs_from_bundle_numpy(
 
         # Load LR constant forcings (z, lsm, …) from npz if available for this grid size.
         _lres_npz_constants: dict[str, np.ndarray] = {}
-        _lres_npz_candidates = [constant_forcings_npz] + list(FALLBACK_CONSTANT_FORCINGS_NPZ)
+        _lres_npz_candidates = (
+            ([constant_forcings_npz] if constant_forcings_npz is not None else [])
+            + list(FALLBACK_CONSTANT_FORCINGS_NPZ)
+        )
         _lres_npz_constants, _, _ = _load_constant_forcings_for_size(
             _lres_npz_candidates, lat_lres.size
         )
@@ -503,6 +634,17 @@ def load_inputs_from_bundle_numpy(
             constant_forcings_npz=constant_forcings_npz,
         )
         x_hres[:, :] = x_hres_tensor[0, 0, 0].numpy()
+        for name, idx in name_to_idx_hres.items():
+            if name in BUNDLE_IMPLICIT_HRES_FEATURES:
+                continue
+            raw = _extract_explicit_hres_input_channel(bundle, name)
+            if raw is None:
+                raise KeyError(
+                    f"Missing explicit high-res input channel '{name}'. "
+                    "Bundle inference can synthesize only forcing/static HRES inputs by default; "
+                    "non-forcing HRES channels must be stored explicitly as in_hres_* fields in the bundle."
+                )
+            x_hres[:, idx] = np.asarray(raw, dtype=np.float32).reshape(-1)
 
         return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
     finally:
@@ -653,7 +795,12 @@ def _to_2d_level_points(da: xr.DataArray) -> np.ndarray:
     return np.asarray(da.values, dtype=np.float32)
 
 
-def _select_step(ds: xr.Dataset, step_hours: int | None) -> xr.Dataset:
+def _select_step(
+    ds: xr.Dataset,
+    step_hours: int | None,
+    *,
+    allow_any_single_step: bool = False,
+) -> xr.Dataset:
     if step_hours is None:
         return ds
     if "step" not in ds.dims and "step" not in ds.coords:
@@ -662,6 +809,10 @@ def _select_step(ds: xr.Dataset, step_hours: int | None) -> xr.Dataset:
     try:
         return ds.sel(step=target)
     except Exception as exc:
+        if allow_any_single_step:
+            step_size = ds.sizes.get("step")
+            if step_size == 1:
+                return ds.isel(step=0)
         raise ValueError(f"Failed to select step={step_hours}h in dataset") from exc
 
 
@@ -670,33 +821,56 @@ def _select_member(
 ) -> xr.Dataset:
     if member is None:
         return ds
+    requested_member = int(member)
+
+    def _fallback_singleton_member(dim_name: str) -> xr.Dataset | None:
+        if ds.sizes.get(dim_name, 0) != 1:
+            return None
+        coord = ds.coords.get(dim_name)
+        if coord is not None:
+            values = np.asarray(coord.values).reshape(-1)
+            if values.size == 1:
+                try:
+                    only_value = int(values[0])
+                except Exception:
+                    only_value = None
+                if allow_missing or (only_value == 0 and requested_member == 1):
+                    return ds.isel({dim_name: 0})
+        if allow_missing:
+            return ds.isel({dim_name: 0})
+        return None
+
     if "number" in ds.coords:
         try:
-            return ds.sel(number=int(member))
+            return ds.sel(number=requested_member)
         except KeyError:
-            if allow_missing and ds.sizes.get("number", 0) == 1:
-                return ds.isel(number=0)
+            fallback = _fallback_singleton_member("number")
+            if fallback is not None:
+                return fallback
             raise
     if "number" in ds.dims:
         try:
-            return ds.sel(number=int(member))
+            return ds.sel(number=requested_member)
         except KeyError:
-            if allow_missing and ds.sizes.get("number", 0) == 1:
-                return ds.isel(number=0)
+            fallback = _fallback_singleton_member("number")
+            if fallback is not None:
+                return fallback
             raise
     if "ensemble_member" in ds.coords:
         try:
-            return ds.sel(ensemble_member=int(member))
+            return ds.sel(ensemble_member=requested_member)
         except KeyError:
-            if allow_missing and ds.sizes.get("ensemble_member", 0) == 1:
-                return ds.isel(ensemble_member=0)
+            fallback = _fallback_singleton_member("ensemble_member")
+            if fallback is not None:
+                return fallback
             raise
     if "ensemble_member" in ds.dims:
         try:
-            return ds.sel(ensemble_member=int(member))
+            return ds.sel(ensemble_member=requested_member)
         except KeyError:
-            if allow_missing and ds.sizes.get("ensemble_member", 0) == 1:
-                return ds.isel(ensemble_member=0)
+            fallback = _fallback_singleton_member("ensemble_member")
+            if fallback is not None:
+                return fallback
             raise
     return ds
 
@@ -706,6 +880,7 @@ def build_input_bundle_from_grib(
     lres_sfc_grib: str | Path,
     lres_pl_grib: str | Path,
     hres_grib: str | Path,
+    hres_static_grib: str | Path | None = None,
     out_nc: str | Path,
     step_hours: int | None = None,
     member: int | None = None,
@@ -713,17 +888,75 @@ def build_input_bundle_from_grib(
     target_sfc_grib: str | Path | None = None,
     target_pl_grib: str | Path | None = None,
     require_target_fields: bool = True,
+    lres_sfc_channels: Sequence[str] | None = None,
+    lres_pl_channels: Sequence[str] | None = None,
+    target_sfc_channels: Sequence[str] | None = None,
+    target_pl_channels: Sequence[str] | None = None,
 ) -> Path:
-    ds_sfc = _open_cfgrib_dataset(lres_sfc_grib)
-    ds_pl = _open_cfgrib_dataset(lres_pl_grib)
-    ds_hres = _open_cfgrib_dataset(hres_grib)
+    default_lres_sfc_channels = (
+        "10u",
+        "10v",
+        "2d",
+        "2t",
+        "cp",
+        "hcc",
+        "lcc",
+        "mcc",
+        "msl",
+        "skt",
+        "sp",
+        "ssrd",
+        "strd",
+        "tcc",
+        "tcw",
+        "tp",
+    )
+    default_lres_pl_channels = ("q", "t", "u", "v", "w", "z")
+    default_target_sfc_channels = ("10u", "10v", "2d", "2t", "msl", "skt", "sp", "tcw")
+    default_target_pl_channels = ("q", "t", "u", "v", "w", "z")
+
+    resolved_lres_sfc_channels = _normalize_channel_subset(
+        lres_sfc_channels,
+        default=default_lres_sfc_channels,
+    )
+    resolved_lres_pl_channels = _normalize_channel_subset(
+        lres_pl_channels,
+        default=default_lres_pl_channels,
+    )
+    resolved_target_sfc_channels = _normalize_channel_subset(
+        target_sfc_channels,
+        default=default_target_sfc_channels,
+    )
+    resolved_target_pl_channels = _normalize_channel_subset(
+        target_pl_channels,
+        default=default_target_pl_channels,
+    )
+
+    # DestinE low-resolution inputs may be packaged as a single mixed-level GRIB.
+    # Reopen the same file with explicit cfgrib level filters so bundle creation
+    # does not depend on pre-splitting surface and pressure-level inputs.
+    ds_sfc = _open_cfgrib_dataset(lres_sfc_grib, filter_by_keys={"typeOfLevel": "surface"})
+    ds_pl = None
+    if resolved_lres_pl_channels:
+        ds_pl = _open_cfgrib_dataset(
+            lres_pl_grib,
+            filter_by_keys={"typeOfLevel": "isobaricInhPa"},
+        )
+    resolved_hres_static_grib = hres_static_grib or hres_grib
+    ds_hres = _open_cfgrib_dataset(resolved_hres_static_grib)
 
     ds_sfc = _select_step(ds_sfc, step_hours)
-    ds_pl = _select_step(ds_pl, step_hours)
-    ds_hres = _select_step(ds_hres, step_hours)
+    if ds_pl is not None:
+        ds_pl = _select_step(ds_pl, step_hours)
+    ds_hres = _select_step(
+        ds_hres,
+        step_hours,
+        allow_any_single_step=bool(hres_static_grib),
+    )
 
     ds_sfc = _select_member(ds_sfc, member)
-    ds_pl = _select_member(ds_pl, member)
+    if ds_pl is not None:
+        ds_pl = _select_member(ds_pl, member)
     ds_hres = _select_member(ds_hres, member, allow_missing=True)
 
     lat_lres = _to_1d_points(ds_sfc["latitude"])
@@ -731,26 +964,26 @@ def build_input_bundle_from_grib(
     lat_hres = _to_1d_points(ds_hres["latitude"])
     lon_hres = _to_1d_points(ds_hres["longitude"])
 
-    level_coord = _get_pl_level_coord(ds_pl)
-    levels = np.asarray(ds_pl[level_coord].values, dtype=np.int32).reshape(-1)
-
     coords = {
         "point_lres": np.arange(lat_lres.shape[0], dtype=np.int32),
         "point_hres": np.arange(lat_hres.shape[0], dtype=np.int32),
-        "level": levels,
         "lat_lres": ("point_lres", lat_lres),
         "lon_lres": ("point_lres", lon_lres),
         "lat_hres": ("point_hres", lat_hres),
         "lon_hres": ("point_hres", lon_hres),
     }
+    if ds_pl is not None:
+        level_coord = _get_pl_level_coord(ds_pl)
+        levels = np.asarray(ds_pl[level_coord].values, dtype=np.int32).reshape(-1)
+        coords["level"] = levels
 
     data_vars = {}
 
     sfc_map = {
-        "u10": "in_lres_10u",
-        "v10": "in_lres_10v",
-        "d2m": "in_lres_2d",
-        "t2m": "in_lres_2t",
+        "10u": "in_lres_10u",
+        "10v": "in_lres_10v",
+        "2d": "in_lres_2d",
+        "2t": "in_lres_2t",
         "cp": "in_lres_cp",
         "hcc": "in_lres_hcc",
         "lcc": "in_lres_lcc",
@@ -764,16 +997,21 @@ def build_input_bundle_from_grib(
         "tcw": "in_lres_tcw",
         "tp": "in_lres_tp",
     }
-    for src, dst in sfc_map.items():
-        if src not in ds_sfc:
+    for src in resolved_lres_sfc_channels:
+        dst = sfc_map.get(src)
+        if dst is None:
+            raise KeyError(f"Unsupported LRES SFC channel requested: {src}")
+        cfgrib_name = SFC_TO_CFGRIB.get(src, src)
+        if cfgrib_name not in ds_sfc:
             if src in OPTIONAL_ZERO_LRES_SFC_VARS:
                 data_vars[dst] = ("point_lres", np.zeros(lat_lres.shape[0], dtype=np.float32))
                 continue
             raise KeyError(f"Missing SFC variable in input: {src}")
-        data_vars[dst] = ("point_lres", _to_1d_points(ds_sfc[src]))
+        data_vars[dst] = ("point_lres", _to_1d_points(ds_sfc[cfgrib_name]))
 
-    pl_vars = ["q", "t", "u", "v", "w", "z"]
-    for v in pl_vars:
+    for v in resolved_lres_pl_channels:
+        if ds_pl is None:
+            raise KeyError(f"Requested PL channel {v} but no pressure-level dataset was loaded.")
         if v not in ds_pl:
             raise KeyError(f"Missing PL variable in input: {v}")
         data_vars[f"in_lres_{v}"] = (("level", "point_lres"), _to_2d_level_points(ds_pl[v]))
@@ -796,33 +1034,37 @@ def build_input_bundle_from_grib(
         ds_target_sfc = _select_step(ds_target_sfc, step_hours)
         ds_target_sfc = _select_member(ds_target_sfc, member, allow_missing=True)
         target_map_sfc = {
-            "u10": "target_hres_10u",
-            "v10": "target_hres_10v",
-            "d2m": "target_hres_2d",
-            "t2m": "target_hres_2t",
+            "10u": "target_hres_10u",
+            "10v": "target_hres_10v",
+            "2d": "target_hres_2d",
+            "2t": "target_hres_2t",
             "msl": "target_hres_msl",
             "skt": "target_hres_skt",
             "sp": "target_hres_sp",
             "tcw": "target_hres_tcw",
         }
-        for src, dst in target_map_sfc.items():
-            if src not in ds_target_sfc:
+        for src in resolved_target_sfc_channels:
+            dst = target_map_sfc.get(src)
+            if dst is None:
+                raise KeyError(f"Unsupported target SFC channel requested: {src}")
+            cfgrib_name = SFC_TO_CFGRIB.get(src, src)
+            if cfgrib_name not in ds_target_sfc:
                 continue
-            vals = _to_1d_points(ds_target_sfc[src])
+            vals = _to_1d_points(ds_target_sfc[cfgrib_name])
             if vals.size != lat_hres.size:
                 raise ValueError(
                     f"Target SFC field {src} point count {vals.size} != point_hres {lat_hres.size}"
                 )
             data_vars[dst] = ("point_hres", vals)
 
-    if target_pl_grib:
+    if target_pl_grib and resolved_target_pl_channels:
         ds_target_pl = _open_cfgrib_dataset(target_pl_grib)
         ds_target_pl = _select_step(ds_target_pl, step_hours)
         ds_target_pl = _select_member(ds_target_pl, member, allow_missing=True)
         level_coord_target = _get_pl_level_coord(ds_target_pl)
         target_levels = np.asarray(ds_target_pl[level_coord_target].values, dtype=np.int32).reshape(-1)
         target_level_coord = target_levels
-        for var in ("q", "t", "u", "v", "w", "z"):
+        for var in resolved_target_pl_channels:
             if var not in ds_target_pl:
                 continue
             vals = _to_2d_level_points(ds_target_pl[var])
@@ -850,11 +1092,17 @@ def build_input_bundle_from_grib(
     bundle.attrs["case_valid_time"] = valid_time
     bundle.attrs["source_lres_sfc"] = str(lres_sfc_grib)
     bundle.attrs["source_lres_pl"] = str(lres_pl_grib)
-    bundle.attrs["source_hres"] = str(hres_grib)
+    bundle.attrs["source_hres"] = str(resolved_hres_static_grib)
+    if hres_static_grib:
+        bundle.attrs["source_hres_static_override"] = str(hres_static_grib)
     if target_sfc_grib:
         bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
     if target_pl_grib:
         bundle.attrs["source_target_pl"] = str(target_pl_grib)
+    bundle.attrs["selected_lres_sfc_channels"] = ",".join(resolved_lres_sfc_channels)
+    bundle.attrs["selected_lres_pl_channels"] = ",".join(resolved_lres_pl_channels)
+    bundle.attrs["selected_target_sfc_channels"] = ",".join(resolved_target_sfc_channels)
+    bundle.attrs["selected_target_pl_channels"] = ",".join(resolved_target_pl_channels)
     bundle.attrs["has_target_hres_fields"] = "yes" if has_target else "no"
     if has_target:
         bundle.attrs["description"] = (
@@ -903,6 +1151,14 @@ def main() -> None:
     parser.add_argument("--lres-pl-grib", required=True)
     parser.add_argument("--hres-grib", required=True)
     parser.add_argument(
+        "--hres-static-grib",
+        default="",
+        help=(
+            "Optional GRIB used only for HRES static/input fields such as z/lsm. "
+            "Defaults to --hres-grib when omitted."
+        ),
+    )
+    parser.add_argument(
         "--target-sfc-grib",
         default="",
         help="Optional high-res surface GRIB containing target/truth fields to store in bundle.",
@@ -911,6 +1167,26 @@ def main() -> None:
         "--target-pl-grib",
         default="",
         help="Optional high-res pressure-level GRIB containing target/truth fields to store in bundle.",
+    )
+    parser.add_argument(
+        "--lres-sfc-channels",
+        default="",
+        help="Optional CSV override for low-resolution surface bundle channels.",
+    )
+    parser.add_argument(
+        "--lres-pl-channels",
+        default="",
+        help="Optional CSV override for low-resolution pressure-level bundle channels.",
+    )
+    parser.add_argument(
+        "--target-sfc-channels",
+        default="",
+        help="Optional CSV override for target high-resolution surface bundle channels.",
+    )
+    parser.add_argument(
+        "--target-pl-channels",
+        default="",
+        help="Optional CSV override for target high-resolution pressure-level bundle channels.",
     )
     parser.add_argument(
         "--allow-missing-target",
@@ -966,6 +1242,7 @@ def main() -> None:
         lres_sfc_grib=args.lres_sfc_grib,
         lres_pl_grib=args.lres_pl_grib,
         hres_grib=args.hres_grib,
+        hres_static_grib=args.hres_static_grib or None,
         out_nc=out_path,
         step_hours=args.step_hours,
         member=args.member,
@@ -973,6 +1250,10 @@ def main() -> None:
         target_sfc_grib=args.target_sfc_grib or None,
         target_pl_grib=args.target_pl_grib or None,
         require_target_fields=not args.allow_missing_target_unsafe,
+        lres_sfc_channels=_parse_channel_subset_csv(args.lres_sfc_channels),
+        lres_pl_channels=_parse_channel_subset_csv(args.lres_pl_channels),
+        target_sfc_channels=_parse_channel_subset_csv(args.target_sfc_channels),
+        target_pl_channels=_parse_channel_subset_csv(args.target_pl_channels),
     )
     print(f"Saved bundle: {out}")
 
