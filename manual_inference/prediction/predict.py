@@ -19,7 +19,14 @@ from manual_inference.checkpoints import (
     instantiate_config,
     to_omegaconf,
 )
-from manual_inference.input_data_construction.bundle import BUNDLE_IMPLICIT_HRES_FEATURES
+from manual_inference.config import BUNDLE_IMPLICIT_HRES_FEATURES
+from manual_inference.config import DATASET_PATH_REWRITE_PREFIXES
+from manual_inference.config import DEFAULT_CKPT_ROOT
+from manual_inference.config import DEFAULT_EXPERIMENTS_DIR
+from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
+
+# Re-export for backward compatibility — external callers import these from here.
+__all__ = ["DEFAULT_EXTRA_ARGS_JSON"]
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle
 from manual_inference.input_data_construction.bundle import find_missing_explicit_hres_inputs
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
@@ -30,9 +37,6 @@ from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICE
 from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction.utils import extract_filtered_input_from_output
 
-DEFAULT_EXTRA_ARGS_JSON = (
-    '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
-)
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -52,19 +56,9 @@ def _rewrite_dataset_paths_in_place(node):
     if isinstance(node, str):
         # Imported checkpoints may carry absolute dataset roots from multiple remote
         # sites. Rewrite those to the canonical local mirror when the target exists.
-        prefixes = (
-            "/leonardo_work/DestE_340_25/ai-ml/datasets///",
-            "/leonardo_work/DestE_340_25/ai-ml/datasets/",
-            "/e/data1/jureap-data/ai-ml/datasets///",
-            "/e/data1/jureap-data/ai-ml/datasets/",
-            "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets///",
-            "/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets/",
-            "/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523//",
-            "/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523/",
-        )
-        for pref in prefixes:
-            if node.startswith(pref):
-                candidate = node.replace(pref, "/home/mlx/ai-ml/datasets/", 1)
+        for remote_prefix, local_prefix in DATASET_PATH_REWRITE_PREFIXES:
+            if node.startswith(remote_prefix):
+                candidate = node.replace(remote_prefix, local_prefix, 1)
                 if os.path.exists(candidate):
                     return candidate
         return node
@@ -160,7 +154,7 @@ def _resolve_ckpt_path(
 
 
 
-def _load_objects(
+def load_objects(
     *,
     ckpt_path: str,
     device: str,
@@ -198,6 +192,10 @@ def _load_objects(
     graph_data = inference_model.graph_data
     datamodule = get_datamodule(config_for_datamodule, graph_data)
     return inference_model, datamodule, dir_exp, name_exp
+
+
+# Backward-compatible alias.
+_load_objects = load_objects
 
 
 def _parse_members(value: str, max_members: int) -> list[int]:
@@ -345,7 +343,7 @@ def _predict_from_dataloader(
     )
 
 
-def _predict_from_bundle(
+def predict_from_bundle(
     *,
     inference_model,
     datamodule,
@@ -448,6 +446,10 @@ def _predict_from_bundle(
             bundle.close()
         except Exception:
             pass
+
+
+# Backward-compatible alias.
+_predict_from_bundle = predict_from_bundle
 
 
 def _compute_x_interp_for_export(
@@ -567,7 +569,7 @@ def _validate_output_path(
 
 def main() -> None:
     ckpt_root_default = os.environ.get(
-        "AIFS_CKPT_ROOT", "/home/ecm5702/scratch/aifs/checkpoint"
+        "AIFS_CKPT_ROOT", DEFAULT_CKPT_ROOT
     )
     parser = argparse.ArgumentParser(description="Generate predictions.nc from a checkpoint.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -851,8 +853,9 @@ def main() -> None:
 
     out_path = args.out
     if not out_path:
+        experiments_dir = os.environ.get("AIFS_EXPERIMENTS_DIR", DEFAULT_EXPERIMENTS_DIR)
         out_path = os.path.join(
-            "/home/ecm5702/hpcperm/experiments", name_exp, "predictions.nc"
+            experiments_dir, name_exp, "predictions.nc"
         )
     out_path = Path(out_path)
     _validate_output_path(

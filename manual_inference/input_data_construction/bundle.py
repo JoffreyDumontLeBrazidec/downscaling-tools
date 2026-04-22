@@ -8,55 +8,24 @@ from typing import Mapping, Sequence
 import numpy as np
 import xarray as xr
 
-DEFAULT_CONSTANT_FORCINGS_NPZ = "/home/ecm5702/hpcperm/data/o320-forcings.npz"
-FALLBACK_CONSTANT_FORCINGS_NPZ = (
-    "/home/ecm5702/hpcperm/data/o48-forcings.npz",
-    "/home/ecm5702/hpcperm/data/o1280-forcings.npz",
-    "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o320.npz",
-    "/home/ecm5702/hpcperm/data/forcings_for_anemoi_inference/forcings_o1280.npz",
-)
+from manual_inference.config import BUNDLE_IMPLICIT_HRES_FEATURES
+from manual_inference.config import DEFAULT_CONSTANT_FORCINGS_NPZ
+from manual_inference.config import DEFAULT_LRES_PL_CHANNELS
+from manual_inference.config import DEFAULT_LRES_SFC_CHANNELS
+from manual_inference.config import DEFAULT_TARGET_PL_CHANNELS
+from manual_inference.config import DEFAULT_TARGET_SFC_CHANNELS
+from manual_inference.config import FALLBACK_CONSTANT_FORCINGS_NPZ
+from manual_inference.config import OPTIONAL_ZERO_LRES_SFC_VARS
+from manual_inference.config import SFC_TO_CFGRIB
 
-SFC_TO_CFGRIB = {
-    "10u": "u10",
-    "10v": "v10",
-    "2d": "d2m",
-    "2t": "t2m",
-    "cp": "cp",
-    "msl": "msl",
-    "skt": "skt",
-    "sp": "sp",
-    "tcw": "tcw",
-    "tp": "tp",
-}
-
-OPTIONAL_ZERO_LRES_SFC_VARS = frozenset(
-    {
-        "cp",
-        "hcc",
-        "lcc",
-        "mcc",
-        "ssrd",
-        "strd",
-        "tcc",
-        "tp",
-    }
-)
-
-BUNDLE_IMPLICIT_HRES_FEATURES = frozenset(
-    {
-        "z",
-        "lsm",
-        "cos_latitude",
-        "sin_latitude",
-        "cos_longitude",
-        "sin_longitude",
-        "cos_julian_day",
-        "sin_julian_day",
-        "cos_local_time",
-        "sin_local_time",
-        "insolation",
-    }
-)
+# Re-export for backward compatibility — external callers import these from here.
+__all__ = [
+    "BUNDLE_IMPLICIT_HRES_FEATURES",
+    "DEFAULT_CONSTANT_FORCINGS_NPZ",
+    "FALLBACK_CONSTANT_FORCINGS_NPZ",
+    "OPTIONAL_ZERO_LRES_SFC_VARS",
+    "SFC_TO_CFGRIB",
+]
 
 
 def split_level_channel(name: str) -> tuple[str, int | None]:
@@ -875,6 +844,168 @@ def _select_member(
     return ds
 
 
+_LRES_SFC_MAP = {
+    "10u": "in_lres_10u",
+    "10v": "in_lres_10v",
+    "2d": "in_lres_2d",
+    "2t": "in_lres_2t",
+    "cp": "in_lres_cp",
+    "hcc": "in_lres_hcc",
+    "lcc": "in_lres_lcc",
+    "mcc": "in_lres_mcc",
+    "msl": "in_lres_msl",
+    "skt": "in_lres_skt",
+    "sp": "in_lres_sp",
+    "ssrd": "in_lres_ssrd",
+    "strd": "in_lres_strd",
+    "tcc": "in_lres_tcc",
+    "tcw": "in_lres_tcw",
+    "tp": "in_lres_tp",
+}
+
+_TARGET_SFC_MAP = {
+    "10u": "target_hres_10u",
+    "10v": "target_hres_10v",
+    "2d": "target_hres_2d",
+    "2t": "target_hres_2t",
+    "msl": "target_hres_msl",
+    "skt": "target_hres_skt",
+    "sp": "target_hres_sp",
+    "tcw": "target_hres_tcw",
+}
+
+
+def _build_lres_sfc_vars(
+    ds_sfc,
+    channels: Sequence[str],
+    lat_lres: np.ndarray,
+) -> dict:
+    data_vars: dict = {}
+    for src in channels:
+        dst = _LRES_SFC_MAP.get(src)
+        if dst is None:
+            raise KeyError(f"Unsupported LRES SFC channel requested: {src}")
+        cfgrib_name = SFC_TO_CFGRIB.get(src, src)
+        if cfgrib_name not in ds_sfc:
+            if src in OPTIONAL_ZERO_LRES_SFC_VARS:
+                data_vars[dst] = ("point_lres", np.zeros(lat_lres.shape[0], dtype=np.float32))
+                continue
+            raise KeyError(f"Missing SFC variable in input: {src}")
+        data_vars[dst] = ("point_lres", _to_1d_points(ds_sfc[cfgrib_name]))
+    return data_vars
+
+
+def _build_lres_pl_vars(
+    ds_pl,
+    channels: Sequence[str],
+) -> dict:
+    data_vars: dict = {}
+    for v in channels:
+        if ds_pl is None:
+            raise KeyError(f"Requested PL channel {v} but no pressure-level dataset was loaded.")
+        if v not in ds_pl:
+            raise KeyError(f"Missing PL variable in input: {v}")
+        data_vars[f"in_lres_{v}"] = (("level", "point_lres"), _to_2d_level_points(ds_pl[v]))
+    return data_vars
+
+
+def _build_target_sfc_vars(
+    ds_target_sfc,
+    channels: Sequence[str],
+    lat_hres: np.ndarray,
+) -> dict:
+    data_vars: dict = {}
+    for src in channels:
+        dst = _TARGET_SFC_MAP.get(src)
+        if dst is None:
+            raise KeyError(f"Unsupported target SFC channel requested: {src}")
+        cfgrib_name = SFC_TO_CFGRIB.get(src, src)
+        if cfgrib_name not in ds_target_sfc:
+            continue
+        vals = _to_1d_points(ds_target_sfc[cfgrib_name])
+        if vals.size != lat_hres.size:
+            raise ValueError(
+                f"Target SFC field {src} point count {vals.size} != point_hres {lat_hres.size}"
+            )
+        data_vars[dst] = ("point_hres", vals)
+    return data_vars
+
+
+def _build_target_pl_vars(
+    ds_target_pl,
+    channels: Sequence[str],
+    lat_hres: np.ndarray,
+) -> tuple[dict, np.ndarray | None]:
+    data_vars: dict = {}
+    level_coord_target = _get_pl_level_coord(ds_target_pl)
+    target_level_coord = np.asarray(ds_target_pl[level_coord_target].values, dtype=np.int32).reshape(-1)
+    for var in channels:
+        if var not in ds_target_pl:
+            continue
+        vals = _to_2d_level_points(ds_target_pl[var])
+        if vals.shape[1] != lat_hres.size:
+            raise ValueError(
+                f"Target PL field {var} point count {vals.shape[1]} != point_hres {lat_hres.size}"
+            )
+        data_vars[f"target_hres_{var}"] = (("target_level", "point_hres"), vals)
+    return data_vars, target_level_coord
+
+
+def _write_bundle_metadata(
+    bundle: xr.Dataset,
+    *,
+    lres_sfc_grib: str | Path,
+    lres_pl_grib: str | Path,
+    hres_grib: str | Path,
+    hres_static_grib: str | Path | None,
+    target_sfc_grib: str | Path | None,
+    target_pl_grib: str | Path | None,
+    resolved_channels: dict[str, Sequence[str]],
+    ds_sfc,
+    step_hours: int | None,
+    member: int | None,
+    has_target: bool,
+    require_target_fields: bool,
+) -> None:
+    valid_time = (
+        str(np.asarray(ds_sfc["valid_time"].values).squeeze())
+        if "valid_time" in ds_sfc
+        else "unknown"
+    )
+    bundle.attrs["case_valid_time"] = valid_time
+    bundle.attrs["source_lres_sfc"] = str(lres_sfc_grib)
+    bundle.attrs["source_lres_pl"] = str(lres_pl_grib)
+    resolved_hres = hres_static_grib or hres_grib
+    bundle.attrs["source_hres"] = str(resolved_hres)
+    if hres_static_grib:
+        bundle.attrs["source_hres_static_override"] = str(hres_static_grib)
+    if target_sfc_grib:
+        bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
+    if target_pl_grib:
+        bundle.attrs["source_target_pl"] = str(target_pl_grib)
+    bundle.attrs["selected_lres_sfc_channels"] = ",".join(resolved_channels["lres_sfc"])
+    bundle.attrs["selected_lres_pl_channels"] = ",".join(resolved_channels["lres_pl"])
+    bundle.attrs["selected_target_sfc_channels"] = ",".join(resolved_channels["target_sfc"])
+    bundle.attrs["selected_target_pl_channels"] = ",".join(resolved_channels["target_pl"])
+    bundle.attrs["has_target_hres_fields"] = "yes" if has_target else "no"
+    if has_target:
+        bundle.attrs["description"] = (
+            "Combined low-res + high-res feature inputs for local inference. "
+            "Includes target_hres_* fields for truth-aware evaluation."
+        )
+    else:
+        bundle.attrs["description"] = (
+            "Combined low-res + high-res feature inputs for local inference. "
+            "Created without target_hres_* fields because --allow-missing-target-unsafe was used. "
+            "Prediction-only and non-canonical for truth-aware evaluation."
+        )
+        bundle.attrs["missing_target_policy"] = "bundle_without_target_hres_due_to_allow_missing_target_unsafe"
+    if step_hours is not None:
+        bundle.attrs["step_hours"] = int(step_hours)
+    if member is not None:
+        bundle.attrs["member"] = int(member)
+
+
 def build_input_bundle_from_grib(
     *,
     lres_sfc_grib: str | Path,
@@ -893,43 +1024,21 @@ def build_input_bundle_from_grib(
     target_sfc_channels: Sequence[str] | None = None,
     target_pl_channels: Sequence[str] | None = None,
 ) -> Path:
-    default_lres_sfc_channels = (
-        "10u",
-        "10v",
-        "2d",
-        "2t",
-        "cp",
-        "hcc",
-        "lcc",
-        "mcc",
-        "msl",
-        "skt",
-        "sp",
-        "ssrd",
-        "strd",
-        "tcc",
-        "tcw",
-        "tp",
-    )
-    default_lres_pl_channels = ("q", "t", "u", "v", "w", "z")
-    default_target_sfc_channels = ("10u", "10v", "2d", "2t", "msl", "skt", "sp", "tcw")
-    default_target_pl_channels = ("q", "t", "u", "v", "w", "z")
-
     resolved_lres_sfc_channels = _normalize_channel_subset(
         lres_sfc_channels,
-        default=default_lres_sfc_channels,
+        default=DEFAULT_LRES_SFC_CHANNELS,
     )
     resolved_lres_pl_channels = _normalize_channel_subset(
         lres_pl_channels,
-        default=default_lres_pl_channels,
+        default=DEFAULT_LRES_PL_CHANNELS,
     )
     resolved_target_sfc_channels = _normalize_channel_subset(
         target_sfc_channels,
-        default=default_target_sfc_channels,
+        default=DEFAULT_TARGET_SFC_CHANNELS,
     )
     resolved_target_pl_channels = _normalize_channel_subset(
         target_pl_channels,
-        default=default_target_pl_channels,
+        default=DEFAULT_TARGET_PL_CHANNELS,
     )
 
     # DestinE low-resolution inputs may be packaged as a single mixed-level GRIB.
@@ -977,44 +1086,9 @@ def build_input_bundle_from_grib(
         levels = np.asarray(ds_pl[level_coord].values, dtype=np.int32).reshape(-1)
         coords["level"] = levels
 
-    data_vars = {}
-
-    sfc_map = {
-        "10u": "in_lres_10u",
-        "10v": "in_lres_10v",
-        "2d": "in_lres_2d",
-        "2t": "in_lres_2t",
-        "cp": "in_lres_cp",
-        "hcc": "in_lres_hcc",
-        "lcc": "in_lres_lcc",
-        "mcc": "in_lres_mcc",
-        "msl": "in_lres_msl",
-        "skt": "in_lres_skt",
-        "sp": "in_lres_sp",
-        "ssrd": "in_lres_ssrd",
-        "strd": "in_lres_strd",
-        "tcc": "in_lres_tcc",
-        "tcw": "in_lres_tcw",
-        "tp": "in_lres_tp",
-    }
-    for src in resolved_lres_sfc_channels:
-        dst = sfc_map.get(src)
-        if dst is None:
-            raise KeyError(f"Unsupported LRES SFC channel requested: {src}")
-        cfgrib_name = SFC_TO_CFGRIB.get(src, src)
-        if cfgrib_name not in ds_sfc:
-            if src in OPTIONAL_ZERO_LRES_SFC_VARS:
-                data_vars[dst] = ("point_lres", np.zeros(lat_lres.shape[0], dtype=np.float32))
-                continue
-            raise KeyError(f"Missing SFC variable in input: {src}")
-        data_vars[dst] = ("point_lres", _to_1d_points(ds_sfc[cfgrib_name]))
-
-    for v in resolved_lres_pl_channels:
-        if ds_pl is None:
-            raise KeyError(f"Requested PL channel {v} but no pressure-level dataset was loaded.")
-        if v not in ds_pl:
-            raise KeyError(f"Missing PL variable in input: {v}")
-        data_vars[f"in_lres_{v}"] = (("level", "point_lres"), _to_2d_level_points(ds_pl[v]))
+    data_vars: dict = {}
+    data_vars.update(_build_lres_sfc_vars(ds_sfc, resolved_lres_sfc_channels, lat_lres))
+    data_vars.update(_build_lres_pl_vars(ds_pl, resolved_lres_pl_channels))
 
     hres_map = {"z": "in_hres_z", "lsm": "in_hres_lsm"}
     for src, dst in hres_map.items():
@@ -1033,46 +1107,14 @@ def build_input_bundle_from_grib(
         ds_target_sfc = _open_cfgrib_dataset(target_sfc_grib)
         ds_target_sfc = _select_step(ds_target_sfc, step_hours)
         ds_target_sfc = _select_member(ds_target_sfc, member, allow_missing=True)
-        target_map_sfc = {
-            "10u": "target_hres_10u",
-            "10v": "target_hres_10v",
-            "2d": "target_hres_2d",
-            "2t": "target_hres_2t",
-            "msl": "target_hres_msl",
-            "skt": "target_hres_skt",
-            "sp": "target_hres_sp",
-            "tcw": "target_hres_tcw",
-        }
-        for src in resolved_target_sfc_channels:
-            dst = target_map_sfc.get(src)
-            if dst is None:
-                raise KeyError(f"Unsupported target SFC channel requested: {src}")
-            cfgrib_name = SFC_TO_CFGRIB.get(src, src)
-            if cfgrib_name not in ds_target_sfc:
-                continue
-            vals = _to_1d_points(ds_target_sfc[cfgrib_name])
-            if vals.size != lat_hres.size:
-                raise ValueError(
-                    f"Target SFC field {src} point count {vals.size} != point_hres {lat_hres.size}"
-                )
-            data_vars[dst] = ("point_hres", vals)
+        data_vars.update(_build_target_sfc_vars(ds_target_sfc, resolved_target_sfc_channels, lat_hres))
 
     if target_pl_grib and resolved_target_pl_channels:
         ds_target_pl = _open_cfgrib_dataset(target_pl_grib)
         ds_target_pl = _select_step(ds_target_pl, step_hours)
         ds_target_pl = _select_member(ds_target_pl, member, allow_missing=True)
-        level_coord_target = _get_pl_level_coord(ds_target_pl)
-        target_levels = np.asarray(ds_target_pl[level_coord_target].values, dtype=np.int32).reshape(-1)
-        target_level_coord = target_levels
-        for var in resolved_target_pl_channels:
-            if var not in ds_target_pl:
-                continue
-            vals = _to_2d_level_points(ds_target_pl[var])
-            if vals.shape[1] != lat_hres.size:
-                raise ValueError(
-                    f"Target PL field {var} point count {vals.shape[1]} != point_hres {lat_hres.size}"
-                )
-            data_vars[f"target_hres_{var}"] = (("target_level", "point_hres"), vals)
+        pl_vars, target_level_coord = _build_target_pl_vars(ds_target_pl, resolved_target_pl_channels, lat_hres)
+        data_vars.update(pl_vars)
 
     has_target = any(name.startswith("target_hres_") for name in data_vars)
     if require_target_fields and not has_target:
@@ -1084,42 +1126,27 @@ def build_input_bundle_from_grib(
     bundle = xr.Dataset(data_vars=data_vars, coords=coords)
     if target_level_coord is not None:
         bundle = bundle.assign_coords(target_level=target_level_coord)
-    valid_time = (
-        str(np.asarray(ds_sfc["valid_time"].values).squeeze())
-        if "valid_time" in ds_sfc
-        else "unknown"
+
+    _write_bundle_metadata(
+        bundle,
+        lres_sfc_grib=lres_sfc_grib,
+        lres_pl_grib=lres_pl_grib,
+        hres_grib=hres_grib,
+        hres_static_grib=hres_static_grib,
+        target_sfc_grib=target_sfc_grib,
+        target_pl_grib=target_pl_grib,
+        resolved_channels={
+            "lres_sfc": resolved_lres_sfc_channels,
+            "lres_pl": resolved_lres_pl_channels,
+            "target_sfc": resolved_target_sfc_channels,
+            "target_pl": resolved_target_pl_channels,
+        },
+        ds_sfc=ds_sfc,
+        step_hours=step_hours,
+        member=member,
+        has_target=has_target,
+        require_target_fields=require_target_fields,
     )
-    bundle.attrs["case_valid_time"] = valid_time
-    bundle.attrs["source_lres_sfc"] = str(lres_sfc_grib)
-    bundle.attrs["source_lres_pl"] = str(lres_pl_grib)
-    bundle.attrs["source_hres"] = str(resolved_hres_static_grib)
-    if hres_static_grib:
-        bundle.attrs["source_hres_static_override"] = str(hres_static_grib)
-    if target_sfc_grib:
-        bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
-    if target_pl_grib:
-        bundle.attrs["source_target_pl"] = str(target_pl_grib)
-    bundle.attrs["selected_lres_sfc_channels"] = ",".join(resolved_lres_sfc_channels)
-    bundle.attrs["selected_lres_pl_channels"] = ",".join(resolved_lres_pl_channels)
-    bundle.attrs["selected_target_sfc_channels"] = ",".join(resolved_target_sfc_channels)
-    bundle.attrs["selected_target_pl_channels"] = ",".join(resolved_target_pl_channels)
-    bundle.attrs["has_target_hres_fields"] = "yes" if has_target else "no"
-    if has_target:
-        bundle.attrs["description"] = (
-            "Combined low-res + high-res feature inputs for local inference. "
-            "Includes target_hres_* fields for truth-aware evaluation."
-        )
-    else:
-        bundle.attrs["description"] = (
-            "Combined low-res + high-res feature inputs for local inference. "
-            "Created without target_hres_* fields because --allow-missing-target-unsafe was used. "
-            "Prediction-only and non-canonical for truth-aware evaluation."
-        )
-        bundle.attrs["missing_target_policy"] = "bundle_without_target_hres_due_to_allow_missing_target_unsafe"
-    if step_hours is not None:
-        bundle.attrs["step_hours"] = int(step_hours)
-    if member is not None:
-        bundle.attrs["member"] = int(member)
 
     out_nc = Path(out_nc)
     out_nc.parent.mkdir(parents=True, exist_ok=True)
