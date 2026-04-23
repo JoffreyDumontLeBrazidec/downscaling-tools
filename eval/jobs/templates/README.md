@@ -34,6 +34,10 @@ preflight_summary
   - Canonical truth-aware bundle-build stage for strict `o320 -> o1280` manual inference.
   - Rebuilds member-step bundle NetCDFs with explicit `target_hres_*` from the raw `eefo_o320` and `enfo_o1280` GRIB inputs.
   - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
+- `build_o1280_o2560_truth_bundles.sbatch`
+  - Canonical truth-aware bundle-build stage for strict `o1280 -> o2560` manual inference.
+  - Rebuilds member-step bundle NetCDFs from the DestinE `o1280` input GRIB plus the colocated `o2560` forcing/truth GRIBs using the maintained surface-only contract.
+  - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
 - `submit_aug26_30_scoreboard_flow.sh`
   - Canonical login-node helper for the full Aug 26-30 production chain.
   - Renders run-local copies of the inference, sigma, and post-writer templates under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
@@ -44,13 +48,15 @@ preflight_summary
   - Supports explicit `BUNDLE_PAIRS=YYYYMMDD:HH,...` subsets so proxy-like scopes can stay on the canonical template.
   - Works for `new` and `old` stack.
   - Enforces fresh run folder and explicit lane/input compatibility.
-  - Allows rebuilt truth-aware bundle roots for `o320 -> o1280` only with explicit `ALLOW_REBUILT_BUNDLE_ROOT=1`.
+  - Allows rebuilt truth-aware bundle roots with explicit `ALLOW_REBUILT_BUNDLE_ROOT=1`.
+  - For `o1280 -> o2560`, now enforces explicit output weather states and `NUM_GPUS_PER_MODEL>=4`.
   - New stack path keeps `y` mandatory in output files.
   - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` so scoreboard reporting can recover exact scope and sampler settings.
 - `strict_manual_predict_one_bundle.sbatch`
   - Single-bundle debug/proof launcher for the same prediction code path.
   - Uses the same repo-owned checkpoint profiling and sampler normalization as the x-bundle launcher.
   - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` for downstream reporting.
+  - Not the maintained proof route for `o1280 -> o2560`; that lane now requires the dedicated helper because the imported checkpoint family needs `4` GPU ranks.
 - `predict_recovery.sbatch`
   - **Recovery for walltime-killed prediction runs.**
   - Auto-detects missing prediction files and relaunches only remaining date/step combos.
@@ -75,6 +81,7 @@ preflight_summary
   - Uses a high-memory O1280 posture (`256G`) and keeps the GPU requirement because route 3 rebuilds a cached intermediate trajectory.
 
 ### TC Evaluation
+For the `o320 -> o1280` lane, treat this prediction-only TC package as part of every standard evaluation run, not as an optional add-on.
 - `tc_eval_from_predictions.sbatch`
   - **Canonical TC PDF template — works on both AC and AG.**
   - Generates normalized TC PDF plots from `predictions_*.nc`.
@@ -100,6 +107,7 @@ preflight_summary
 - `scoreboard_sigma_eval.sbatch`
   - Canonical sigma-evaluator launcher for the Aug 26-30 full scoreboard chain.
   - Uses the repo root dynamically instead of a hard-coded checkout path.
+  - For `o320 -> o1280` and `o1280 -> o2560`, sigma must run on AG with `NUM_GPUS_PER_MODEL=4` and a matching `srun`/Slurm 4-task allocation; single-GPU AG launches are not reliable for those lanes.
 - `spectra_ecmwf_from_predictions.sbatch`
   - **Canonical ECMWF spectra template — AC-only (requires gptosp.ser).**
   - Follows the same 3-stage pipeline as `eval/spectra/grb_to_spectra.sh`:
@@ -148,6 +156,12 @@ preflight_summary
   - Enforces the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`) and a high-memory default for O1280 plot-heavy CPU follow-ups (`256G`).
   - Optionally stages a representative three-route TC compare via `RUN_TC_THREE_ROUTE_COMPARE=1`, using `tc_three_route_compare_from_run.sbatch`.
   - Supports render-only mode via `NO_SUBMIT=1`.
+- `submit_o1280_o2560_manual_eval_flow.sh`
+  - Login-node helper for the maintained `o1280 -> o2560` DestinE lane.
+  - Validates both checkpoint variants, records checkpoint-profile plus bundle-preflight JSON under the run root, rebuilds strict surface-only truth-aware bundles into `<RUN_ROOT>/bundles_with_y`, and renders strict prediction plus optional local-plots and spectra follow-ups.
+  - Defaults to `PHASE=proof`, explicit `10u,10v,2t,msl` output weather states, and the required `4`-GPU O2560 predict posture.
+  - Supports a guarded `ALLOW_DEBUG_FALLBACK=1` proof path through `debug_from_dataloader_with_plots.sbatch` when the strict bundle contract is not satisfied.
+  - Defaults to proxy spectra even on AC because the current imported checkpoint family is surface-only and does not use the older `sp,t_850,z_500` assumptions.
 - `submit_tc_eval_from_predictions.sh`
   - Login-node helper for standalone TC reruns on an existing predictions tree.
   - Renders a host-safe copy of `tc_eval_from_predictions.sbatch` under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
@@ -164,6 +178,16 @@ preflight_summary
 - `preflight_eval_check.sh`
   - **Source this before any submission** to validate cluster, venv, data, QOS, and walltime.
   - Also works standalone: `bash preflight_eval_check.sh --help`.
+
+### Training
+- `train_o48_o96.sbatch`
+  - Canonical `o48 -> o96` training launcher with correct O48-specific overrides.
+  - Encodes the 11-var forcing list (cos_solar_zenith_angle replaces insolation, no slor),
+    non-zero LR floor, and normalizer additions that differ from the base config.
+  - Edit the USER SETTINGS block (sigma schedule, max_steps, batch size) and copy to
+    `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/` before submitting.
+  - This template exists because the base config `downscaling_no_precip.yaml` assumes
+    12 forcing vars matching the O96→O320 lane; O48 needs different overrides.
 
 ### Training Loss
 - `training_loss_plots_from_mlflow.sbatch`
@@ -243,6 +267,8 @@ For standalone TC reruns on an existing predictions tree, prefer:
 ## Smooth Routes By Goal
 - Quick checkpoint screen (`o96 -> o320`, `10` bundles):
   - `codex_eval_predictions --ckpt-id <ID>`
+- `o48 -> o96` training with correct forcing/LR overrides:
+  - copy `train_o48_o96.sbatch`, edit USER SETTINGS, `sbatch`
 - `o48 -> o96` rebuild strict Humberto bundles:
   - edit `build_o48_o96_truth_bundles.sbatch`, then `sbatch` it
 - `o48 -> o96` smooth full/manual eval route:
