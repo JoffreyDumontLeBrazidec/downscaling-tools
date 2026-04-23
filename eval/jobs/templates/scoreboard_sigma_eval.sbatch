@@ -1,14 +1,18 @@
 #!/bin/bash --login
-# Canonical sigma-evaluator launcher for o96->o320 scoreboard Pillar 1.
+# Canonical sigma-evaluator launcher for scoreboard and manual-eval chains.
 #
-# Edit only the USER SETTINGS block, then submit with:
-#   sbatch scoreboard_sigma_eval.sbatch
+# Default allocation fits o48->o96 and o96->o320.
+# For o320->o1280 and o1280->o2560, submit from an AG host with:
+#   sbatch --gpus-per-node=4 --ntasks-per-node=4 scoreboard_sigma_eval.sbatch
+# and set NUM_GPUS_PER_MODEL=4 below. Single-GPU AG sigma launches are not
+# reliable for those lanes.
 
 #SBATCH --job-name=sigma_eval
 #SBATCH --qos=ng
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
 
@@ -22,11 +26,12 @@ CHECKPOINT_REF=""                # checkpoint directory under CKPT_ROOT; blank =
 CKPT_NAME="REPLACE_CHECKPOINT_FILENAME.ckpt"   # use non-inference checkpoint (anemoi-*.ckpt)
 EXPECTED_STACK_FLAVOR="new"      # new | old
 CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
-OUT_CSV=""                     # blank => /home/ecm5702/perm/eval/scoreboards/sigma/<RUN_ID>_sigma_eval.csv
+OUT_CSV=""                       # blank => /home/ecm5702/perm/eval/scoreboards/sigma/<RUN_ID>_sigma_eval.csv
 SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
-EXPECTED_LANE="o96_o320"       # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
+EXPECTED_LANE="o96_o320"         # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
+NUM_GPUS_PER_MODEL=1              # set to 4 for o320_o1280 / o1280_o2560
 ###############################################################################
 
 die() {
@@ -54,6 +59,7 @@ require_choice() {
   "CKPT_NAME='${CKPT_NAME}' looks like an inference checkpoint. Use a non-inference anemoi-*.ckpt for sigma evaluator."
 require_choice "${EXPECTED_LANE}" o48_o96 o96_o320 o320_o1280 o1280_o2560
 require_choice "${EXPECTED_STACK_FLAVOR}" new old
+require_choice "${NUM_GPUS_PER_MODEL}" 1 4
 
 if [[ -z "${CHECKPOINT_REF}" ]]; then
   CHECKPOINT_REF="${RUN_ID}"
@@ -77,6 +83,15 @@ case "${HOST_SHORT}" in
     ;;
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
+
+if [[ "${EXPECTED_LANE}" == "o320_o1280" || "${EXPECTED_LANE}" == "o1280_o2560" ]]; then
+  [[ "${HOST_SHORT}" == ag* ]] || die \
+    "Lane ${EXPECTED_LANE} sigma eval must run from AG. Single-GPU fallback is not canonical for this lane."
+  [[ "${NUM_GPUS_PER_MODEL}" == "4" ]] || die \
+    "Lane ${EXPECTED_LANE} requires NUM_GPUS_PER_MODEL=4. Single-GPU AG sigma launches are not reliable."
+  [[ "${SLURM_NTASKS:-1}" == "4" ]] || die \
+    "Lane ${EXPECTED_LANE} requires a 4-task allocation. Submit with: sbatch --gpus-per-node=4 --ntasks-per-node=4 scoreboard_sigma_eval.sbatch"
+fi
 
 REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 [[ -d "${REPO_ROOT}" ]] || die "Repo root not found: ${REPO_ROOT}"
@@ -117,14 +132,19 @@ which python
 python -V
 
 cd "${REPO_ROOT}"
-python -m eval.sigma_evaluator.run_sigma_evaluator \
-  --name_exp "${CHECKPOINT_REF}" \
-  --name_ckpt "${CKPT_NAME}" \
-  --ckpt-root "${CKPT_ROOT}" \
-  --sigmas "${SIGMAS}" \
-  --n_samples "${N_SAMPLES}" \
-  --validation_frequency "${VALIDATION_FREQUENCY}" \
-  --out_csv "${OUT_CSV}" \
-  --device cuda
+srun -u \
+  --ntasks="${NUM_GPUS_PER_MODEL}" \
+  --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
+  --gpus-per-task=1 \
+  python -u -m eval.sigma_evaluator.run_sigma_evaluator \
+    --name_exp "${CHECKPOINT_REF}" \
+    --name_ckpt "${CKPT_NAME}" \
+    --ckpt-root "${CKPT_ROOT}" \
+    --sigmas "${SIGMAS}" \
+    --n_samples "${N_SAMPLES}" \
+    --validation_frequency "${VALIDATION_FREQUENCY}" \
+    --out_csv "${OUT_CSV}" \
+    --num-gpus-per-model "${NUM_GPUS_PER_MODEL}" \
+    --device cuda
 
 echo "DONE: ${OUT_CSV}"

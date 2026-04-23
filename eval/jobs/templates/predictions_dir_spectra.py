@@ -110,6 +110,15 @@ def parse_args() -> argparse.Namespace:
             f"Default: {SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE_DEFAULT:g}."
         ),
     )
+    p.add_argument(
+        "--consolidated-pdf",
+        default="",
+        help=(
+            "Path to a single consolidated multi-page PDF merging all per-variable and per-scope "
+            "plots into one file. When set, the consolidated PDF is written in addition to the "
+            "per-variable PDFs. Typically set to <RUN_ROOT>/spectra_proxy.pdf or spectra_ecmwf.pdf."
+        ),
+    )
     return p.parse_args()
 
 
@@ -538,17 +547,80 @@ def build_spectra_artifacts(
     return summary, curve_summary
 
 
+def _merge_pdfs_simple(source_pdfs: list[Path], target: Path) -> None:
+    """Concatenate PDF files page by page using PyPDF2/pypdf when available, else copy first."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for src in source_pdfs:
+            reader = PdfReader(str(src))
+            for page in reader.pages:
+                writer.add_page(page)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            writer.write(f)
+    except ImportError:
+        import subprocess
+        import shutil
+
+        gs_path = shutil.which("gs")
+        if gs_path:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    gs_path,
+                    "-dBATCH",
+                    "-dNOPAUSE",
+                    "-q",
+                    "-sDEVICE=pdfwrite",
+                    f"-sOutputFile={target}",
+                ]
+                + [str(p) for p in source_pdfs],
+                check=True,
+            )
+        else:
+            raise RuntimeError(
+                "Neither pypdf nor ghostscript (gs) available to merge PDFs. "
+                "Install pypdf or ensure gs is on PATH."
+            )
+
+
+def build_consolidated_spectra_pdf_from_existing(
+    *,
+    out_dir: Path,
+    consolidated_pdf_path: Path,
+    states: list[str],
+) -> Path:
+    """Merge all per-variable per-scope spectra PDFs into one consolidated multi-page PDF."""
+    per_variable_pdfs: list[Path] = []
+    for state in states:
+        for scope_name, spec in SCOPE_SPECS.items():
+            candidate = out_dir / spec.pdf_name.format(state=state)
+            if candidate.exists():
+                per_variable_pdfs.append(candidate)
+
+    if not per_variable_pdfs:
+        raise FileNotFoundError(f"No per-variable spectra PDFs found in {out_dir}")
+
+    _merge_pdfs_simple(per_variable_pdfs, consolidated_pdf_path)
+    print(f"Wrote consolidated spectra PDF ({len(per_variable_pdfs)} pages): {consolidated_pdf_path}")
+    return consolidated_pdf_path
+
+
 def main() -> None:
     args = parse_args()
     pred_dir = Path(args.predictions_dir).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    states = parse_weather_states(args.weather_states)
+
     summary, curve_summary = build_spectra_artifacts(
         pred_dir=pred_dir,
         out_dir=out_dir,
         run_label=args.run_label,
-        states=parse_weather_states(args.weather_states),
+        states=states,
         nside=args.nside,
         lmax=args.lmax,
         spectra_method=args.spectra_method,
@@ -565,6 +637,14 @@ def main() -> None:
     out_curves = out_dir / "spectra_curve_summary.json"
     out_curves.write_text(json.dumps(curve_summary, indent=2), encoding="utf-8")
     print(f"Wrote spectra curve summary: {out_curves}")
+
+    if args.consolidated_pdf:
+        consolidated_path = Path(args.consolidated_pdf).expanduser().resolve()
+        build_consolidated_spectra_pdf_from_existing(
+            out_dir=out_dir,
+            consolidated_pdf_path=consolidated_path,
+            states=states,
+        )
 
 
 if __name__ == "__main__":

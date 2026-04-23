@@ -7,7 +7,8 @@
 #   2) strict multi-bundle manual inference from that rebuilt bundle root,
 #   3) one-date local plots,
 #   4) spectra (auto: proxy on AG, ECMWF on AC),
-#   5) TC evaluation (auto: native on AG, regridded on AC),
+#   5) the standard TC package: Idalia+Franklin TC PDFs plus prediction-only contour plots
+#      (auto: native on AG, regridded on AC for the PDF route),
 # with `afterok` dependencies across the chain.
 #
 # Canonical host/env rule for this lane:
@@ -54,15 +55,15 @@ REGIONAL_SUITE_OUT_PREFIX="${REGIONAL_SUITE_OUT_PREFIX:-local_plots_regions}"
 RUN_STORM_PLOTS="${RUN_STORM_PLOTS:-1}"              # 1 => render storm boxes for selected steps
 STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-idalia,franklin}"
 STORM_PLOT_OUT_PREFIX="${STORM_PLOT_OUT_PREFIX:-tc_local_plots}"
-RUN_TC_CONTOUR_PLOTS="${RUN_TC_CONTOUR_PLOTS:-1}"   # 1 => render contour-style TC suites for selected steps
+RUN_TC_CONTOUR_PLOTS="${RUN_TC_CONTOUR_PLOTS:-1}"   # standard TC package default: keep contour-style TC suites on for selected steps
 TC_CONTOUR_OUT_PREFIX="${TC_CONTOUR_OUT_PREFIX:-tc_contour_plots}"
 RUN_TC_THREE_ROUTE_COMPARE="${RUN_TC_THREE_ROUTE_COMPARE:-0}"  # 1 => select representative TC cases and render all three TC routes
-TC_THREE_ROUTE_OUT_DIR="${TC_THREE_ROUTE_OUT_DIR:-${RUN_ROOT}/tc_three_route_compare}"
+TC_THREE_ROUTE_OUT_DIR="${TC_THREE_ROUTE_OUT_DIR:-}"
 TC_THREE_ROUTE_EVENTS="${TC_THREE_ROUTE_EVENTS:-idalia,franklin}"
 TC_THREE_ROUTE_SELECTION_METRIC="${TC_THREE_ROUTE_SELECTION_METRIC:-maxwind}"
 
 SPECTRA_METHOD="${SPECTRA_METHOD:-auto}"             # auto | proxy | ecmwf
-TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded
+TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded; standard TC PDF route runs every evaluation by default
 TC_EVENTS="${TC_EVENTS:-idalia,franklin}"
 TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-}"
 
@@ -225,11 +226,11 @@ esac
 case "${HOST_FAMILY}" in
   ac)
     EXPECTED_PROFILE_PYTHON="/home/ecm5702/dev/.ds-dyn/bin/python"
-    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-dyn"
+    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-dyn/bin/activate"
     ;;
   ag)
     EXPECTED_PROFILE_PYTHON="/home/ecm5702/dev/.ds-ag/bin/python"
-    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-ag"
+    EXPECTED_NEW_STACK_VENV="/home/ecm5702/dev/.ds-ag/bin/activate"
     ;;
 esac
 
@@ -501,6 +502,16 @@ fi
 if [[ "${PHASE}" == "continue-full" && ! -d "${RUN_ROOT}" ]]; then
   die "PHASE=continue-full requires an existing run root: ${RUN_ROOT}"
 fi
+if [[ -z "${TC_THREE_ROUTE_OUT_DIR}" ]]; then
+  TC_THREE_ROUTE_OUT_DIR="${RUN_ROOT}/tc_three_route_compare"
+fi
+if [[ "${PHASE}" == "continue-full" ]]; then
+  ALLOW_EXISTING_PREDICTIONS_DIR="1"
+  ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES="1"
+else
+  ALLOW_EXISTING_PREDICTIONS_DIR="0"
+  ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES="0"
+fi
 
 TEMPLATE_DIR="${PROJECT_ROOT}/eval/jobs/templates"
 BUILD_TEMPLATE="${TEMPLATE_DIR}/build_o320_o1280_truth_bundles.sbatch"
@@ -651,6 +662,8 @@ set_var "${PREDICT_SCRIPT}" RUN_ID_OVERRIDE "${RUN_ID}"
 set_var "${PREDICT_SCRIPT}" NUM_GPUS_PER_MODEL "4"
 set_var "${PREDICT_SCRIPT}" ALLOW_EXISTING_RUN_DIR "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_REBUILT_BUNDLE_ROOT "1"
+set_var "${PREDICT_SCRIPT}" ALLOW_EXISTING_PREDICTIONS_DIR "${ALLOW_EXISTING_PREDICTIONS_DIR}"
+set_var "${PREDICT_SCRIPT}" ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES "${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}"
 set_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "${SAMPLER_JSON}"
 set_sbatch_directive "${PREDICT_SCRIPT}" job-name "o1280_pred_${CHECKPOINT_SHORT}"
 set_sbatch_directive "${PREDICT_SCRIPT}" ntasks-per-node "4"
@@ -957,6 +970,25 @@ monitor_jobs+=("${tc_contour_jobs[@]}")
 if [[ -n "${tc_three_route_job}" ]]; then
   monitor_jobs+=("${tc_three_route_job}")
 fi
+
+# --- Finalize: lean eval layout reorganization ---
+FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
+FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
+if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
+  if [[ ! -f "${FINALIZE_SCRIPT}" ]] || [[ "${ALLOW_OVERWRITE}" -eq 1 ]]; then
+    cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+  fi
+  finalize_dep_csv="$(IFS=:; echo "${monitor_jobs[*]}")"
+  finalize_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${finalize_dep_csv} "${FINALIZE_SCRIPT}")"
+  finalize_job="$(extract_job_id "${finalize_submit}")"
+  echo "[o1280-flow] ${finalize_submit}"
+  monitor_jobs+=("${finalize_job}")
+else
+  finalize_job="skipped_no_template"
+fi
+
 monitor_job_csv="$(IFS=,; echo "${monitor_jobs[*]}")"
 GENERATED_SCRIPT_LINES=""
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
@@ -994,6 +1026,7 @@ ${GENERATED_SCRIPT_LINES}job_ids:
   regional_suites:  ${regional_job_summary} (afterok:${predict_job})
   storm_plots:      ${storm_job_summary} (afterok:${predict_job})
   tc_contours:      ${tc_contour_job_summary} (afterok:${predict_job})
+  finalize_lean:    ${finalize_job:-skipped} (afterok:all)
 
 Monitor:
   squeue -j ${monitor_job_csv}

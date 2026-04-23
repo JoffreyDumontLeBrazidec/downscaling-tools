@@ -250,6 +250,22 @@ write_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${sigma_jo
 write_job="$(extract_job_id "${write_submit}")"
 echo "[INFO] ${write_submit}"
 
+# --- Finalize: lean eval layout reorganization ---
+FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
+FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
+AUG_RUN_ROOT="/home/ecm5702/perm/eval/${RUN_ID}"
+finalize_job="skipped"
+if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
+  if [[ ! -f "${FINALIZE_SCRIPT}" ]] || [[ "${ALLOW_OVERWRITE}" -eq 1 ]]; then
+    cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${AUG_RUN_ROOT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+  fi
+  finalize_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${write_job} "${FINALIZE_SCRIPT}")"
+  finalize_job="$(extract_job_id "${finalize_submit}")"
+  echo "[INFO] ${finalize_submit}"
+fi
+
 cat <<EOF
 
 === AUG 26-30 SCOREBOARD FLOW SUBMITTED ===
@@ -269,7 +285,8 @@ job_ids:
   sigma:           ${sigma_job}
   inference:       ${infer_job}
   post_writer:     ${write_job} (afterok:${sigma_job}:${infer_job})
+  finalize_lean:   ${finalize_job}
 
 Monitor:
-  squeue -j ${sigma_job},${infer_job},${write_job}
+  squeue -j ${sigma_job},${infer_job},${write_job}${finalize_job:+,${finalize_job}}
 EOF

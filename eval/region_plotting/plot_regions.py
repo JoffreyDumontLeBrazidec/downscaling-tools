@@ -26,17 +26,17 @@ logging.basicConfig(level=logging.INFO)
 DEFAULT_MODEL_VARIABLES = ["x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0"]
 DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "msl", "tp", "z_500", "u_850", "v_850", "t_850"]
 
-# O96-scale crops for o48->o96 evaluation. These are intentionally tighter than the
-# older broad boxes so O96 structure can look smooth and spatially coherent while the
-# O48 input remains visibly coarse/blocky. They emphasize terrain, coastline/island
-# structure, rainforest convection, and tropical-cyclone-sensitive flow.
+# O96-scale windows for o48->o96 evaluation. These are intentionally broad
+# continental-scale windows so a 300 km -> 100 km comparison leaves O48 very
+# coarse/blurry while O96 still retains useful terrain/coastline/precipitation
+# structure.
 O96_INTERESTING_REGIONS: dict[str, list[float]] = {
-    "amazon_forest_core": [-8.0, 2.0, -72.0, -62.0],
-    "congo_basin": [-5.0, 5.0, 15.0, 25.0],
-    "andes_central": [-34.0, -26.0, -74.0, -66.0],
-    "himalayas_central": [30.0, 35.0, 80.0, 90.0],
-    "maritime_continent": [-2.0, 8.0, 108.0, 118.0],
-    "eastern_us_coast": [30.0, 40.0, -82.0, -72.0],
+    "amazon_forest_core": [-25.0, 15.0, -90.0, -30.0],
+    "congo_basin": [-18.0, 18.0, 0.0, 45.0],
+    "andes_central": [-50.0, -5.0, -95.0, -45.0],
+    "himalayas_central": [10.0, 50.0, 55.0, 115.0],
+    "maritime_continent": [-18.0, 30.0, 85.0, 160.0],
+    "eastern_us_coast": [10.0, 55.0, -110.0, -45.0],
 }
 
 # Curated "interesting" O1280 regions discovered from the 2026-02-27 analysis workflow.

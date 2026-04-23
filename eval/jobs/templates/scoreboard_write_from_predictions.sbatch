@@ -120,7 +120,8 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+CANONICAL_REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
+REPO_ROOT="${DOWNSCALING_TOOLS_ROOT:-${CANONICAL_REPO_ROOT}}"
 TEMPLATE_DIR="${REPO_ROOT}/eval/jobs/templates"
 [[ -d "${REPO_ROOT}" ]] || die "Repo root not found: ${REPO_ROOT}"
 [[ -d "${TEMPLATE_DIR}" ]] || die "Template dir not found: ${TEMPLATE_DIR}"
@@ -187,9 +188,10 @@ for PAIR in "${SPECTRA_PAIR_ARRAY[@]}"; do
   STEP="${PAIR##*:}"
   [[ "${DATE}" =~ ^[0-9]{8}$ ]] || die "Invalid spectra date in pair: ${PAIR}"
   [[ "${STEP}" =~ ^[0-9]{1,3}$ ]] || die "Invalid spectra step in pair: ${PAIR}"
-  src="${PRED_DIR}/predictions_${DATE}_step${STEP}.nc"
+  printf -v STEP_PADDED "%03d" "${STEP}"
+  src="${PRED_DIR}/predictions_${DATE}_step${STEP_PADDED}.nc"
   [[ -f "${src}" ]] || die "Missing spectra input file: ${src}"
-  ln -sfn "${src}" "${SUBSET_DIR}/predictions_${DATE}_step${STEP}.nc"
+  ln -sfn "${src}" "${SUBSET_DIR}/predictions_${DATE}_step${STEP_PADDED}.nc"
   subset_dates+=("${DATE}")
   subset_steps+=("${STEP}")
 done

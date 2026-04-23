@@ -57,8 +57,9 @@ EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma
 NTASKS=4
 
 # Lane-specific extra predict flags. Leave empty for o48_o96 / o96_o320 / o320_o1280.
-# For o1280_o2560: EXTRA_PREDICT_FLAGS=(--output-weather-state-mode surface-plus-core-pl --slim-output)
-EXTRA_PREDICT_FLAGS=()
+# For o1280_o2560, use the maintained contract from submit_o1280_o2560_manual_eval_flow.sh:
+#   EXTRA_PREDICT_FLAGS="--output-weather-state-mode all --output-weather-states 10u,10v,2t,msl --slim-output"
+EXTRA_PREDICT_FLAGS=""
 
 # Variables to plot; passed to --weather-states. e.g. "2t,10u,10v,msl"
 PLOT_WEATHER_STATES="REPLACE_PLOT_WEATHER_STATES"
@@ -92,6 +93,9 @@ require_choice "${SOURCE_HPC}" ac ag leonardo jupiter
 [[ "${DEBUG_ACK}" == "I_UNDERSTAND_THIS_IS_DEBUG_ONLY" ]] || die "Set DEBUG_ACK to the required acknowledgement string."
 if "${USE_INFERENCE_COMPANION}"; then
   [[ "${INFERENCE_COMPANION}" != REPLACE_* ]] || die "USE_INFERENCE_COMPANION=true requires INFERENCE_COMPANION to be set."
+fi
+if [[ "${LANE}" == "o1280_o2560" && "${NTASKS}" -lt 4 ]]; then
+  die "LANE=o1280_o2560 requires NTASKS>=4 for the debug dataloader fallback."
 fi
 
 HOST_SHORT="$(hostname -s)"
@@ -192,12 +196,52 @@ python -m eval.jobs.checkpoint_profile \
   echo "plot_weather_states=${PLOT_WEATHER_STATES}"
 } > "${RUN_DIR}/manual_inference_run_info.txt"
 
+python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${INFERENCE_COMPANION}" "${CKPT_ROOT}" "${IDX}" "${N_SAMPLES}" "${MEMBERS}" "${VALIDATION_FREQUENCY}" "${NTASKS}" "${EXTRA_ARGS_JSON}" "${PLOT_WEATHER_STATES}" "${DEBUG_ACK}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+config = {
+    "run_id": sys.argv[2],
+    "artifacts_root": sys.argv[3],
+    "stack_flavor": sys.argv[4],
+    "lane": sys.argv[5],
+    "source_hpc": sys.argv[6],
+    "host_short": sys.argv[7],
+    "venv_activate": sys.argv[8],
+    "code_root": sys.argv[9],
+    "checkpoint": {"path": sys.argv[10]},
+    "inference_companion": sys.argv[11],
+    "source": {
+        "mode": "debug_from_dataloader",
+        "ckpt_root": sys.argv[12],
+        "idx": int(sys.argv[13]),
+        "n_samples": int(sys.argv[14]),
+        "members": [int(token.strip()) for token in sys.argv[15].split(",") if token.strip()],
+        "validation_frequency": sys.argv[16],
+    },
+    "debug": {
+        "ntasks": int(sys.argv[17]),
+        "extra_args_json": sys.argv[18],
+        "plot_weather_states": sys.argv[19],
+        "acknowledgement": sys.argv[20],
+        "proof_only": True,
+    },
+}
+out_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+PY
+
 cd "${CODE_ROOT}"
 
 # Build --debug-from-dataloader flag (new stack only)
 NEW_DEBUG_FLAG=()
 if [[ "${STACK_FLAVOR}" == "new" ]]; then
   NEW_DEBUG_FLAG=(--debug-from-dataloader)
+fi
+EXTRA_PREDICT_ARGS=()
+if [[ -n "${EXTRA_PREDICT_FLAGS}" ]]; then
+  read -r -a EXTRA_PREDICT_ARGS <<< "${EXTRA_PREDICT_FLAGS}"
 fi
 
 echo "[INFO] starting distributed dataloader prediction (ntasks=${NTASKS})"
@@ -214,7 +258,7 @@ srun --ntasks="${NTASKS}" --ntasks-per-node="${NTASKS}" \
   --extra-args-json "${EXTRA_ARGS_JSON}" \
   "${NEW_DEBUG_FLAG[@]}" \
   --allow-existing-output-dir \
-  "${EXTRA_PREDICT_FLAGS[@]}" \
+  "${EXTRA_PREDICT_ARGS[@]}" \
   --out "${PRED_NC}"
 
 [[ -f "${PRED_NC}" ]] || die "Expected output file missing: ${PRED_NC}"

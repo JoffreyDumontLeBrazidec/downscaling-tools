@@ -4,6 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=1
+#SBATCH --qos=ng
 #SBATCH --hint=nomultithread
 #SBATCH --time=08:00:00
 #SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
@@ -14,7 +15,7 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 STACK_FLAVOR="new"         # new | old
-LANE="o96_o320"            # o96_o320 | o320_o1280 | o1280_o2560
+LANE="o96_o320"            # o48_o96 | o96_o320 | o320_o1280 | o1280_o2560
 SOURCE_HPC="ac"            # ac | ag | leonardo | jupiter
 
 CHECKPOINT_REF="REPLACE_CHECKPOINT_REF"
@@ -75,13 +76,16 @@ require_choice() {
 }
 
 require_choice "${STACK_FLAVOR}" new old
-require_choice "${LANE}" o96_o320 o320_o1280 o1280_o2560
+require_choice "${LANE}" o48_o96 o96_o320 o320_o1280 o1280_o2560
 require_choice "${SOURCE_HPC}" ac ag leonardo jupiter
 [[ "${CHECKPOINT_REF}" != REPLACE_* ]] || die "Set CHECKPOINT_REF."
 [[ "${CHECKPOINT_SHORT}" != REPLACE_* ]] || die "Set CHECKPOINT_SHORT."
 [[ "${BUNDLE_NC}" != REPLACE_* ]] || die "Set BUNDLE_NC."
 [[ -f "${BUNDLE_NC}" ]] || die "Bundle does not exist: ${BUNDLE_NC}"
 [[ "${BUNDLE_NC}" == *"/${LANE}/"* ]] || die "Bundle path does not match lane ${LANE}: ${BUNDLE_NC}"
+if [[ "${LANE}" == "o1280_o2560" ]]; then
+  die "strict_manual_predict_one_bundle.sbatch is not a valid proof route for LANE=o1280_o2560. The imported O2560 checkpoint family requires 4 GPU ranks. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o1280_o2560_manual_eval_flow.sh instead."
+fi
 
 HOST_SHORT="$(hostname -s)"
 case "${HOST_SHORT}" in
@@ -90,7 +94,8 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools}"
+REPO_ROOT="${PROJECT_ROOT}"
 
 if [[ "${STACK_FLAVOR}" == "new" ]]; then
   CODE_ROOT="${REPO_ROOT}"
@@ -108,6 +113,7 @@ else
   fi
 fi
 
+[[ -d "${REPO_ROOT}" ]] || die "Project root not found: ${REPO_ROOT}"
 [[ -d "${CODE_ROOT}" ]] || die "Code root not found: ${CODE_ROOT}"
 [[ -f "${VENV_ACTIVATE}" ]] || die "Env activate script not found: ${VENV_ACTIVATE}"
 
@@ -241,6 +247,7 @@ python -m manual_inference.prediction.predict from-bundle \
   --validation-frequency "${VALIDATION_FREQUENCY}" \
   --extra-args-json "${EXTRA_ARGS_JSON}" \
   --precision "${PRECISION}" \
+  --allow-existing-output-dir \
   --out "${RUN_DIR}/predictions.nc"
 
 PRED_NC="${RUN_DIR}/predictions.nc"

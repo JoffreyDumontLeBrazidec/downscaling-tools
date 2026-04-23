@@ -4,6 +4,10 @@
 #   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh
 # It renders this template with the tested 4-GPU / 32-CPU / 24h posture and
 # wires local plots, spectra, and TC follow-ups without ad hoc script forks.
+# For `LANE=o1280_o2560`, prefer the repo-owned login-node helper:
+#   /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o1280_o2560_manual_eval_flow.sh
+# That helper enforces the current surface-only DestinE contract and the
+# required 4-GPU predict posture for the imported checkpoint family.
 #SBATCH --job-name=manual_predict_x_bundle
 #SBATCH --qos=ng
 #SBATCH --nodes=1
@@ -50,14 +54,23 @@ DEVICE="cuda"
 PRECISION="fp32"
 VALIDATION_FREQUENCY="50h"  # used by new stack only
 NUM_GPUS_PER_MODEL=1        # used by new stack only; o320_o1280 should use 4
+OUTPUT_WEATHER_STATE_MODE="surface-plus-core-pl"
+OUTPUT_WEATHER_STATES=""
+SLIM_OUTPUT=1
 # Keep the whole JSON blob shell-quoted as one string; outer single quotes are safest.
 EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+
+# MLflow experiment directory for enriching EXPERIMENT_CONFIG with training params
+MLFLOW_EXPERIMENT_DIR=""
 
 # Old stack currently allows missing target in code path; keep default strict.
 ALLOW_MISSING_TARGET_OLD=0
 # Keep this at 0 unless you intentionally overwrite a previous run.
 ALLOW_EXISTING_RUN_DIR=0
 ALLOW_REBUILT_BUNDLE_ROOT=0
+# Keep these at 0 unless you intentionally reuse an existing predictions/ directory.
+ALLOW_EXISTING_PREDICTIONS_DIR=0
+ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES=0
 ###############################################################################
 
 die() {
@@ -95,8 +108,8 @@ if not raw:
     print("")
     raise SystemExit(0)
 
-seen: set[str] = set()
-normalized: list[str] = []
+seen = set()
+normalized = []
 for token in raw.split(","):
     token = token.strip()
     if not token:
@@ -148,6 +161,9 @@ require_choice "${DATE_PRESET}" default aug16_30
 [[ -d "${INPUT_ROOT}" ]] || die "INPUT_ROOT does not exist: ${INPUT_ROOT}"
 [[ "${ALLOW_EXISTING_RUN_DIR}" == "0" || "${ALLOW_EXISTING_RUN_DIR}" == "1" ]] || die "ALLOW_EXISTING_RUN_DIR must be 0 or 1."
 [[ "${ALLOW_REBUILT_BUNDLE_ROOT}" == "0" || "${ALLOW_REBUILT_BUNDLE_ROOT}" == "1" ]] || die "ALLOW_REBUILT_BUNDLE_ROOT must be 0 or 1."
+[[ "${ALLOW_EXISTING_PREDICTIONS_DIR}" == "0" || "${ALLOW_EXISTING_PREDICTIONS_DIR}" == "1" ]] || die "ALLOW_EXISTING_PREDICTIONS_DIR must be 0 or 1."
+[[ "${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}" == "0" || "${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}" == "1" ]] || die "ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES must be 0 or 1."
+[[ "${SLIM_OUTPUT}" == "0" || "${SLIM_OUTPUT}" == "1" ]] || die "SLIM_OUTPUT must be 0 or 1."
 if [[ -n "${RUN_ID_OVERRIDE}" && ! "${RUN_ID_OVERRIDE}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   die "Unsafe RUN_ID_OVERRIDE: ${RUN_ID_OVERRIDE}"
 fi
@@ -179,6 +195,14 @@ BUNDLE_PAIRS="$(normalize_bundle_pairs "${BUNDLE_PAIRS}")"
 
 if [[ "${LANE}" == "o320_o1280" && "${NUM_GPUS_PER_MODEL}" -lt 4 ]]; then
   die "LANE=o320_o1280 requires NUM_GPUS_PER_MODEL>=4. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh or submit this template with matching 4-GPU scheduler overrides."
+fi
+if [[ "${LANE}" == "o1280_o2560" ]]; then
+  if [[ "${NUM_GPUS_PER_MODEL}" -lt 4 ]]; then
+    die "LANE=o1280_o2560 requires NUM_GPUS_PER_MODEL>=4. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o1280_o2560_manual_eval_flow.sh or submit this template with matching 4-GPU scheduler overrides."
+  fi
+  if [[ -z "${OUTPUT_WEATHER_STATES}" ]]; then
+    die "LANE=o1280_o2560 requires explicit OUTPUT_WEATHER_STATES (current contract: 10u,10v,2t,msl)."
+  fi
 fi
 
 HOST_SHORT="$(hostname -s)"
@@ -285,26 +309,31 @@ python -m eval.jobs.checkpoint_profile \
   echo "bundle_pairs=${BUNDLE_PAIRS:-none}"
   echo "members=${MEMBERS}"
   echo "output_predictions_dir=${PRED_DIR}"
+  echo "allow_existing_predictions_dir=${ALLOW_EXISTING_PREDICTIONS_DIR}"
+  echo "allow_overwrite_existing_prediction_files=${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}"
   echo "manifest=${MANIFEST_PATH}"
   echo "device=${DEVICE}"
   echo "precision=${PRECISION}"
   echo "validation_frequency=${VALIDATION_FREQUENCY}"
   echo "num_gpus_per_model=${NUM_GPUS_PER_MODEL}"
+  echo "output_weather_state_mode=${OUTPUT_WEATHER_STATE_MODE}"
+  echo "output_weather_states=${OUTPUT_WEATHER_STATES}"
+  echo "slim_output=${SLIM_OUTPUT}"
   echo "extra_args_json=${EXTRA_ARGS_JSON}"
 } > "${RUN_DIR}/manual_inference_run_info.txt"
 
-python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${INPUT_ROOT_MODE}" "${DATES}" "${MEMBERS}" "${STEPS}" "${BUNDLE_PAIRS}" "${EXTRA_ARGS_JSON}" <<'PY'
+python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${STACK_FLAVOR}" "${LANE}" "${SOURCE_HPC}" "${HOST_SHORT}" "${VENV_ACTIVATE}" "${CODE_ROOT}" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${INPUT_ROOT}" "${INPUT_ROOT_MODE}" "${DATES}" "${MEMBERS}" "${STEPS}" "${BUNDLE_PAIRS}" "${OUTPUT_WEATHER_STATE_MODE}" "${OUTPUT_WEATHER_STATES}" "${SLIM_OUTPUT}" "${EXTRA_ARGS_JSON}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 
-def parse_int_list(raw: str) -> list[int]:
+def parse_int_list(raw):
     return [int(part.strip()) for part in raw.split(",") if part.strip()]
 
 
-def parse_bundle_pairs(raw: str) -> list[dict[str, int]]:
-    pairs: list[dict[str, int]] = []
+def parse_bundle_pairs(raw):
+    pairs = []
     for token in raw.split(","):
         token = token.strip()
         if not token:
@@ -336,7 +365,10 @@ dates = parse_int_list(sys.argv[14])
 members = parse_int_list(sys.argv[15])
 steps = parse_int_list(sys.argv[16])
 bundle_pairs = parse_bundle_pairs(sys.argv[17])
-sampling_config_json = sys.argv[18]
+output_weather_state_mode = sys.argv[18]
+output_weather_states = sys.argv[19]
+slim_output = int(sys.argv[20])
+sampling_config_json = sys.argv[21]
 
 checkpoint_path = Path(checkpoint_ref)
 if not checkpoint_path.is_absolute():
@@ -367,6 +399,9 @@ config = {
             "steps_hours": steps,
             "selection_mode": "explicit_pairs" if bundle_pairs else "cartesian_dates_steps",
         },
+        "output_weather_state_mode": output_weather_state_mode,
+        "output_weather_states": output_weather_states,
+        "slim_output": bool(slim_output),
     },
 }
 if bundle_pairs:
@@ -379,9 +414,133 @@ except json.JSONDecodeError:
 out_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 PY
 
+# Enrich EXPERIMENT_CONFIG with training params from MLflow (best-effort)
+if [[ -n "${MLFLOW_EXPERIMENT_DIR}" && -d "${MLFLOW_EXPERIMENT_DIR}" ]]; then
+  python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${CHECKPOINT_REF}" "${CKPT_ROOT}" "${MLFLOW_EXPERIMENT_DIR}" <<'PYENRICH'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1])
+checkpoint_ref = sys.argv[2]
+ckpt_root = sys.argv[3]
+mlflow_dir = Path(sys.argv[4])
+
+checkpoint_path = Path(checkpoint_ref)
+if not checkpoint_path.is_absolute():
+    checkpoint_path = Path(ckpt_root) / checkpoint_ref
+mlflow_run_id = checkpoint_path.parent.name
+
+run_dir = mlflow_dir / mlflow_run_id
+if not run_dir.is_dir():
+    print(f"[enrich] MLflow run dir not found: {run_dir}, skipping enrichment")
+    raise SystemExit(0)
+
+def read_param(name, default=None):
+    p = run_dir / "params" / name
+    if p.is_file():
+        return p.read_text().strip()
+    return default
+
+def read_param_float(name, default=None):
+    v = read_param(name)
+    if v is not None:
+        try:
+            return float(v)
+        except ValueError:
+            pass
+    return default
+
+def read_param_int(name, default=None):
+    v = read_param(name)
+    if v is not None:
+        try:
+            return int(v)
+        except ValueError:
+            pass
+    return default
+
+config = json.loads(config_path.read_text())
+
+config["training"] = {
+    "max_steps": read_param_int("config.training.max_steps"),
+    "lr": {
+        "rate": read_param_float("config.training.lr.rate"),
+        "iterations": read_param_int("config.training.lr.iterations"),
+        "warmup": read_param_int("config.training.lr.warmup"),
+        "min": read_param_float("config.training.lr.min"),
+    },
+    "training_approach": read_param("config.training.training_approach"),
+    "transfer_learning": read_param("config.training.transfer_learning"),
+}
+
+config["dataloader"] = {
+    "batch_size_training": read_param_int("config.dataloader.batch_size.training"),
+    "dataloader_config": read_param("config.dataloader.config_name",
+                                     read_param("config.dataloader")),
+}
+select_forcings = read_param("config.dataloader.select_forcings")
+if select_forcings:
+    config["dataloader"]["select_forcings"] = select_forcings
+
+config["diffusion_defaults"] = {
+    "log_normal_mean": read_param_float("config.model.model.diffusion.log_normal_mean"),
+    "log_normal_std": read_param_float("config.model.model.diffusion.log_normal_std"),
+    "sigma_max": read_param_float("config.model.model.diffusion.sigma_max"),
+    "sigma_min": read_param_float("config.model.model.diffusion.sigma_min"),
+}
+
+config["hardware"] = {
+    "num_gpus_per_model": read_param_int("config.hardware.num_gpus_per_model"),
+    "num_gpus_per_node": read_param_int("config.hardware.num_gpus_per_node"),
+    "num_nodes": read_param_int("config.hardware.num_nodes"),
+}
+
+meta_yaml = run_dir / "meta.yaml"
+if meta_yaml.is_file():
+    run_name = None
+    experiment_id = None
+    for line in meta_yaml.read_text().splitlines():
+        if line.startswith("run_name:"):
+            run_name = line.split(":", 1)[1].strip().strip("'\"")
+        elif line.startswith("experiment_id:"):
+            experiment_id = line.split(":", 1)[1].strip().strip("'\"")
+    config["mlflow"] = {
+        "run_id": mlflow_run_id,
+        "run_name": run_name,
+        "experiment_id": experiment_id,
+    }
+
+# Remove None values for cleaner output
+def remove_nones(obj):
+    if isinstance(obj, dict):
+        return {k: remove_nones(v) for k, v in obj.items() if v is not None}
+    return obj
+
+config = remove_nones(config)
+config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+print(f"[enrich] EXPERIMENT_CONFIG enriched with training params from MLflow run {mlflow_run_id}")
+PYENRICH
+fi
+
 cd "${CODE_ROOT}"
 
+PREDICTION_OVERWRITE_FLAGS=()
+if [[ "${ALLOW_EXISTING_PREDICTIONS_DIR}" -eq 1 ]]; then
+  PREDICTION_OVERWRITE_FLAGS+=(--allow-existing-out-dir)
+fi
+if [[ "${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}" -eq 1 ]]; then
+  PREDICTION_OVERWRITE_FLAGS+=(--allow-overwrite-existing-files)
+fi
+
 if [[ "${STACK_FLAVOR}" == "new" ]]; then
+  NEW_STACK_OUTPUT_FLAGS=()
+  if [[ -n "${OUTPUT_WEATHER_STATES}" ]]; then
+    NEW_STACK_OUTPUT_FLAGS+=(--output-weather-states "${OUTPUT_WEATHER_STATES}")
+  fi
+  if [[ "${SLIM_OUTPUT}" -eq 1 ]]; then
+    NEW_STACK_OUTPUT_FLAGS+=(--slim-output)
+  fi
   if [[ "${NUM_GPUS_PER_MODEL}" -gt 1 ]]; then
     srun --ntasks="${NUM_GPUS_PER_MODEL}" --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
       python eval/jobs/generate_predictions_25_files.py \
@@ -390,15 +549,18 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
       --out-dir "${PRED_DIR}" \
       --name-ckpt "${CHECKPOINT_REF}" \
       --ckpt-root "${CKPT_ROOT}" \
+      "${PREDICTION_OVERWRITE_FLAGS[@]}" \
       --device "${DEVICE}" \
       --num-gpus-per-model "${NUM_GPUS_PER_MODEL}" \
       --precision "${PRECISION}" \
       --validation-frequency "${VALIDATION_FREQUENCY}" \
+      --output-weather-state-mode "${OUTPUT_WEATHER_STATE_MODE}" \
       --members "${MEMBERS}" \
       --steps "${STEPS}" \
       --dates "${DATES}" \
       --bundle-pairs "${BUNDLE_PAIRS}" \
       --extra-args-json "${EXTRA_ARGS_JSON}" \
+      "${NEW_STACK_OUTPUT_FLAGS[@]}" \
       --manifest "${MANIFEST_PATH}"
   else
     python eval/jobs/generate_predictions_25_files.py \
@@ -407,15 +569,18 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
       --out-dir "${PRED_DIR}" \
       --name-ckpt "${CHECKPOINT_REF}" \
       --ckpt-root "${CKPT_ROOT}" \
+      "${PREDICTION_OVERWRITE_FLAGS[@]}" \
       --device "${DEVICE}" \
       --num-gpus-per-model "${NUM_GPUS_PER_MODEL}" \
       --precision "${PRECISION}" \
       --validation-frequency "${VALIDATION_FREQUENCY}" \
+      --output-weather-state-mode "${OUTPUT_WEATHER_STATE_MODE}" \
       --members "${MEMBERS}" \
       --steps "${STEPS}" \
       --dates "${DATES}" \
       --bundle-pairs "${BUNDLE_PAIRS}" \
       --extra-args-json "${EXTRA_ARGS_JSON}" \
+      "${NEW_STACK_OUTPUT_FLAGS[@]}" \
       --manifest "${MANIFEST_PATH}"
   fi
 else
@@ -428,6 +593,7 @@ else
     --out-dir "${PRED_DIR}" \
     --ckpt-id "${CHECKPOINT_REF}" \
     --ckpt-root "${CKPT_ROOT}" \
+    "${PREDICTION_OVERWRITE_FLAGS[@]}" \
     --device "${DEVICE}" \
     --precision "${PRECISION}" \
     --members "${MEMBERS}" \

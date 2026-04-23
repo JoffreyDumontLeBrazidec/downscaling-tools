@@ -139,6 +139,7 @@ mapping = {
     "10v": "10v_sfc",
     "2t": "2t_sfc",
     "sp": "sp_sfc",
+    "msl": "msl_sfc",
     "t_850": "t_850",
     "z_500": "z_500",
 }

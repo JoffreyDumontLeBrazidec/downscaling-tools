@@ -1,0 +1,11 @@
+RETRIEVE,
+    CLASS      = od,
+    STREAM     = oper,
+    TYPE       = an,
+    EXPVER     = iekm,
+    GRID       = O96,
+    LEVTYPE    = sfc,
+    PARAM      = z/lsm,
+    DATE       = 20250928,
+    TIME       = 0000,
+    TARGET     = "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_static_date20250928_time0000_sfc.grib"

@@ -34,6 +34,7 @@ VARIABLE_CONFIGS: dict[str, VariableConfig] = {
     "10v": VariableConfig(weather_state="10v", dir_name="10v_sfc"),
     "2t": VariableConfig(weather_state="2t", dir_name="2t_sfc"),
     "sp": VariableConfig(weather_state="sp", dir_name="sp_sfc"),
+    "msl": VariableConfig(weather_state="msl", dir_name="msl_sfc"),
     "t_850": VariableConfig(weather_state="t_850", dir_name="t_850"),
     "z_500": VariableConfig(weather_state="z_500", dir_name="z_500"),
 }
@@ -120,13 +121,25 @@ def write_values_from_template(template_path: Path, out_path: Path, values: np.n
         codes_release(clone)
 
 
-def find_prediction_grib_template(template_grib_root: Path, ymd: int, suffix: str) -> Path:
-    candidates = sorted(template_grib_root.glob(f"*date{ymd}_time0000_step24to120_{suffix}.grib"))
+def find_prediction_grib_template(
+    template_grib_root: Path,
+    ymd: int,
+    suffixes: str | tuple[str, ...],
+) -> Path:
+    suffix_values = (suffixes,) if isinstance(suffixes, str) else suffixes
+    candidates: list[Path] = []
+    for suffix in suffix_values:
+        candidates.extend(
+            sorted(template_grib_root.glob(f"*date{ymd}_time0000_step24to120_{suffix}.grib"))
+        )
+        candidates.extend(
+            sorted(template_grib_root.glob(f"*date{ymd}_time0000_step006to120by006_{suffix}.grib"))
+        )
     if not candidates:
         raise FileNotFoundError(
-            f"No template GRIB matching date={ymd} suffix={suffix} under {template_grib_root}"
+            f"No template GRIB matching date={ymd} suffixes={suffix_values} under {template_grib_root}"
         )
-    return candidates[0]
+    return sorted(set(candidates))[0]
 
 
 def write_values_from_matching_grib_message(
@@ -263,8 +276,12 @@ def main() -> None:
                     else:
                         message_short_name = "t" if state == "t_850" else "z" if state == "z_500" else state
                         message_level = 850 if state == "t_850" else 500 if state == "z_500" else None
-                        template_suffix = "pl_y" if state in {"t_850", "z_500"} else "sfc_y"
-                        template_path = find_prediction_grib_template(template_grib_root, ymd, template_suffix)
+                        template_suffixes = ("pl_y",) if state in {"t_850", "z_500"} else ("sfc_y", "y")
+                        template_path = find_prediction_grib_template(
+                            template_grib_root,
+                            ymd,
+                            template_suffixes,
+                        )
                         write_values_from_matching_grib_message(
                             template_path,
                             out_path,

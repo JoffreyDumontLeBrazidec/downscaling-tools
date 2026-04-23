@@ -81,7 +81,7 @@ case "${HOST_SHORT}" in
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 TEMPLATE_DIR="${REPO_ROOT}/eval/jobs/templates"
 SPECTRA_SCRIPT="${TEMPLATE_DIR}/predictions_dir_spectra.py"
 SURFACE_SCRIPT="${REPO_ROOT}/eval/jobs/scoreboard_surface_loss.py"

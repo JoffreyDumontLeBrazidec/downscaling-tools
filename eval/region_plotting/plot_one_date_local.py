@@ -39,7 +39,7 @@ def _default_region_for_grid(grid: str) -> str:
     if grid == "O1280":
         return "amazon_forest_central"
     if grid == "O96":
-        return "amazon_forest_core"
+        return "amazon_forest"
     return "amazon_forest"
 
 

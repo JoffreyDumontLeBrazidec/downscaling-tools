@@ -27,6 +27,7 @@ CONFIGS: dict[str, SpectraConfig] = {
     "10u": SpectraConfig(weather_state="10u", param="10u", level="sfc", dir_name="10u_sfc"),
     "10v": SpectraConfig(weather_state="10v", param="10v", level="sfc", dir_name="10v_sfc"),
     "sp": SpectraConfig(weather_state="sp", param="sp", level="sfc", dir_name="sp_sfc"),
+    "msl": SpectraConfig(weather_state="msl", param="msl", level="sfc", dir_name="msl_sfc"),
     "t_850": SpectraConfig(weather_state="t_850", param="t", level="850", dir_name="t_850"),
     "z_500": SpectraConfig(weather_state="z_500", param="z", level="500", dir_name="z_500"),
 }

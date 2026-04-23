@@ -25,6 +25,7 @@ SURFACE_VARIABLES: OrderedDict[str, float] = OrderedDict(
     ]
 )
 TOTAL_WEIGHT = float(sum(SURFACE_VARIABLES.values()))  # 14.0
+SURFACE_NORMALIZATION_SCHEME = "truth-std"
 
 
 def _normalize_weights(weights: np.ndarray) -> np.ndarray:
@@ -135,23 +136,62 @@ def _member_area_weighted_mse(
     return numerators.sum(axis=1) / weight_sums
 
 
-def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
+def _update_running_moments(state: dict[str, float], values: np.ndarray) -> None:
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return
+    count = int(finite.size)
+    mean = float(np.mean(finite))
+    m2 = float(np.sum(np.square(finite - mean)))
+    previous_count = int(state["count"])
+    if previous_count == 0:
+        state["count"] = count
+        state["mean"] = mean
+        state["m2"] = m2
+        return
+    delta = mean - float(state["mean"])
+    total = previous_count + count
+    state["m2"] = float(state["m2"]) + m2 + delta * delta * previous_count * count / total
+    state["mean"] = (float(state["mean"]) * previous_count + mean * count) / total
+    state["count"] = total
+
+
+def _variance_from_running_moments(state: dict[str, float]) -> float | None:
+    count = int(state["count"])
+    if count <= 0:
+        return None
+    variance = float(state["m2"]) / count
+    if not np.isfinite(variance) or variance <= 0.0:
+        return None
+    return variance
+
+
+def process_predictions_dir(
+    predictions_dir: Path,
+    *,
+    prediction_var: str = "y_pred",
+    truth_var: str = "y",
+) -> dict[str, Any]:
     pred_files = sorted(predictions_dir.glob("predictions_*.nc"))
     if not pred_files:
         raise ValueError(f"No prediction files found in {predictions_dir}")
 
     print(f"Found {len(pred_files)} prediction files")
-    var_mse_values: dict[str, list[float]] = {var: [] for var in SURFACE_VARIABLES}
+    active_surface_variables: OrderedDict[str, float] | None = None
+    missing_surface_variables: list[str] = []
+    var_mse_values: dict[str, list[float]] = {}
+    truth_moments: dict[str, dict[str, float]] = {}
 
     for pred_file in pred_files:
         print(f"Processing {pred_file.name}...")
         with xr.open_dataset(pred_file, cache=False) as ds:
-            for required_var in ("y_pred", "y", "weather_state"):
+            for required_var in (prediction_var, truth_var, "weather_state"):
                 if required_var not in ds:
                     raise ValueError(f"{pred_file}: missing required variable '{required_var}'")
 
-            y_pred = _to_member_point_weather(ds["y_pred"], ds, label="y_pred")
-            y_true = _to_member_point_weather(ds["y"], ds, label="y")
+            y_pred = _to_member_point_weather(ds[prediction_var], ds, label=prediction_var)
+            y_true = _to_member_point_weather(ds[truth_var], ds, label=truth_var)
 
             if y_pred.sizes["grid_point_hres"] != y_true.sizes["grid_point_hres"]:
                 raise ValueError(
@@ -175,13 +215,35 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
             ws_index = _weather_state_index(ds)
-            missing_vars = [var for var in SURFACE_VARIABLES if var not in ws_index]
-            if missing_vars:
+            file_surface_variables = OrderedDict(
+                (var, weight) for var, weight in SURFACE_VARIABLES.items() if var in ws_index
+            )
+            file_missing_variables = [var for var in SURFACE_VARIABLES if var not in ws_index]
+            if not file_surface_variables:
                 raise ValueError(
-                    f"{pred_file}: missing required surface weather_state entries: {missing_vars}"
+                    f"{pred_file}: none of the supported surface weather_state entries were found; "
+                    f"available entries={sorted(ws_index)}"
+                )
+            if active_surface_variables is None:
+                active_surface_variables = file_surface_variables
+                missing_surface_variables = file_missing_variables
+                var_mse_values = {var: [] for var in active_surface_variables}
+                truth_moments = {
+                    var: {"count": 0.0, "mean": 0.0, "m2": 0.0}
+                    for var in active_surface_variables
+                }
+                if missing_surface_variables:
+                    print(
+                        "Warning: proceeding without missing surface weather_state entries: "
+                        + ", ".join(missing_surface_variables)
+                    )
+            elif tuple(file_surface_variables) != tuple(active_surface_variables):
+                raise ValueError(
+                    f"{pred_file}: inconsistent surface weather_state coverage; "
+                    f"expected {list(active_surface_variables)}, got {list(file_surface_variables)}"
                 )
 
-            for var_name in SURFACE_VARIABLES:
+            for var_name in active_surface_variables:
                 idx = ws_index[var_name]
                 # Load one surface field at a time to keep memory bounded on large O320 files.
                 y_pred_vals = np.asarray(y_pred.isel(weather_state=idx).values, dtype=np.float64)
@@ -192,18 +254,28 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
                     weights,
                 )
                 var_mse_values[var_name].extend(per_member_mse.tolist())
+                _update_running_moments(truth_moments[var_name], y_true_vals)
+
+    if active_surface_variables is None:
+        raise ValueError(f"No supported surface weather_state entries found under {predictions_dir}")
 
     per_var_results: dict[str, dict[str, Any]] = {}
     weighted_surface_mse = 0.0
+    weighted_surface_nmse = 0.0
+    has_weighted_surface_nmse = False
     n_member_samples_per_variable: int | None = None
+    total_weight = float(sum(active_surface_variables.values()))
 
-    for var_name, var_weight in SURFACE_VARIABLES.items():
+    for var_name, var_weight in active_surface_variables.items():
         values = np.asarray(var_mse_values[var_name], dtype=np.float64)
         if values.size == 0:
             raise ValueError(f"No MSE values collected for required variable '{var_name}'")
         mean_mse = float(np.mean(values))
         n_samples = int(values.size)
-        normalized_weight = float(var_weight / TOTAL_WEIGHT)
+        normalized_weight = float(var_weight / total_weight)
+        truth_variance = _variance_from_running_moments(truth_moments[var_name])
+        truth_std = float(np.sqrt(truth_variance)) if truth_variance is not None else None
+        mean_nmse = mean_mse / truth_variance if truth_variance is not None else None
 
         per_var_results[var_name] = {
             "mean_mse": mean_mse,
@@ -211,7 +283,14 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
             "normalized_weight": normalized_weight,
             "n_member_samples": n_samples,
         }
+        if truth_std is not None:
+            per_var_results[var_name]["truth_std"] = truth_std
+        if mean_nmse is not None and np.isfinite(mean_nmse):
+            per_var_results[var_name]["mean_nmse"] = float(mean_nmse)
         weighted_surface_mse += mean_mse * normalized_weight
+        if mean_nmse is not None and np.isfinite(mean_nmse):
+            weighted_surface_nmse += float(mean_nmse) * normalized_weight
+            has_weighted_surface_nmse = True
 
         if n_member_samples_per_variable is None:
             n_member_samples_per_variable = n_samples
@@ -222,7 +301,15 @@ def process_predictions_dir(predictions_dir: Path) -> dict[str, Any]:
 
     return {
         "weighted_surface_mse": float(weighted_surface_mse),
-        "total_weight": TOTAL_WEIGHT,
+        "weighted_surface_nmse": float(weighted_surface_nmse) if has_weighted_surface_nmse else None,
+        "normalization_scheme": SURFACE_NORMALIZATION_SCHEME,
+        "prediction_var": prediction_var,
+        "truth_var": truth_var,
+        "total_weight": total_weight,
+        "requested_surface_variables": list(SURFACE_VARIABLES.keys()),
+        "available_surface_variables": list(active_surface_variables.keys()),
+        "missing_surface_variables": missing_surface_variables,
+        "total_requested_weight": TOTAL_WEIGHT,
         "n_prediction_files": len(pred_files),
         "n_member_samples_per_variable": int(n_member_samples_per_variable or 0),
         "variables": per_var_results,
@@ -261,10 +348,19 @@ def main() -> None:
 
     print(f"\nResults written to: {out_json}")
     print(f"Weighted surface MSE: {results['weighted_surface_mse']:.6e}")
+    weighted_surface_nmse = results.get("weighted_surface_nmse")
+    if weighted_surface_nmse is None:
+        print("Weighted surface nMSE: na")
+    else:
+        print(f"Weighted surface nMSE: {weighted_surface_nmse:.6e}")
     print("\nPer-variable breakdown:")
     for var, data in sorted(results["variables"].items()):
+        mean_nmse_text = "na"
+        if "mean_nmse" in data:
+            mean_nmse_text = f"{data['mean_nmse']:.6e}"
         print(
             f"  {var:6s}: MSE={data['mean_mse']:.6e}, "
+            f"nMSE={mean_nmse_text}, "
             f"weight={data['normalized_weight']:.3f}, "
             f"samples={data['n_member_samples']}"
         )

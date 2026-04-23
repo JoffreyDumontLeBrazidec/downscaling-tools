@@ -305,7 +305,10 @@ def main() -> None:
         output_weather_states = parse_output_weather_states(args.output_weather_states)
 
         if args.device == "cuda" and not torch.cuda.is_available():
-            args.device = "cpu"
+            raise SystemExit(
+                "Requested --device cuda, but CUDA is not available on this host. "
+                "Refusing to fall back to CPU for diffusion sampling."
+            )
 
         device = _resolve_device(args.device, local_rank)
         if str(device).startswith("cuda"):

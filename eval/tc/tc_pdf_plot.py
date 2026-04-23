@@ -250,17 +250,25 @@ def _extreme_tail_table(series: dict[str, tuple[np.ndarray, np.ndarray]]) -> dic
         wind = _finite_1d(wind_arr)
         msl_hit = (msl >= IDALIA_EXTREME_MSLP_RANGE[0]) & (msl <= IDALIA_EXTREME_MSLP_RANGE[1])
         wind_hit = wind > IDALIA_EXTREME_WIND_MIN
-        rows.append(
-            {
-                "exp": exp,
-                "mslp_980_990_count": int(np.sum(msl_hit)),
-                "mslp_980_990_fraction": float(np.mean(msl_hit)) if msl.size else math.nan,
-                "wind_gt_25_count": int(np.sum(wind_hit)),
-                "wind_gt_25_fraction": float(np.mean(wind_hit)) if wind.size else math.nan,
-                "n_msl": int(msl.size),
-                "n_wind": int(wind.size),
-            }
-        )
+        row: dict[str, object] = {
+            "exp": exp,
+            "mslp_980_990_count": int(np.sum(msl_hit)),
+            "mslp_980_990_fraction": float(np.mean(msl_hit)) if msl.size else math.nan,
+            "wind_gt_25_count": int(np.sum(wind_hit)),
+            "wind_gt_25_fraction": float(np.mean(wind_hit)) if wind.size else math.nan,
+            "n_msl": int(msl.size),
+            "n_wind": int(wind.size),
+        }
+        # Multi-depth tail percentiles for analysis-anchored scoring
+        if msl.size > 0:
+            row["mslp_p1"] = float(np.percentile(msl, 1.0))
+            row["mslp_p01"] = float(np.percentile(msl, 0.1))
+            row["mslp_min"] = float(np.min(msl))
+        if wind.size > 0:
+            row["wind_p99"] = float(np.percentile(wind, 99.0))
+            row["wind_p999"] = float(np.percentile(wind, 99.9))
+            row["wind_max"] = float(np.max(wind))
+        rows.append(row)
     rows.sort(
         key=lambda row: (
             float(row["mslp_980_990_fraction"]) if np.isfinite(row["mslp_980_990_fraction"]) else -1.0,

@@ -32,33 +32,33 @@ RUN_SUFFIX="${RUN_SUFFIX:-manual_eval}"
 RUN_ID_OVERRIDE="${RUN_ID_OVERRIDE:-}"
 
 PROXY_BUNDLE_PAIRS="${PROXY_BUNDLE_PAIRS:-20250926:24,20250926:48,20250927:24,20250927:48,20250928:24,20250928:48,20250929:24,20250929:48,20250930:24,20250930:48}"
-SAMPLER_JSON="${SAMPLER_JSON:-{}}"
+SAMPLER_JSON="${SAMPLER_JSON:-{\"schedule_type\":\"experimental_piecewise\",\"num_steps\":21,\"sigma_max\":1000.0,\"sigma_transition\":10.0,\"sigma_min\":0.03,\"high_schedule_type\":\"exponential\",\"low_schedule_type\":\"karras\",\"num_steps_high\":5,\"num_steps_low\":16,\"rho\":7.0,\"sampler\":\"heun\",\"S_churn\":2.5,\"S_min\":0.75,\"S_max\":1000.0,\"S_noise\":1.05}}"
 DATES="${DATES:-}"
 STEPS="${STEPS:-24,48,72,96,120}"
 BUNDLE_PAIRS="${BUNDLE_PAIRS:-}"
 MEMBERS="${MEMBERS:-}"                               # blank => phase default (member 1)
 
 MLFLOW_EXPERIMENT_DIR="${MLFLOW_EXPERIMENT_DIR:-/home/ecm5702/scratch/aifs/logs/mlflow/909682684414341917}"
-TRAINING_RUN_FILTER="${TRAINING_RUN_FILTER:-}"       # blank => defaults to checkpoint short,lane
+TRAINING_RUN_FILTER="${TRAINING_RUN_FILTER:-forcings_hres}"  # excludes 100k-family runs (data leakage)
 TRAINING_RUN_MIN_STEPS="${TRAINING_RUN_MIN_STEPS:-0}"
 
 SIGMAS="${SIGMAS:-0.02,0.05,0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000}"
 SIGMA_N_SAMPLES="${SIGMA_N_SAMPLES:-3}"
 SIGMA_VALIDATION_FREQUENCY="${SIGMA_VALIDATION_FREQUENCY:-50h}"
 
-RUN_ONE_DATE_LOCAL="${RUN_ONE_DATE_LOCAL:-1}"
+RUN_ONE_DATE_LOCAL="${RUN_ONE_DATE_LOCAL:-0}"
 LOCAL_PLOT_DATE="${LOCAL_PLOT_DATE:-}"               # blank => auto first selected date
 LOCAL_PLOT_EXPECTED_COUNT="${LOCAL_PLOT_EXPECTED_COUNT:-auto}"
 LOCAL_PLOT_OUT_SUBDIR="${LOCAL_PLOT_OUT_SUBDIR:-local_plots_one_date}"
 
 RUN_REGIONAL_SUITES="${RUN_REGIONAL_SUITES:-1}"
 REGIONAL_SUITE_DATE="${REGIONAL_SUITE_DATE:-}"       # blank => prefer 20250928 when available
-REGIONAL_SUITE_STEPS="${REGIONAL_SUITE_STEPS:-24,48,120}"
+REGIONAL_SUITE_STEPS="${REGIONAL_SUITE_STEPS:-24,120}"
 REGIONAL_SUITE_REGION_NAMES="${REGIONAL_SUITE_REGION_NAMES:-amazon_forest_core,eastern_us_coast,andes_central,himalayas_central,maritime_continent,congo_basin}"
 REGIONAL_SUITE_MODEL_VARIABLES="${REGIONAL_SUITE_MODEL_VARIABLES:-x_0,x_interp_0,y_0,y_pred_0,residuals_0,residuals_pred_0}"
 REGIONAL_SUITE_OUT_PREFIX="${REGIONAL_SUITE_OUT_PREFIX:-local_plots_regions}"
 
-RUN_STORM_PLOTS="${RUN_STORM_PLOTS:-1}"
+RUN_STORM_PLOTS="${RUN_STORM_PLOTS:-0}"
 STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-eastern_us_coast,idalia_center}"
 STORM_PLOT_OUT_PREFIX="${STORM_PLOT_OUT_PREFIX:-storm_local_plots}"
 
@@ -616,6 +616,7 @@ set_var "${PREDICT_SCRIPT}" NUM_GPUS_PER_MODEL "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_EXISTING_RUN_DIR "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_REBUILT_BUNDLE_ROOT "1"
 set_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "${SAMPLER_JSON}"
+set_var "${PREDICT_SCRIPT}" MLFLOW_EXPERIMENT_DIR "${MLFLOW_EXPERIMENT_DIR}"
 set_sbatch_directive "${PREDICT_SCRIPT}" job-name "o48_pred_${CHECKPOINT_SHORT}"
 set_sbatch_directive "${PREDICT_SCRIPT}" ntasks-per-node "1"
 set_sbatch_directive "${PREDICT_SCRIPT}" cpus-per-task "16"
@@ -705,6 +706,7 @@ for storm_script in "${STORM_SCRIPTS[@]}"; do
   set_var "${storm_script}" PREDICTIONS_FILE "${PREDICTIONS_DIR}/predictions_${RESOLVED_REGIONAL_SUITE_DATE}_step${step_padded}.nc"
   set_var "${storm_script}" OUT_DIR "${RUN_ROOT}/${STORM_PLOT_OUT_PREFIX}_step${step_padded}"
   set_var "${storm_script}" REGION_NAMES "${STORM_PLOT_REGIONS}"
+  set_var "${storm_script}" SUITE_KIND "storm"
   set_var "${storm_script}" MODEL_VARIABLES "${REGIONAL_SUITE_MODEL_VARIABLES}"
   set_sbatch_directive "${storm_script}" job-name "o48_storms${step_padded}_${CHECKPOINT_SHORT}"
 done
@@ -763,6 +765,18 @@ if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
 fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_sbatch_directive "${TC_SCRIPT}" qos "${CPU_QOS}"
+fi
+if [[ "${HOST_FAMILY}" == "ac" ]]; then
+  set_sbatch_directive "${LOCAL_SCRIPT}" mem "128G"
+  for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
+    set_sbatch_directive "${regional_script}" mem "128G"
+  done
+  for storm_script in "${STORM_SCRIPTS[@]}"; do
+    set_sbatch_directive "${storm_script}" mem "128G"
+  done
+  if [[ "${RUN_TC_PDF}" == "1" ]]; then
+    set_sbatch_directive "${TC_SCRIPT}" mem "128G"
+  fi
 fi
 
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
@@ -872,6 +886,28 @@ if [[ "${RUN_TC_PDF}" == "1" ]]; then
   echo "[o48-flow] ${tc_submit}"
 fi
 
+# --- Finalize: lean eval layout reorganization ---
+FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
+FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
+monitor_jobs=("${predict_job}" "${loss_job}" "${sigma_job}" "${spectra_job}")
+[[ "${local_job}" != "skipped" ]] && monitor_jobs+=("${local_job}")
+[[ "${tc_job}" != "skipped" ]] && monitor_jobs+=("${tc_job}")
+monitor_jobs+=("${regional_jobs[@]}")
+monitor_jobs+=("${storm_jobs[@]}")
+finalize_job="skipped"
+if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
+  if [[ ! -f "${FINALIZE_SCRIPT}" ]] || [[ "${ALLOW_OVERWRITE}" -eq 1 ]]; then
+    cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+    set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+  fi
+  finalize_dep_csv="$(IFS=:; echo "${monitor_jobs[*]}")"
+  finalize_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${finalize_dep_csv} "${FINALIZE_SCRIPT}")"
+  finalize_job="$(extract_job_id "${finalize_submit}")"
+  echo "[o48-flow] ${finalize_submit}"
+  monitor_jobs+=("${finalize_job}")
+fi
+
 cat <<EOF
 
 === O48 -> O96 MANUAL EVAL FLOW SUBMITTED ===
@@ -898,4 +934,5 @@ job_ids:
   tc_pdf:           ${tc_job}
   regional_suites:  ${regional_jobs[*]:-skipped}
   storm_plots:      ${storm_jobs[*]:-skipped}
+  finalize_lean:    ${finalize_job}
 EOF
