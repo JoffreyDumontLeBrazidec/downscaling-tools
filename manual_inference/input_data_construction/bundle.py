@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Mapping, Sequence
 
 import numpy as np
 import xarray as xr
+
+logger = logging.getLogger(__name__)
 
 from manual_inference.config import BUNDLE_IMPLICIT_HRES_FEATURES
 from manual_inference.config import DEFAULT_CONSTANT_FORCINGS_NPZ
@@ -514,6 +517,8 @@ def load_inputs_from_bundle_numpy(
             _lres_npz_candidates, lat_lres.size
         )
 
+        _zero_filled_vars: list[str] = []
+
         for name, idx in name_to_idx_lres.items():
             base, level = split_level_channel(name)
             if level is None:
@@ -564,6 +569,13 @@ def load_inputs_from_bundle_numpy(
                         # Load from pre-built forcings npz (z, lsm, slor, …).
                         raw = _lres_npz_constants[name]
                     elif name in OPTIONAL_ZERO_LRES_SFC_VARS:
+                        logger.warning(
+                            "Zero-filling missing lres variable '%s' (index %d). "
+                            "If the model was trained on real values for this variable, "
+                            "zero-fill will be out-of-distribution and may corrupt predictions.",
+                            name, idx,
+                        )
+                        _zero_filled_vars.append(name)
                         raw = np.zeros(n_lres, dtype=np.float32)
                     else:
                         raise KeyError(f"Missing bundle field: {field_name}")
@@ -614,6 +626,13 @@ def load_inputs_from_bundle_numpy(
                     "non-forcing HRES channels must be stored explicitly as in_hres_* fields in the bundle."
                 )
             x_hres[:, idx] = np.asarray(raw, dtype=np.float32).reshape(-1)
+
+        if _zero_filled_vars:
+            logger.warning(
+                "OOD RISK: %d lres variables were zero-filled: %s. "
+                "Predictions may be unreliable if the model was trained with real values for these fields.",
+                len(_zero_filled_vars), ", ".join(sorted(_zero_filled_vars)),
+            )
 
         return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
     finally:
