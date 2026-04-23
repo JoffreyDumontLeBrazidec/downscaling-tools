@@ -3,15 +3,10 @@
 # Canonical o48 → o96 training template
 #
 # WHY THIS EXISTS:
-#   The base config `downscaling_no_precip.yaml` lists 12 forcing variables
-#   that match the O96→O320 lane.  The O48 zarr differs:
-#     - `cos_solar_zenith_angle` instead of `insolation`
-#     - no `slor`
-#   Previous ad-hoc launchers either wiped the forcing list entirely
-#   (`data.forcing=[]`) or forgot lr.min, causing:
-#     A) Model wasted capacity predicting 104 channels (11 deterministic)
-#     B) LR decayed to zero at max_steps
-#   This template encodes the corrected O48-specific overrides.
+#   The o48_o96 top-level config now points to data: downscaling_o48
+#   which has the correct 11-var forcing list and normalizer for the O48
+#   zarr.  The training/default.yaml lr.min is now 1e-7 (safe floor).
+#   This template adds only run-specific overrides (sigma, steps, etc).
 #
 # USAGE:
 #   1. Copy this template to /home/ecm5702/dev/jobscripts/submit/<date>/
@@ -70,19 +65,11 @@ cd /home/ecm5702/dev
 RUN_NAME="${RUN_TAG}_lognorm${SIGMA_MEAN}_${SIGMA_STD}_${MAX_STEPS}steps_${SLURM_JOB_ID}"
 
 # ─── Train ──────────────────────────────────────────────────────────────────
-# KEY O48-SPECIFIC OVERRIDES (do not remove):
+# The o48_o96 top-level config now uses data: downscaling_o48 which has
+# the correct 11-var forcing list, normalizer, and tp in std.
+# The training/default.yaml lr.min is now 1e-7 (safe floor).
 #
-#   data.forcing  — 11 vars, NOT the base config's 12.
-#                   cos_solar_zenith_angle replaces insolation; slor absent.
-#                   Without this, model predicts 104 channels (wastes 32% of
-#                   gradient budget on deterministic vars).
-#
-#   training.lr.min — must be > 0 to prevent LR decaying to exactly zero.
-#
-#   +data.normalizer.none — adds cos_solar_zenith_angle (APPENDS to base list).
-#
-#   +data.normalizer.std  — adds tp to std normalization.
-#
+# Only run-specific overrides remain here:
 #   ~training.variable_groups.pl.param + is_pressure_level — ensures PL
 #                   level detection works with the full 13-level set.
 
@@ -97,9 +84,6 @@ srun anemoi-training train \
   training.training_approach=probabilistic_low_noise \
   dataloader=o48_o96_forcings_hres \
   dataloader.batch_size.training="${BATCH_SIZE}" \
-  'data.forcing=[cos_latitude,cos_longitude,sin_latitude,sin_longitude,cos_julian_day,cos_local_time,sin_julian_day,sin_local_time,cos_solar_zenith_angle,lsm,z]' \
-  '+data.normalizer.none=[cos_latitude,cos_longitude,sin_latitude,sin_longitude,cos_julian_day,cos_local_time,sin_julian_day,sin_local_time,cos_solar_zenith_angle,lsm]' \
-  '+data.normalizer.std=[tp]' \
   '~training.variable_groups.pl.param' \
   '+training.variable_groups.pl.is_pressure_level=True' \
   model.model.diffusion.log_normal_mean="${SIGMA_MEAN}" \
