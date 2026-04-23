@@ -181,13 +181,13 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
 
 ### Training
 - `train_o48_o96.sbatch`
-  - Canonical `o48 -> o96` training launcher with correct O48-specific overrides.
-  - Encodes the 11-var forcing list (cos_solar_zenith_angle replaces insolation, no slor),
-    non-zero LR floor, and normalizer additions that differ from the base config.
-  - Edit the USER SETTINGS block (sigma schedule, max_steps, batch size) and copy to
+  - Canonical `o48 -> o96` training launcher.
+  - The `o48_o96` top-level config uses `data: downscaling_o48` which carries
+    the correct 11-var forcing list and normalizer. The global `training/default.yaml`
+    `lr.min` is `1e-7` (safe floor). This template only adds run-specific overrides
+    (sigma schedule, max_steps, batch size, PL variable group fix).
+  - Edit the USER SETTINGS block and copy to
     `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/` before submitting.
-  - This template exists because the base config `downscaling_no_precip.yaml` assumes
-    12 forcing vars matching the O96→O320 lane; O48 needs different overrides.
 
 ### Training Loss
 - `training_loss_plots_from_mlflow.sbatch`
