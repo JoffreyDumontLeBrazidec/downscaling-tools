@@ -156,17 +156,27 @@ if [[ "$SKIP_TRAINING" -eq 0 ]]; then
   echo "STEP 2: Converting checkpoint to inference format"
   echo "========================================"
 
-  RUN_UUID=$(ls -tc "${OUTPUT}/checkpoint/" | head -1)
-  CKPT_DIR="${OUTPUT}/checkpoint/${RUN_UUID}"
+  # Extract the checkpoint dir that THIS training job created (avoid race with concurrent jobs)
+  JOB_OUT="/home/ecm5702/dev/jobscripts/outputs/overfit/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out"
+  CKPT_DIR=$(grep -oP 'Checkpoints path: \K.*' "${JOB_OUT}" | tail -1)
+  if [[ -z "$CKPT_DIR" ]]; then
+    echo "WARN: Could not extract checkpoint path from training log; falling back to ls -tc"
+    RUN_UUID=$(ls -tc "${OUTPUT}/checkpoint/" | head -1)
+    CKPT_DIR="${OUTPUT}/checkpoint/${RUN_UUID}"
+  fi
   echo "Found checkpoint dir: ${CKPT_DIR}"
 
   TRAIN_CKPT=$(find "${CKPT_DIR}" -name "last.ckpt" -o -name "anemoi-*.ckpt" | grep -v inference | sort | tail -1)
   echo "Training checkpoint: ${TRAIN_CKPT}"
 
   INF_CKPT="${CKPT_DIR}/inference-$(basename ${TRAIN_CKPT})"
-  python -m anemoi.training checkpoint inference \
-    --input "${TRAIN_CKPT}" \
-    --output "${INF_CKPT}"
+  if [[ -f "${INF_CKPT}" ]]; then
+    echo "Inference checkpoint already exists (created by training callback): ${INF_CKPT}"
+  else
+    python -m anemoi.training checkpoint inference \
+      --input "${TRAIN_CKPT}" \
+      --output "${INF_CKPT}"
+  fi
   echo "Inference checkpoint: ${INF_CKPT}"
 
   CKPT_PATH="${TRAIN_CKPT}"
