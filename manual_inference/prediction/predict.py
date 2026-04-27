@@ -267,8 +267,9 @@ def _predict_from_dataloader(
     model_comm_group,
     output_weather_state_mode: str = "all",
     output_weather_states: Sequence[str] | None = None,
+    split: str = "valid",
 ):
-    data = datamodule.ds_valid.data
+    data = (datamodule.ds_train if split == "train" else datamodule.ds_valid).data
     x_in = np.asarray(data[idx : idx + n_samples][0])  # [dates, vars, ens, grid]
     x_in_hres = np.asarray(data[idx : idx + n_samples][1])
     y = np.asarray(data[idx : idx + n_samples][2])
@@ -602,6 +603,12 @@ def main() -> None:
     )
     p_dl.add_argument("--out", default="")
     p_dl.add_argument(
+        "--split",
+        choices=["valid", "train"],
+        default="valid",
+        help="Which data split to sample from (default: valid).",
+    )
+    p_dl.add_argument(
         "--debug-from-dataloader",
         action="store_true",
         help="Required safety switch: from-dataloader is debug-only.",
@@ -754,7 +761,7 @@ def main() -> None:
                 "from-dataloader is debug-only in the new stack. "
                 "Pass --debug-from-dataloader to run it intentionally."
             )
-        data = datamodule.ds_valid.data
+        data = (datamodule.ds_train if args.split == "train" else datamodule.ds_valid).data
         max_members = int(np.asarray(data[args.idx : args.idx + 1][0]).shape[2])
         members = _parse_members(args.members, max_members)
         (
@@ -779,6 +786,7 @@ def main() -> None:
             model_comm_group=model_comm_group,
             output_weather_state_mode=args.output_weather_state_mode,
             output_weather_states=output_weather_states,
+            split=args.split,
         )
         member_ids = members
         y, used_missing_target_unsafe = _coerce_missing_truth_to_nan(

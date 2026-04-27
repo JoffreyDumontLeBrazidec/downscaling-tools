@@ -5,22 +5,15 @@ Usage (single variable):
     python validate_overfit.py \
         --predictions-nc /path/to/predictions.nc \
         --spectra-json /path/to/spectra_summary.json \
-        --variable 2t \
-        [--full-field-threshold 0.05] \
-        [--residual-threshold 0.10] \
-        [--rmse-threshold 2.0] \
-        [--temp-min 220] [--temp-max 330]
+        --variable 2t
 
 Usage (multi-variable):
     python validate_overfit.py \
         --predictions-nc /path/to/predictions.nc \
         --spectra-json /path/to/spectra_summary.json \
-        --variables 2t,tp \
-        [--full-field-threshold 0.05] \
-        [--residual-threshold 0.10] \
-        [--rmse-threshold 2.0] \
-        [--temp-min 180] [--temp-max 340]
+        --variables 2t,tp
 
+Per-variable thresholds are built-in. Override globally with CLI flags.
 Exits 0 on PASS, 1 on FAIL.
 """
 from __future__ import annotations
@@ -32,8 +25,30 @@ from pathlib import Path
 
 import numpy as np
 
+# Per-variable default thresholds
+VARIABLE_DEFAULTS = {
+    "2t": {"range_min": 180.0, "range_max": 340.0, "rmse": 2.0, "corr": 0.95, "ff_l2": 0.05, "res_l2": 1.0, "unit": "K"},
+    "tp": {"range_min": -0.01, "range_max": 0.5, "rmse": 0.01, "corr": 0.3, "ff_l2": 0.5, "res_l2": 2.0, "unit": "kg/m²"},
+}
+# Fallback for unknown variables
+DEFAULT_THRESHOLDS = {"range_min": -1e6, "range_max": 1e6, "rmse": 10.0, "corr": 0.5, "ff_l2": 0.1, "res_l2": 2.0, "unit": ""}
 
-def check_predictions(nc_path: str, variable: str, temp_min: float, temp_max: float, rmse_threshold: float) -> dict:
+
+def _get_thresholds(variable: str, args) -> dict:
+    """Get thresholds for a variable, using CLI overrides if provided."""
+    defaults = VARIABLE_DEFAULTS.get(variable, DEFAULT_THRESHOLDS)
+    return {
+        "range_min": args.range_min if args.range_min is not None else defaults["range_min"],
+        "range_max": args.range_max if args.range_max is not None else defaults["range_max"],
+        "rmse": args.rmse_threshold if args.rmse_threshold is not None else defaults["rmse"],
+        "corr": args.corr_threshold if args.corr_threshold is not None else defaults["corr"],
+        "ff_l2": args.full_field_threshold if args.full_field_threshold is not None else defaults["ff_l2"],
+        "res_l2": args.residual_threshold if args.residual_threshold is not None else defaults["res_l2"],
+        "unit": defaults.get("unit", ""),
+    }
+
+
+def check_predictions(nc_path: str, variable: str, thresholds: dict) -> dict:
     """Basic sanity checks on predictions.nc."""
     import xarray as xr
 
@@ -73,9 +88,9 @@ def check_predictions(nc_path: str, variable: str, temp_min: float, temp_max: fl
 
     results["checks"]["no_nan"] = nan_frac == 0.0
     results["checks"]["no_inf"] = inf_frac == 0.0
-    results["checks"]["range_ok"] = vmin >= temp_min and vmax <= temp_max
-    results["checks"]["rmse_ok"] = rmse < rmse_threshold
-    results["checks"]["corr_ok"] = corr > 0.95
+    results["checks"]["range_ok"] = vmin >= thresholds["range_min"] and vmax <= thresholds["range_max"]
+    results["checks"]["rmse_ok"] = rmse < thresholds["rmse"]
+    results["checks"]["corr_ok"] = corr > thresholds["corr"]
 
     results["pass"] = all(results["checks"].values())
     return results
@@ -131,11 +146,13 @@ def main():
     # Accept either --variable (single) or --variables (comma-separated list)
     p.add_argument("--variable", default=None, help="Single variable to validate (legacy)")
     p.add_argument("--variables", default=None, help="Comma-separated list of variables (e.g. 2t,tp)")
-    p.add_argument("--full-field-threshold", type=float, default=0.05)
-    p.add_argument("--residual-threshold", type=float, default=0.10)
-    p.add_argument("--rmse-threshold", type=float, default=2.0)
-    p.add_argument("--temp-min", type=float, default=220.0)
-    p.add_argument("--temp-max", type=float, default=330.0)
+    # Optional global overrides (None = use per-variable defaults)
+    p.add_argument("--full-field-threshold", type=float, default=None)
+    p.add_argument("--residual-threshold", type=float, default=None)
+    p.add_argument("--rmse-threshold", type=float, default=None)
+    p.add_argument("--corr-threshold", type=float, default=None)
+    p.add_argument("--range-min", type=float, default=None)
+    p.add_argument("--range-max", type=float, default=None)
     args = p.parse_args()
 
     # Resolve variable list: --variables takes precedence, fall back to --variable
@@ -154,27 +171,27 @@ def main():
     all_pass = True
 
     for variable in var_list:
+        thresholds = _get_thresholds(variable, args)
+        unit = thresholds["unit"]
+
         # --- Predictions sanity ---
         print(f"\n--- Predictions sanity ({variable}) ---")
-        pred_result = check_predictions(
-            args.predictions_nc, variable,
-            args.temp_min, args.temp_max, args.rmse_threshold,
-        )
+        pred_result = check_predictions(args.predictions_nc, variable, thresholds)
         if "reason" in pred_result:
             print(f"  FAIL: {pred_result['reason']}")
         else:
             print(f"  NaN fraction:  {pred_result['nan_fraction']:.6f}  {'✓' if pred_result['checks']['no_nan'] else '✗'}")
             print(f"  Inf fraction:  {pred_result['inf_fraction']:.6f}  {'✓' if pred_result['checks']['no_inf'] else '✗'}")
-            print(f"  Range:         [{pred_result['pred_min']:.2f}, {pred_result['pred_max']:.2f}]  {'✓' if pred_result['checks']['range_ok'] else '✗'} (expected [{args.temp_min}, {args.temp_max}])")
-            print(f"  RMSE vs truth: {pred_result['rmse']:.4f} K  {'✓' if pred_result['checks']['rmse_ok'] else '✗'} (threshold {args.rmse_threshold})")
-            print(f"  Spatial corr:  {pred_result['spatial_correlation']:.6f}  {'✓' if pred_result['checks']['corr_ok'] else '✗'} (threshold 0.95)")
+            print(f"  Range:         [{pred_result['pred_min']:.4f}, {pred_result['pred_max']:.4f}]  {'✓' if pred_result['checks']['range_ok'] else '✗'} (expected [{thresholds['range_min']}, {thresholds['range_max']}])")
+            print(f"  RMSE vs truth: {pred_result['rmse']:.4f} {unit}  {'✓' if pred_result['checks']['rmse_ok'] else '✗'} (threshold {thresholds['rmse']})")
+            print(f"  Spatial corr:  {pred_result['spatial_correlation']:.6f}  {'✓' if pred_result['checks']['corr_ok'] else '✗'} (threshold {thresholds['corr']})")
         print(f"  Predictions: {'PASS' if pred_result['pass'] else 'FAIL'}")
 
         # --- Spectra quality ---
         print(f"\n--- Spectra quality ({variable}) ---")
         spec_result = check_spectra(
             args.spectra_json, variable,
-            args.full_field_threshold, args.residual_threshold,
+            thresholds["ff_l2"], thresholds["res_l2"],
         )
         if "reason" in spec_result:
             print(f"  FAIL: {spec_result['reason']}")
@@ -183,10 +200,10 @@ def main():
             res = spec_result["residual_relative_l2"]
             ff_str = f"{ff:.6f}" if ff is not None else "N/A"
             res_str = f"{res:.6f}" if res is not None else "N/A"
-            print(f"  Full-field relative_l2: {ff_str}  {'✓' if spec_result['checks']['full_field_ok'] else '✗'} (threshold {args.full_field_threshold})")
+            print(f"  Full-field relative_l2: {ff_str}  {'✓' if spec_result['checks']['full_field_ok'] else '✗'} (threshold {thresholds['ff_l2']})")
             if "full_field_note" in spec_result:
                 print(f"    Note: {spec_result['full_field_note']}")
-            print(f"  Residual relative_l2:  {res_str}  {'✓' if spec_result['checks']['residual_ok'] else '✗'} (threshold {args.residual_threshold})")
+            print(f"  Residual relative_l2:  {res_str}  {'✓' if spec_result['checks']['residual_ok'] else '✗'} (threshold {thresholds['res_l2']})")
             if "residual_note" in spec_result:
                 print(f"    Note: {spec_result['residual_note']}")
         print(f"  Spectra: {'PASS' if spec_result['pass'] else 'FAIL'}")

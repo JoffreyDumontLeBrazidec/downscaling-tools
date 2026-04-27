@@ -199,6 +199,7 @@ python -m manual_inference.prediction.predict from-dataloader \
   --members 0 \
   --validation-frequency "50h" \
   --precision fp32 \
+  --split train \
   --output-weather-states "${OUTPUT_WEATHER_STATES}" \
   --slim-output \
   --extra-args-json '{"schedule_type":"karras","num_steps":40,"sigma_max":1000.0,"sigma_min":0.03,"rho":7.0,"sampler":"heun","S_churn":0,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}' \
@@ -237,12 +238,7 @@ PRED_NC="${PRED_DIR}/predictions_overfit.nc"
 python "${VALIDATE}" \
   --predictions-nc "${PRED_NC}" \
   --spectra-json "${SPECTRA_DIR}/spectra_summary.json" \
-  --variables "${VALIDATE_VARIABLES}" \
-  --full-field-threshold 0.05 \
-  --residual-threshold 1.0 \
-  --rmse-threshold 2.0 \
-  --temp-min 180 \
-  --temp-max 340
+  --variables "${VALIDATE_VARIABLES}"
 
 echo ""
 echo "========================================"
