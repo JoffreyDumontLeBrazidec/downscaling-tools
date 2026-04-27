@@ -76,8 +76,14 @@ def adapt_config_hpc(config_checkpoint, config):
 
 
 def instantiate_config(
-    anemoi_config_dir="/home/ecm5702/dev/anemoi-config", config_name="hindcast_o320"
+    anemoi_config_dir=None, config_name=None,
 ):
+    if anemoi_config_dir is None:
+        anemoi_config_dir = os.environ.get(
+            "ANEMOI_CONFIG_DIR", "/home/ecm5702/dev/anemoi-config"
+        )
+    if config_name is None:
+        config_name = os.environ.get("ANEMOI_CONFIG_NAME", "o96_o320")
     GlobalHydra.instance().clear()
     initialize_config_dir(config_dir=anemoi_config_dir, job_name="compose_config")
     config = compose(config_name=config_name)
