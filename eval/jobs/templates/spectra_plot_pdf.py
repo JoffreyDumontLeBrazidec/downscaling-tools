@@ -67,11 +67,28 @@ def build_pdf_proxy(spectra_dir: Path, out_pdf: Path) -> int:
                 rl2 = sc.get("relative_l2_mean_curve", float("nan"))
                 n_curves = sc.get("n_curves", "?")
 
+                # Fix 4: guard against empty mask
+                mask = wvn > 0
+                if mask.sum() == 0:
+                    print(f"[WARN] Skipping {var}/{scope}: no wavenumbers > 0")
+                    continue
+
+                # Fix 3: guard against all-NaN or all-zero data after masking
+                pred_masked = pred[mask]
+                truth_masked = truth[mask]
+                if (
+                    len(pred_masked) == 0
+                    or len(truth_masked) == 0
+                    or (np.all(np.isnan(pred_masked)) or np.all(pred_masked == 0))
+                    or (np.all(np.isnan(truth_masked)) or np.all(truth_masked == 0))
+                ):
+                    print(f"[WARN] Skipping {var}/{scope}: no valid data after masking")
+                    continue
+
                 fig, ax = plt.subplots(figsize=(8, 5))
                 # Only plot positive wavenumbers for log-log
-                mask = wvn > 0
-                ax.loglog(wvn[mask], pred[mask], label="prediction", color="tab:blue")
-                ax.loglog(wvn[mask], truth[mask], label="truth", color="tab:orange", linestyle="--")
+                ax.loglog(wvn[mask], pred_masked, label="prediction", color="tab:blue")
+                ax.loglog(wvn[mask], truth_masked, label="truth", color="tab:orange", linestyle="--")
 
                 if score_wvn_min is not None:
                     ax.axvline(score_wvn_min, color="gray", linestyle=":", linewidth=0.8, label=f"score ell>{score_wvn_min:.0f}")
@@ -80,9 +97,10 @@ def build_pdf_proxy(spectra_dir: Path, out_pdf: Path) -> int:
                 ax.set_ylabel("Spectral amplitude")
                 ax.set_title(f"{run_label}  |  {var}  |  {scope}  (n={n_curves})")
                 ax.legend(fontsize=8)
+                rl2_label = "RL2=N/A" if (isinstance(rl2, float) and np.isnan(rl2)) else f"RL2={rl2:.4f}"
                 ax.text(
                     0.98, 0.98,
-                    f"RL2={rl2:.4f}",
+                    rl2_label,
                     transform=ax.transAxes,
                     ha="right", va="top",
                     fontsize=9,
@@ -119,13 +137,27 @@ def build_pdf_ecmwf(spectra_dir: Path, out_pdf: Path) -> int:
             ampl_files = sorted(param_dir.glob("ampl_*.npy"))
             wvn_files = sorted(param_dir.glob("wvn_*.npy"))
 
+            # Fix 1: guard against wvn/ampl count mismatch
+            if wvn_files and len(ampl_files) != len(wvn_files):
+                print(
+                    f"[WARN] Skipping {param_dir.name}: "
+                    f"ampl file count ({len(ampl_files)}) != wvn file count ({len(wvn_files)})"
+                )
+                continue
+
             # Load all amplitude arrays; use matching wvn if available
-            ampls = [np.load(str(f)) for f in ampl_files]
+            ampls = [np.load(f) for f in ampl_files]
             if wvn_files:
-                wvns = [np.load(str(f)) for f in wvn_files]
+                wvns = [np.load(f) for f in wvn_files]
                 wvn = np.mean(np.stack(wvns, axis=0), axis=0)
             else:
                 wvn = np.arange(len(ampls[0]), dtype=float)
+
+            # Fix 2: guard against inconsistent amplitude array lengths
+            ampl_lengths = [len(a) for a in ampls]
+            if len(set(ampl_lengths)) > 1:
+                print(f"[WARN] Skipping {param_dir.name}: inconsistent amplitude array lengths")
+                continue
 
             ampl_stack = np.stack(ampls, axis=0)
             ampl_mean = np.mean(ampl_stack, axis=0)
