@@ -640,11 +640,19 @@ def main() -> None:
 
     if args.consolidated_pdf:
         consolidated_path = Path(args.consolidated_pdf).expanduser().resolve()
-        build_consolidated_spectra_pdf_from_existing(
-            out_dir=out_dir,
-            consolidated_pdf_path=consolidated_path,
-            states=states,
-        )
+        try:
+            build_consolidated_spectra_pdf_from_existing(
+                out_dir=out_dir,
+                consolidated_pdf_path=consolidated_path,
+                states=states,
+            )
+        except Exception as exc:
+            print(f"[WARN] PDF consolidation failed (non-fatal): {exc}", flush=True)
+            print(
+                f"[WARN] Re-run to generate PDF: "
+                f"python spectra_plot_pdf.py --spectra-dir {out_dir} --out-pdf {consolidated_path}",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":

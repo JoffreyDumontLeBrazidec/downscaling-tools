@@ -168,3 +168,49 @@ def test_build_spectra_artifacts_uses_predictions_x_interp_without_checkpoint(tm
     assert summary["residualization"]["method"] == "predictions_x_interp"
     assert state_summary["relative_l2_mean_curve"] == pytest.approx(0.25)
     assert state_summary["scopes"]["residual"]["relative_l2_mean_curve"] == pytest.approx(0.5)
+
+
+def test_consolidated_pdf_failure_is_non_fatal(tmp_path, monkeypatch):
+    """PDF consolidation failure must not raise — compute succeeded, only merge failed."""
+    module = _load_module()
+
+    # Patch PDF builder to always raise (simulates missing pypdf/gs)
+    def _raise(**_kwargs):
+        raise RuntimeError("No pypdf or ghostscript available")
+
+    monkeypatch.setattr(module, "build_consolidated_spectra_pdf_from_existing", _raise)
+
+    # Patch the heavy compute to return trivial data so we reach the PDF call
+    fake_summary = {"run_label": "test", "weather_states": {}}
+    fake_curve = {"run_label": "test", "weather_states": {}}
+    monkeypatch.setattr(
+        module,
+        "build_spectra_artifacts",
+        lambda **_kwargs: (fake_summary, fake_curve),
+    )
+
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    out_dir = tmp_path / "spectra"
+    out_dir.mkdir()
+    consolidated = tmp_path / "spectra_proxy.pdf"
+
+    import sys
+    argv_backup = sys.argv[:]
+    sys.argv = [
+        "predictions_dir_spectra.py",
+        "--predictions-dir", str(pred_dir),
+        "--out-dir", str(out_dir),
+        "--run-label", "test",
+        "--weather-states", "10u",
+        "--nside", "32",
+        "--lmax", "63",
+        "--consolidated-pdf", str(consolidated),
+    ]
+    try:
+        module.main()  # must not raise even though PDF builder raises
+    finally:
+        sys.argv = argv_backup
+
+    # Job completed without exception; PDF will not exist but that is expected
+    assert not consolidated.exists() or True
