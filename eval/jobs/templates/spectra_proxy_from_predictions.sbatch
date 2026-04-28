@@ -156,6 +156,20 @@ echo "[INFO] Running: ${CMD[*]}"
 SUMMARY_JSON="${OUT_DIR}/spectra_summary.json"
 [[ -f "${SUMMARY_JSON}" ]] || die "Expected spectra summary missing: ${SUMMARY_JSON}"
 
+# --- PDF generation: always attempted after successful compute (non-fatal) ---
+PLOT_PDF_PY="${PROJECT_ROOT}/eval/jobs/templates/spectra_plot_pdf.py"
+CURVE_SUMMARY="${OUT_DIR}/spectra_curve_summary.json"
+CONSOLIDATED_PDF="${RUN_ROOT}/spectra_proxy.pdf"
+if [[ -f "${PLOT_PDF_PY}" ]] && [[ -f "${CURVE_SUMMARY}" ]]; then
+  echo "[INFO] Generating consolidated PDF from curve summary..."
+  "${PYTHON}" "${PLOT_PDF_PY}" \
+    --spectra-dir "${OUT_DIR}" \
+    --out-pdf "${CONSOLIDATED_PDF}" \
+    || echo "[WARN] PDF generation failed. Re-run: ${PYTHON} ${PLOT_PDF_PY} --spectra-dir ${OUT_DIR} --out-pdf ${CONSOLIDATED_PDF}"
+else
+  echo "[WARN] Skipping PDF generation: spectra_plot_pdf.py or spectra_curve_summary.json not found."
+fi
+
 if [[ "${WRITE_EXPERIMENT_CONFIG}" -eq 1 ]]; then
   cat > "${OUT_DIR}/EXPERIMENT_CONFIG.yaml" <<EOF
 run_id: ${RUN_ID}
