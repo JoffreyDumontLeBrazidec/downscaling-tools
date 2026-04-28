@@ -147,9 +147,6 @@ if [[ "${SHOW_INDIVIDUAL_CURVES}" -eq 1 ]]; then
   CMD+=(--show-individual-curves)
 fi
 
-# Produce a single consolidated multi-page PDF with all variables and scopes
-CMD+=(--consolidated-pdf "${RUN_ROOT}/spectra_proxy.pdf")
-
 echo "[INFO] Running: ${CMD[*]}"
 "${CMD[@]}"
 
