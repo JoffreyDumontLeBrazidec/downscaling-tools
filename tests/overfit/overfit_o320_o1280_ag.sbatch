@@ -102,7 +102,9 @@ python -m anemoi.training checkpoint inference \
   --output "${INF_CKPT}"
 echo "Inference checkpoint: ${INF_CKPT}"
 
-# Keep old models AND training on PYTHONPATH for inference too
+# Keep old models AND training on PYTHONPATH for inference too:
+# - models: checkpoint was pickled with old class paths (anemoi.models.layers.chunk)
+# - training: DownscalingAnemoiDatasetsDataModule + old config schema compatibility
 export PYTHONPATH="/ec/res4/scratch/ecm5702/aifs/anemoi-core-compat-training/models/src:/ec/res4/scratch/ecm5702/aifs/anemoi-core-compat-training/training/src"
 
 # ── Step 3: Run inference ──
