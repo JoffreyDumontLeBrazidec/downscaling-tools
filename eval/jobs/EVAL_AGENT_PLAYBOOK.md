@@ -187,4 +187,4 @@ Outputs:
 - Before launching TC plots, verify staged inputs exist under `/home/ecm5702/hpcperm/data/tc/<event>/surface_pf_ENFO_O320_<EXPVER>_YYYYMMDD.grib`.
 - If a previous all-dates eval job is running and user requests one-date-only local plots, cancel the broader job and replace it with one-date eval-only submission.
 - For checkpoint mode (`python -m eval.run checkpoint ...`), keep sigma evaluator enabled unless the user explicitly asks to skip.
-- Do not use `python -m eval.tc.plot_pdf_tc --expver 0001` as the ML curve for run-id evaluations; this duplicates the ENFO reference and is not run-specific.
+- Do not use `python -m eval.tc.workflows pdf --ml-expids ENFO_O320_0001` as the ML curve for run-id evaluations; this duplicates the ENFO reference and is not run-specific.

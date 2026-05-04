@@ -85,7 +85,7 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
 - `tc_eval_from_predictions.sbatch`
   - **Canonical TC PDF template — works on both AC and AG.**
   - Generates normalized TC PDF plots from `predictions_*.nc`.
-  - Uses `eval/tc/plot_pdf_tc_from_predictions.py` from this repo.
+  - Uses `eval/tc/workflows.py` (pdf subcommand) from this repo.
   - This is a prediction-only CPU path: no generation and no intermediate-state rebuild.
   - Supports `native` and `regridded` modes (`regridded` requires metview, AC-only).
   - Checks TC reference data exists; points to request script if missing.
@@ -144,7 +144,7 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
   - Auto spectra policy:
     - AC submit host -> ECMWF spectra
     - AG submit host -> proxy spectra
-  - `RUN_TC_PDF=1` is optional. Humberto is now registered in `eval/tc/tc_events.py`, but the smooth default still depends on the staged reference GRIBs under `/home/ecm5702/hpcperm/data/tc/humberto/`.
+  - `RUN_TC_PDF=1` is optional. Humberto is now registered in `eval/tc/events.py`, but the smooth default still depends on the staged reference GRIBs under `/home/ecm5702/hpcperm/data/tc/humberto/`.
 - `submit_o320_o1280_manual_eval_flow.sh`
   - Login-node helper for the weak-agent-safe `o320 -> o1280` lane.
   - Validates checkpoint profile, auto-resolves stack flavor, defaults to `PHASE=proxy`, and renders run-local copies of:
@@ -209,7 +209,7 @@ do not reimplement their logic in ad-hoc scratch scripts.
 
 | Tool | Path | Purpose |
 |------|------|---------|
-| TC plotting | `eval/tc/plot_pdf_tc_from_predictions.py` | TC normalized PDF plots from predictions |
+| TC plotting | `eval/tc/workflows.py` | TC normalized PDF plots from predictions |
 | TC data request | `eval/tc/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
 | Spectra pipeline | `eval/spectra/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
 | Spectra compute | `/home/ecm5702/dev/post_prepml/spectra/spectra_ml/individual_files/compute_spectra-3.py` | Spectral harmonics → amplitude spectra |

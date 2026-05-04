@@ -1,7 +1,7 @@
 #!/bin/bash --login
 # TC member-map plotting template — renders per-member 2x3 spatial grids
 # (MSLP/Wind × Input/Prediction/Target) from predictions_*.nc files using:
-#   eval.tc.plot_members_tc
+#   eval.tc.workflows member-maps
 #
 # One sbatch per lane. Each produces a single multi-page PDF per TC event.
 #
@@ -78,7 +78,7 @@ echo "[INFO] date=${DATE} steps=${STEPS} members=${MEMBERS}"
 echo "[INFO] run_label=${RUN_LABEL}"
 
 CMD=(
-  "${PYTHON}" -m eval.tc.plot_members_tc
+  "${PYTHON}" -m eval.tc.workflows member-maps
   --predictions-dir "${PREDICTIONS_DIR}"
   --run-label "${RUN_LABEL}"
   --date "${DATE}"

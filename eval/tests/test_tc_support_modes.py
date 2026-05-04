@@ -7,45 +7,29 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from eval.tc import plot_pdf_tc as tc_plot_mod
-from eval.tc import plot_pdf_tc_from_predictions as pred_plot_mod
-from eval.tc import tc_events as events_mod
-from eval.tc import tc_pdf_plot as tc_pdf_plot_mod
-from eval.tc import tc_vector_loading as loading_mod
+from eval.tc import events as events_mod
+from eval.tc import workflows as workflows_mod
+from eval.tc import loading_grib as loading_grib_mod
+from eval.tc import loading_predictions as loading_pred_mod
+from eval.tc import data_types as data_types_mod
+from eval.tc import plot_config as plot_config_mod
+from eval.tc import experiment_config as exp_config_mod
 
 
-def test_plot_pdf_tc_main_defaults_to_regridded(monkeypatch):
+def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):
     captured: dict[str, object] = {}
 
     def _fake_run_tc_pdf(**kwargs):
         captured.update(kwargs)
         return "unused"
 
-    monkeypatch.setattr(tc_plot_mod, "run_tc_pdf", _fake_run_tc_pdf)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["plot_pdf_tc.py", "--expver", "j2hh", "--outdir", "/tmp/tc-default"],
-    )
-
-    tc_plot_mod.main()
-
-    assert captured["support_mode"] == "regridded"
-
-
-def test_plot_pdf_tc_from_predictions_main_defaults_to_regridded(monkeypatch):
-    captured: dict[str, object] = {}
-
-    def _fake_run_tc_pdf_from_predictions(**kwargs):
-        captured.update(kwargs)
-        return "unused"
-
-    monkeypatch.setattr(pred_plot_mod, "run_tc_pdf_from_predictions", _fake_run_tc_pdf_from_predictions)
+    monkeypatch.setattr(workflows_mod, "run_tc_pdf", _fake_run_tc_pdf)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "plot_pdf_tc_from_predictions.py",
+            "workflows.py",
+            "pdf",
             "--predictions-dir",
             "/tmp/preds",
             "--outdir",
@@ -55,24 +39,25 @@ def test_plot_pdf_tc_from_predictions_main_defaults_to_regridded(monkeypatch):
         ],
     )
 
-    pred_plot_mod.main()
+    workflows_mod.main()
 
     assert captured["support_mode"] == "regridded"
 
 
-def test_plot_pdf_tc_from_predictions_main_passes_display_label(monkeypatch):
+def test_workflows_pdf_main_passes_display_label(monkeypatch):
     captured: dict[str, object] = {}
 
-    def _fake_run_tc_pdf_from_predictions(**kwargs):
+    def _fake_run_tc_pdf(**kwargs):
         captured.update(kwargs)
         return "unused"
 
-    monkeypatch.setattr(pred_plot_mod, "run_tc_pdf_from_predictions", _fake_run_tc_pdf_from_predictions)
+    monkeypatch.setattr(workflows_mod, "run_tc_pdf", _fake_run_tc_pdf)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "plot_pdf_tc_from_predictions.py",
+            "workflows.py",
+            "pdf",
             "--predictions-dir",
             "/tmp/preds",
             "--outdir",
@@ -84,7 +69,7 @@ def test_plot_pdf_tc_from_predictions_main_passes_display_label(monkeypatch):
         ],
     )
 
-    pred_plot_mod.main()
+    workflows_mod.main()
 
     assert captured["display_label"] == "short label"
 
@@ -120,7 +105,7 @@ def test_regridded_prediction_curve_interpolates_gridded_source(tmp_path: Path):
     ds["y_pred"].attrs["lon"] = "lon_hres"
     ds.to_netcdf(pred_path)
 
-    curve = loading_mod._load_prediction_curve_regridded(
+    curve = loading_pred_mod._load_prediction_curve_regridded(
         [(pred_path, 20230827, 24)],
         target_lon=np.array([0.5], dtype=np.float64),
         target_lat=np.array([0.5], dtype=np.float64),
@@ -133,37 +118,37 @@ def test_regridded_prediction_curve_interpolates_gridded_source(tmp_path: Path):
 
 
 def test_analysis_row_indices_supports_with_and_without_leading_analysis_frame():
-    assert loading_mod._analysis_row_indices(6, None) == slice(1, None)
-    assert loading_mod._analysis_row_indices(6, [0, 2]) == [1, 3]
-    assert loading_mod._analysis_row_indices(5, None) == slice(0, None)
-    assert loading_mod._analysis_row_indices(5, [0, 2]) == [0, 2]
+    assert loading_grib_mod._analysis_row_indices(6, None) == slice(1, None)
+    assert loading_grib_mod._analysis_row_indices(6, [0, 2]) == [1, 3]
+    assert loading_grib_mod._analysis_row_indices(5, None) == slice(0, None)
+    assert loading_grib_mod._analysis_row_indices(5, [0, 2]) == [0, 2]
 
 
-def test_humberto_plot_event_curves_uses_event_specific_oper_and_references():
-    cfg = events_mod.EVENTS["humberto"]
+def test_humberto_compute_event_stats_uses_event_specific_oper_and_references():
+    event = events_mod.EVENTS["humberto"]
+    exp_cfg = exp_config_mod.EXPERIMENT_CONFIGS["humberto"]
+    plot_cfg = plot_config_mod.PLOT_CONFIGS["humberto"]
     curves = {
-        cfg.analysis: loading_mod.CurveVectors(
+        exp_cfg.analysis_expid: data_types_mod.CurveVectors(
             msl=np.array([999.0, 1001.0, 1003.0, 1005.0]),
             wind=np.array([12.0, 14.0, 16.0, 18.0]),
         ),
-        cfg.expid_enfo_o320: loading_mod.CurveVectors(
+        exp_cfg.reference_expids[0]: data_types_mod.CurveVectors(
             msl=np.array([998.0, 1000.0, 1002.0, 1004.0]),
             wind=np.array([13.0, 15.0, 17.0, 19.0]),
         ),
-        "demo-run": loading_mod.CurveVectors(
+        "demo-run": data_types_mod.CurveVectors(
             msl=np.array([996.0, 998.0, 1000.0, 1002.0]),
             wind=np.array([10.0, 12.0, 14.0, 16.0]),
         ),
     }
 
-    fig, stats = tc_pdf_plot_mod.plot_event_curves(
-        cfg,
-        curves=curves,
-        curve_order=["demo-run", *cfg.reference_expids],
-        exp_labels={"demo-run": "demo"},
-        return_stats=True,
+    stats = workflows_mod.compute_event_stats(
+        curves,
+        analysis_key=exp_cfg.analysis_expid,
+        plot_config=plot_cfg,
+        curve_order=["demo-run", *exp_cfg.reference_expids],
     )
 
-    assert stats["curve_order"] == ["demo-run", *cfg.reference_expids]
-    assert cfg.expid_enfo_o320 in stats["variables"]["mslp_hpa"]["curves"]
-    plt.close(fig)
+    assert stats["curve_order"] == ["demo-run", *exp_cfg.reference_expids]
+    assert exp_cfg.reference_expids[0] in stats["variables"]["mslp_hpa"]["curves"]

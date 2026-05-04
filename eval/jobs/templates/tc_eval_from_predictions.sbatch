@@ -2,7 +2,7 @@
 # Canonical TC evaluation template — works on both AC and AG.
 #
 # Generates normalized TC PDF plots from predictions_*.nc files using:
-#   <repo>/eval/tc/plot_pdf_tc_from_predictions.py
+#   <repo>/eval/tc/workflows.py (pdf subcommand)
 #
 # PREREQUISITE: TC reference GRIB data must exist under BASE_TC_DIR.
 # To request/refresh TC reference data for all events, run:
@@ -53,6 +53,7 @@ DISPLAY_LABEL=""                # optional shorter legend label; blank => RUN_ID
 PLOT_TITLE=""                   # optional override for TCEvent plot_title; blank => use TCEvent default
 IEKM_TARGET_GRIB_PATH=""       # IEKM target GRIBs; blank => use TCEvent default; "none" => disable
 IEKM_LABEL="IEKM_TARGET"      # label for IEKM reference curve
+ANALYSIS_EXPID=""              # override analysis truth anchor, e.g. OPER_O1280_0001; blank => use TCEvent default
 OUT_STEM=""                     # blank => auto-generated from events + RUN_ID
 BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
 WRITE_EXPERIMENT_CONFIG=0       # 1 => write ${RUN_ROOT}/EXPERIMENT_CONFIG.yaml
@@ -158,7 +159,7 @@ fi
 cd "${PROJECT_ROOT}"
 
 CMD=(
-  "${PYTHON}" -m eval.tc.plot_pdf_tc_from_predictions
+  "${PYTHON}" -m eval.tc.workflows pdf
   --predictions-dir "${PREDICTIONS_DIR}"
   --outdir "${OUT_DIR}"
   --run-label "${RUN_ID}"
@@ -185,6 +186,9 @@ fi
 if [[ "${IEKM_LABEL}" != "IEKM_TARGET" ]]; then
   CMD+=(--iekm-label "${IEKM_LABEL}")
 fi
+if [[ -n "${ANALYSIS_EXPID}" ]]; then
+  CMD+=(--analysis-expid "${ANALYSIS_EXPID}")
+fi
 
 echo "[INFO] Running: ${CMD[*]}"
 "${CMD[@]}"
@@ -202,7 +206,7 @@ predictions:
   file_count: ${PRED_COUNT}
 tc_evaluation:
   method: prediction-driven
-  script: ${PROJECT_ROOT}/eval/tc/plot_pdf_tc_from_predictions.py
+  script: ${PROJECT_ROOT}/eval/tc/workflows.py
   data_request_script: ${PROJECT_ROOT}/eval/tc/all_events_request.sh
   pdf: ${PDF_PATH}
   stats_json: ${STATS_PATH}

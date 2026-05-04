@@ -30,16 +30,17 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tc.tc_events import EVENTS, TCEvent
-from tc.tc_vector_loading import (
-    CurveVectors,
-    SupportMode,
+from tc.events import EVENTS, TCEvent
+from tc.data_types import CurveVectors, SupportMode
+from tc.experiment_config import EXPERIMENT_CONFIGS
+from tc.plot_config import PLOT_CONFIGS
+from tc.loading_predictions import (
     analysis_dates_for_event,
     discover_prediction_files,
-    load_prediction_event_curve,
-    regridded_target_points_from_grib,
+    load_prediction_curves,
     select_prediction_files_for_event,
 )
+from tc.loading_grib import regridded_target_points
 
 LOG = logging.getLogger(__name__)
 
@@ -112,11 +113,16 @@ def diagnose_per_bundle(
 
         # Precompute regridded target grid once per event
         target_lon, target_lat = None, None
+        exp_cfg = EXPERIMENT_CONFIGS.get(event_name)
+        plot_cfg = PLOT_CONFIGS.get(event_name)
         if support_mode == "regridded":
             days = sorted({int(f"{ymd:08d}"[6:8]) for _, ymd, _ in event_pred_files})
             sample_date = analysis_dates_for_event(cfg, days)[0]
-            target_lon, target_lat = regridded_target_points_from_grib(
-                cfg, dir_data_base=base_tc_dir, sample_analysis_date=sample_date,
+            analysis_expid = exp_cfg.analysis_expid if exp_cfg else "OPER_O320_0001"
+            regrid_res = plot_cfg.regrid_resolution if plot_cfg else 0.25
+            sample_path = f"{base_tc_dir}/{event_name}/surface_an_{analysis_expid}_{sample_date}.grib"
+            target_lon, target_lat = regridded_target_points(
+                cfg.bbox, regrid_res, sample_path,
             )
 
         per_bundle: list[dict] = []
@@ -128,9 +134,9 @@ def diagnose_per_bundle(
 
             single_file = [(path, ymd, step)]
             try:
-                curve = load_prediction_event_curve(
+                curve = load_prediction_curves(
                     single_file,
-                    cfg=cfg,
+                    bbox=cfg.bbox,
                     support_mode=support_mode,
                     target_lon=target_lon,
                     target_lat=target_lat,
