@@ -21,7 +21,7 @@
 #SBATCH --mem=256G
 #SBATCH --gpus-per-node=4
 #SBATCH --time=06:00:00
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -43,7 +43,7 @@ CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
 USE_INFERENCE_COMPANION=false
 INFERENCE_COMPANION="REPLACE_INFERENCE_COMPANION"
 
-OUTPUT_ROOT="/home/ecm5702/perm/eval"
+OUTPUT_ROOT="/home/ecm5702/scratch/eval"
 RUN_DATE_UTC="$(date -u +%Y%m%d)"
 RUN_SUFFIX="REPLACE_RUN_SUFFIX"         # e.g. "dataloader_plot_v1"
 
@@ -51,7 +51,7 @@ IDX=0
 N_SAMPLES=1
 MEMBERS="0"
 VALIDATION_FREQUENCY="50h"
-EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
 
 # Number of GPU ranks for srun DDP. Use 4 for o1280_o2560; 1 for o48_o96/o96_o320/o320_o1280.
 NTASKS=4

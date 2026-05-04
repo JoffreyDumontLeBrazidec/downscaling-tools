@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from eval.jobs import slurm_jobs
+from eval.paths import DEFAULT_EVAL_ROOT
 
 TERMINAL_OK = slurm_jobs.TERMINAL_OK
 TERMINAL_BAD = slurm_jobs.TERMINAL_BAD
@@ -50,7 +51,7 @@ def _regenerate_scripts(launch_script: Path, launch_args: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Background autopilot for full eval suite.")
     parser.add_argument("--expver", required=True)
-    parser.add_argument("--eval-root", default="/home/ecm5702/perm/eval")
+    parser.add_argument("--eval-root", default=DEFAULT_EVAL_ROOT)
     parser.add_argument("--poll-seconds", type=int, default=30)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--eval-date", default="20230801/20230802")

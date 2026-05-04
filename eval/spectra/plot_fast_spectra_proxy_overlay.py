@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--coefficients-json",
-        default="/home/ecm5702/perm/eval/spectra_proxy_calibration/20260303_fast_proxy_bestof_v2_v3/fast_spectra_proxy_coefficients.json",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_calibration/20260303_fast_proxy_bestof_v2_v3/fast_spectra_proxy_coefficients.json",
     )
     p.add_argument(
         "--ai-spectra-root",
@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--number", type=int, default=1)
     p.add_argument("--nside", type=int, default=128, help="Override nside if desired.")
     p.add_argument("--lmax", type=int, default=319, help="Override lmax if desired.")
-    p.add_argument("--output-dir", default="/home/ecm5702/perm/eval/spectra_proxy_validation/20260304_fast_proxy_overlay")
+    p.add_argument("--output-dir", default="/home/ecm5702/scratch/eval/spectra_proxy_validation/20260304_fast_proxy_overlay")
     p.add_argument("--auto-pick-sample", action="store_true", help="Pick first available sample for param/level.")
     return p.parse_args()
 

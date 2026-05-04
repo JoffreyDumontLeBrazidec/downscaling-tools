@@ -18,15 +18,16 @@
 #SBATCH --qos=nf
 #SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-node=0
 #SBATCH --mem=4G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 
 # Spectra consolidated PDF names at top level
@@ -36,9 +37,14 @@ SPECTRA_ECMWF_PDF_NAME="spectra_ecmwf.pdf"
 # Local plot PDF names at top level (one per step)
 LOCAL_PLOT_STEPS="24,120"
 
+# When enabled, recreate the old top-level raw paths as symlinks into data/.
+# O48->O96 currently disables this so the run root stays visually lean.
+CREATE_BACKCOMPAT_SYMLINKS="${CREATE_BACKCOMPAT_SYMLINKS:-1}"
+
 # TC consolidated PDF names
 TC_CONTOUR_PDF_NAME="tc_contours.pdf"
 TC_PDF_DIST_NAME="tc_pdf_distributions.pdf"
+# TC member maps: copied per-event (tc_member_maps_<event>.pdf) — no merge needed
 ###############################################################################
 
 die() {
@@ -46,9 +52,18 @@ die() {
   exit 2
 }
 
+maybe_link_backcompat() {
+  local target="$1"
+  local link_path="$2"
+  if [[ "${CREATE_BACKCOMPAT_SYMLINKS}" == "1" ]]; then
+    ln -sf "${target}" "${link_path}" 2>/dev/null || true
+  fi
+}
+
 [[ "${RUN_ROOT}" != *REPLACE_* ]] || die "Set RUN_ROOT."
 [[ "${RUN_ID}" != REPLACE_* ]] || die "Set RUN_ID."
 [[ -d "${RUN_ROOT}" ]] || die "RUN_ROOT does not exist: ${RUN_ROOT}"
+[[ "${CREATE_BACKCOMPAT_SYMLINKS}" == "0" || "${CREATE_BACKCOMPAT_SYMLINKS}" == "1" ]] || die "CREATE_BACKCOMPAT_SYMLINKS must be 0 or 1."
 
 DATA_DIR="${RUN_ROOT}/data"
 mkdir -p "${DATA_DIR}"
@@ -79,9 +94,21 @@ for item in "${DIRS_TO_MOVE[@]}"; do
   dst="${DATA_DIR}/${item}"
   if [[ -e "${src}" ]] && [[ ! -e "${dst}" ]]; then
     mv "${src}" "${dst}"
-    # Create a symlink for backward compatibility
-    ln -sf "data/${item}" "${src}" 2>/dev/null || true
+    maybe_link_backcompat "data/${item}" "${src}"
     echo "[MOVE] ${item} -> data/${item}"
+  fi
+done
+
+# Move lane-specific or run-specific metrics JSON files that are not covered by
+# the historical scoreboard_metrics.json name.
+for metrics_file in "${RUN_ROOT}"/*_metrics.json; do
+  [[ -f "${metrics_file}" ]] || continue
+  base="$(basename "${metrics_file}")"
+  dst="${DATA_DIR}/${base}"
+  if [[ ! -e "${dst}" ]]; then
+    mv "${metrics_file}" "${dst}"
+    maybe_link_backcompat "data/${base}" "${RUN_ROOT}/${base}"
+    echo "[MOVE] ${base} -> data/${base}"
   fi
 done
 
@@ -94,20 +121,20 @@ for spectra_dir in "${RUN_ROOT}"/spectra_*/ "${RUN_ROOT}"/spectra_*/; do
   dst="${DATA_DIR}/${dir_name}"
   if [[ ! -e "${dst}" ]]; then
     mv "${spectra_dir}" "${dst}"
-    ln -sf "data/${dir_name}" "${RUN_ROOT}/${dir_name}" 2>/dev/null || true
+    maybe_link_backcompat "data/${dir_name}" "${RUN_ROOT}/${dir_name}"
     echo "[MOVE] ${dir_name} -> data/${dir_name}"
   fi
 done
 
 # Move local plot raw directories
-for plot_dir in "${RUN_ROOT}"/local_plots_*/ "${RUN_ROOT}"/storm_local_plots_*/ "${RUN_ROOT}"/tc_local_plots_*/; do
+for plot_dir in "${RUN_ROOT}"/local_plots_*/ "${RUN_ROOT}"/storm_local_plots_*/ "${RUN_ROOT}"/tc_local_plots_*/ "${RUN_ROOT}"/tc_member_maps*/; do
   [[ -d "${plot_dir}" ]] || continue
   dir_name="$(basename "${plot_dir}")"
   [[ "${plot_dir}" != "${DATA_DIR}/"* ]] || continue
   dst="${DATA_DIR}/${dir_name}"
   if [[ ! -e "${dst}" ]]; then
     mv "${plot_dir}" "${dst}"
-    ln -sf "data/${dir_name}" "${RUN_ROOT}/${dir_name}" 2>/dev/null || true
+    maybe_link_backcompat "data/${dir_name}" "${RUN_ROOT}/${dir_name}"
     echo "[MOVE] ${dir_name} -> data/${dir_name}"
   fi
 done
@@ -122,7 +149,7 @@ for subset_dir in "${RUN_ROOT}"/predictions_*/ "${RUN_ROOT}"/predictions_subset_
   dst="${DATA_DIR}/${dir_name}"
   if [[ ! -e "${dst}" ]]; then
     mv "${subset_dir}" "${dst}"
-    ln -sf "data/${dir_name}" "${RUN_ROOT}/${dir_name}" 2>/dev/null || true
+    maybe_link_backcompat "data/${dir_name}" "${RUN_ROOT}/${dir_name}"
     echo "[MOVE] ${dir_name} -> data/${dir_name}"
   fi
 done
@@ -135,7 +162,7 @@ for ref_dir in "${RUN_ROOT}"/enfo_*/ "${RUN_ROOT}"/eefo_*/; do
   dst="${DATA_DIR}/${dir_name}"
   if [[ ! -e "${dst}" ]]; then
     mv "${ref_dir}" "${dst}"
-    ln -sf "data/${dir_name}" "${RUN_ROOT}/${dir_name}" 2>/dev/null || true
+    maybe_link_backcompat "data/${dir_name}" "${RUN_ROOT}/${dir_name}"
     echo "[MOVE] ${dir_name} -> data/${dir_name}"
   fi
 done
@@ -147,7 +174,7 @@ for tc_file in "${RUN_ROOT}"/tc_normed_pdfs_*.stats.json "${RUN_ROOT}"/tc_normed
   dst="${DATA_DIR}/${base}"
   if [[ ! -e "${dst}" ]]; then
     mv "${tc_file}" "${dst}"
-    ln -sf "data/${base}" "${RUN_ROOT}/${base}" 2>/dev/null || true
+    maybe_link_backcompat "data/${base}" "${RUN_ROOT}/${base}"
     echo "[MOVE] ${base} -> data/${base}"
   fi
 done
@@ -183,7 +210,9 @@ if [[ ! -f "${RUN_ROOT}/${SPECTRA_PROXY_PDF_NAME}" ]]; then
   PROXY_PDFS=()
   for candidate_dir in \
     "${DATA_DIR}/spectra_proxy"* \
-    "${RUN_ROOT}/spectra_proxy"*; do
+    "${DATA_DIR}/spectra_o48_o96" \
+    "${RUN_ROOT}/spectra_proxy"* \
+    "${RUN_ROOT}/spectra_o48_o96"; do
     [[ -d "${candidate_dir}" ]] || continue
     for pdf_file in "${candidate_dir}"/spectra_*.pdf; do
       [[ -f "${pdf_file}" ]] || continue
@@ -316,6 +345,29 @@ if [[ ! -f "${RUN_ROOT}/${TC_PDF_DIST_NAME}" ]]; then
     break
   done
 fi
+
+# --- TC member maps: one top-level PDF per event (not merged) ---
+for candidate_dir in \
+  "${DATA_DIR}"/tc_member_maps* \
+  "${RUN_ROOT}"/tc_member_maps*; do
+  [[ -d "${candidate_dir}" ]] || continue
+  for pdf_file in "${candidate_dir}"/tc_members_*.pdf; do
+    [[ -f "${pdf_file}" ]] || continue
+    base="$(basename "${pdf_file}")"
+    # Extract event name: tc_members_<event>_<label>_<date>.pdf -> <event>
+    event="$(echo "${base}" | sed -n 's/^tc_members_\([^_]*\)_.*/\1/p')"
+    if [[ -n "${event}" ]]; then
+      top_name="tc_member_maps_${event}.pdf"
+    else
+      top_name="${base}"
+    fi
+    if [[ ! -f "${RUN_ROOT}/${top_name}" ]]; then
+      cp "${pdf_file}" "${RUN_ROOT}/${top_name}"
+      echo "[PDF] ${top_name} (from ${base})"
+    fi
+  done
+  break
+done
 
 ###############################################################################
 # STEP 3: Summary

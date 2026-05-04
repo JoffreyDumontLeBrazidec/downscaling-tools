@@ -72,11 +72,11 @@ DEFAULT_LRES_SFC_CHANNELS = (
     "tp",
 )
 DEFAULT_LRES_PL_CHANNELS = ("q", "t", "u", "v", "w", "z")
-DEFAULT_TARGET_SFC_CHANNELS = ("10u", "10v", "2d", "2t", "msl", "skt", "sp", "tcw")
+DEFAULT_TARGET_SFC_CHANNELS = ("10u", "10v", "2d", "2t", "msl", "skt", "sp", "tcw", "tp")
 DEFAULT_TARGET_PL_CHANNELS = ("q", "t", "u", "v", "w", "z")
 
 DEFAULT_EXTRA_ARGS_JSON = (
-    '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+    '{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
 )
 
 DATASET_PATH_REWRITE_PREFIXES = (

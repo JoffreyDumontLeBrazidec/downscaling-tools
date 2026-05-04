@@ -145,6 +145,7 @@ def test_o1280_o2560_helper_renders_strict_bundle_flow(tmp_path: Path):
     predict_text = (submit_dir / f"{run_id}_predict.sbatch").read_text(encoding="utf-8")
     local_text = (submit_dir / f"{run_id}_local_plots.sbatch").read_text(encoding="utf-8")
     spectra_text = (submit_dir / f"{run_id}_spectra.sbatch").read_text(encoding="utf-8")
+    surface_text = (submit_dir / f"{run_id}_surface_loss.sbatch").read_text(encoding="utf-8")
 
     assert 'SOURCE_INPUT_ROOT="' in build_text
     assert 'SOURCE_FORCING_ROOT="' in build_text
@@ -155,6 +156,8 @@ def test_o1280_o2560_helper_renders_strict_bundle_flow(tmp_path: Path):
     assert 'SLIM_OUTPUT="1"' in predict_text
     assert 'WEATHER_STATES="10u,10v,2t,msl"' in local_text
     assert 'WEATHER_STATES="10u,10v,2t,msl"' in spectra_text
+    assert f'PREDICTIONS_DIR="{tmp_path / "output" / run_id / "predictions"}"' in surface_text
+    assert f'OUT_JSON="{tmp_path / "output" / run_id / "surface_loss_summary.json"}"' in surface_text
     assert "strict_bundle_ready=1" in result.stdout
 
 

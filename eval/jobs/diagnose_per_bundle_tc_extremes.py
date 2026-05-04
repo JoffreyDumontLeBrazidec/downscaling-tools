@@ -12,7 +12,7 @@ for fast checkpoint screening.
 
 Usage:
     python -m eval.jobs.diagnose_per_bundle_tc_extremes \
-        --predictions-dir /home/ecm5702/perm/eval/<RUN_ID>/predictions \
+        --predictions-dir /home/ecm5702/scratch/eval/<RUN_ID>/predictions \
         --out-json /home/ecm5702/scratch/per_bundle_tc_extremes.json \
         --support-mode regridded \
         --events idalia,franklin

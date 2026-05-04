@@ -32,6 +32,13 @@ RUN_SUFFIX="${RUN_SUFFIX:-scoreboard_aug26_30}"
 SPECTRA_METHOD="${SPECTRA_METHOD:-ecmwf}"       # proxy | ecmwf
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-regridded}" # native | regridded
 TC_EVENTS="${TC_EVENTS:-idalia,franklin}"
+TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O320_0001,EEFO_O96_0001,ENFO_O320_ip6y}"
+
+# TC member maps settings
+RUN_TC_MEMBER_MAPS="${RUN_TC_MEMBER_MAPS:-1}"         # 1 => render per-member TC spatial maps
+TC_MEMBER_MAPS_MEMBERS="${TC_MEMBER_MAPS_MEMBERS:-0,1,2,3,4}"
+TC_MEMBER_MAPS_DATE="${TC_MEMBER_MAPS_DATE:-20230828}"  # strong-TC date for Idalia/Franklin
+TC_MEMBER_MAPS_STEPS="${TC_MEMBER_MAPS_STEPS:-48}"      # single strong step (valid Aug 30: Idalia Cat3 + Franklin Cat4)
 
 # Submission controls
 SUBMIT_QOS="${SUBMIT_QOS:-}"                    # legacy override applied to all jobs when set
@@ -140,6 +147,11 @@ WRITE_TEMPLATE="${TEMPLATE_DIR}/scoreboard_write_from_predictions.sbatch"
 [[ -f "${SIGMA_TEMPLATE}" ]] || die "Missing template: ${SIGMA_TEMPLATE}"
 [[ -f "${WRITE_TEMPLATE}" ]] || die "Missing template: ${WRITE_TEMPLATE}"
 
+TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  [[ -f "${TC_MEMBER_MAPS_TEMPLATE}" ]] || die "Missing template: ${TC_MEMBER_MAPS_TEMPLATE}"
+fi
+
 SUBMIT_DIR="${SUBMIT_ROOT}/${RUN_DATE_UTC}"
 mkdir -p "${SUBMIT_DIR}"
 
@@ -147,7 +159,16 @@ INFER_SCRIPT="${SUBMIT_DIR}/inference_${CHECKPOINT_SHORT}_${RUN_DATE_UTC}.sbatch
 SIGMA_SCRIPT="${SUBMIT_DIR}/sigma_${CHECKPOINT_SHORT}_${RUN_DATE_UTC}.sbatch"
 WRITE_SCRIPT="${SUBMIT_DIR}/scoreboard_write_${CHECKPOINT_SHORT}_${RUN_DATE_UTC}.sbatch"
 
-for target in "${INFER_SCRIPT}" "${SIGMA_SCRIPT}" "${WRITE_SCRIPT}"; do
+TC_MEMBER_MAPS_SCRIPT=""
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  TC_MEMBER_MAPS_SCRIPT="${SUBMIT_DIR}/tc_member_maps_${CHECKPOINT_SHORT}_${RUN_DATE_UTC}.sbatch"
+fi
+
+TARGET_LIST=("${INFER_SCRIPT}" "${SIGMA_SCRIPT}" "${WRITE_SCRIPT}")
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  TARGET_LIST+=("${TC_MEMBER_MAPS_SCRIPT}")
+fi
+for target in "${TARGET_LIST[@]}"; do
   if [[ -e "${target}" && "${ALLOW_OVERWRITE}" -ne 1 ]]; then
     die "Refusing to overwrite existing generated file: ${target} (set ALLOW_OVERWRITE=1 to replace)"
   fi
@@ -156,6 +177,10 @@ done
 cp "${INFER_TEMPLATE}" "${INFER_SCRIPT}"
 cp "${SIGMA_TEMPLATE}" "${SIGMA_SCRIPT}"
 cp "${WRITE_TEMPLATE}" "${WRITE_SCRIPT}"
+
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  cp "${TC_MEMBER_MAPS_TEMPLATE}" "${TC_MEMBER_MAPS_SCRIPT}"
+fi
 
 # Render inference script (Aug 26-30 default preset).
 set_var "${INFER_SCRIPT}" STACK_FLAVOR "${STACK_FLAVOR}"
@@ -180,8 +205,26 @@ set_var "${WRITE_SCRIPT}" SIGMA_RUN_ID "${RUN_ID}"
 set_var "${WRITE_SCRIPT}" SPECTRA_METHOD "${SPECTRA_METHOD}"
 set_var "${WRITE_SCRIPT}" TC_SUPPORT_MODE "${TC_SUPPORT_MODE}"
 set_var "${WRITE_SCRIPT}" TC_EVENTS "${TC_EVENTS}"
+set_var "${WRITE_SCRIPT}" TC_EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+
+# Render TC member maps script.
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  AUG_RUN_ROOT="/home/ecm5702/scratch/eval/${RUN_ID}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ROOT "${AUG_RUN_ROOT}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" PREDICTIONS_DIR "${AUG_RUN_ROOT}/predictions"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" OUT_DIR "${AUG_RUN_ROOT}/tc_member_maps"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" EVENTS "${TC_EVENTS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" DATE "${TC_MEMBER_MAPS_DATE}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" STEPS "${TC_MEMBER_MAPS_STEPS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" MEMBERS "${TC_MEMBER_MAPS_MEMBERS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_LABEL "${CHECKPOINT_SHORT}"
+fi
 
 bash -n "${INFER_SCRIPT}" "${SIGMA_SCRIPT}" "${WRITE_SCRIPT}"
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  bash -n "${TC_MEMBER_MAPS_SCRIPT}"
+fi
 
 SUBMIT_HOST_SHORT="$(hostname -s)"
 case "${SUBMIT_HOST_SHORT}" in
@@ -250,10 +293,18 @@ write_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${sigma_jo
 write_job="$(extract_job_id "${write_submit}")"
 echo "[INFO] ${write_submit}"
 
+tc_member_maps_job=""
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  echo "[INFO] Submitting TC member maps (depends on inference)..."
+  tc_mm_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${infer_job} "${TC_MEMBER_MAPS_SCRIPT}")"
+  tc_member_maps_job="$(extract_job_id "${tc_mm_submit}")"
+  echo "[INFO] ${tc_mm_submit}"
+fi
+
 # --- Finalize: lean eval layout reorganization ---
 FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
 FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
-AUG_RUN_ROOT="/home/ecm5702/perm/eval/${RUN_ID}"
+AUG_RUN_ROOT="/home/ecm5702/scratch/eval/${RUN_ID}"
 finalize_job="skipped"
 if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
   if [[ ! -f "${FINALIZE_SCRIPT}" ]] || [[ "${ALLOW_OVERWRITE}" -eq 1 ]]; then
@@ -261,7 +312,11 @@ if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
     set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${AUG_RUN_ROOT}"
     set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
   fi
-  finalize_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${write_job} "${FINALIZE_SCRIPT}")"
+  finalize_dep="${write_job}"
+  if [[ -n "${tc_member_maps_job}" ]]; then
+    finalize_dep="${finalize_dep}:${tc_member_maps_job}"
+  fi
+  finalize_submit="$(sbatch "${WRITE_SBATCH_ARGS[@]}" --dependency=afterok:${finalize_dep} "${FINALIZE_SCRIPT}")"
   finalize_job="$(extract_job_id "${finalize_submit}")"
   echo "[INFO] ${finalize_submit}"
 fi
@@ -285,8 +340,9 @@ job_ids:
   sigma:           ${sigma_job}
   inference:       ${infer_job}
   post_writer:     ${write_job} (afterok:${sigma_job}:${infer_job})
+  tc_member_maps:   ${tc_member_maps_job:-skipped} (afterok:${infer_job})
   finalize_lean:   ${finalize_job}
 
 Monitor:
-  squeue -j ${sigma_job},${infer_job},${write_job}${finalize_job:+,${finalize_job}}
+  squeue -j ${sigma_job},${infer_job},${write_job}${tc_member_maps_job:+,${tc_member_maps_job}}${finalize_job:+,${finalize_job}}
 EOF

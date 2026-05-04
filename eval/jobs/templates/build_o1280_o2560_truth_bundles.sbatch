@@ -2,9 +2,9 @@
 # Canonical truth-aware bundle build for strict `o1280 -> o2560` manual inference.
 # This stage rebuilds member-step bundle NetCDFs with explicit `target_hres_*`
 # using the current surface-only DestinE contract:
-#   - low-res inputs: 10u,10v,2t,msl
+#   - low-res inputs: 10u,10v,2t,msl (+ optional tp sidecar)
 #   - high-res explicit static inputs: z,lsm
-#   - target truth: 10u,10v,2t,msl
+#   - target truth: 10u,10v,2t,msl (+ optional tp sidecar)
 # No pressure-level targets are part of the maintained proof route.
 #
 # Preferred launch path:
@@ -19,7 +19,7 @@
 #SBATCH --hint=nomultithread
 #SBATCH --time=12:00:00
 #SBATCH --mem=128G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -31,8 +31,8 @@ SOURCE_HPC="ag"            # ac | ag | leonardo | jupiter
 CHECKPOINT_SHORT="REPLACE_CHECKPOINT_SHORT"
 SOURCE_INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/destine_o1280_inputs_2024_latest_available"
 SOURCE_FORCING_ROOT="/home/ecm5702/hpcperm/data/input_data/destine_o2560_forcings_2024_latest_available"
-RUN_ROOT="/home/ecm5702/perm/eval/manual_example"
-BUNDLE_DIR="/home/ecm5702/perm/eval/manual_example/bundles_with_y"
+RUN_ROOT="/home/ecm5702/scratch/eval/manual_example"
+BUNDLE_DIR="/home/ecm5702/scratch/eval/manual_example/bundles_with_y"
 DATES="20241108,20241109,20241110,20241111,20241112"
 STEPS="120"
 BUNDLE_PAIRS=""
@@ -199,15 +199,33 @@ build_one_bundle() {
   local step="$2"
   local member="$3"
   local bundle_nc
+  local -a lres_sfc_extra_args=()
+  local -a target_sfc_extra_args=()
+  local lres_tp_path
+  local target_tp_path
+  local lres_sfc_channels="10u,10v,2t,msl"
+  local target_sfc_channels="10u,10v,2t,msl"
   bundle_nc="$(printf "%s/enfo_o1280_0001_date%s_time0000_mem%02d_step%03dh_input_bundle.nc" "${BUNDLE_DIR}" "${date}" "${member}" "${step}")"
+  lres_tp_path="${SOURCE_INPUT_ROOT}/enfo_o1280_0001_date${date}_time0000_step006to120by006_input_tp.grib"
+  target_tp_path="${SOURCE_FORCING_ROOT}/destine_rd_fc_oper_i4ql_o2560_date${date}_time0000_step006to120by006_y_tp.grib"
+  if [[ -f "${lres_tp_path}" ]]; then
+    lres_sfc_extra_args=(--lres-sfc-extra-grib "${lres_tp_path}")
+    lres_sfc_channels="${lres_sfc_channels},tp"
+  fi
+  if [[ -f "${target_tp_path}" ]]; then
+    target_sfc_extra_args=(--target-sfc-extra-grib "${target_tp_path}")
+    target_sfc_channels="${target_sfc_channels},tp"
+  fi
   python -m manual_inference.prediction.predict build-bundle \
     --lres-sfc-grib "${SOURCE_INPUT_ROOT}/enfo_o1280_0001_date${date}_time0000_step006to120by006_input.grib" \
+    "${lres_sfc_extra_args[@]}" \
     --lres-pl-grib "${SOURCE_INPUT_ROOT}/enfo_o1280_0001_date${date}_time0000_step006to120by006_input.grib" \
     --hres-grib "${SOURCE_FORCING_ROOT}/destine_rd_fc_oper_i4ql_o2560_date${date}_time0000_step006to120by006_sfc.grib" \
     --target-sfc-grib "${SOURCE_FORCING_ROOT}/destine_rd_fc_oper_i4ql_o2560_date${date}_time0000_step006to120by006_y.grib" \
-    --lres-sfc-channels "10u,10v,2t,msl" \
+    "${target_sfc_extra_args[@]}" \
+    --lres-sfc-channels "${lres_sfc_channels}" \
     --lres-pl-channels "NONE" \
-    --target-sfc-channels "10u,10v,2t,msl" \
+    --target-sfc-channels "${target_sfc_channels}" \
     --target-pl-channels "NONE" \
     --step-hours "${step}" \
     --member "${member}" \
@@ -284,26 +302,36 @@ else:
 
 missing = [str(path) for path in expected if not path.exists()]
 sample_attrs: dict[str, str] = {}
-if expected and expected[0].exists():
-    with xr.open_dataset(expected[0]) as ds:
-        sample_attrs = {
-            "selected_lres_sfc_channels": str(ds.attrs.get("selected_lres_sfc_channels", "")),
-            "selected_lres_pl_channels": str(ds.attrs.get("selected_lres_pl_channels", "")),
-            "selected_target_sfc_channels": str(ds.attrs.get("selected_target_sfc_channels", "")),
-            "selected_target_pl_channels": str(ds.attrs.get("selected_target_pl_channels", "")),
-            "has_target_hres_fields": str(ds.attrs.get("has_target_hres_fields", "")),
-        }
+unreadable: list[dict[str, str]] = []
+for path in expected:
+    if not path.exists():
+        continue
+    try:
+        with xr.open_dataset(path) as ds:
+            if not sample_attrs:
+                sample_attrs = {
+                    "selected_lres_sfc_channels": str(ds.attrs.get("selected_lres_sfc_channels", "")),
+                    "selected_lres_pl_channels": str(ds.attrs.get("selected_lres_pl_channels", "")),
+                    "selected_target_sfc_channels": str(ds.attrs.get("selected_target_sfc_channels", "")),
+                    "selected_target_pl_channels": str(ds.attrs.get("selected_target_pl_channels", "")),
+                    "has_target_hres_fields": str(ds.attrs.get("has_target_hres_fields", "")),
+                }
+    except Exception as exc:  # pragma: no cover - shell-side verification
+        unreadable.append({"path": str(path), "error": repr(exc)})
 
 payload = {
     "bundle_dir": str(bundle_dir),
     "expected_count": len(expected),
     "actual_count": len(list(bundle_dir.glob("*_input_bundle.nc"))),
     "missing": missing,
+    "unreadable": unreadable,
     "sample_attrs": sample_attrs,
 }
 out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 if missing:
     raise SystemExit(f"Missing rebuilt bundle(s): {missing[:5]}")
+if unreadable:
+    raise SystemExit(f"Unreadable rebuilt bundle(s): {unreadable[:3]}")
 if sample_attrs.get("selected_lres_pl_channels") not in {"", "[]"}:
     raise SystemExit(f"Expected surface-only bundle contract, got attrs={sample_attrs}")
 if sample_attrs.get("selected_target_pl_channels") not in {"", "[]"}:

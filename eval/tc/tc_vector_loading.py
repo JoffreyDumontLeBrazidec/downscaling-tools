@@ -198,13 +198,14 @@ def load_prediction_event_curve(
     support_mode: SupportMode,
     target_lon: np.ndarray | None = None,
     target_lat: np.ndarray | None = None,
+    prediction_var: str = "y_pred",
 ) -> CurveVectors:
     pred_files = list(pred_files)
     if not pred_files:
         raise ValueError(f"No prediction files provided for event={cfg.name}")
 
     if support_mode == "native":
-        return _load_prediction_curve_native(pred_files, cfg=cfg)
+        return _load_prediction_curve_native(pred_files, cfg=cfg, prediction_var=prediction_var)
     if support_mode == "regridded":
         if target_lon is None or target_lat is None:
             raise ValueError("target_lon/target_lat are required for regridded prediction loading")
@@ -212,8 +213,18 @@ def load_prediction_event_curve(
             pred_files,
             target_lon=target_lon,
             target_lat=target_lat,
+            prediction_var=prediction_var,
         )
     raise ValueError(f"Unsupported support_mode={support_mode!r}")
+
+
+def load_iekm_target_curve(grib_path: str) -> CurveVectors:
+    """Load MSL + 10m wind from IEKM Y-target GRIBs. grib_path may contain glob wildcards."""
+    import glob as _glob
+    files = sorted(_glob.glob(grib_path)) if ("*" in grib_path or "?" in grib_path) else [grib_path]
+    if not files:
+        raise FileNotFoundError(f"No IEKM target GRIB files matched: {grib_path}")
+    return _load_native_curve(files, is_analysis=False, step_indices=None)
 
 
 def _load_native_curve(
@@ -386,6 +397,7 @@ def _load_prediction_curve_native(
     pred_files: list[tuple[Path, int, int]],
     *,
     cfg: TCEvent,
+    prediction_var: str = "y_pred",
 ) -> CurveVectors:
     msl_vals: list[np.ndarray] = []
     wind_vals: list[np.ndarray] = []
@@ -399,7 +411,7 @@ def _load_prediction_curve_native(
             mask = _event_point_mask(lon, lat, cfg)
             if not np.any(mask):
                 continue
-            y_pred = _prediction_values_by_point(ds)
+            y_pred = _prediction_values_by_point(ds, prediction_var=prediction_var)
             msl_vals.append((y_pred[:, mask, i_msl] / 100.0).reshape(-1))
             u10 = y_pred[:, mask, i_u10]
             v10 = y_pred[:, mask, i_v10]
@@ -419,6 +431,7 @@ def _load_prediction_curve_regridded(
     *,
     target_lon: np.ndarray,
     target_lat: np.ndarray,
+    prediction_var: str = "y_pred",
 ) -> CurveVectors:
     msl_vals: list[np.ndarray] = []
     wind_vals: list[np.ndarray] = []
@@ -428,7 +441,7 @@ def _load_prediction_curve_regridded(
             i_msl = weather_states.index("msl")
             i_u10 = weather_states.index("10u")
             i_v10 = weather_states.index("10v")
-            y_pred = _prediction_values_by_point(ds)
+            y_pred = _prediction_values_by_point(ds, prediction_var=prediction_var)
             source_lon, source_lat = _prediction_point_coordinates(ds)
             source_grid = _prediction_structured_grid(ds)
             if source_grid is not None:
@@ -479,8 +492,10 @@ def _event_point_mask(lon: np.ndarray, lat: np.ndarray, cfg: TCEvent) -> np.ndar
     return lat_mask & lon_mask
 
 
-def _prediction_values_by_point(ds: xr.Dataset) -> np.ndarray:
-    y_pred = ds["y_pred"]
+def _prediction_values_by_point(ds: xr.Dataset, *, prediction_var: str = "y_pred") -> np.ndarray:
+    if prediction_var not in ds:
+        raise KeyError(f"Prediction dataset is missing variable {prediction_var!r}")
+    y_pred = ds[prediction_var]
     if "sample" in y_pred.dims:
         y_pred = y_pred.isel(sample=0, drop=True)
     spatial_dims = _prediction_spatial_dims(ds, y_pred)
@@ -511,8 +526,10 @@ def _prediction_point_coordinates(ds: xr.Dataset) -> tuple[np.ndarray, np.ndarra
         lon = lon_grid.reshape(-1)
         lat = lat_grid.reshape(-1)
     elif lon_da.ndim == 2 and lat_da.ndim == 2 and lon_da.dims == lat_da.dims:
-        lon = normalize_lon(np.asarray(lon_da.values, dtype=np.float64)).reshape(-1)
-        lat = np.asarray(lat_da.values, dtype=np.float64).reshape(-1)
+        # Multi-ds predictions store lon/lat per-member; take first member since
+        # coordinates are identical across members.
+        lon = normalize_lon(np.asarray(lon_da.values[0], dtype=np.float64)).reshape(-1)
+        lat = np.asarray(lat_da.values[0], dtype=np.float64).reshape(-1)
     else:
         raise ValueError(
             f"Unsupported lon_hres/lat_hres coordinate layout: "
@@ -529,8 +546,9 @@ def _prediction_structured_grid(ds: xr.Dataset) -> StructuredGrid | None:
 
 
 def _prediction_spatial_dims(ds: xr.Dataset, y_pred: xr.DataArray) -> tuple[str, ...]:
-    lon_dims = tuple(ds["lon_hres"].dims)
-    lat_dims = tuple(ds["lat_hres"].dims)
+    _MEMBER_LIKE = {"ensemble_member", "member", "realization"}
+    lon_dims = tuple(d for d in ds["lon_hres"].dims if d not in _MEMBER_LIKE)
+    lat_dims = tuple(d for d in ds["lat_hres"].dims if d not in _MEMBER_LIKE)
     if lon_dims == lat_dims and lon_dims:
         if all(dim in y_pred.dims for dim in lon_dims):
             return lon_dims

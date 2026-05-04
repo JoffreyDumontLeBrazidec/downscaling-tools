@@ -35,20 +35,24 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=256G
 #SBATCH --gpus-per-node=1
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_DIR="${RUN_ROOT}/predictions"
 OUT_DIR="${RUN_ROOT}"
 EVENTS="idalia,franklin"        # comma-separated subset; blank => all events
 SUPPORT_MODE="native"           # native | regridded
 EXTRA_REFERENCE_EXPIDS=""       # example: ENFO_O320_j138,ENFO_O1280_0001
+DISPLAY_LABEL=""                # optional shorter legend label; blank => RUN_ID
+PLOT_TITLE=""                   # optional override for TCEvent plot_title; blank => use TCEvent default
+IEKM_TARGET_GRIB_PATH=""       # IEKM target GRIBs; blank => use TCEvent default; "none" => disable
+IEKM_LABEL="IEKM_TARGET"      # label for IEKM reference curve
 OUT_STEM=""                     # blank => auto-generated from events + RUN_ID
 BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
 WRITE_EXPERIMENT_CONFIG=0       # 1 => write ${RUN_ROOT}/EXPERIMENT_CONFIG.yaml
@@ -169,6 +173,18 @@ fi
 if [[ -n "${EXTRA_REFERENCE_EXPIDS}" ]]; then
   CMD+=(--extra-reference-expids "${EXTRA_REFERENCE_EXPIDS}")
 fi
+if [[ -n "${DISPLAY_LABEL}" ]]; then
+  CMD+=(--display-label "${DISPLAY_LABEL}")
+fi
+if [[ -n "${PLOT_TITLE}" ]]; then
+  CMD+=(--plot-title "${PLOT_TITLE}")
+fi
+if [[ -n "${IEKM_TARGET_GRIB_PATH}" ]]; then
+  CMD+=(--iekm-target-grib-path "${IEKM_TARGET_GRIB_PATH}")
+fi
+if [[ "${IEKM_LABEL}" != "IEKM_TARGET" ]]; then
+  CMD+=(--iekm-label "${IEKM_LABEL}")
+fi
 
 echo "[INFO] Running: ${CMD[*]}"
 "${CMD[@]}"
@@ -194,6 +210,7 @@ tc_evaluation:
   events: ${EVENTS:-all_events}
   base_tc_dir: ${BASE_TC_DIR}
   extra_reference_expids: ${EXTRA_REFERENCE_EXPIDS:-none}
+  display_label: ${DISPLAY_LABEL:-${RUN_ID}}
 EOF
 fi
 

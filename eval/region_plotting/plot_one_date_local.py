@@ -36,11 +36,26 @@ def _scalar_text(ds: xr.Dataset, name: str) -> str:
 
 def _default_region_for_grid(grid: str) -> str:
     grid = str(grid).strip()
+    if grid == "O2560":
+        return "alps_innsbruck"
     if grid == "O1280":
         return "amazon_forest_central"
     if grid == "O96":
         return "amazon_forest"
     return "amazon_forest"
+
+
+def _infer_grid(ds) -> str:
+    """Infer grid from dataset attrs or hres dimension size."""
+    grid = str(getattr(ds, "attrs", {}).get("grid", "")).strip()
+    if grid:
+        return grid
+    hres = ds.sizes.get("grid_point_hres", 0)
+    if hres >= 26_000_000:
+        return "O2560"
+    if hres >= 6_000_000:
+        return "O1280"
+    return ""
 
 
 def _write_one_date_manifest(
@@ -158,7 +173,7 @@ def render_prediction_file(
     with xr.open_dataset(predictions_path) as ds:
         resolved_region = region
         if resolved_region == "auto":
-            resolved_region = _default_region_for_grid(str(ds.attrs.get("grid", "")).strip())
+            resolved_region = _default_region_for_grid(_infer_grid(ds))
         ds_member = _select_member_dataset(
             ds,
             sample_index=sample_index,
@@ -244,7 +259,7 @@ def render_one_date_local_plots(
         with xr.open_dataset(predictions_path) as ds:
             resolved_region = region
             if resolved_region == "auto":
-                resolved_region = _default_region_for_grid(str(ds.attrs.get("grid", "")).strip())
+                resolved_region = _default_region_for_grid(_infer_grid(ds))
             ds_member = _select_member_dataset(
                 ds,
                 sample_index=sample_index,

@@ -7,7 +7,7 @@
 #SBATCH --qos=ng
 #SBATCH --hint=nomultithread
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -23,14 +23,14 @@ CHECKPOINT_SHORT="REPLACE_CHECKPOINT_SHORT"
 CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
 BUNDLE_NC="REPLACE_INPUT_BUNDLE_NC"
 
-OUTPUT_ROOT="/home/ecm5702/perm/eval"
+OUTPUT_ROOT="/home/ecm5702/scratch/eval"
 RUN_DATE_UTC="$(date -u +%Y%m%d)"
 RUN_SUFFIX=""              # optional, safe chars only
 
 DEVICE="cuda"
 PRECISION="fp32"
 VALIDATION_FREQUENCY="50h"
-EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
 
 # Old stack currently allows missing target in code path; set to 1 to enforce y anyway.
 REQUIRE_Y_ON_OLD_STACK=0

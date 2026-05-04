@@ -12,10 +12,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
+#SBATCH --gpus-per-node=0
 #SBATCH --hint=nomultithread
 #SBATCH --time=12:00:00
 #SBATCH --mem=128G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -26,8 +27,8 @@ STACK_FLAVOR="new"         # new | old
 SOURCE_HPC="ac"            # ac | ag | leonardo | jupiter
 CHECKPOINT_SHORT="REPLACE_CHECKPOINT_SHORT"
 SOURCE_GRIB_ROOT="/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930"
-RUN_ROOT="/home/ecm5702/perm/eval/manual_example"
-BUNDLE_DIR="/home/ecm5702/perm/eval/manual_example/bundles_with_y"
+RUN_ROOT="/home/ecm5702/scratch/eval/manual_example"
+BUNDLE_DIR="/home/ecm5702/scratch/eval/manual_example/bundles_with_y"
 DATES="20250926,20250927,20250928,20250929,20250930"
 STEPS="24,48,72,96,120"
 BUNDLE_PAIRS=""
@@ -201,20 +202,23 @@ build_one_bundle() {
   local member="$3"
   local bundle_nc
   local -a hres_static_arg=()
+  local -a lres_sfc_extra_args=()
+  local -a target_sfc_extra_args=()
+  local lres_tp_path
+  local target_tp_path
   bundle_nc="$(printf "%s/enfo_o48_0001_date%s_time0000_mem%02d_step%03dh_input_bundle.nc" "${BUNDLE_DIR}" "${date}" "${member}" "${step}")"
   if [[ -n "${HRES_STATIC_GRIB}" ]]; then
     hres_static_arg=(--hres-static-grib "${HRES_STATIC_GRIB}")
   fi
-  python -m manual_inference.prediction.predict build-bundle \
-    --lres-sfc-grib "${SOURCE_GRIB_ROOT}/enfo_o48_0001_date${date}_time0000_mem1to10_step24to120_sfc.grib" \
-    --lres-pl-grib "${SOURCE_GRIB_ROOT}/enfo_o48_0001_date${date}_time0000_mem1to10_step24to120_pl.grib" \
-    --hres-grib "${SOURCE_GRIB_ROOT}/enfo_o96_0001_date${date}_time0000_step24to120_sfc.grib" \
-    "${hres_static_arg[@]}" \
-    --target-sfc-grib "${SOURCE_GRIB_ROOT}/iekm_o96_iekm_date${date}_time0000_step24to120_sfc_y.grib" \
-    --target-pl-grib "${SOURCE_GRIB_ROOT}/iekm_o96_iekm_date${date}_time0000_step24to120_pl_y.grib" \
-    --step-hours "${step}" \
-    --member "${member}" \
-    --out "${bundle_nc}"
+  lres_tp_path="${SOURCE_GRIB_ROOT}/enfo_o48_0001_date${date}_time0000_mem1to10_step24to120_sfc_tp.grib"
+  target_tp_path="${SOURCE_GRIB_ROOT}/iekm_o96_iekm_date${date}_time0000_step24to120_sfc_y_tp.grib"
+  if [[ -f "${lres_tp_path}" ]]; then
+    lres_sfc_extra_args=(--lres-sfc-extra-grib "${lres_tp_path}")
+  fi
+  if [[ -f "${target_tp_path}" ]]; then
+    target_sfc_extra_args=(--target-sfc-extra-grib "${target_tp_path}")
+  fi
+  python -m manual_inference.prediction.predict build-bundle     --lres-sfc-grib "${SOURCE_GRIB_ROOT}/enfo_o48_0001_date${date}_time0000_mem1to10_step24to120_sfc.grib"     "${lres_sfc_extra_args[@]}"     --lres-pl-grib "${SOURCE_GRIB_ROOT}/enfo_o48_0001_date${date}_time0000_mem1to10_step24to120_pl.grib"     --hres-grib "${SOURCE_GRIB_ROOT}/enfo_o96_0001_date${date}_time0000_step24to120_sfc.grib"     "${hres_static_arg[@]}"     --target-sfc-grib "${SOURCE_GRIB_ROOT}/iekm_o96_iekm_date${date}_time0000_step24to120_sfc_y.grib"     "${target_sfc_extra_args[@]}"     --target-pl-grib "${SOURCE_GRIB_ROOT}/iekm_o96_iekm_date${date}_time0000_step24to120_pl_y.grib"     --step-hours "${step}"     --member "${member}"     --out "${bundle_nc}"
 }
 
 IFS=',' read -r -a MEMBER_LIST <<< "${MEMBERS}"

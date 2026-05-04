@@ -54,15 +54,62 @@ def _open_cfgrib_dataset(
     filter_by_keys: Mapping[str, str] | None = None,
 ) -> xr.Dataset:
     _cleanup_empty_cfgrib_indexes(grib_path)
-    import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
-
     backend_kwargs = {}
     if filter_by_keys:
         backend_kwargs["filter_by_keys"] = dict(filter_by_keys)
-    return ekd.from_source("file", str(grib_path)).to_xarray(
-        engine="cfgrib",
-        backend_kwargs=backend_kwargs,
-    )
+    try:
+        return xr.open_dataset(str(grib_path), engine="cfgrib", backend_kwargs=backend_kwargs)
+    except Exception:
+        import earthkit.data as ekd  # pylint: disable=import-outside-toplevel
+
+        return ekd.from_source("file", str(grib_path)).to_xarray(
+            engine="cfgrib",
+            backend_kwargs=backend_kwargs,
+        )
+
+
+def _normalize_optional_grib_list(
+    grib_paths: Sequence[str | Path] | None,
+) -> list[Path]:
+    normalized: list[Path] = []
+    for raw in grib_paths or ():
+        raw_text = str(raw).strip()
+        if not raw_text:
+            continue
+        normalized.append(Path(raw_text))
+    return normalized
+
+
+def _merge_datasets(datasets: Sequence[xr.Dataset]) -> xr.Dataset:
+    if not datasets:
+        raise ValueError("Expected at least one dataset to merge.")
+    merged = datasets[0]
+    for ds in datasets[1:]:
+        merged = xr.merge(
+            [merged, ds],
+            compat="override",
+            join="exact",
+            combine_attrs="override",
+        )
+    return merged
+
+
+def _open_selected_surface_dataset(
+    primary_grib: str | Path,
+    extra_gribs: Sequence[str | Path] | None,
+    *,
+    step_hours: int | None,
+    member: int | None,
+    filter_by_keys: Mapping[str, str] | None = None,
+    allow_missing_member: bool = False,
+) -> xr.Dataset:
+    datasets = []
+    for path in [Path(primary_grib), *_normalize_optional_grib_list(extra_gribs)]:
+        ds = _open_cfgrib_dataset(path, filter_by_keys=filter_by_keys)
+        ds = _select_step(ds, step_hours)
+        ds = _select_member(ds, member, allow_missing=allow_missing_member)
+        datasets.append(ds)
+    return _merge_datasets(datasets)
 
 
 def _infer_target_gribs_from_hres(
@@ -811,55 +858,43 @@ def _select_member(
         return ds
     requested_member = int(member)
 
-    def _fallback_singleton_member(dim_name: str) -> xr.Dataset | None:
-        if ds.sizes.get(dim_name, 0) != 1:
+    def _select_named_member(dim_name: str) -> xr.Dataset | None:
+        if dim_name not in ds.dims and dim_name not in ds.coords:
             return None
+
         coord = ds.coords.get(dim_name)
         if coord is not None:
             values = np.asarray(coord.values).reshape(-1)
-            if values.size == 1:
-                try:
-                    only_value = int(values[0])
-                except Exception:
-                    only_value = None
-                if allow_missing or (only_value == 0 and requested_member == 1):
-                    return ds.isel({dim_name: 0})
-        if allow_missing:
+            if values.size:
+                matches = []
+                for idx, raw_value in enumerate(values):
+                    try:
+                        if int(raw_value) == requested_member:
+                            matches.append(idx)
+                    except Exception:
+                        continue
+                if matches:
+                    if dim_name in ds.dims:
+                        return ds.isel({dim_name: int(matches[0])})
+                    return ds
+                if values.size == 1:
+                    try:
+                        only_value = int(values[0])
+                    except Exception:
+                        only_value = None
+                    if allow_missing or (only_value == 0 and requested_member == 1):
+                        if dim_name in ds.dims:
+                            return ds.isel({dim_name: 0})
+                        return ds
+
+        if ds.sizes.get(dim_name, 0) == 1 and allow_missing:
             return ds.isel({dim_name: 0})
         return None
 
-    if "number" in ds.coords:
-        try:
-            return ds.sel(number=requested_member)
-        except KeyError:
-            fallback = _fallback_singleton_member("number")
-            if fallback is not None:
-                return fallback
-            raise
-    if "number" in ds.dims:
-        try:
-            return ds.sel(number=requested_member)
-        except KeyError:
-            fallback = _fallback_singleton_member("number")
-            if fallback is not None:
-                return fallback
-            raise
-    if "ensemble_member" in ds.coords:
-        try:
-            return ds.sel(ensemble_member=requested_member)
-        except KeyError:
-            fallback = _fallback_singleton_member("ensemble_member")
-            if fallback is not None:
-                return fallback
-            raise
-    if "ensemble_member" in ds.dims:
-        try:
-            return ds.sel(ensemble_member=requested_member)
-        except KeyError:
-            fallback = _fallback_singleton_member("ensemble_member")
-            if fallback is not None:
-                return fallback
-            raise
+    for dim_name in ("number", "ensemble_member"):
+        selected = _select_named_member(dim_name)
+        if selected is not None:
+            return selected
     return ds
 
 
@@ -891,6 +926,7 @@ _TARGET_SFC_MAP = {
     "skt": "target_hres_skt",
     "sp": "target_hres_sp",
     "tcw": "target_hres_tcw",
+    "tp": "target_hres_tp",
 }
 
 
@@ -974,10 +1010,12 @@ def _write_bundle_metadata(
     bundle: xr.Dataset,
     *,
     lres_sfc_grib: str | Path,
+    lres_sfc_extra_gribs: Sequence[str | Path],
     lres_pl_grib: str | Path,
     hres_grib: str | Path,
     hres_static_grib: str | Path | None,
     target_sfc_grib: str | Path | None,
+    target_sfc_extra_gribs: Sequence[str | Path],
     target_pl_grib: str | Path | None,
     resolved_channels: dict[str, Sequence[str]],
     ds_sfc,
@@ -993,6 +1031,8 @@ def _write_bundle_metadata(
     )
     bundle.attrs["case_valid_time"] = valid_time
     bundle.attrs["source_lres_sfc"] = str(lres_sfc_grib)
+    if lres_sfc_extra_gribs:
+        bundle.attrs["source_lres_sfc_extra"] = ",".join(str(path) for path in lres_sfc_extra_gribs)
     bundle.attrs["source_lres_pl"] = str(lres_pl_grib)
     resolved_hres = hres_static_grib or hres_grib
     bundle.attrs["source_hres"] = str(resolved_hres)
@@ -1000,6 +1040,8 @@ def _write_bundle_metadata(
         bundle.attrs["source_hres_static_override"] = str(hres_static_grib)
     if target_sfc_grib:
         bundle.attrs["source_target_sfc"] = str(target_sfc_grib)
+    if target_sfc_extra_gribs:
+        bundle.attrs["source_target_sfc_extra"] = ",".join(str(path) for path in target_sfc_extra_gribs)
     if target_pl_grib:
         bundle.attrs["source_target_pl"] = str(target_pl_grib)
     bundle.attrs["selected_lres_sfc_channels"] = ",".join(resolved_channels["lres_sfc"])
@@ -1028,6 +1070,7 @@ def _write_bundle_metadata(
 def build_input_bundle_from_grib(
     *,
     lres_sfc_grib: str | Path,
+    lres_sfc_extra_gribs: Sequence[str | Path] | None = None,
     lres_pl_grib: str | Path,
     hres_grib: str | Path,
     hres_static_grib: str | Path | None = None,
@@ -1036,6 +1079,7 @@ def build_input_bundle_from_grib(
     member: int | None = None,
     out_zarr: str | Path | None = None,
     target_sfc_grib: str | Path | None = None,
+    target_sfc_extra_gribs: Sequence[str | Path] | None = None,
     target_pl_grib: str | Path | None = None,
     require_target_fields: bool = True,
     lres_sfc_channels: Sequence[str] | None = None,
@@ -1059,11 +1103,19 @@ def build_input_bundle_from_grib(
         target_pl_channels,
         default=DEFAULT_TARGET_PL_CHANNELS,
     )
+    resolved_lres_sfc_extra_gribs = _normalize_optional_grib_list(lres_sfc_extra_gribs)
+    resolved_target_sfc_extra_gribs = _normalize_optional_grib_list(target_sfc_extra_gribs)
 
     # DestinE low-resolution inputs may be packaged as a single mixed-level GRIB.
     # Reopen the same file with explicit cfgrib level filters so bundle creation
     # does not depend on pre-splitting surface and pressure-level inputs.
-    ds_sfc = _open_cfgrib_dataset(lres_sfc_grib, filter_by_keys={"typeOfLevel": "surface"})
+    ds_sfc = _open_selected_surface_dataset(
+        lres_sfc_grib,
+        resolved_lres_sfc_extra_gribs,
+        step_hours=step_hours,
+        member=member,
+        filter_by_keys={"typeOfLevel": "surface"},
+    )
     ds_pl = None
     if resolved_lres_pl_channels:
         ds_pl = _open_cfgrib_dataset(
@@ -1073,7 +1125,6 @@ def build_input_bundle_from_grib(
     resolved_hres_static_grib = hres_static_grib or hres_grib
     ds_hres = _open_cfgrib_dataset(resolved_hres_static_grib)
 
-    ds_sfc = _select_step(ds_sfc, step_hours)
     if ds_pl is not None:
         ds_pl = _select_step(ds_pl, step_hours)
     ds_hres = _select_step(
@@ -1082,7 +1133,6 @@ def build_input_bundle_from_grib(
         allow_any_single_step=bool(hres_static_grib),
     )
 
-    ds_sfc = _select_member(ds_sfc, member)
     if ds_pl is not None:
         ds_pl = _select_member(ds_pl, member)
     ds_hres = _select_member(ds_hres, member, allow_missing=True)
@@ -1123,9 +1173,13 @@ def build_input_bundle_from_grib(
 
     target_level_coord: np.ndarray | None = None
     if target_sfc_grib:
-        ds_target_sfc = _open_cfgrib_dataset(target_sfc_grib)
-        ds_target_sfc = _select_step(ds_target_sfc, step_hours)
-        ds_target_sfc = _select_member(ds_target_sfc, member, allow_missing=True)
+        ds_target_sfc = _open_selected_surface_dataset(
+            target_sfc_grib,
+            resolved_target_sfc_extra_gribs,
+            step_hours=step_hours,
+            member=member,
+            allow_missing_member=True,
+        )
         data_vars.update(_build_target_sfc_vars(ds_target_sfc, resolved_target_sfc_channels, lat_hres))
 
     if target_pl_grib and resolved_target_pl_channels:
@@ -1149,10 +1203,12 @@ def build_input_bundle_from_grib(
     _write_bundle_metadata(
         bundle,
         lres_sfc_grib=lres_sfc_grib,
+        lres_sfc_extra_gribs=resolved_lres_sfc_extra_gribs,
         lres_pl_grib=lres_pl_grib,
         hres_grib=hres_grib,
         hres_static_grib=hres_static_grib,
         target_sfc_grib=target_sfc_grib,
+        target_sfc_extra_gribs=resolved_target_sfc_extra_gribs,
         target_pl_grib=target_pl_grib,
         resolved_channels={
             "lres_sfc": resolved_lres_sfc_channels,
@@ -1194,6 +1250,12 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Build input bundle NetCDF from GRIB.")
     parser.add_argument("--lres-sfc-grib", required=True)
+    parser.add_argument(
+        "--lres-sfc-extra-grib",
+        action="append",
+        default=[],
+        help="Optional extra low-resolution surface GRIB to merge before bundle creation.",
+    )
     parser.add_argument("--lres-pl-grib", required=True)
     parser.add_argument("--hres-grib", required=True)
     parser.add_argument(
@@ -1208,6 +1270,12 @@ def main() -> None:
         "--target-sfc-grib",
         default="",
         help="Optional high-res surface GRIB containing target/truth fields to store in bundle.",
+    )
+    parser.add_argument(
+        "--target-sfc-extra-grib",
+        action="append",
+        default=[],
+        help="Optional extra target surface GRIB to merge before bundle creation.",
     )
     parser.add_argument(
         "--target-pl-grib",
@@ -1286,6 +1354,7 @@ def main() -> None:
 
     out = build_input_bundle_from_grib(
         lres_sfc_grib=args.lres_sfc_grib,
+        lres_sfc_extra_gribs=args.lres_sfc_extra_grib,
         lres_pl_grib=args.lres_pl_grib,
         hres_grib=args.hres_grib,
         hres_static_grib=args.hres_static_grib or None,
@@ -1294,6 +1363,7 @@ def main() -> None:
         member=args.member,
         out_zarr=args.out_zarr or None,
         target_sfc_grib=args.target_sfc_grib or None,
+        target_sfc_extra_gribs=args.target_sfc_extra_grib,
         target_pl_grib=args.target_pl_grib or None,
         require_target_fields=not args.allow_missing_target_unsafe,
         lres_sfc_channels=_parse_channel_subset_csv(args.lres_sfc_channels),

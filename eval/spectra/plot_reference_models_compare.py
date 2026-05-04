@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/physical_model_spectra_compare_20260303",
+        default="/home/ecm5702/scratch/eval/physical_model_spectra_compare_20260303",
         help="Where to save comparison plots and summary JSON.",
     )
     p.add_argument(

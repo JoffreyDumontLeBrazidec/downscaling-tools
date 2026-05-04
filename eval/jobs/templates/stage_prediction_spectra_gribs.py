@@ -211,6 +211,10 @@ def main() -> None:
         if template_grib_root is None:
             pred_lat = np.asarray(ds0["lat_hres"].values, dtype=np.float64)
             pred_lon = np.asarray(ds0["lon_hres"].values, dtype=np.float64)
+            if pred_lat.ndim > 1:
+                pred_lat = pred_lat[0]
+            if pred_lon.ndim > 1:
+                pred_lon = pred_lon[0]
             pred_lon = ((pred_lon + 180.0) % 360.0) - 180.0
 
     missing_in_predictions = [state for state in requested_states if state not in ds0_states]

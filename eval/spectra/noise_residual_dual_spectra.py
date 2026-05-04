@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/noise_residual_spectra_20260305",
+        default="/home/ecm5702/scratch/eval/noise_residual_spectra_20260305",
         help="Persistent output directory.",
     )
     parser.add_argument("--num-samples", type=int, default=5, help="Number of sampled times per case.")

@@ -28,7 +28,7 @@ CHECKPOINT_PATH="${CHECKPOINT_PATH:-REPLACE_CHECKPOINT_PATH}"
 SOURCE_HPC="${SOURCE_HPC:-ag}"                        # ac | ag | leonardo | jupiter
 INPUT_EVENT="${INPUT_EVENT:-idalia}"
 SOURCE_GRIB_ROOT="${SOURCE_GRIB_ROOT:-/home/ecm5702/hpcperm/data/input_data/o320_o1280/${INPUT_EVENT}}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/perm/eval}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/scratch/eval}"
 PHASE="${PHASE:-proxy}"                              # proxy | continue-full | full-only
 PREBUILT_BUNDLE_ROOT="${PREBUILT_BUNDLE_ROOT:-}"    # optional bundles_with_y* root to skip rebuild
 
@@ -37,7 +37,8 @@ RUN_SUFFIX="${RUN_SUFFIX:-manual_eval}"              # appended to the canonical
 RUN_ID_OVERRIDE="${RUN_ID_OVERRIDE:-}"              # required for continue-full across days
 
 PROXY_BUNDLE_PAIRS="${PROXY_BUNDLE_PAIRS:-20230829:24,20230828:48,20230829:48,20230828:24,20230830:24,20230828:72,20230827:72,20230830:48,20230829:72,20230827:48}"
-SAMPLER_JSON="${SAMPLER_JSON:-{\"num_steps\":40,\"sigma_max\":1000.0,\"sigma_min\":0.03,\"rho\":7.0,\"sampler\":\"heun\",\"S_max\":1000.0}}"
+DEFAULT_SAMPLER_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
+SAMPLER_JSON="${SAMPLER_JSON:-$DEFAULT_SAMPLER_JSON}"
 DATE_PRESET="${DATE_PRESET:-default}"                # default | aug16_30
 DATES="${DATES:-}"                                   # explicit CSV override
 STEPS="${STEPS:-24,48,72,96,120}"
@@ -57,6 +58,11 @@ STORM_PLOT_REGIONS="${STORM_PLOT_REGIONS:-idalia,franklin}"
 STORM_PLOT_OUT_PREFIX="${STORM_PLOT_OUT_PREFIX:-tc_local_plots}"
 RUN_TC_CONTOUR_PLOTS="${RUN_TC_CONTOUR_PLOTS:-1}"   # standard TC package default: keep contour-style TC suites on for selected steps
 TC_CONTOUR_OUT_PREFIX="${TC_CONTOUR_OUT_PREFIX:-tc_contour_plots}"
+RUN_TC_MEMBER_MAPS="${RUN_TC_MEMBER_MAPS:-1}"         # 1 => render per-member TC spatial maps (MSLP/Wind x Input/Pred/Target)
+TC_MEMBER_MAPS_OUT_DIR="${TC_MEMBER_MAPS_OUT_DIR:-tc_member_maps}"
+TC_MEMBER_MAPS_MEMBERS="${TC_MEMBER_MAPS_MEMBERS:-0,1,2,3,4}"
+TC_MEMBER_MAPS_DATE="${TC_MEMBER_MAPS_DATE:-20230828}"  # strong-TC date for Idalia/Franklin
+TC_MEMBER_MAPS_STEPS="${TC_MEMBER_MAPS_STEPS:-48}"      # single strong step (valid Aug 30: Idalia Cat3 + Franklin Cat4)
 RUN_TC_THREE_ROUTE_COMPARE="${RUN_TC_THREE_ROUTE_COMPARE:-0}"  # 1 => select representative TC cases and render all three TC routes
 TC_THREE_ROUTE_OUT_DIR="${TC_THREE_ROUTE_OUT_DIR:-}"
 TC_THREE_ROUTE_EVENTS="${TC_THREE_ROUTE_EVENTS:-idalia,franklin}"
@@ -64,13 +70,14 @@ TC_THREE_ROUTE_SELECTION_METRIC="${TC_THREE_ROUTE_SELECTION_METRIC:-maxwind}"
 
 SPECTRA_METHOD="${SPECTRA_METHOD:-auto}"             # auto | proxy | ecmwf
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded; standard TC PDF route runs every evaluation by default
-TC_EVENTS="${TC_EVENTS:-idalia,franklin}"
-TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-}"
+TC_EVENTS="${TC_EVENTS:-idalia,franklin,franklin_idalia}"
+TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O320_0001,EEFO_O96_0001,ENFO_O320_ip6y}"
 
 HOLD="${HOLD:-0}"                                    # 1 => submit held
 NO_SUBMIT="${NO_SUBMIT:-0}"                          # 1 => render only
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"              # 1 => overwrite rendered files
 SUBMIT_ROOT="${SUBMIT_ROOT:-/home/ecm5702/dev/jobscripts/submit}"
+PROFILE_JSON_PATH="${PROFILE_JSON_PATH:-}"           # optional JSON override for checkpoint_profile output
 PROFILE_PYTHON="${PROFILE_PYTHON:-}"                 # optional override for checkpoint_profile
 O1280_PLOT_MEM="${O1280_PLOT_MEM:-256G}"            # high-memory default for O1280 local/regional/storm six-panel CPU follow-ups
 O1280_TC_MEM="${O1280_TC_MEM:-128G}"                # prediction-only TC PDFs/contours on AC nf should stay within the tested 128G posture
@@ -100,6 +107,59 @@ require_choice() {
 require_bool() {
   local value="$1"
   [[ "${value}" == "0" || "${value}" == "1" ]] || die "Expected 0 or 1, got '${value}'"
+}
+
+normalize_json_object() {
+  local raw="$1"
+  local label="$2"
+  python3 - "${raw}" "${label}" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1]
+label = sys.argv[2]
+try:
+    parsed = json.loads(raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"{label} is not valid JSON: {exc}")
+if not isinstance(parsed, dict):
+    raise SystemExit(f"{label} must decode to a JSON object, got {type(parsed).__name__}")
+print(json.dumps(parsed, separators=(",", ":")))
+PY
+}
+
+validate_rendered_json_var() {
+  local file="$1"
+  local var="$2"
+  local label="$3"
+  python3 - "${file}" "${var}" "${label}" <<'PY'
+from pathlib import Path
+import ast
+import json
+import re
+import sys
+
+path = Path(sys.argv[1])
+var = sys.argv[2]
+label = sys.argv[3]
+pattern = re.compile(rf"^{re.escape(var)}=(.+)$", re.MULTILINE)
+match = pattern.search(path.read_text(encoding="utf-8"))
+if match is None:
+    raise SystemExit(f"Variable not found in {path}: {var}")
+rhs = match.group(1).strip()
+try:
+    rendered = ast.literal_eval(rhs)
+except Exception as exc:
+    raise SystemExit(f"{label} rendered into {path} is not a valid shell string literal: {exc}")
+if not isinstance(rendered, str):
+    raise SystemExit(f"{label} rendered into {path} must be a shell string literal.")
+try:
+    parsed = json.loads(rendered)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"{label} rendered into {path} is not valid JSON: {exc}")
+if not isinstance(parsed, dict):
+    raise SystemExit(f"{label} rendered into {path} must decode to a JSON object, got {type(parsed).__name__}")
+PY
 }
 
 set_var() {
@@ -216,6 +276,8 @@ if [[ "${LOCAL_PLOT_EXPECTED_COUNT}" != "auto" && ! "${LOCAL_PLOT_EXPECTED_COUNT
   die "LOCAL_PLOT_EXPECTED_COUNT must be 'auto' or a non-negative integer."
 fi
 
+SAMPLER_JSON="$(normalize_json_object "${SAMPLER_JSON}" "SAMPLER_JSON")"
+
 HOST_SHORT="$(hostname -s)"
 case "${HOST_SHORT}" in
   ac*) HOST_FAMILY="ac" ;;
@@ -237,19 +299,24 @@ esac
 if [[ -z "${PROFILE_PYTHON}" ]]; then
   PROFILE_PYTHON="${EXPECTED_PROFILE_PYTHON}"
 elif [[ "${PROFILE_PYTHON}" != "${EXPECTED_PROFILE_PYTHON}" ]]; then
-  die "Host/env mismatch for o320->o1280: ${HOST_FAMILY} requires ${EXPECTED_PROFILE_PYTHON}, got ${PROFILE_PYTHON}"
+  if [[ -z "${PROFILE_JSON_PATH}" ]]; then
+    die "Host/env mismatch for o320->o1280: ${HOST_FAMILY} requires ${EXPECTED_PROFILE_PYTHON}, got ${PROFILE_PYTHON}"
+  fi
 fi
-[[ -x "${PROFILE_PYTHON}" ]] || die "PROFILE_PYTHON is not executable: ${PROFILE_PYTHON}"
-
-PROFILE_JSON="$(
-  PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" \
-    "${PROFILE_PYTHON}" -m eval.jobs.checkpoint_profile \
-      --name-ckpt "${CHECKPOINT_PATH}" \
-      --source-hpc "${SOURCE_HPC}" \
-      --host-short "${HOST_SHORT}" \
-      --expected-lane o320_o1280 \
-      --json
-)"
+if [[ -n "${PROFILE_JSON_PATH}" ]]; then
+  PROFILE_JSON="$(cat "${PROFILE_JSON_PATH}")"
+else
+  [[ -x "${PROFILE_PYTHON}" ]] || die "PROFILE_PYTHON is not executable: ${PROFILE_PYTHON}"
+  PROFILE_JSON="$(
+    PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}" \
+      "${PROFILE_PYTHON}" -m eval.jobs.checkpoint_profile \
+        --name-ckpt "${CHECKPOINT_PATH}" \
+        --source-hpc "${SOURCE_HPC}" \
+        --host-short "${HOST_SHORT}" \
+        --expected-lane o320_o1280 \
+        --json
+  )"
+fi
 
 mapfile -t PROFILE_FIELDS < <(
   python3 - "${PROFILE_JSON}" <<'PY'
@@ -522,6 +589,7 @@ PROXY_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_proxy_from_predictions.sbatch"
 ECMWF_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_ecmwf_from_predictions.sbatch"
 TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
 TC_CONTOUR_TEMPLATE="${TEMPLATE_DIR}/tc_contour_suite_from_predictions.sbatch"
+TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
 
 [[ -f "${INFER_TEMPLATE}" ]] || die "Missing template: ${INFER_TEMPLATE}"
 [[ -f "${LOCAL_TEMPLATE}" ]] || die "Missing template: ${LOCAL_TEMPLATE}"
@@ -530,6 +598,9 @@ TC_CONTOUR_TEMPLATE="${TEMPLATE_DIR}/tc_contour_suite_from_predictions.sbatch"
 [[ -f "${ECMWF_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${ECMWF_SPECTRA_TEMPLATE}"
 [[ -f "${TC_TEMPLATE}" ]] || die "Missing template: ${TC_TEMPLATE}"
 [[ -f "${TC_CONTOUR_TEMPLATE}" ]] || die "Missing template: ${TC_CONTOUR_TEMPLATE}"
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  [[ -f "${TC_MEMBER_MAPS_TEMPLATE}" ]] || die "Missing template: ${TC_MEMBER_MAPS_TEMPLATE}"
+fi
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   [[ -f "${BUILD_TEMPLATE}" ]] || die "Missing template: ${BUILD_TEMPLATE}"
 fi
@@ -592,11 +663,19 @@ PY
 )
 fi
 
+TC_MEMBER_MAPS_SCRIPT=""
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  TC_MEMBER_MAPS_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_member_maps.sbatch"
+fi
+
 TARGET_SCRIPTS=("${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}")
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   TARGET_SCRIPTS=("${BUILD_SCRIPT}" "${TARGET_SCRIPTS[@]}")
 fi
 TARGET_SCRIPTS+=("${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}")
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  TARGET_SCRIPTS+=("${TC_MEMBER_MAPS_SCRIPT}")
+fi
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   TARGET_SCRIPTS+=("${TC_THREE_ROUTE_SCRIPT}")
 fi
@@ -626,6 +705,9 @@ done
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   cp "${TC_CONTOUR_TEMPLATE}" "${tc_contour_script}"
 done
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  cp "${TC_MEMBER_MAPS_TEMPLATE}" "${TC_MEMBER_MAPS_SCRIPT}"
+fi
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   cp "${TC_THREE_ROUTE_TEMPLATE}" "${TC_THREE_ROUTE_SCRIPT}"
 fi
@@ -665,6 +747,7 @@ set_var "${PREDICT_SCRIPT}" ALLOW_REBUILT_BUNDLE_ROOT "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_EXISTING_PREDICTIONS_DIR "${ALLOW_EXISTING_PREDICTIONS_DIR}"
 set_var "${PREDICT_SCRIPT}" ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES "${ALLOW_OVERWRITE_EXISTING_PREDICTION_FILES}"
 set_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "${SAMPLER_JSON}"
+validate_rendered_json_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "SAMPLER_JSON"
 set_sbatch_directive "${PREDICT_SCRIPT}" job-name "o1280_pred_${CHECKPOINT_SHORT}"
 set_sbatch_directive "${PREDICT_SCRIPT}" ntasks-per-node "4"
 set_sbatch_directive "${PREDICT_SCRIPT}" cpus-per-task "32"
@@ -750,6 +833,20 @@ for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   set_sbatch_directive "${tc_contour_script}" mem "${O1280_TC_MEM}"
 done
 
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" OUT_DIR "${RUN_ROOT}/${TC_MEMBER_MAPS_OUT_DIR}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" EVENTS "${TC_EVENTS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" DATE "${TC_MEMBER_MAPS_DATE}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" STEPS "${TC_MEMBER_MAPS_STEPS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" MEMBERS "${TC_MEMBER_MAPS_MEMBERS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_LABEL "${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" job-name "o1280_tcmbr_${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" mem "${O1280_TC_MEM}"
+fi
+
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   set_var "${TC_THREE_ROUTE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
   set_var "${TC_THREE_ROUTE_SCRIPT}" RUN_ID "${RUN_ID}"
@@ -780,6 +877,9 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
     drop_sbatch_directive "${tc_contour_script}" gpus-per-node
   done
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    drop_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node
+  fi
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     drop_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node
   fi
@@ -799,6 +899,9 @@ else
   for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
     set_sbatch_directive "${tc_contour_script}" gpus-per-node "0"
   done
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node "0"
+  fi
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     set_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node "0"
   fi
@@ -817,6 +920,9 @@ done
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   set_sbatch_directive "${tc_contour_script}" qos "${CPU_QOS}"
 done
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" qos "${CPU_QOS}"
+fi
 if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   set_sbatch_directive "${SPECTRA_SCRIPT}" qos "${CPU_QOS}"
 fi
@@ -833,6 +939,9 @@ else
   else
     bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
   fi
+fi
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  bash -n "${TC_MEMBER_MAPS_SCRIPT}"
 fi
 
 echo "[o1280-flow] checkpoint=${RESOLVED_CKPT_PATH}"
@@ -862,6 +971,7 @@ echo "[o1280-flow] run_storm_plots=${RUN_STORM_PLOTS}"
 echo "[o1280-flow] storm_plot_regions=${STORM_PLOT_REGIONS}"
 echo "[o1280-flow] run_tc_contour_plots=${RUN_TC_CONTOUR_PLOTS}"
 echo "[o1280-flow] tc_contour_out_prefix=${TC_CONTOUR_OUT_PREFIX}"
+echo "[o1280-flow] run_tc_member_maps=${RUN_TC_MEMBER_MAPS}"
 echo "[o1280-flow] run_tc_three_route_compare=${RUN_TC_THREE_ROUTE_COMPARE}"
 echo "[o1280-flow] tc_three_route_out_dir=${TC_THREE_ROUTE_OUT_DIR}"
 echo "[o1280-flow] tc_three_route_events=${TC_THREE_ROUTE_EVENTS}"
@@ -885,6 +995,9 @@ done
 for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   echo "  - ${tc_contour_script}"
 done
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  echo "  - ${TC_MEMBER_MAPS_SCRIPT}"
+fi
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   echo "  - ${TC_THREE_ROUTE_SCRIPT}"
 fi
@@ -948,6 +1061,13 @@ for tc_contour_script in "${TC_CONTOUR_SCRIPTS[@]}"; do
   echo "[o1280-flow] ${tc_contour_submit}"
 done
 
+tc_member_maps_job=""
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  tc_member_maps_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${TC_MEMBER_MAPS_SCRIPT}")"
+  tc_member_maps_job="$(extract_job_id "${tc_member_maps_submit}")"
+  echo "[o1280-flow] ${tc_member_maps_submit}"
+fi
+
 tc_three_route_job=""
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   tc_three_route_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${TC_THREE_ROUTE_SCRIPT}")"
@@ -967,6 +1087,9 @@ monitor_jobs+=("${predict_job}" "${local_job}" "${spectra_job}" "${tc_job}")
 monitor_jobs+=("${regional_jobs[@]}")
 monitor_jobs+=("${storm_jobs[@]}")
 monitor_jobs+=("${tc_contour_jobs[@]}")
+if [[ -n "${tc_member_maps_job}" ]]; then
+  monitor_jobs+=("${tc_member_maps_job}")
+fi
 if [[ -n "${tc_three_route_job}" ]]; then
   monitor_jobs+=("${tc_three_route_job}")
 fi
@@ -979,6 +1102,12 @@ if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
     cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
     set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
     set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+    set_sbatch_directive "${FINALIZE_SCRIPT}" qos "${CPU_QOS}"
+    if [[ "${HOST_FAMILY}" == "ac" ]]; then
+      drop_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node 2>/dev/null || true
+    else
+      set_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node "0"
+    fi
   fi
   finalize_dep_csv="$(IFS=:; echo "${monitor_jobs[*]}")"
   finalize_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${finalize_dep_csv} "${FINALIZE_SCRIPT}")"
@@ -997,6 +1126,9 @@ fi
 for script_path in "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"; do
   GENERATED_SCRIPT_LINES+="  - ${script_path}"$'\n'
 done
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  GENERATED_SCRIPT_LINES+="  - ${TC_MEMBER_MAPS_SCRIPT}"$'\n'
+fi
 if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
   GENERATED_SCRIPT_LINES+="  - ${TC_THREE_ROUTE_SCRIPT}"$'\n'
 fi
@@ -1026,6 +1158,7 @@ ${GENERATED_SCRIPT_LINES}job_ids:
   regional_suites:  ${regional_job_summary} (afterok:${predict_job})
   storm_plots:      ${storm_job_summary} (afterok:${predict_job})
   tc_contours:      ${tc_contour_job_summary} (afterok:${predict_job})
+  tc_member_maps:   ${tc_member_maps_job:-skipped} (afterok:${predict_job})
   finalize_lean:    ${finalize_job:-skipped} (afterok:all)
 
 Monitor:

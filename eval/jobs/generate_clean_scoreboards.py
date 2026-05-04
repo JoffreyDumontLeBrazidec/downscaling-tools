@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
+from eval.paths import DEFAULT_EVAL_ROOT
+
 
 NEED_EVENTS = ["dora", "fernanda", "hilary", "idalia", "franklin"]
 
@@ -524,7 +526,7 @@ def write_global_html(tsv_file: Path, out_file: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate clean markdown/html scoreboards for TC extremes.")
-    ap.add_argument("--eval-root", default="/home/ecm5702/perm/eval")
+    ap.add_argument("--eval-root", default=DEFAULT_EVAL_ROOT)
     args = ap.parse_args()
 
     eval_root = Path(args.eval_root)

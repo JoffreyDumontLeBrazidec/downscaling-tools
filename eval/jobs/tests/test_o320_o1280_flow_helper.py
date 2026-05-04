@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+import ast
+import json
 import os
+import re
 import stat
 import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+import torch
+
 
 ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh"
+
+
+def _extract_shell_string(script_text: str, var: str) -> str:
+    match = re.search(rf"^{re.escape(var)}=(.+)$", script_text, re.MULTILINE)
+    assert match is not None, f"{var} not found in rendered script"
+    return ast.literal_eval(match.group(1))
 
 
 def _write_executable(path: Path, content: str) -> Path:
@@ -17,23 +29,27 @@ def _write_executable(path: Path, content: str) -> Path:
     return path
 
 
-def _make_fake_profile(path: Path, *, checkpoint_path: str, host_family: str) -> Path:
-    script = textwrap.dedent(
-        f"""\
-        #!/usr/bin/env python3
-        import json
-
-        payload = {{
-            "checkpoint_path": {checkpoint_path!r},
-            "stack_flavor": "new",
-            "lane": "o320_o1280",
-            "host_family": {host_family!r},
-            "recommended_venv": "/tmp/fake_venv/bin/activate",
-        }}
-        print(json.dumps(payload))
-        """
-    )
-    return _write_executable(path, script)
+def _write_fake_checkpoint(path: Path, *, lres: int, hres: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "hyper_parameters": {
+            "config": {
+                "dataloader": {
+                    "validation": {
+                        "dataset": {
+                            "zip": [
+                                {"name": "lres", "dataset": f"/tmp/data/o{lres}/input.zarr"},
+                                {"name": "hres", "dataset": f"/tmp/data/o{hres}/truth.zarr"},
+                            ]
+                        }
+                    }
+                },
+                "multi_dataset_normalizer": True,
+            }
+        }
+    }
+    torch.save(payload, path)
+    return path
 
 
 def _make_fake_hostname(path: Path, host_short: str) -> Path:
@@ -62,11 +78,29 @@ def _touch_required_source_gribs(root: Path, dates: list[str]) -> None:
             (root / name).write_text("stub\n", encoding="utf-8")
 
 
+def _write_profile_json(path: Path, *, checkpoint_path: Path, host_family: str) -> Path:
+    recommended_venv = (
+        "/home/ecm5702/dev/.ds-dyn/bin/activate"
+        if host_family == "ac"
+        else "/home/ecm5702/dev/.ds-ag/bin/activate"
+    )
+    payload = {
+        "checkpoint_path": str(checkpoint_path),
+        "stack_flavor": "new",
+        "lane": "o320_o1280",
+        "host_family": host_family,
+        "recommended_venv": recommended_venv,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _run_helper(
     tmp_path: Path,
     *,
     phase: str,
     run_id_override: str = "",
+    extra_env: dict[str, str] | None = None,
     host_family: str = "ag",
     host_short: str = "ag6-test",
     populate_source_gribs: bool = True,
@@ -80,10 +114,14 @@ def _run_helper(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    fake_checkpoint_path = "/tmp/checkpoints/da4d902b71084ecc884a938c4b8930d3/anemoi-step.ckpt"
-    fake_profile = _make_fake_profile(
-        bin_dir / "fake_profile.py",
-        checkpoint_path=fake_checkpoint_path,
+    fake_checkpoint = _write_fake_checkpoint(
+        tmp_path / "checkpoints" / "da4d902b71084ecc884a938c4b8930d3" / "anemoi-step.ckpt",
+        lres=320,
+        hres=1280,
+    )
+    profile_json = _write_profile_json(
+        tmp_path / "profile.json",
+        checkpoint_path=fake_checkpoint,
         host_family=host_family,
     )
     _make_fake_hostname(bin_dir / "hostname", host_short)
@@ -100,12 +138,12 @@ def _run_helper(
     env = os.environ.copy()
     env.update(
         {
-            "CHECKPOINT_PATH": "/tmp/fake.ckpt",
+            "CHECKPOINT_PATH": str(fake_checkpoint),
             "SOURCE_HPC": "ag",
             "SOURCE_GRIB_ROOT": str(source_root),
             "OUTPUT_ROOT": str(output_root),
             "SUBMIT_ROOT": str(submit_root),
-            "PROFILE_PYTHON": str(fake_profile),
+            "PROFILE_JSON_PATH": str(profile_json),
             "NO_SUBMIT": "1",
             "ALLOW_OVERWRITE": "1",
             "RUN_DATE_UTC": "20260327",
@@ -115,6 +153,8 @@ def _run_helper(
     )
     if run_id_override:
         env["RUN_ID_OVERRIDE"] = run_id_override
+    if extra_env:
+        env.update(extra_env)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
 
     return subprocess.run(
@@ -169,6 +209,9 @@ def test_o320_o1280_helper_continue_full_render_reuses_existing_run_id(tmp_path:
 
 
 def test_o320_o1280_helper_ac_proxy_render_uses_ecmwf_and_cpu_safe_jobs(tmp_path: Path):
+    if not Path("/home/ecm5702/dev/.ds-dyn/bin/python").exists():
+        pytest.skip("ac profile python is unavailable on this host")
+
     result = _run_helper(
         tmp_path,
         phase="proxy",
@@ -193,6 +236,54 @@ def test_o320_o1280_helper_ac_proxy_render_uses_ecmwf_and_cpu_safe_jobs(tmp_path
     assert 'PREDICTIONS_DIR="' in spectra_text
     assert 'SUBSET_DIR="' not in spectra_text
     assert 'SUPPORT_MODE="regridded"' in tc_text
+
+
+def test_o320_o1280_helper_proxy_render_normalizes_default_sampler_json(tmp_path: Path):
+    result = _run_helper(tmp_path, phase="proxy")
+    assert result.returncode == 0, result.stderr
+
+    submit_dir = tmp_path / "submit" / "20260327"
+    predict_text = (submit_dir / f"manual_da4d902b_new_o320_o1280_20260327_manual_eval_predict.sbatch").read_text(encoding="utf-8")
+
+    rendered = _extract_shell_string(predict_text, "EXTRA_ARGS_JSON")
+    parsed = json.loads(rendered)
+
+    assert parsed["schedule_type"] == "experimental_piecewise"
+    assert rendered == json.dumps(parsed, separators=(",", ":"))
+
+
+def test_o320_o1280_helper_proxy_render_normalizes_custom_sampler_json(tmp_path: Path):
+    custom_sampler = {
+        "schedule_type": "experimental_piecewise",
+        "num_steps": 23,
+        "sigma_max": 1000.0,
+        "sigma_transition": 7.0,
+        "sigma_min": 0.03,
+        "high_schedule_type": "exponential",
+        "low_schedule_type": "karras",
+        "num_steps_high": 7,
+        "num_steps_low": 16,
+        "rho": 7.0,
+        "sampler": "heun",
+        "S_churn": 2.5,
+        "S_min": 0.75,
+        "S_max": 1000.0,
+        "S_noise": 1.05,
+    }
+    result = _run_helper(
+        tmp_path,
+        phase="proxy",
+        extra_env={"SAMPLER_JSON": json.dumps(custom_sampler, indent=2)},
+    )
+    assert result.returncode == 0, result.stderr
+
+    submit_dir = tmp_path / "submit" / "20260327"
+    predict_text = (submit_dir / f"manual_da4d902b_new_o320_o1280_20260327_manual_eval_predict.sbatch").read_text(encoding="utf-8")
+
+    rendered = _extract_shell_string(predict_text, "EXTRA_ARGS_JSON")
+
+    assert rendered == json.dumps(custom_sampler, separators=(",", ":"))
+    assert json.loads(rendered) == custom_sampler
 
 
 def test_o320_o1280_helper_continue_full_requires_run_id_override(tmp_path: Path):

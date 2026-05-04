@@ -24,7 +24,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --hint=nomultithread
 #SBATCH --time=48:00:00
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -40,7 +40,7 @@ CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
 INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 
 # The existing run directory to recover into
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_DIR"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_DIR"
 
 # Full date/step grid — the template will auto-skip completed files
 ALL_DATES="20230826,20230827,20230828,20230829,20230830"
@@ -50,7 +50,7 @@ MEMBERS="1,2,3,4,5,6,7,8,9,10"
 DEVICE="cuda"
 PRECISION="fp32"
 NUM_GPUS_PER_MODEL=1
-EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
 
 # Unsafe mode for bundles without target_hres_* fields
 ALLOW_MISSING_TARGET_UNSAFE=0

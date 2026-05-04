@@ -23,7 +23,7 @@ CHECKPOINT_PATH="${CHECKPOINT_PATH:-REPLACE_CHECKPOINT_PATH}"
 SOURCE_HPC="${SOURCE_HPC:-ac}"                        # ac | ag | leonardo | jupiter
 INPUT_EVENT="${INPUT_EVENT:-humberto}"
 SOURCE_GRIB_ROOT="${SOURCE_GRIB_ROOT:-/home/ecm5702/hpcperm/data/input_data/o48_o96/${INPUT_EVENT}_20250926_20250930}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/perm/eval}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/scratch/eval}"
 PHASE="${PHASE:-proxy}"                              # proxy | continue-full | full-only
 PREBUILT_BUNDLE_ROOT="${PREBUILT_BUNDLE_ROOT:-}"    # optional bundles_with_y* root to skip rebuild
 
@@ -32,7 +32,8 @@ RUN_SUFFIX="${RUN_SUFFIX:-manual_eval}"
 RUN_ID_OVERRIDE="${RUN_ID_OVERRIDE:-}"
 
 PROXY_BUNDLE_PAIRS="${PROXY_BUNDLE_PAIRS:-20250926:24,20250926:48,20250927:24,20250927:48,20250928:24,20250928:48,20250929:24,20250929:48,20250930:24,20250930:48}"
-SAMPLER_JSON="${SAMPLER_JSON:-{\"schedule_type\":\"experimental_piecewise\",\"num_steps\":21,\"sigma_max\":1000.0,\"sigma_transition\":10.0,\"sigma_min\":0.03,\"high_schedule_type\":\"exponential\",\"low_schedule_type\":\"karras\",\"num_steps_high\":5,\"num_steps_low\":16,\"rho\":7.0,\"sampler\":\"heun\",\"S_churn\":2.5,\"S_min\":0.75,\"S_max\":1000.0,\"S_noise\":1.05}}"
+DEFAULT_SAMPLER_JSON='{"schedule_type":"experimental_piecewise","num_steps":21,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":5,"num_steps_low":16,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
+SAMPLER_JSON="${SAMPLER_JSON:-$DEFAULT_SAMPLER_JSON}"
 DATES="${DATES:-}"
 STEPS="${STEPS:-24,48,72,96,120}"
 BUNDLE_PAIRS="${BUNDLE_PAIRS:-}"
@@ -71,7 +72,16 @@ SPECTRA_MEMBER_AGGREGATION="${SPECTRA_MEMBER_AGGREGATION:-per-file-mean}"
 RUN_TC_PDF="${RUN_TC_PDF:-0}"                        # optional; set to 1 to include Humberto TC PDFs
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded
 TC_EVENTS="${TC_EVENTS:-humberto}"
-TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-}"
+TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O48_0001}"
+TC_IEKM_TARGET_GRIB_PATH="${TC_IEKM_TARGET_GRIB_PATH:-/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_iekm_date*_time0000_step24to120_sfc_y.grib}"
+TC_IEKM_LABEL="${TC_IEKM_LABEL:-IEKM_O96_TARGET}"
+TC_PLOT_TITLE="${TC_PLOT_TITLE:-TC Humberto 2025-09 | o48→o96 | norm. PDFs (MSLP & 10m Wind)}"
+TC_DISPLAY_LABEL="${TC_DISPLAY_LABEL:-}"           # short legend label, e.g. ln12-s200k
+RUN_TC_MEMBER_MAPS="${RUN_TC_MEMBER_MAPS:-1}"         # 1 => render per-member TC spatial maps
+TC_MEMBER_MAPS_OUT_DIR="${TC_MEMBER_MAPS_OUT_DIR:-tc_member_maps}"
+TC_MEMBER_MAPS_MEMBERS="${TC_MEMBER_MAPS_MEMBERS:-0,1,2,3,4}"
+TC_MEMBER_MAPS_DATE="${TC_MEMBER_MAPS_DATE:-20250926}"  # strong-TC date for Humberto
+TC_MEMBER_MAPS_STEPS="${TC_MEMBER_MAPS_STEPS:-24}"      # single strong step
 
 HOLD="${HOLD:-0}"
 NO_SUBMIT="${NO_SUBMIT:-0}"
@@ -104,6 +114,59 @@ require_choice() {
 require_bool() {
   local value="$1"
   [[ "${value}" == "0" || "${value}" == "1" ]] || die "Expected 0 or 1, got '${value}'"
+}
+
+normalize_json_object() {
+  local raw="$1"
+  local label="$2"
+  python3 - "${raw}" "${label}" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1]
+label = sys.argv[2]
+try:
+    parsed = json.loads(raw)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"{label} is not valid JSON: {exc}")
+if not isinstance(parsed, dict):
+    raise SystemExit(f"{label} must decode to a JSON object, got {type(parsed).__name__}")
+print(json.dumps(parsed, separators=(",", ":")))
+PY
+}
+
+validate_rendered_json_var() {
+  local file="$1"
+  local var="$2"
+  local label="$3"
+  python3 - "${file}" "${var}" "${label}" <<'PY'
+from pathlib import Path
+import ast
+import json
+import re
+import sys
+
+path = Path(sys.argv[1])
+var = sys.argv[2]
+label = sys.argv[3]
+pattern = re.compile(rf"^{re.escape(var)}=(.+)$", re.MULTILINE)
+match = pattern.search(path.read_text(encoding="utf-8"))
+if match is None:
+    raise SystemExit(f"Variable not found in {path}: {var}")
+rhs = match.group(1).strip()
+try:
+    rendered = ast.literal_eval(rhs)
+except Exception as exc:
+    raise SystemExit(f"{label} rendered into {path} is not a valid shell string literal: {exc}")
+if not isinstance(rendered, str):
+    raise SystemExit(f"{label} rendered into {path} must be a shell string literal.")
+try:
+    parsed = json.loads(rendered)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"{label} rendered into {path} is not valid JSON: {exc}")
+if not isinstance(parsed, dict):
+    raise SystemExit(f"{label} rendered into {path} must decode to a JSON object, got {type(parsed).__name__}")
+PY
 }
 
 set_var() {
@@ -203,6 +266,7 @@ require_bool "${RUN_ONE_DATE_LOCAL}"
 require_bool "${RUN_REGIONAL_SUITES}"
 require_bool "${RUN_STORM_PLOTS}"
 require_bool "${RUN_TC_PDF}"
+require_bool "${RUN_TC_MEMBER_MAPS}"
 require_bool "${HOLD}"
 require_bool "${NO_SUBMIT}"
 require_bool "${ALLOW_OVERWRITE}"
@@ -217,6 +281,8 @@ if [[ "${LOCAL_PLOT_EXPECTED_COUNT}" != "auto" && ! "${LOCAL_PLOT_EXPECTED_COUNT
   die "LOCAL_PLOT_EXPECTED_COUNT must be 'auto' or a non-negative integer."
 fi
 [[ "${TRAINING_RUN_MIN_STEPS}" =~ ^[0-9]+$ ]] || die "TRAINING_RUN_MIN_STEPS must be a non-negative integer."
+
+SAMPLER_JSON="$(normalize_json_object "${SAMPLER_JSON}" "SAMPLER_JSON")"
 
 HOST_SHORT="$(hostname -s)"
 case "${HOST_SHORT}" in
@@ -489,6 +555,7 @@ REGIONAL_TEMPLATE="${TEMPLATE_DIR}/regional_suite_from_predictions.sbatch"
 PROXY_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_proxy_from_predictions.sbatch"
 ECMWF_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_ecmwf_from_predictions.sbatch"
 TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
+TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
 
 [[ -f "${INFER_TEMPLATE}" ]] || die "Missing template: ${INFER_TEMPLATE}"
 [[ -f "${LOSS_TEMPLATE}" ]] || die "Missing template: ${LOSS_TEMPLATE}"
@@ -499,6 +566,9 @@ TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
 [[ -f "${ECMWF_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${ECMWF_SPECTRA_TEMPLATE}"
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   [[ -f "${TC_TEMPLATE}" ]] || die "Missing template: ${TC_TEMPLATE}"
+fi
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  [[ -f "${TC_MEMBER_MAPS_TEMPLATE}" ]] || die "Missing template: ${TC_MEMBER_MAPS_TEMPLATE}"
 fi
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   [[ -f "${BUILD_TEMPLATE}" ]] || die "Missing template: ${BUILD_TEMPLATE}"
@@ -514,6 +584,10 @@ SIGMA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_sigma_eval.sbatch"
 LOCAL_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_local_plots.sbatch"
 SPECTRA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_spectra.sbatch"
 TC_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_eval.sbatch"
+TC_MEMBER_MAPS_SCRIPT=""
+if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
+  TC_MEMBER_MAPS_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_member_maps.sbatch"
+fi
 REGIONAL_SCRIPTS=()
 STORM_SCRIPTS=()
 
@@ -555,6 +629,9 @@ if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   TARGET_SCRIPTS=("${BUILD_SCRIPT}" "${TARGET_SCRIPTS[@]}")
 fi
 TARGET_SCRIPTS+=("${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}")
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  TARGET_SCRIPTS+=("${TC_MEMBER_MAPS_SCRIPT}")
+fi
 for target in "${TARGET_SCRIPTS[@]}"; do
   if [[ -e "${target}" && "${ALLOW_OVERWRITE}" -ne 1 ]]; then
     die "Refusing to overwrite existing generated file: ${target} (set ALLOW_OVERWRITE=1 to replace)"
@@ -575,6 +652,9 @@ else
 fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   cp "${TC_TEMPLATE}" "${TC_SCRIPT}"
+fi
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  cp "${TC_MEMBER_MAPS_TEMPLATE}" "${TC_MEMBER_MAPS_SCRIPT}"
 fi
 for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
   cp "${REGIONAL_TEMPLATE}" "${regional_script}"
@@ -616,6 +696,7 @@ set_var "${PREDICT_SCRIPT}" NUM_GPUS_PER_MODEL "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_EXISTING_RUN_DIR "1"
 set_var "${PREDICT_SCRIPT}" ALLOW_REBUILT_BUNDLE_ROOT "1"
 set_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "${SAMPLER_JSON}"
+validate_rendered_json_var "${PREDICT_SCRIPT}" EXTRA_ARGS_JSON "SAMPLER_JSON"
 set_var "${PREDICT_SCRIPT}" MLFLOW_EXPERIMENT_DIR "${MLFLOW_EXPERIMENT_DIR}"
 set_sbatch_directive "${PREDICT_SCRIPT}" job-name "o48_pred_${CHECKPOINT_SHORT}"
 set_sbatch_directive "${PREDICT_SCRIPT}" ntasks-per-node "1"
@@ -683,7 +764,24 @@ if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_var "${TC_SCRIPT}" EVENTS "${TC_EVENTS}"
   set_var "${TC_SCRIPT}" SUPPORT_MODE "${RESOLVED_TC_SUPPORT_MODE}"
   set_var "${TC_SCRIPT}" EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+  set_var "${TC_SCRIPT}" DISPLAY_LABEL "${TC_DISPLAY_LABEL}"
+  set_var "${TC_SCRIPT}" IEKM_TARGET_GRIB_PATH "${TC_IEKM_TARGET_GRIB_PATH}"
+  set_var "${TC_SCRIPT}" IEKM_LABEL "${TC_IEKM_LABEL}"
+  set_var "${TC_SCRIPT}" PLOT_TITLE "${TC_PLOT_TITLE}"
   set_sbatch_directive "${TC_SCRIPT}" job-name "o48_tc_${CHECKPOINT_SHORT}"
+fi
+
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" OUT_DIR "${RUN_ROOT}/${TC_MEMBER_MAPS_OUT_DIR}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" EVENTS "${TC_EVENTS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" DATE "${TC_MEMBER_MAPS_DATE}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" STEPS "${TC_MEMBER_MAPS_STEPS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" MEMBERS "${TC_MEMBER_MAPS_MEMBERS}"
+  set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_LABEL "${CHECKPOINT_SHORT}"
+  set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" job-name "o48_tcmbr_${CHECKPOINT_SHORT}"
 fi
 
 for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
@@ -730,6 +828,9 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   if [[ "${RUN_TC_PDF}" == "1" ]]; then
     drop_sbatch_directive "${TC_SCRIPT}" gpus-per-node
   fi
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    drop_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node
+  fi
 else
   CPU_QOS="ng"
   if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
@@ -747,6 +848,9 @@ else
   fi
   if [[ "${RUN_TC_PDF}" == "1" ]]; then
     set_sbatch_directive "${TC_SCRIPT}" gpus-per-node "0"
+  fi
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node "0"
   fi
 fi
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
@@ -766,6 +870,9 @@ fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_sbatch_directive "${TC_SCRIPT}" qos "${CPU_QOS}"
 fi
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" qos "${CPU_QOS}"
+fi
 if [[ "${HOST_FAMILY}" == "ac" ]]; then
   set_sbatch_directive "${LOCAL_SCRIPT}" mem "128G"
   for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
@@ -776,6 +883,9 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   done
   if [[ "${RUN_TC_PDF}" == "1" ]]; then
     set_sbatch_directive "${TC_SCRIPT}" mem "128G"
+  fi
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" mem "128G"
   fi
 fi
 
@@ -791,6 +901,10 @@ else
   else
     bash -n "${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}"
   fi
+fi
+
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  bash -n "${TC_MEMBER_MAPS_SCRIPT}"
 fi
 
 echo "[o48-flow] checkpoint=${RESOLVED_CKPT_PATH}"
@@ -820,6 +934,7 @@ if [[ "${RESOLVED_SPECTRA_METHOD}" == "ecmwf" ]]; then
   echo "[o48-flow] ecmwf_spectra_weather_states=${RESOLVED_ECMWF_SPECTRA_WEATHER_STATES}"
 fi
 echo "[o48-flow] run_tc_pdf=${RUN_TC_PDF}"
+echo "[o48-flow] run_tc_member_maps=${RUN_TC_MEMBER_MAPS}"
 
 SBATCH_ARGS=()
 if [[ "${HOLD}" == "1" ]]; then
@@ -886,26 +1001,41 @@ if [[ "${RUN_TC_PDF}" == "1" ]]; then
   echo "[o48-flow] ${tc_submit}"
 fi
 
+tc_member_maps_job="skipped"
+if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+  tc_member_maps_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${TC_MEMBER_MAPS_SCRIPT}")"
+  tc_member_maps_job="$(extract_job_id "${tc_member_maps_submit}")"
+  echo "[o48-flow] ${tc_member_maps_submit}"
+fi
+
 # --- Finalize: lean eval layout reorganization ---
 FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
 FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
-monitor_jobs=("${predict_job}" "${loss_job}" "${sigma_job}" "${spectra_job}")
-[[ "${local_job}" != "skipped" ]] && monitor_jobs+=("${local_job}")
-[[ "${tc_job}" != "skipped" ]] && monitor_jobs+=("${tc_job}")
-monitor_jobs+=("${regional_jobs[@]}")
-monitor_jobs+=("${storm_jobs[@]}")
+layout_jobs=("${predict_job}" "${spectra_job}")
+[[ "${local_job}" != "skipped" ]] && layout_jobs+=("${local_job}")
+[[ "${tc_job}" != "skipped" ]] && layout_jobs+=("${tc_job}")
+[[ "${tc_member_maps_job}" != "skipped" ]] && layout_jobs+=("${tc_member_maps_job}")
+layout_jobs+=("${regional_jobs[@]}")
+layout_jobs+=("${storm_jobs[@]}")
 finalize_job="skipped"
 if [[ -f "${FINALIZE_TEMPLATE}" ]]; then
   if [[ ! -f "${FINALIZE_SCRIPT}" ]] || [[ "${ALLOW_OVERWRITE}" -eq 1 ]]; then
     cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
     set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
     set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+    set_var "${FINALIZE_SCRIPT}" CREATE_BACKCOMPAT_SYMLINKS "0"
+    set_sbatch_directive "${FINALIZE_SCRIPT}" qos "${CPU_QOS}"
+    if [[ "${HOST_FAMILY}" == "ac" ]]; then
+      drop_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node 2>/dev/null || true
+    else
+      set_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node "0"
+    fi
   fi
-  finalize_dep_csv="$(IFS=:; echo "${monitor_jobs[*]}")"
+  finalize_dep_csv="$(IFS=:; echo "${layout_jobs[*]}")"
   finalize_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${finalize_dep_csv} "${FINALIZE_SCRIPT}")"
   finalize_job="$(extract_job_id "${finalize_submit}")"
   echo "[o48-flow] ${finalize_submit}"
-  monitor_jobs+=("${finalize_job}")
+  layout_jobs+=("${finalize_job}")
 fi
 
 cat <<EOF
@@ -932,6 +1062,7 @@ job_ids:
   local_plots:      ${local_job}
   spectra:          ${spectra_job}
   tc_pdf:           ${tc_job}
+  tc_member_maps:   ${tc_member_maps_job}
   regional_suites:  ${regional_jobs[*]:-skipped}
   storm_plots:      ${storm_jobs[*]:-skipped}
   finalize_lean:    ${finalize_job}

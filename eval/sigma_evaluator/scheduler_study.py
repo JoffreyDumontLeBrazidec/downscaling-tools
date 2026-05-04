@@ -35,8 +35,8 @@ CONTROL_CANDIDATES = (
             "schedule_type": "experimental_piecewise",
             "schedule_kind": "piecewise30",
             "num_steps": 30,
-            "sigma_max": 100000.0,
-            "sigma_transition": 100.0,
+            "sigma_max": 1000.0,
+            "sigma_transition": 10.0,
             "sigma_min": DEFAULT_SIGMA_MIN,
             "high_schedule_type": "exponential",
             "low_schedule_type": "karras",
@@ -46,7 +46,7 @@ CONTROL_CANDIDATES = (
             "sampler": DEFAULT_SAMPLER,
             "S_churn": DEFAULT_S_CHURN,
             "S_min": DEFAULT_S_MIN,
-            "S_max": 100000.0,
+            "S_max": 1000.0,
             "S_noise": DEFAULT_S_NOISE,
         },
     },
@@ -102,7 +102,7 @@ class CheckpointProfile:
         checkpoint_short = str(raw.get("checkpoint_short") or checkpoint_id[:8])
         baseline_slug = str(
             raw.get("baseline_slug")
-            or f"manual-{checkpoint_short}-{raw.get('stack_flavor', 'new')}-piecewise30-h10-l20-sigma100"
+            or f"manual-{checkpoint_short}-{raw.get('stack_flavor', 'new')}-piecewise30-t10-h10-l20-sigma1k"
         )
         return cls(
             checkpoint_id=checkpoint_id,

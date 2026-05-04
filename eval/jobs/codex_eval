@@ -21,6 +21,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+EVAL_ROOT="${EVAL_ROOT:-/home/ecm5702/scratch/eval}"
 
 MODE="$1"
 TARGET="$2"
@@ -62,7 +63,14 @@ if [[ ! "${RUN_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   exit 2
 fi
 
-LOG_DIR="/home/ecm5702/perm/eval/${RUN_NAME}/logs"
+EXTRA_ARGS=("$@")
+for ((idx=0; idx<${#EXTRA_ARGS[@]}; idx++)); do
+  if [[ "${EXTRA_ARGS[$idx]}" == "--eval-root" && $((idx + 1)) -lt ${#EXTRA_ARGS[@]} ]]; then
+    EVAL_ROOT="${EXTRA_ARGS[$((idx + 1))]}"
+  fi
+done
+
+LOG_DIR="${EVAL_ROOT}/${RUN_NAME}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/${LOG_FILE_BASENAME}"
 PID_FILE="${LOG_DIR}/${PID_FILE_BASENAME}"

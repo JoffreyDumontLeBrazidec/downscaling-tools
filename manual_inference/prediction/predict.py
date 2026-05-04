@@ -39,6 +39,13 @@ from manual_inference.prediction.utils import extract_filtered_input_from_output
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Matches any Jupiter .runtime_datasets/<run_id>/ prefix (e.g. o1280_406905).
+# These are ephemeral symlink farms whose zarr filenames mirror the AG local mirror.
+_JUPITER_RUNTIME_RE = re.compile(
+    r"^/e/home/jusers/dumontlebrazidec1/jupiter/dev/\.runtime_datasets/[^/]+/"
+)
+_JUPITER_RUNTIME_LOCAL = "/home/mlx/ai-ml/datasets/"
+
 
 def _rewrite_dataset_paths_in_place(node):
     if OmegaConf.is_config(node):
@@ -61,6 +68,13 @@ def _rewrite_dataset_paths_in_place(node):
                 candidate = node.replace(remote_prefix, local_prefix, 1)
                 if os.path.exists(candidate):
                     return candidate
+        # Fallback: any Jupiter .runtime_datasets/<run_id>/ → local AG mirror.
+        # Prevents breakage when new Jupiter training runs use a different run ID.
+        m = _JUPITER_RUNTIME_RE.match(node)
+        if m:
+            candidate = _JUPITER_RUNTIME_LOCAL + node[m.end():]
+            if os.path.exists(candidate):
+                return candidate
         return node
     return node
 
@@ -281,9 +295,10 @@ def _predict_from_dataloader(
     name_to_idx_in = datamodule.data_indices.data.input[0].name_to_index
     name_to_idx_out = datamodule.data_indices.model.output.name_to_index
 
-    x_in, _ = extract_filtered_input_from_output(
-        x_in, name_to_idx_in, name_to_idx_out
-    )
+    # Downscaling models expect full lres input (including forcings) — the model's
+    # normalizer has parameters for all input channels.  Only filter the *output
+    # reference* arrays (x_out, y_out) later; keep x_in unfiltered for predict_step.
+    x_in_full = x_in  # keep full-channel copy for the model
 
     lon_lres = np.asarray(data.longitudes[0])
     lat_lres = np.asarray(data.latitudes[0])
@@ -307,7 +322,7 @@ def _predict_from_dataloader(
 
     for i_sample in range(n_samples):
         for j, m in enumerate(members):
-            x_l = torch.from_numpy(x_in[i_sample, m]).to(device)
+            x_l = torch.from_numpy(x_in_full[i_sample, m]).to(device)
             x_h = torch.from_numpy(x_in_hres[i_sample, m]).to(device)
             x_l = x_l[None, None, None, ...]
             x_h = x_h[None, None, None, ...]
@@ -329,7 +344,11 @@ def _predict_from_dataloader(
 
     if not members:
         raise ValueError("No members selected. Pass at least one member id.")
-    x_out = x_in[:, members, :, :][..., selected_indices]
+    # For output comparison, filter x_in to output-matching variables
+    x_in_filtered, _ = extract_filtered_input_from_output(
+        x_in, name_to_idx_in, name_to_idx_out
+    )
+    x_out = x_in_filtered[:, members, :, :][..., selected_indices]
     y_out = y[:, members, :, :][..., selected_indices]
     return (
         x_out,
@@ -546,7 +565,8 @@ def _validate_output_path(
     parent_name = parent.name
     grandparent_name = parent.parent.name if parent.parent != parent else ""
     if _RUN_NAME_RE.fullmatch(parent_name) and _RUN_NAME_RE.fullmatch(grandparent_name):
-        if parent.parent.exists() and (parent.parent / "logs").is_dir():
+        if (parent.parent.exists() and (parent.parent / "logs").is_dir()
+                and parent.exists() and (parent / "logs").is_dir()):
             raise SystemExit(
                 f"Unsafe nested output path detected: {resolved}. "
                 "Refusing to place a new run folder under an existing run folder."
@@ -661,6 +681,12 @@ def main() -> None:
 
     p_bundle_build = sub.add_parser("build-bundle", help="Create input bundle from GRIB.")
     p_bundle_build.add_argument("--lres-sfc-grib", required=True)
+    p_bundle_build.add_argument(
+        "--lres-sfc-extra-grib",
+        action="append",
+        default=[],
+        help="Optional extra low-resolution surface GRIB to merge before bundle creation.",
+    )
     p_bundle_build.add_argument("--lres-pl-grib", required=True)
     p_bundle_build.add_argument("--hres-grib", required=True)
     p_bundle_build.add_argument(
@@ -669,6 +695,12 @@ def main() -> None:
         help="Optional GRIB file used only for high-resolution static fields such as z and lsm.",
     )
     p_bundle_build.add_argument("--target-sfc-grib", default="")
+    p_bundle_build.add_argument(
+        "--target-sfc-extra-grib",
+        action="append",
+        default=[],
+        help="Optional extra target surface GRIB to merge before bundle creation.",
+    )
     p_bundle_build.add_argument("--target-pl-grib", default="")
     p_bundle_build.add_argument(
         "--lres-sfc-channels",
@@ -718,6 +750,7 @@ def main() -> None:
 
         out = build_input_bundle_from_grib(
             lres_sfc_grib=args.lres_sfc_grib,
+            lres_sfc_extra_gribs=args.lres_sfc_extra_grib,
             lres_pl_grib=args.lres_pl_grib,
             hres_grib=args.hres_grib,
             hres_static_grib=args.hres_static_grib or None,
@@ -725,6 +758,7 @@ def main() -> None:
             step_hours=args.step_hours,
             member=args.member,
             target_sfc_grib=args.target_sfc_grib or None,
+            target_sfc_extra_gribs=args.target_sfc_extra_grib,
             target_pl_grib=args.target_pl_grib or None,
             require_target_fields=not args.allow_missing_target_unsafe,
             lres_sfc_channels=_parse_channel_subset_csv(args.lres_sfc_channels),

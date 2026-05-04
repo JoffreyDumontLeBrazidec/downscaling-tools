@@ -332,6 +332,16 @@ def main() -> None:
         required=True,
         help="Output JSON file path (e.g., surface_loss_summary.json)",
     )
+    parser.add_argument(
+        "--prediction-var",
+        default="y_pred",
+        help="Dataset variable to score against truth (default: y_pred).",
+    )
+    parser.add_argument(
+        "--truth-var",
+        default="y",
+        help="Dataset truth variable (default: y).",
+    )
     args = parser.parse_args()
 
     predictions_dir = Path(args.predictions_dir)
@@ -340,7 +350,12 @@ def main() -> None:
         raise FileNotFoundError(f"Predictions directory not found: {predictions_dir}")
 
     print(f"Computing surface loss from: {predictions_dir}")
-    results = process_predictions_dir(predictions_dir)
+    print(f"Prediction variable: {args.prediction_var} | truth variable: {args.truth_var}")
+    results = process_predictions_dir(
+        predictions_dir,
+        prediction_var=args.prediction_var,
+        truth_var=args.truth_var,
+    )
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
     with out_json.open("w") as f:

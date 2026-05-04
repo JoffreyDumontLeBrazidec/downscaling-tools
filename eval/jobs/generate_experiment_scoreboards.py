@@ -13,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path
+
 
 FIELDS = ["2t_sfc", "10u_sfc", "10v_sfc", "t_850", "z_500"]
 FIELD_META = {
@@ -38,7 +40,7 @@ DEFAULT_BASELINE = [
     ("j10b", "j10b"),
 ]
 DEFAULT_SPECTRA_EXCLUDE = ["ip6y"]
-DEFAULT_BASELINE_FILE = "/home/ecm5702/perm/eval/scoreboards/o96_o320_baseline_experiments.json"
+DEFAULT_BASELINE_FILE = default_scoreboard_path("o96_o320_baseline_experiments.json")
 
 
 @dataclass
@@ -80,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--samples-per-field", type=int, default=5)
     p.add_argument("--ai-spectra-root", default="/home/ecm5702/perm/ai_spectra")
     p.add_argument("--reference-root", default="/home/ecm5702/hpcperm/reference_spectra/enfo_o320")
-    p.add_argument("--eval-root", default="/home/ecm5702/perm/eval")
+    p.add_argument("--eval-root", default=DEFAULT_EVAL_ROOT)
     p.add_argument("--output-dir", default="")
     p.add_argument(
         "--spectra-exclude",

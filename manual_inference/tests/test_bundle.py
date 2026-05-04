@@ -26,6 +26,19 @@ def _make_sfc_dataset(point_count: int, *, prefix: float) -> xr.Dataset:
     return xr.Dataset(data_vars=data_vars, coords=coords)
 
 
+def _make_tp_only_sfc_dataset(point_count: int, *, value: float) -> xr.Dataset:
+    coords = {"values": np.arange(point_count, dtype=np.int32)}
+    return xr.Dataset(
+        data_vars={
+            "tp": ("values", np.full(point_count, value, dtype=np.float32)),
+            "latitude": ("values", np.linspace(10, 20, point_count, dtype=np.float32)),
+            "longitude": ("values", np.linspace(30, 40, point_count, dtype=np.float32)),
+            "valid_time": ((), np.datetime64("2023-08-21T00:00:00")),
+        },
+        coords=coords,
+    )
+
+
 def _make_pl_dataset(point_count: int) -> xr.Dataset:
     levels = np.asarray([50, 100, 200], dtype=np.int32)
     shape = (levels.size, point_count)
@@ -56,56 +69,38 @@ def _make_hres_dataset(point_count: int) -> xr.Dataset:
 
 
 def _install_fake_earthkit(monkeypatch, datasets: dict[str, xr.Dataset]) -> None:
-    class _FakeSource:
-        def __init__(self, ds: xr.Dataset):
-            self._ds = ds
+    original_open_dataset = xr.open_dataset
 
-        def to_xarray(self, engine: str = "cfgrib", **kwargs) -> xr.Dataset:
-            assert engine == "cfgrib"
-            return self._ds
+    def _open_dataset(path, engine=None, backend_kwargs=None, **kwargs):
+        if engine == "cfgrib":
+            return datasets[str(path)]
+        return original_open_dataset(path, engine=engine, backend_kwargs=backend_kwargs, **kwargs)
 
-    def _from_source(kind: str, path: str) -> _FakeSource:
-        assert kind == "file"
-        return _FakeSource(datasets[path])
-
-    fake_data_module = types.ModuleType("earthkit.data")
-    fake_data_module.from_source = _from_source
-    fake_earthkit = types.ModuleType("earthkit")
-    fake_earthkit.data = fake_data_module
-    monkeypatch.setitem(sys.modules, "earthkit", fake_earthkit)
-    monkeypatch.setitem(sys.modules, "earthkit.data", fake_data_module)
+    monkeypatch.setattr(xr, "open_dataset", _open_dataset)
 
 
 def test_open_cfgrib_dataset_forwards_filter_by_keys(monkeypatch):
     captured = {}
+    original_open_dataset = xr.open_dataset
 
-    class _FakeSource:
-        def to_xarray(self, engine: str = "cfgrib", **kwargs) -> xr.Dataset:
-            captured["engine"] = engine
-            captured["kwargs"] = kwargs
-            return xr.Dataset()
+    def _open_dataset(path, engine=None, backend_kwargs=None, **kwargs):
+        captured["path"] = str(path)
+        captured["engine"] = engine
+        captured["backend_kwargs"] = backend_kwargs
+        return xr.Dataset() if engine == "cfgrib" else original_open_dataset(
+            path, engine=engine, backend_kwargs=backend_kwargs, **kwargs
+        )
 
-    def _from_source(kind: str, path: str) -> _FakeSource:
-        captured["kind"] = kind
-        captured["path"] = path
-        return _FakeSource()
-
-    fake_data_module = types.ModuleType("earthkit.data")
-    fake_data_module.from_source = _from_source
-    fake_earthkit = types.ModuleType("earthkit")
-    fake_earthkit.data = fake_data_module
-    monkeypatch.setitem(sys.modules, "earthkit", fake_earthkit)
-    monkeypatch.setitem(sys.modules, "earthkit.data", fake_data_module)
+    monkeypatch.setattr(xr, "open_dataset", _open_dataset)
 
     bundle._open_cfgrib_dataset(
         "/tmp/mixed_input.grib",
         filter_by_keys={"typeOfLevel": "surface"},
     )
 
-    assert captured["kind"] == "file"
     assert captured["path"] == "/tmp/mixed_input.grib"
     assert captured["engine"] == "cfgrib"
-    assert captured["kwargs"]["backend_kwargs"]["filter_by_keys"] == {"typeOfLevel": "surface"}
+    assert captured["backend_kwargs"]["filter_by_keys"] == {"typeOfLevel": "surface"}
 
 
 @pytest.mark.parametrize(
@@ -151,6 +146,20 @@ def test_select_member_accepts_requested_member_one_for_singleton_zero_coord():
     assert "number" in selected.coords
     assert selected.sizes["values"] == 2
     assert np.asarray(selected["u10"].values).shape == (2,)
+
+
+def test_select_member_accepts_matching_scalar_number_coord():
+    ds = xr.Dataset(
+        data_vars={"z": ("values", np.array([7.0, 8.0], dtype=np.float32))},
+        coords={
+            "values": np.arange(2, dtype=np.int32),
+            "number": np.array(1, dtype=np.int32),
+        },
+    )
+
+    selected = bundle._select_member(ds, 1)
+
+    assert selected.identical(ds)
 
 
 def test_build_input_bundle_allows_missing_target_with_explicit_override(tmp_path, monkeypatch):
@@ -361,6 +370,42 @@ def test_build_input_bundle_backfills_missing_lres_precip(tmp_path, monkeypatch)
         for name in expected_zero_vars:
             assert name in ds
             assert np.allclose(ds[name].values, 0.0)
+    finally:
+        ds.close()
+
+
+def test_build_input_bundle_merges_surface_tp_sidecars(tmp_path, monkeypatch):
+    datasets = {
+        "lres_sfc.grib": _make_sfc_dataset(3, prefix=0.0),
+        "lres_sfc_tp.grib": _make_tp_only_sfc_dataset(3, value=9.0),
+        "lres_pl.grib": _make_pl_dataset(3),
+        "hres.grib": _make_hres_dataset(4),
+        "target_sfc.grib": _make_sfc_dataset(4, prefix=100.0),
+        "target_sfc_tp.grib": _make_tp_only_sfc_dataset(4, value=109.0),
+        "target_pl.grib": _make_pl_dataset(4),
+    }
+    _install_fake_earthkit(monkeypatch, datasets)
+
+    out_path = tmp_path / "bundle.nc"
+    bundle.build_input_bundle_from_grib(
+        lres_sfc_grib="lres_sfc.grib",
+        lres_sfc_extra_gribs=["lres_sfc_tp.grib"],
+        lres_pl_grib="lres_pl.grib",
+        hres_grib="hres.grib",
+        out_nc=out_path,
+        target_sfc_grib="target_sfc.grib",
+        target_sfc_extra_gribs=["target_sfc_tp.grib"],
+        target_pl_grib="target_pl.grib",
+    )
+
+    ds = xr.open_dataset(out_path)
+    try:
+        assert "in_lres_tp" in ds
+        assert "target_hres_tp" in ds
+        assert np.allclose(ds["in_lres_tp"].values, 9.0)
+        assert np.allclose(ds["target_hres_tp"].values, 109.0)
+        assert ds.attrs["source_lres_sfc_extra"] == "lres_sfc_tp.grib"
+        assert ds.attrs["source_target_sfc_extra"] == "target_sfc_tp.grib"
     finally:
         ds.close()
 
@@ -590,6 +635,42 @@ def test_bundle_main_forwards_allow_missing_target_unsafe(monkeypatch, tmp_path,
 
     assert captured["require_target_fields"] is False
     assert f"Saved bundle: {tmp_path / 'bundle.nc'}" in capsys.readouterr().out
+
+
+def test_bundle_main_forwards_surface_extra_gribs(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def _fake_build_input_bundle_from_grib(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "bundle.nc"
+
+    monkeypatch.setattr(bundle, "build_input_bundle_from_grib", _fake_build_input_bundle_from_grib)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bundle.py",
+            "--lres-sfc-grib",
+            "lres_sfc.grib",
+            "--lres-sfc-extra-grib",
+            "lres_sfc_tp.grib",
+            "--lres-pl-grib",
+            "lres_pl.grib",
+            "--hres-grib",
+            "hres.grib",
+            "--target-sfc-grib",
+            "target_sfc.grib",
+            "--target-sfc-extra-grib",
+            "target_sfc_tp.grib",
+            "--out",
+            str(tmp_path / "bundle.nc"),
+        ],
+    )
+
+    bundle.main()
+
+    assert captured["lres_sfc_extra_gribs"] == ["lres_sfc_tp.grib"]
+    assert captured["target_sfc_extra_gribs"] == ["target_sfc_tp.grib"]
 
 
 def test_bundle_main_forwards_channel_subset_overrides(monkeypatch, tmp_path):

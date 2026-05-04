@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/spectra_proxy_calibration",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_calibration",
         help="Output directory for coefficients and metrics.",
     )
     return parser.parse_args()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import logging
 import os
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from manual_inference.prediction.predict import (
 
 from .sigma_evaluator import SigmaEvaluator
 from .sigmas import sigmas
+
+logger = logging.getLogger(__name__)
 
 
 O1280_FAMILY_LANES = {"o320_o1280", "o1280_o2560"}
@@ -88,6 +91,83 @@ def _distributed_barrier(*, device: str, local_rank: int) -> None:
         return
     sync_device_ids = [local_rank] if str(device).startswith("cuda") and torch.cuda.is_available() else None
     dist.barrier(device_ids=sync_device_ids)
+
+
+def _inject_minimal_hardware_config(config_checkpoint, host_config) -> None:
+    """Fallback when adapt_config_hpc fails (e.g. missing hardware key).
+
+    Copies hardware paths from host_config and sets safe defaults so that
+    the sigma evaluator can proceed on a single GPU.
+    """
+    from omegaconf import OmegaConf, DictConfig  # pylint: disable=import-outside-toplevel
+
+    hw_dict: dict = {}
+    try:
+        hw_dict["paths"] = OmegaConf.to_container(host_config.hardware.paths, resolve=True)
+    except Exception:
+        hw_dict["paths"] = {
+            "data": os.environ.get("DATA_DIR", ""),
+            "grid": os.environ.get("GRID_DIR", ""),
+            "residual_statistics": os.environ.get("RESIDUAL_STATISTICS_DIR", ""),
+        }
+    hw_dict.setdefault("num_gpus_per_model", 1)
+
+    if isinstance(config_checkpoint, DictConfig):
+        config_checkpoint.hardware = OmegaConf.create(hw_dict)
+    else:
+        from types import SimpleNamespace  # pylint: disable=import-outside-toplevel
+        config_checkpoint.hardware = SimpleNamespace(**hw_dict)
+
+
+def _resolve_output_name_to_index(downscaler, datamodule) -> dict[str, int]:
+    """Extract model output name_to_index from downscaler or datamodule."""
+    for source_name, obj in [("downscaler", downscaler), ("datamodule", datamodule)]:
+        try:
+            nti = obj.data_indices.model.output.name_to_index
+            if nti is not None and len(nti) > 0:
+                logger.info("Resolved output name_to_index from %s (%d vars)", source_name, len(nti))
+                return dict(nti)
+        except AttributeError:
+            continue
+    logger.warning("Could not resolve output name_to_index — per-field metrics will be NaN")
+    return {}
+
+
+def _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_size) -> None:
+    """Configure model-parallel communication group on the downscaler.
+
+    Sets model_comm_group, model_comm_group_size, reader_group_rank, and
+    grid shard attributes so that multi-GPU sharding (used for o320->o1280
+    and o1280->o2560) works correctly during sigma evaluation.
+    """
+    if model_comm_group is None or world_size <= 1:
+        return
+
+    if hasattr(downscaler, "set_model_comm_group"):
+        downscaler.set_model_comm_group(
+            model_comm_group,
+            model_comm_group_id=0,
+            model_comm_group_rank=global_rank,
+            model_comm_num_groups=1,
+            model_comm_group_size=world_size,
+        )
+    else:
+        downscaler.model_comm_group = model_comm_group
+        downscaler.model_comm_group_size = world_size
+
+    downscaler.reader_group_rank = global_rank
+    if (
+        getattr(downscaler, "keep_batch_sharded", False)
+        and hasattr(downscaler, "lres_grid_indices")
+        and hasattr(downscaler, "hres_grid_indices")
+    ):
+        downscaler.lres_grid_shard_shapes = downscaler.lres_grid_indices.shard_shapes
+        downscaler.hres_grid_shard_shapes = downscaler.hres_grid_indices.shard_shapes
+        downscaler.lres_grid_shard_slice = downscaler.lres_grid_indices.get_shard_slice(global_rank)
+        downscaler.hres_grid_shard_slice = downscaler.hres_grid_indices.get_shard_slice(global_rank)
+        if hasattr(downscaler, "grid_indices"):
+            downscaler.grid_shard_shapes = downscaler.grid_indices.shard_shapes
+            downscaler.grid_shard_slice = downscaler.grid_indices.get_shard_slice(global_rank)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -170,10 +250,26 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
 
     global_rank, local_rank, world_size = _get_parallel_info()
 
-    object_loader = ObjectFromCheckpointLoader(args.ckpt_root, args.name_exp, args.name_ckpt)
     checkpoint, config_checkpoint = get_checkpoint(args.ckpt_root, args.name_exp, args.name_ckpt)
     config = instantiate_config()
-    config_checkpoint = adapt_config_hpc(config_checkpoint, config)
+    try:
+        config_checkpoint = adapt_config_hpc(config_checkpoint, config)
+    except Exception as exc:
+        logger.warning("adapt_config_hpc failed (%s), injecting minimal hardware config", exc)
+        _inject_minimal_hardware_config(config_checkpoint, config)
+
+    try:
+        object_loader = ObjectFromCheckpointLoader(args.ckpt_root, args.name_exp, args.name_ckpt)
+    except Exception as loader_exc:
+        logger.warning("ObjectFromCheckpointLoader init failed (%s), constructing manually", loader_exc)
+        from manual_inference.checkpoints import to_omegaconf  # pylint: disable=import-outside-toplevel
+        object_loader = ObjectFromCheckpointLoader.__new__(ObjectFromCheckpointLoader)
+        object_loader.dir_exp = args.ckpt_root
+        object_loader.name_exp = args.name_exp
+        object_loader.name_ckpt = args.name_ckpt
+        object_loader.checkpoint = checkpoint
+        object_loader.config_checkpoint = config_checkpoint
+        object_loader.config_for_datamodule = to_omegaconf(config_checkpoint)
 
     object_loader.config_checkpoint = config_checkpoint
     # Some checkpoints were produced on external paths (e.g. /leonardo_work/...).
@@ -186,6 +282,13 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
     )
     if hasattr(object_loader.config_for_datamodule.dataloader.validation, "num_workers"):
         object_loader.config_for_datamodule.dataloader.validation.num_workers = 0
+    # Newer anemoi configs store num_workers at dataloader.num_workers.{split},
+    # not at dataloader.validation.num_workers. Cap at 1 (not 0: setting 0
+    # triggers a prefetch_factor validation error in the anemoi datamodule).
+    # 1 worker × 4 ranks = 4 workers instead of 5×4=20, preventing OOM.
+    _nw = getattr(object_loader.config_for_datamodule.dataloader, "num_workers", None)
+    if _nw is not None and hasattr(_nw, "validation"):
+        _nw.validation = 1
 
     inferred_lane = infer_lane_from_config(_normalize_cfg_for_lane_inference(config_checkpoint))
     required_model_parallel_gpus = (
@@ -249,14 +352,18 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
         datamodule = object_loader.datamodule
         interface = object_loader.interface
         downscaler = object_loader.downscaler
-        downscaler.model_comm_group = model_comm_group
         _ = checkpoint  # keep behavior; checkpoint is loaded for config compatibility.
 
         interface = interface.to(device)
         downscaler = downscaler.to(device)
+
+        _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_size)
+
         print(
             f"Running sigma evaluator on device: {device} "
-            f"(lane={inferred_lane}, num_gpus_per_model={requested_model_parallel_gpus})"
+            f"(lane={inferred_lane}, num_gpus_per_model={requested_model_parallel_gpus}, "
+            f"keep_batch_sharded={getattr(downscaler, 'keep_batch_sharded', 'N/A')}, "
+            f"lres_shard_shapes={getattr(downscaler, 'lres_grid_shard_shapes', 'N/A') is not None})"
         )
 
         if args.sigmas.strip():
@@ -266,7 +373,8 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
 
         run_noised = args.run_noised or (not args.run_noised and not args.run_pure_noise)
         run_pure_noise = args.run_pure_noise
-        sigma_evaluator = SigmaEvaluator(downscaler, datamodule, args.n_samples)
+        name_to_index = _resolve_output_name_to_index(downscaler, datamodule)
+        sigma_evaluator = SigmaEvaluator(downscaler, datamodule, args.n_samples, name_to_index)
 
         def _run_one(sigma: float, prediction_on_pure_noise: bool) -> dict:
             if torch.cuda.is_available():

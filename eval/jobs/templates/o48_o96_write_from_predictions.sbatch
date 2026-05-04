@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=04:00:00
 #SBATCH --mem=64G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -16,7 +16,7 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 RUN_ID="REPLACE_RUN_ID"
-OUTPUT_ROOT="/home/ecm5702/perm/eval"
+OUTPUT_ROOT="/home/ecm5702/scratch/eval"
 RUN_ROOT=""
 PRED_DIR=""
 EXPECTED_PRED_FILES=10
@@ -24,12 +24,16 @@ SIGMA_RUN_ID=""
 
 TC_EVENTS="humberto"
 TC_SUPPORT_MODE="regridded"      # native | regridded
+TC_DISPLAY_LABEL=""              # optional shorter legend label; blank => RUN_ID
 BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
 
 SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
 SPECTRA_NSIDE=64
 SPECTRA_LMAX=95
+SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE=0
 SPECTRA_MEMBER_AGG="per-file-mean"   # per-file-mean | raw-members
+PREDICTION_VAR="y_pred"              # y_pred | x_interp | any high-res prediction-like var
+TRUTH_VAR="y"
 SPECTRA_OUT_DIRNAME="spectra_o48_o96"
 SURFACE_JSON_NAME="surface_loss_summary.json"
 METRICS_JSON_NAME="o48_o96_metrics.json"
@@ -58,6 +62,8 @@ require_choice() {
 [[ "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Unsafe RUN_ID: ${RUN_ID}"
 require_choice "${TC_SUPPORT_MODE}" native regridded
 require_choice "${SPECTRA_MEMBER_AGG}" per-file-mean raw-members
+[[ -n "${PREDICTION_VAR// /}" ]] || die "PREDICTION_VAR must be non-empty"
+[[ -n "${TRUTH_VAR// /}" ]] || die "TRUTH_VAR must be non-empty"
 
 if [[ -z "${RUN_ROOT}" ]]; then
   RUN_ROOT="${OUTPUT_ROOT}/${RUN_ID}"
@@ -112,14 +118,28 @@ if [[ -n "${TC_EVENTS// /}" ]]; then
   TC_EVENT_TAG="${TC_EVENTS//,/_}"
   TC_EVENT_TAG="${TC_EVENT_TAG// /}"
   TC_OUT_NAME="tc_normed_pdfs_${TC_EVENT_TAG}_${RUN_ID}_from_predictions.pdf"
-  python -m eval.tc.plot_pdf_tc_from_predictions \
-    --predictions-dir "${PRED_DIR}" \
-    --outdir "${RUN_ROOT}" \
-    --run-label "${RUN_ID}" \
-    --out-name "${TC_OUT_NAME}" \
-    --base-tc-dir "${BASE_TC_DIR}" \
-    --support-mode "${TC_SUPPORT_MODE}" \
-    --events "${TC_EVENTS}"
+  if [[ -n "${TC_DISPLAY_LABEL}" ]]; then
+    python -m eval.tc.plot_pdf_tc_from_predictions \
+      --predictions-dir "${PRED_DIR}" \
+      --outdir "${RUN_ROOT}" \
+      --run-label "${RUN_ID}" \
+      --display-label "${TC_DISPLAY_LABEL}" \
+      --out-name "${TC_OUT_NAME}" \
+      --base-tc-dir "${BASE_TC_DIR}" \
+      --support-mode "${TC_SUPPORT_MODE}" \
+      --events "${TC_EVENTS}" \
+      --prediction-var "${PREDICTION_VAR}"
+  else
+    python -m eval.tc.plot_pdf_tc_from_predictions \
+      --predictions-dir "${PRED_DIR}" \
+      --outdir "${RUN_ROOT}" \
+      --run-label "${RUN_ID}" \
+      --out-name "${TC_OUT_NAME}" \
+      --base-tc-dir "${BASE_TC_DIR}" \
+      --support-mode "${TC_SUPPORT_MODE}" \
+      --events "${TC_EVENTS}" \
+      --prediction-var "${PREDICTION_VAR}"
+  fi
   TC_STATS="${RUN_ROOT}/${TC_OUT_NAME%.pdf}.stats.json"
 fi
 
@@ -136,13 +156,17 @@ python "${SPECTRA_SCRIPT}" \
   --weather-states "${SPECTRA_WEATHER_STATES}" \
   --nside "${SPECTRA_NSIDE}" \
   --lmax "${SPECTRA_LMAX}" \
-  --member-aggregation "${SPECTRA_MEMBER_AGG}"
+  --score-wavenumber-min-exclusive "${SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE}" \
+  --member-aggregation "${SPECTRA_MEMBER_AGG}" \
+  --prediction-var "${PREDICTION_VAR}"
 
 python "${SURFACE_SCRIPT}" \
   --predictions-dir "${PRED_DIR}" \
-  --out-json "${SURFACE_JSON}"
+  --out-json "${SURFACE_JSON}" \
+  --prediction-var "${PREDICTION_VAR}" \
+  --truth-var "${TRUTH_VAR}"
 
-python - "${RUN_ID}" "${OUTPUT_ROOT}" "${SIGMA_RUN_ID}" "${TC_STATS}" "${SPECTRA_OUT}" "${SURFACE_JSON}" "${METRICS_JSON}" "${PRED_DIR}" "${EXPECTED_PRED_FILES}" "${TC_EVENTS}" <<'PY'
+python - "${RUN_ID}" "${OUTPUT_ROOT}" "${SIGMA_RUN_ID}" "${TC_STATS}" "${SPECTRA_OUT}" "${SURFACE_JSON}" "${METRICS_JSON}" "${PRED_DIR}" "${EXPECTED_PRED_FILES}" "${TC_EVENTS}" "${PREDICTION_VAR}" "${TRUTH_VAR}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -159,6 +183,8 @@ out_path = Path(sys.argv[7])
 pred_dir = Path(sys.argv[8])
 expected_pred_files = int(sys.argv[9])
 requested_events = tuple(event.strip().lower() for event in sys.argv[10].split(",") if event.strip())
+prediction_var = sys.argv[11]
+truth_var = sys.argv[12]
 
 summary = metrics.build_run_scoreboard_metrics(
     run_id=run_id,
@@ -171,6 +197,16 @@ summary = metrics.build_run_scoreboard_metrics(
 )
 summary["lane"] = "o48_o96"
 summary["predictions_dir"] = str(pred_dir)
+summary["prediction_var"] = prediction_var
+summary["truth_var"] = truth_var
+summary["baseline_mode"] = "x_interp" if prediction_var == "x_interp" else "model_prediction"
+if prediction_var == "x_interp":
+    summary["spectra_full_field_mean_relative_l2"] = summary.get("spectra_mean_relative_l2")
+    summary["spectra_mean_relative_l2"] = None
+    summary["spectra_score_excluded_reason"] = (
+        "x_interp full-field spectra are dominated by large-scale input power and are not a "
+        "downscaling skill score; residual prediction spectrum is zero by construction."
+    )
 summary["expected_prediction_files"] = expected_pred_files
 summary["requested_tc_events"] = list(requested_events)
 summary["artifacts"] = {
@@ -196,6 +232,8 @@ echo "=== o48->o96 writer complete ==="
 echo "run_id=${RUN_ID}"
 echo "pred_dir=${PRED_DIR}"
 echo "pred_count=${pred_count}"
+echo "prediction_var=${PREDICTION_VAR}"
+echo "truth_var=${TRUTH_VAR}"
 echo "spectra_out=${SPECTRA_OUT}"
 echo "surface_json=${SURFACE_JSON}"
 echo "metrics_json=${METRICS_JSON}"

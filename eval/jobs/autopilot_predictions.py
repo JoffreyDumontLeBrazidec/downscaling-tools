@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from eval.jobs import slurm_jobs
+from eval.paths import DEFAULT_EVAL_ROOT
 
 TERMINAL_OK = slurm_jobs.TERMINAL_OK
 TERMINAL_BAD = slurm_jobs.TERMINAL_BAD
@@ -67,7 +68,7 @@ def _validate_eval_root(eval_root: Path) -> None:
     if (eval_root / "logs").is_dir() and (eval_root / "jobs").is_dir():
         raise SystemExit(
             f"Refusing eval root that already looks like a run directory: {eval_root}. "
-            "Pass the parent eval root (for example /home/ecm5702/perm/eval)."
+            "Pass the parent eval root (for example /home/ecm5702/scratch/eval)."
         )
 
 
@@ -175,7 +176,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--run-id", required=True)
-    ap.add_argument("--eval-root", default="/home/ecm5702/perm/eval")
+    ap.add_argument("--eval-root", default=DEFAULT_EVAL_ROOT)
     ap.add_argument("--poll-seconds", type=int, default=20)
     ap.add_argument("--max-retries", type=int, default=1)
     ap.add_argument("--input-root", default="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia")

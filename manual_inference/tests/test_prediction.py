@@ -812,6 +812,45 @@ def test_predict_from_bundle_applies_output_subset(monkeypatch):
     assert dates is None
 
 
+def test_predict_build_bundle_forwards_surface_extra_gribs(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def _fake_build_input_bundle_from_grib(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "bundle.nc"
+
+    fake_bundle_module = types.ModuleType("manual_inference.input_data_construction.bundle")
+    fake_bundle_module.build_input_bundle_from_grib = _fake_build_input_bundle_from_grib
+    monkeypatch.setitem(sys.modules, "manual_inference.input_data_construction.bundle", fake_bundle_module)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "predict.py",
+            "build-bundle",
+            "--lres-sfc-grib",
+            "lres_input.grib",
+            "--lres-sfc-extra-grib",
+            "lres_input_tp.grib",
+            "--lres-pl-grib",
+            "lres_input.grib",
+            "--hres-grib",
+            "hres_sfc.grib",
+            "--target-sfc-grib",
+            "target_y.grib",
+            "--target-sfc-extra-grib",
+            "target_y_tp.grib",
+            "--out",
+            str(tmp_path / "bundle.nc"),
+        ],
+    )
+
+    predict.main()
+
+    assert captured["lres_sfc_extra_gribs"] == ["lres_input_tp.grib"]
+    assert captured["target_sfc_extra_gribs"] == ["target_y_tp.grib"]
+
+
 def test_predict_build_bundle_forwards_channel_subset_overrides(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 

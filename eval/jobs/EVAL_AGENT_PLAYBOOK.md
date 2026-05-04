@@ -15,11 +15,11 @@ Use this as the default when a user asks to evaluate a run.
 - For all TC requests, agents must explicitly report these extreme-tail values for the target run:
   - `extreme_score`, `mslp_980_990_fraction`, `wind_gt_25_fraction`
   - plus the thresholds used in that file.
-- For all TC requests, agents must also compare the target run against all previously evaluated experiments currently available in `/home/ecm5702/perm/eval` by scanning:
+- For all TC requests, agents must also compare the target run against all previously evaluated experiments currently available in `/home/ecm5702/scratch/eval` by scanning:
   - `tc_extreme_tail_*.json`
   - `tc_normed_pdfs_*from_predictions.stats.json`
   - and return a ranked cross-experiment table (highest `extreme_score` first).
-- For all "extreme" requests, this comparison table is mandatory and must include the target run plus all other analyzed experiments discoverable in `/home/ecm5702/perm/eval`.
+- For all "extreme" requests, this comparison table is mandatory and must include the target run plus all other analyzed experiments discoverable in `/home/ecm5702/scratch/eval`.
 - If any analyzed experiment is missing extreme stats, agents must recalculate the missing stats first, then regenerate the ranked comparison table before final reporting.
 - Final response must always include:
   - the absolute path to the generated comparison table file,
@@ -71,7 +71,7 @@ Do **not** fork ad hoc `/tmp/*.sbatch` launchers for this lane.
 ## B) Predictions Run (`run-id`) - Eval Only
 
 Assumes predictions already exist at:
-`/home/ecm5702/perm/eval/<RUN_ID>/predictions/predictions_*.nc`
+`/home/ecm5702/scratch/eval/<RUN_ID>/predictions/predictions_*.nc`
 
 1) One-date local plots:
 
@@ -84,9 +84,9 @@ sbatch /home/ecm5702/dev/jobscripts/local_plots_one_date_<RUN_ID>.sbatch
 ```
 
 This writes canonical non-TC local plots under:
-- `/home/ecm5702/perm/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step024/`
+- `/home/ecm5702/scratch/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step024/`
 - ...
-- `/home/ecm5702/perm/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step120/`
+- `/home/ecm5702/scratch/eval/<RUN_ID>/local_plots_one_date/predictions_20230826_step120/`
 
 For new outputs, prefer the baseline filenames emitted by the canonical helper, for example:
 - `amazon_forest_member01_baseline.pdf`
@@ -124,7 +124,7 @@ sbatch /home/ecm5702/dev/jobscripts/spectra_ecmwf_<RUN_ID>.sbatch
 
 4) Run manifest:
 
-Prediction-first routes should already have `/home/ecm5702/perm/eval/<RUN_ID>/EXPERIMENT_CONFIG.yaml` from the strict manual-inference template. If it is missing, treat that as a workflow bug and backfill it immediately rather than inventing a second manifest surface.
+Prediction-first routes should already have `/home/ecm5702/scratch/eval/<RUN_ID>/EXPERIMENT_CONFIG.yaml` from the strict manual-inference template. If it is missing, treat that as a workflow bug and backfill it immediately rather than inventing a second manifest surface.
 
 ## C) Expver Run (Full Eval Family)
 
@@ -156,7 +156,7 @@ sacct -j <JOB1>,<JOB2>,<JOB3> --format=JobID,JobName%30,QOS,State,ExitCode,Elaps
 Use this when summarizing TC results so users always get cross-run extreme-tail context:
 
 ```bash
-find /home/ecm5702/perm/eval -type f \( -name 'tc_extreme_tail_*.json' -o -name 'tc_normed_pdfs_*from_predictions.stats.json' \) | sort
+find /home/ecm5702/scratch/eval -type f \( -name 'tc_extreme_tail_*.json' -o -name 'tc_normed_pdfs_*from_predictions.stats.json' \) | sort
 ```
 
 Extract/merge rows and rank by `extreme_score` descending. Include per-row:
@@ -167,7 +167,7 @@ Extract/merge rows and rank by `extreme_score` descending. Include per-row:
 - thresholds used for each row
 - source file path
 
-Write the ranked table to a stable artifact path (for example `/home/ecm5702/perm/eval/tc_extreme_scoreboard_all_exps.tsv` and/or `<RUN_DIR>/tc_extreme_scoreboard_all_exps.tsv`) and share that path.
+Write the ranked table to a stable artifact path (for example `/home/ecm5702/scratch/eval/tc_extreme_scoreboard_all_exps.tsv` and/or `<RUN_DIR>/tc_extreme_scoreboard_all_exps.tsv`) and share that path.
 
 ## Clean Readable Scoreboards (VS Code Friendly)
 
@@ -178,8 +178,8 @@ python /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/generat
 ```
 
 Outputs:
-- `/home/ecm5702/perm/eval/scoreboards/prepml_all_tc_reproduction_scoreboard.md`
-- `/home/ecm5702/perm/eval/scoreboards/global_extreme_scoreboard.md`
+- `/home/ecm5702/scratch/eval/scoreboards/prepml_all_tc_reproduction_scoreboard.md`
+- `/home/ecm5702/scratch/eval/scoreboards/global_extreme_scoreboard.md`
 
 ## Notes
 

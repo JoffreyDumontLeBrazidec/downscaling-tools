@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTEXT_SCOREBOARD_CSV = Path(
     "/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/docs/docs/scoreboard_o96_o320/state/source_26_30/scoreboard.csv"
@@ -517,13 +519,13 @@ def main():
     parser.add_argument(
         "--eval-root",
         type=str,
-        default="/home/ecm5702/perm/eval",
+        default=DEFAULT_EVAL_ROOT,
         help="Root directory containing evaluation outputs",
     )
     parser.add_argument(
         "--out-md",
         type=str,
-        default="/home/ecm5702/perm/eval/scoreboards/enfo_o320_scoreboard.md",
+        default=default_scoreboard_path("enfo_o320_scoreboard.md"),
         help="Output markdown file path",
     )
     parser.add_argument(

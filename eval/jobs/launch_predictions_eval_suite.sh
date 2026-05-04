@@ -8,7 +8,7 @@ Usage:
 
 Options:
   --run-id <id>                Required run id (e.g. p25a)
-  --eval-root <path>           Eval root (default: /home/ecm5702/perm/eval)
+  --eval-root <path>           Eval root (default: /home/ecm5702/scratch/eval)
   --input-root <path>          Bundle input root (default: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia)
   --ckpt-id <id>               Checkpoint id
   --predict-qos <qos>          Slurm QoS for predict job (default: dg; auto-switch to ng if time > 00:30:00)
@@ -26,7 +26,7 @@ EOF
 }
 
 RUN_ID=""
-EVAL_ROOT="/home/ecm5702/perm/eval"
+EVAL_ROOT="/home/ecm5702/scratch/eval"
 INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 CKPT_ID="4a5b2f1b24b84c52872bfcec1410b00f"
 NAME_CKPT=""
@@ -109,7 +109,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 EVAL_ROOT_REAL="$(realpath -m "${EVAL_ROOT}")"
 if [[ ( -d "${EVAL_ROOT}/logs" && -d "${EVAL_ROOT}/jobs" ) || ( -d "${EVAL_ROOT_REAL}/logs" && -d "${EVAL_ROOT_REAL}/jobs" ) ]]; then
   echo "Refusing eval root that already looks like a run directory: ${EVAL_ROOT}" >&2
-  echo "Use the parent eval root (for example /home/ecm5702/perm/eval), not an existing run folder." >&2
+  echo "Use the parent eval root (for example /home/ecm5702/scratch/eval), not an existing run folder." >&2
   exit 2
 fi
 RUN_DIR="${EVAL_ROOT}/${RUN_ID}"

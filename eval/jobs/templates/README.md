@@ -129,11 +129,18 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
 ### Submission Helper
 - `submit_o48_o96_manual_eval_flow.sh`
   - Login-node helper for the weak-agent-safe `o48 -> o96` lane.
-  - Validates checkpoint profile, rebuilds strict Humberto truth bundles, runs strict prediction, submits MLflow loss plots, sigma sweeps, one-date local plots, curated regional suites, storm-area contour suites, and spectra.
-  - Default diagnostic bundle targets the Humberto `2025-09-26..30` surface with curated region names:
-    - `amazon_forest,eastern_us,idalia,himalayas,southeast_asia,central_africa`
-  - Default storm-area contour regions:
-    - `eastern_us,idalia`
+  - Validates checkpoint profile, rebuilds strict Humberto truth bundles, runs strict prediction, and submits MLflow loss plots, sigma sweeps, spectra, plus the default regional-summary plot bundle.
+  - Current helper defaults:
+    - sampler: `piecewise21` with `sigma_max=1000`
+    - curated regional suites enabled for `step024` and `step120`
+    - one-date local plots disabled unless `RUN_ONE_DATE_LOCAL=1`
+    - storm-area contour suites disabled unless `RUN_STORM_PLOTS=1`
+    - finalize step rewrites the run root into the lean layout (`data/` for raw artifacts, summary PDFs at top level) without leaving raw back-compat symlink clutter
+    - finalize no longer waits on sigma eval or MLflow loss export; it waits only on the jobs needed to build the user-facing package
+  - Default curated regional-suite names:
+    - `amazon_forest_core,eastern_us_coast,andes_central,himalayas_central,maritime_continent,congo_basin`
+  - Default storm-area contour regions when enabled:
+    - `eastern_us_coast,idalia_center`
   - Auto spectra policy:
     - AC submit host -> ECMWF spectra
     - AG submit host -> proxy spectra
@@ -274,7 +281,7 @@ For standalone TC reruns on an existing predictions tree, prefer:
 - `o48 -> o96` smooth full/manual eval route:
   - `CHECKPOINT_PATH=<CKPT_PATH> bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o48_o96_manual_eval_flow.sh`
 - `o48 -> o96` proxy eval from rebuilt bundles:
-  - `launch_o48_o96_humberto_proxy_eval.sh --input-root /home/ecm5702/perm/eval/<RUN_ID>/bundles_with_y`
+  - `launch_o48_o96_humberto_proxy_eval.sh --input-root /home/ecm5702/scratch/eval/<RUN_ID>/bundles_with_y`
 - Promote a passing run to full250 (`o96 -> o320`):
   - `codex_eval_predictions --ckpt-id <ID> --run-id <same_run_id> --continue-full`
 - Manual full250 fallback:

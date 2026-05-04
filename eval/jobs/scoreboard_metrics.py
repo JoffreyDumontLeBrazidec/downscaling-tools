@@ -260,6 +260,18 @@ def infer_eval_sampler_min(extra_args: dict[str, Any] | None, sampling_text: str
     return "na"
 
 
+def _infer_sampler_label_from_run_id(run_id: str) -> str:
+    """Last-resort: extract sampler+steps from the run directory name."""
+    match = re.search(r"(?:^|_)(heun|karras|piecewise|euler|dpm|edm|lognorm)(\d+)(?:_|$)", run_id.lower())
+    if not match:
+        return "na"
+    schedule = normalize_schedule_label(match.group(1))
+    steps = match.group(2)
+    if schedule and steps:
+        return f"{schedule}{steps}"
+    return schedule or "na"
+
+
 def infer_eval_sampler_min_from_run_root(run_root: Path) -> str:
     config_path = run_root / "EXPERIMENT_CONFIG.yaml"
     sampling_text = ""
@@ -285,7 +297,7 @@ def infer_eval_sampler_min_from_run_root(run_root: Path) -> str:
 
     logs_dir = run_root / "logs"
     if not logs_dir.exists():
-        return "na"
+        return _infer_sampler_label_from_run_id(run_root.name)
 
     seen: set[Path] = set()
     log_candidates = (
@@ -304,7 +316,7 @@ def infer_eval_sampler_min_from_run_root(run_root: Path) -> str:
         if label != "na":
             return label
 
-    return "na"
+    return _infer_sampler_label_from_run_id(run_root.name)
 
 
 def load_sigma_losses_from_csv(csv_path: Path) -> dict[str, float]:
@@ -326,6 +338,26 @@ def sigma_losses_for_scoreboard(csv_path: Path) -> dict[str, float | None]:
         f"sigma_{sigma_fragment(level)}": sigma_losses.get(f"sigma_{sigma_fragment(level)}")
         for level in SIGMA_LEVELS
     }
+
+
+CANONICAL_OPER_O320_ANALYSIS = {
+    "idalia": {
+        "mslp_p1": 1002.7293048095703,
+        "mslp_p01": 992.9954538574219,
+        "mslp_min": 971.3018798828125,
+        "wind_p99": 14.000569772720336,
+        "wind_p999": 22.4329648017885,
+        "wind_max": 32.032962799072266,
+    },
+    "franklin": {
+        "mslp_p1": 1000.1705812499999,
+        "mslp_p01": 985.811875,
+        "mslp_min": 957.39375,
+        "wind_p99": 18.191709977264132,
+        "wind_p999": 25.2288104076867,
+        "wind_max": 36.36738498393529,
+    },
+}
 
 
 def _mslp_depth(value: float) -> float:
@@ -433,24 +465,39 @@ def _multi_depth_enfo_deviation(
     return sum(devs) / len(devs)
 
 
-def _normalize_tc_rows(rows: list[dict[str, Any]]) -> None:
+def _normalize_tc_rows(rows: list[dict[str, Any]], *, event_name: str | None = None) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
+
+    When *event_name* is provided and a canonical OPER_O320 analysis row exists
+    for that event, uses the canonical analysis instead of the file-embedded one.
+    Scores are then rescaled so EEFO_O96 maps to 0 and analysis maps to 1.
 
     Falls back to legacy batch-relative normalization when analysis row or
     tail percentiles are not available.
     """
-    analysis_row = _find_row_by_predicate(rows, _is_analysis_row)
+    canonical = CANONICAL_OPER_O320_ANALYSIS.get(event_name) if event_name else None
+    analysis_row = canonical if canonical is not None else _find_row_by_predicate(rows, _is_analysis_row)
     enfo_row = _find_row_by_predicate(rows, _is_reference_row)
 
     # If analysis row exists and has tail percentiles, use analysis-anchored scoring
     if analysis_row is not None and finite_float(analysis_row.get("mslp_p1")) is not None:
+        # Compute eefo floor for rescaling
+        eefo_row = _find_row_by_predicate(rows, _is_eefo_row)
+        eefo_raw = None
+        if eefo_row is not None:
+            eefo_raw = _multi_depth_tc_score(eefo_row, analysis_row)
+
         for row in rows:
-            if _is_analysis_row(str(row.get("exp", "")).strip()):
+            exp = str(row.get("exp", "")).strip()
+            if _is_analysis_row(exp):
                 row["_extreme_score_value"] = 1.0  # analysis is perfect by definition
                 row["_enfo_deviation_value"] = None
                 continue
-            score = _multi_depth_tc_score(row, analysis_row)
-            row["_extreme_score_value"] = score
+            raw_score = _multi_depth_tc_score(row, analysis_row)
+            if raw_score is not None and eefo_raw is not None and eefo_raw < 1.0:
+                row["_extreme_score_value"] = max(0.0, (raw_score - eefo_raw) / (1.0 - eefo_raw))
+            else:
+                row["_extreme_score_value"] = raw_score
             if enfo_row is not None:
                 row["_enfo_deviation_value"] = _multi_depth_enfo_deviation(row, enfo_row, analysis_row)
             else:
@@ -491,6 +538,10 @@ def _tc_candidates(run_id: str) -> list[str]:
     if token:
         candidates.extend({token, token[:8], token[:7]})
     return [candidate for candidate in candidates if candidate]
+
+
+def _is_eefo_row(exp: str) -> bool:
+    return exp.upper().startswith("EEFO")
 
 
 def _is_reference_row(exp: str) -> bool:
@@ -544,7 +595,7 @@ def load_tc_extreme_scores_from_json(
         if not isinstance(rows, list):
             continue
         norm_rows = [row for row in rows if isinstance(row, dict)]
-        _normalize_tc_rows(norm_rows)
+        _normalize_tc_rows(norm_rows, event_name=event_name)
         chosen = _choose_tc_row(norm_rows, run_id)
         if chosen is None:
             continue

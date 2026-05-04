@@ -14,7 +14,7 @@
 #SBATCH --hint=nomultithread
 #SBATCH --time=12:00:00
 #SBATCH --mem=128G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -25,8 +25,8 @@ STACK_FLAVOR="new"         # new | old
 SOURCE_HPC="ag"            # ac | ag | leonardo | jupiter
 CHECKPOINT_SHORT="REPLACE_CHECKPOINT_SHORT"
 SOURCE_GRIB_ROOT="/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
-RUN_ROOT="/home/ecm5702/perm/eval/manual_example"
-BUNDLE_DIR="/home/ecm5702/perm/eval/manual_example/bundles_with_y"
+RUN_ROOT="/home/ecm5702/scratch/eval/manual_example"
+BUNDLE_DIR="/home/ecm5702/scratch/eval/manual_example/bundles_with_y"
 DATES="20230826,20230827,20230828,20230829,20230830"
 STEPS="24,48,72,96,120"
 BUNDLE_PAIRS=""

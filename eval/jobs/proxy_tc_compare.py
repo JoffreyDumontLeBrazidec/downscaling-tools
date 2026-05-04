@@ -8,7 +8,7 @@ screening.
 
 Usage:
     python -m eval.jobs.proxy_tc_compare \
-        --proxy-predictions-dir /home/ecm5702/perm/eval/<proxy_run>/predictions \
+        --proxy-predictions-dir /home/ecm5702/scratch/eval/<proxy_run>/predictions \
         --anchor-json /home/ecm5702/scratch/per_bundle_tc_extremes_56b6c4e2_anchor.json \
         --out-json /home/ecm5702/scratch/proxy_compare_<run_id>.json
 

@@ -1,20 +1,20 @@
 #!/bin/bash --login
 # Canonical MLflow training-loss plotting template.
-# Generates per-variable loss panels and overview plots from local MLflow logs.
+# Generates exact-run loss curves, overview plots, and per-variable panels from local MLflow logs.
 # If no matching run is found, it writes a status JSON instead of failing hard.
 #SBATCH --job-name=mlflow_loss_plots
 #SBATCH --qos=nf
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 MLFLOW_EXPERIMENT_DIR="/home/ecm5702/scratch/aifs/logs/mlflow/909682684414341917"
 MIN_STEPS=0
@@ -132,8 +132,17 @@ echo "[INFO] python=$(which python) ($("${PYTHON}" -V 2>&1))"
   "${SELECTED_NAME_FILTER}" \
   "${RUN_ROOT}"
 
+"${PYTHON}" "${PROJECT_ROOT}/mlflow/plot_loss.py" \
+  "${MLFLOW_EXPERIMENT_DIR}" \
+  "${SELECTED_NAME_FILTER}" \
+  "${RUN_ROOT}/loss_curves.png"
+
 [[ -f "${RUN_ROOT}/key_vars.png" ]] || die "Expected MLflow plot missing: ${RUN_ROOT}/key_vars.png"
 [[ -f "${RUN_ROOT}/overview.png" ]] || die "Expected MLflow plot missing: ${RUN_ROOT}/overview.png"
+[[ -f "${RUN_ROOT}/all_vars.png" ]] || die "Expected MLflow plot missing: ${RUN_ROOT}/all_vars.png"
+[[ -f "${RUN_ROOT}/loss_curves.png" ]] || die "Expected MLflow plot missing: ${RUN_ROOT}/loss_curves.png"
 
 echo "DONE: ${RUN_ROOT}/key_vars.png"
 echo "DONE: ${RUN_ROOT}/overview.png"
+echo "DONE: ${RUN_ROOT}/all_vars.png"
+echo "DONE: ${RUN_ROOT}/loss_curves.png"

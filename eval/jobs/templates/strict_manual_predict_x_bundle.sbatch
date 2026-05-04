@@ -16,7 +16,8 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --hint=nomultithread
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --mem=0
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -45,7 +46,7 @@ STEPS="24,48,72,96,120"
 BUNDLE_PAIRS=""
 MEMBERS="1,2,3,4,5,6,7,8,9,10"
 
-OUTPUT_ROOT="/home/ecm5702/perm/eval"
+OUTPUT_ROOT="/home/ecm5702/scratch/eval"
 RUN_DATE_UTC="$(date -u +%Y%m%d)"
 RUN_SUFFIX=""              # optional, safe chars only
 RUN_ID_OVERRIDE=""         # optional full run-id override
@@ -58,7 +59,7 @@ OUTPUT_WEATHER_STATE_MODE="surface-plus-core-pl"
 OUTPUT_WEATHER_STATES=""
 SLIM_OUTPUT=1
 # Keep the whole JSON blob shell-quoted as one string; outer single quotes are safest.
-EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":100000.0,"sigma_transition":100.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":100000.0,"S_noise":1.05}'
+EXTRA_ARGS_JSON='{"schedule_type":"experimental_piecewise","num_steps":30,"sigma_max":1000.0,"sigma_transition":10.0,"sigma_min":0.03,"high_schedule_type":"exponential","low_schedule_type":"karras","num_steps_high":10,"num_steps_low":20,"rho":7.0,"sampler":"heun","S_churn":2.5,"S_min":0.75,"S_max":1000.0,"S_noise":1.05}'
 
 # MLflow experiment directory for enriching EXPERIMENT_CONFIG with training params
 MLFLOW_EXPERIMENT_DIR=""

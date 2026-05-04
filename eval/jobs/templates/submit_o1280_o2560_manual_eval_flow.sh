@@ -11,26 +11,32 @@ set -euo pipefail
 ###############################################################################
 CHECKPOINT_PATH="${CHECKPOINT_PATH:-REPLACE_CHECKPOINT_PATH}"
 SOURCE_HPC="${SOURCE_HPC:-ag}"                        # ac | ag | leonardo | jupiter
-SOURCE_INPUT_ROOT="${SOURCE_INPUT_ROOT:-/home/ecm5702/hpcperm/data/input_data/destine_o1280_inputs_2024_latest_available}"
-SOURCE_FORCING_ROOT="${SOURCE_FORCING_ROOT:-/home/ecm5702/hpcperm/data/input_data/destine_o2560_forcings_2024_latest_available}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/perm/eval}"
+SOURCE_INPUT_ROOT="${SOURCE_INPUT_ROOT:-/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/docs/epics/o1280_o2560/in-progress/humberto_launch_20260422/compat_o1280_inputs}"
+SOURCE_FORCING_ROOT="${SOURCE_FORCING_ROOT:-/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/docs/epics/o1280_o2560/in-progress/humberto_launch_20260422/compat_o2560_forcings}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/home/ecm5702/scratch/eval}"
 PHASE="${PHASE:-proof}"                              # proof | full-only
 
 RUN_DATE_UTC="${RUN_DATE_UTC:-$(date -u +%Y%m%d)}"
 RUN_SUFFIX="${RUN_SUFFIX:-manual_eval}"
 RUN_ID_OVERRIDE="${RUN_ID_OVERRIDE:-}"
 
-PROOF_BUNDLE_PAIRS="${PROOF_BUNDLE_PAIRS:-20241108:120}"
-FULL_BUNDLE_PAIRS="${FULL_BUNDLE_PAIRS:-20241108:120,20241109:120,20241110:120,20241111:120,20241112:120}"
+PROOF_BUNDLE_PAIRS="${PROOF_BUNDLE_PAIRS:-20250926:120}"
+FULL_BUNDLE_PAIRS="${FULL_BUNDLE_PAIRS:-20250926:24,20250926:48,20250926:72,20250926:96,20250926:120,20250927:24,20250927:48,20250927:72,20250927:96,20250927:120,20250928:24,20250928:48,20250928:72,20250928:96,20250928:120,20250929:24,20250929:48,20250929:72,20250929:96,20250929:120,20250930:24,20250930:48,20250930:72,20250930:96,20250930:120}"
 BUNDLE_PAIRS="${BUNDLE_PAIRS:-}"                     # optional exact date:step override
 MEMBERS="${MEMBERS:-1}"
 
 RUN_LOCAL_PLOTS="${RUN_LOCAL_PLOTS:-1}"
 LOCAL_PLOT_DATE="${LOCAL_PLOT_DATE:-}"
 LOCAL_PLOT_EXPECTED_COUNT="${LOCAL_PLOT_EXPECTED_COUNT:-auto}"
-LOCAL_PLOT_OUT_SUBDIR="${LOCAL_PLOT_OUT_SUBDIR:-local_plots_one_date}"
+LOCAL_PLOT_OUT_SUBDIR="${LOCAL_PLOT_OUT_SUBDIR:-destine_showcase_plots}"
+
+# O2560 DestinE showcase regions (uniform 3°×4° crops for 4.4 km vs 9 km).
+# Space-separated list of region names from O2560_SHOWCASE_REGIONS in plot_regions.py.
+# Blank means render all showcase regions defined for the detected grid.
+LOCAL_PLOT_REGIONS="${LOCAL_PLOT_REGIONS:-humberto_core java_bali_strait gbr_reef_tight amazon_manaus congo_river_delta rift_valley_tight alps_innsbruck tokyo_bay florida_keys crete_south}"
 
 RUN_SPECTRA="${RUN_SPECTRA:-1}"
+RUN_SURFACE_LOSS="${RUN_SURFACE_LOSS:-1}"
 SPECTRA_METHOD="${SPECTRA_METHOD:-proxy}"            # auto | proxy | ecmwf
 ALLOW_DEBUG_FALLBACK="${ALLOW_DEBUG_FALLBACK:-0}"
 
@@ -43,6 +49,21 @@ PROFILE_PYTHON="${PROFILE_PYTHON:-}"
 PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-}"
 PREFLIGHT_JSON_PATH="${PREFLIGHT_JSON_PATH:-}"
 O2560_PLOT_MEM="${O2560_PLOT_MEM:-256G}"
+
+RUN_TC_PDF="${RUN_TC_PDF:-1}"
+TC_EVENTS="${TC_EVENTS:-humberto}"
+TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"
+TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O1280_0001}"
+TC_IEKM_TARGET_GRIB_PATH="${TC_IEKM_TARGET_GRIB_PATH:-/home/ecm5702/hpcperm/data/input_data/destine_iekm_o2560_targets_humberto_20250926_20250930/iekm_o2560_iekm_date*_time0000_step24to120_sfc_y.grib}"
+TC_IEKM_LABEL="${TC_IEKM_LABEL:-IEKM_O2560_TARGET}"
+TC_PLOT_TITLE="${TC_PLOT_TITLE:-TC Humberto 2025-09 | o1280→o2560 | norm. PDFs (MSLP & 10m Wind)}"
+O2560_TC_MEM="${O2560_TC_MEM:-128G}"
+
+RUN_TC_MEMBER_MAPS="${RUN_TC_MEMBER_MAPS:-1}"
+TC_MEMBER_MAPS_OUT_DIR="${TC_MEMBER_MAPS_OUT_DIR:-tc_member_maps}"
+TC_MEMBER_MAPS_MEMBERS="${TC_MEMBER_MAPS_MEMBERS:-0,1,2,3,4}"
+TC_MEMBER_MAPS_DATE="${TC_MEMBER_MAPS_DATE:-20250928}"
+TC_MEMBER_MAPS_STEPS="${TC_MEMBER_MAPS_STEPS:-24}"
 ###############################################################################
 
 PROJECT_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
@@ -154,10 +175,15 @@ require_choice "${PHASE}" proof full-only
 require_choice "${SPECTRA_METHOD}" auto proxy ecmwf
 require_bool "${RUN_LOCAL_PLOTS}"
 require_bool "${RUN_SPECTRA}"
+require_bool "${RUN_SURFACE_LOSS}"
 require_bool "${ALLOW_DEBUG_FALLBACK}"
 require_bool "${HOLD}"
 require_bool "${NO_SUBMIT}"
 require_bool "${ALLOW_OVERWRITE}"
+require_bool "${RUN_TC_PDF}"
+require_bool "${RUN_TC_MEMBER_MAPS}"
+require_choice "${TC_SUPPORT_MODE}" auto native regridded
+[[ "${O2560_TC_MEM}" =~ ^[0-9]+[KMGTP]$ ]] || die "O2560_TC_MEM must look like 256G"
 [[ "${CHECKPOINT_PATH}" != REPLACE_* ]] || die "Set CHECKPOINT_PATH."
 [[ -d "${SOURCE_INPUT_ROOT}" ]] || die "SOURCE_INPUT_ROOT does not exist: ${SOURCE_INPUT_ROOT}"
 [[ -d "${SOURCE_FORCING_ROOT}" ]] || die "SOURCE_FORCING_ROOT does not exist: ${SOURCE_FORCING_ROOT}"
@@ -174,6 +200,19 @@ case "${HOST_SHORT}" in
   ag*) HOST_FAMILY="ag"; EXPECTED_PYTHON="/home/ecm5702/dev/.ds-ag/bin/python" ;;
   *) die "Unsupported login node family (${HOST_SHORT}). Run from ac-* or ag-*." ;;
 esac
+
+if [[ "${TC_SUPPORT_MODE}" == "auto" ]]; then
+  if [[ "${HOST_FAMILY}" == "ac" ]]; then
+    RESOLVED_TC_SUPPORT_MODE="regridded"
+  else
+    RESOLVED_TC_SUPPORT_MODE="native"
+  fi
+else
+  RESOLVED_TC_SUPPORT_MODE="${TC_SUPPORT_MODE}"
+fi
+if [[ "${RESOLVED_TC_SUPPORT_MODE}" == "regridded" && "${HOST_FAMILY}" != "ac" ]]; then
+  die "TC_SUPPORT_MODE=regridded requires an ac login node."
+fi
 
 PROFILE_PYTHON="${PROFILE_PYTHON:-${EXPECTED_PYTHON}}"
 PREFLIGHT_PYTHON="${PREFLIGHT_PYTHON:-${EXPECTED_PYTHON}}"
@@ -359,13 +398,26 @@ NUM_GPUS_PER_MODEL="${PREFLIGHT_FIELDS[7]}"
 SLIM_OUTPUT="${PREFLIGHT_FIELDS[8]}"
 RESOLVED_SPECTRA_METHOD="$([[ "${SPECTRA_METHOD}" == "auto" ]] && printf 'proxy' || printf '%s' "${SPECTRA_METHOD}")"
 
+TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
+TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
+
+[[ "${RUN_TC_PDF}" -eq 0 ]] || [[ -f "${TC_TEMPLATE}" ]] || die "Missing: ${TC_TEMPLATE}"
+[[ "${RUN_TC_MEMBER_MAPS}" -eq 0 ]] || [[ -f "${TC_MEMBER_MAPS_TEMPLATE}" ]] || die "Missing: ${TC_MEMBER_MAPS_TEMPLATE}"
+
 BUILD_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_build_truth_bundles.sbatch"
 PREDICT_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_predict.sbatch"
 DEBUG_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_debug_dataloader.sbatch"
 LOCAL_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_local_plots.sbatch"
 SPECTRA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_spectra.sbatch"
+SURFACE_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_surface_loss.sbatch"
+TC_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_eval.sbatch"
+TC_MEMBER_MAPS_SCRIPT=""
+[[ "${RUN_TC_MEMBER_MAPS}" -eq 1 ]] && TC_MEMBER_MAPS_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_member_maps.sbatch"
 
-for path in "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${DEBUG_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}"; do
+OVERWRITE_CHECK_LIST=("${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${DEBUG_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${SURFACE_SCRIPT}")
+[[ "${RUN_TC_PDF}" -eq 1 ]] && OVERWRITE_CHECK_LIST+=("${TC_SCRIPT}")
+[[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]] && OVERWRITE_CHECK_LIST+=("${TC_MEMBER_MAPS_SCRIPT}")
+for path in "${OVERWRITE_CHECK_LIST[@]}"; do
   if [[ -e "${path}" && "${ALLOW_OVERWRITE}" -ne 1 ]]; then
     die "Rendered script already exists: ${path}. Set ALLOW_OVERWRITE=1 to replace it."
   fi
@@ -418,7 +470,8 @@ if [[ "${STRICT_BUNDLE_READY}" == "1" ]]; then
   set_sbatch_directive "${PREDICT_SCRIPT}" ntasks-per-node "${NUM_GPUS_PER_MODEL}"
   set_sbatch_directive "${PREDICT_SCRIPT}" cpus-per-task "8"
   set_sbatch_directive "${PREDICT_SCRIPT}" gpus-per-node "${NUM_GPUS_PER_MODEL}"
-  set_sbatch_directive "${PREDICT_SCRIPT}" time "24:00:00"
+  set_sbatch_directive "${PREDICT_SCRIPT}" time "48:00:00"
+  set_sbatch_directive "${PREDICT_SCRIPT}" mem "0"
 
   if [[ "${RUN_LOCAL_PLOTS}" -eq 1 ]]; then
     cp "${TEMPLATE_DIR}/local_plots_one_date_from_predictions.sbatch" "${LOCAL_SCRIPT}"
@@ -428,6 +481,10 @@ if [[ "${STRICT_BUNDLE_READY}" == "1" ]]; then
     set_var "${LOCAL_SCRIPT}" OUT_SUBDIR "${LOCAL_PLOT_OUT_SUBDIR}"
     set_var "${LOCAL_SCRIPT}" EXPECTED_COUNT "${RESOLVED_LOCAL_PLOT_EXPECTED_COUNT}"
     set_var "${LOCAL_SCRIPT}" WEATHER_STATES "${PLOT_WEATHER_STATES}"
+    # Canonical o1280→o2560 local-plot workflow: suite mode renders all
+    # O2560 showcase regions sequentially from the first step file.
+    set_var "${LOCAL_SCRIPT}" RENDER_MODE "suite"
+    set_var "${LOCAL_SCRIPT}" REGION_LIST "${LOCAL_PLOT_REGIONS}"
     set_sbatch_directive "${LOCAL_SCRIPT}" job-name "o2560_local_${CHECKPOINT_SHORT}"
     set_sbatch_directive "${LOCAL_SCRIPT}" mem "${O2560_PLOT_MEM}"
     if [[ "${HOST_FAMILY}" == "ac" ]]; then
@@ -475,6 +532,66 @@ if [[ "${STRICT_BUNDLE_READY}" == "1" ]]; then
       set_sbatch_directive "${SPECTRA_SCRIPT}" job-name "o2560_spectra_${CHECKPOINT_SHORT}"
     fi
   fi
+
+  if [[ "${RUN_SURFACE_LOSS}" -eq 1 ]]; then
+    cp "${TEMPLATE_DIR}/surface_loss_from_predictions.sbatch" "${SURFACE_SCRIPT}"
+    set_var "${SURFACE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+    set_var "${SURFACE_SCRIPT}" RUN_ID "${RUN_ID}"
+    set_var "${SURFACE_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+    set_var "${SURFACE_SCRIPT}" OUT_JSON "${RUN_ROOT}/surface_loss_summary.json"
+    set_sbatch_directive "${SURFACE_SCRIPT}" job-name "o2560_surface_${CHECKPOINT_SHORT}"
+    if [[ "${HOST_FAMILY}" == "ac" ]]; then
+      set_sbatch_directive "${SURFACE_SCRIPT}" qos "nf"
+      drop_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node
+    else
+      set_sbatch_directive "${SURFACE_SCRIPT}" qos "ng"
+      set_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node "0"
+    fi
+  fi
+
+  if [[ "${RUN_TC_PDF}" -eq 1 ]]; then
+    cp "${TC_TEMPLATE}" "${TC_SCRIPT}"
+    set_var "${TC_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+    set_var "${TC_SCRIPT}" RUN_ID "${RUN_ID}"
+    set_var "${TC_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+    set_var "${TC_SCRIPT}" EVENTS "${TC_EVENTS}"
+    set_var "${TC_SCRIPT}" SUPPORT_MODE "${RESOLVED_TC_SUPPORT_MODE}"
+    set_var "${TC_SCRIPT}" EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+    set_var "${TC_SCRIPT}" PLOT_TITLE "${TC_PLOT_TITLE}"
+    set_var "${TC_SCRIPT}" IEKM_TARGET_GRIB_PATH "${TC_IEKM_TARGET_GRIB_PATH}"
+    set_var "${TC_SCRIPT}" IEKM_LABEL "${TC_IEKM_LABEL}"
+    set_sbatch_directive "${TC_SCRIPT}" job-name "o2560_tc_${CHECKPOINT_SHORT}"
+    set_sbatch_directive "${TC_SCRIPT}" mem "${O2560_TC_MEM}"
+    if [[ "${HOST_FAMILY}" == "ac" ]]; then
+      set_sbatch_directive "${TC_SCRIPT}" qos "nf"
+      drop_sbatch_directive "${TC_SCRIPT}" gpus-per-node
+    else
+      set_sbatch_directive "${TC_SCRIPT}" qos "ng"
+      set_sbatch_directive "${TC_SCRIPT}" gpus-per-node "0"
+    fi
+  fi
+
+  if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
+    cp "${TC_MEMBER_MAPS_TEMPLATE}" "${TC_MEMBER_MAPS_SCRIPT}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_ID "${RUN_ID}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" OUT_DIR "${RUN_ROOT}/${TC_MEMBER_MAPS_OUT_DIR}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" EVENTS "${TC_EVENTS}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" DATE "${TC_MEMBER_MAPS_DATE}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" STEPS "${TC_MEMBER_MAPS_STEPS}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" MEMBERS "${TC_MEMBER_MAPS_MEMBERS}"
+    set_var "${TC_MEMBER_MAPS_SCRIPT}" RUN_LABEL "${CHECKPOINT_SHORT}"
+    set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" job-name "o2560_tcmbr_${CHECKPOINT_SHORT}"
+    set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" mem "${O2560_TC_MEM}"
+    if [[ "${HOST_FAMILY}" == "ac" ]]; then
+      set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" qos "nf"
+      drop_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node
+    else
+      set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" qos "ng"
+      set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node "0"
+    fi
+  fi
 else
   [[ "${ALLOW_DEBUG_FALLBACK}" -eq 1 && "${PHASE}" == "proof" && "${PROOF_ONLY_READY}" == "1" ]] || die "Strict bundle route is not ready. Blockers: ${BLOCKER_SUMMARY}"
   cp "${TEMPLATE_DIR}/debug_from_dataloader_with_plots.sbatch" "${DEBUG_SCRIPT}"
@@ -496,7 +613,7 @@ else
   set_sbatch_directive "${DEBUG_SCRIPT}" gpus-per-node "${NUM_GPUS_PER_MODEL}"
 fi
 
-if [[ "${NO_SUBMIT}" -eq 0 ]]; then
+  if [[ "${NO_SUBMIT}" -eq 0 ]]; then
   SBATCH_ARGS=()
   [[ "${HOLD}" -eq 1 ]] && SBATCH_ARGS+=(--hold)
   if [[ "${STRICT_BUNDLE_READY}" == "1" ]]; then
@@ -506,6 +623,13 @@ if [[ "${NO_SUBMIT}" -eq 0 ]]; then
     PREDICT_JOB="$(extract_job_id "${predict_submit}")"
     [[ "${RUN_LOCAL_PLOTS}" -eq 1 ]] && LOCAL_JOB="$(extract_job_id "$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${PREDICT_JOB} "${LOCAL_SCRIPT}")")" || LOCAL_JOB=""
     [[ "${RUN_SPECTRA}" -eq 1 ]] && SPECTRA_JOB="$(extract_job_id "$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${PREDICT_JOB} "${SPECTRA_SCRIPT}")")" || SPECTRA_JOB=""
+    [[ "${RUN_SURFACE_LOSS}" -eq 1 ]] && SURFACE_JOB="$(extract_job_id "$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${PREDICT_JOB} "${SURFACE_SCRIPT}")")" || SURFACE_JOB=""
+
+    TC_JOB=""
+    [[ "${RUN_TC_PDF}" -eq 1 ]] && TC_JOB="$(extract_job_id "$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${PREDICT_JOB} "${TC_SCRIPT}")")"
+
+    TC_MEMBER_MAPS_JOB=""
+    [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]] && TC_MEMBER_MAPS_JOB="$(extract_job_id "$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${PREDICT_JOB} "${TC_MEMBER_MAPS_SCRIPT}")")"
 
     # --- Finalize: lean eval layout reorganization ---
     FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
@@ -516,10 +640,20 @@ if [[ "${NO_SUBMIT}" -eq 0 ]]; then
         cp "${FINALIZE_TEMPLATE}" "${FINALIZE_SCRIPT}"
         set_var "${FINALIZE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
         set_var "${FINALIZE_SCRIPT}" RUN_ID "${RUN_ID}"
+        if [[ "${HOST_FAMILY}" == "ac" ]]; then
+          set_sbatch_directive "${FINALIZE_SCRIPT}" qos "nf"
+          drop_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node
+        else
+          set_sbatch_directive "${FINALIZE_SCRIPT}" qos "ng"
+          set_sbatch_directive "${FINALIZE_SCRIPT}" gpus-per-node "0"
+        fi
       fi
       finalize_deps="${PREDICT_JOB}"
       [[ -n "${LOCAL_JOB}" ]] && finalize_deps+=":${LOCAL_JOB}"
       [[ -n "${SPECTRA_JOB}" ]] && finalize_deps+=":${SPECTRA_JOB}"
+      [[ -n "${SURFACE_JOB}" ]] && finalize_deps+=":${SURFACE_JOB}"
+      [[ -n "${TC_JOB}" ]] && finalize_deps+=":${TC_JOB}"
+      [[ -n "${TC_MEMBER_MAPS_JOB}" ]] && finalize_deps+=":${TC_MEMBER_MAPS_JOB}"
       finalize_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${finalize_deps} "${FINALIZE_SCRIPT}")"
       finalize_job="$(extract_job_id "${finalize_submit}")"
       echo "[o2560-flow] ${finalize_submit}"
@@ -541,5 +675,12 @@ echo "[o2560-flow] bundle_pairs=${NORMALIZED_BUNDLE_PAIRS}"
 echo "[o2560-flow] members=${EFFECTIVE_MEMBERS}"
 echo "[o2560-flow] output_weather_states=${OUTPUT_WEATHER_STATES}"
 echo "[o2560-flow] spectra_method=${RESOLVED_SPECTRA_METHOD}"
+echo "[o2560-flow] surface_loss=${RUN_SURFACE_LOSS}"
+echo "[o2560-flow] run_tc_pdf=${RUN_TC_PDF}"
+echo "[o2560-flow] tc_events=${TC_EVENTS}"
+echo "[o2560-flow] tc_support_mode=${RESOLVED_TC_SUPPORT_MODE}"
+echo "[o2560-flow] run_tc_member_maps=${RUN_TC_MEMBER_MAPS}"
+echo "[o2560-flow] tc_job=${TC_JOB:-skipped}"
+echo "[o2560-flow] tc_member_maps_job=${TC_MEMBER_MAPS_JOB:-skipped}"
 echo "[o2560-flow] finalize_lean=${finalize_job:-skipped}"
 echo "[o2560-flow] rendered_submit_dir=${SUBMIT_DIR}"

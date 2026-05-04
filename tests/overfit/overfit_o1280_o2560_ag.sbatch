@@ -1,4 +1,4 @@
-#!/bin/bash --login
+#!/bin/bash
 #SBATCH --job-name=overfit_o1280_ag
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
@@ -11,6 +11,10 @@
 #SBATCH --mem=256G
 #SBATCH --output=/home/ecm5702/dev/jobscripts/outputs/overfit/%x_%j.out
 #SBATCH --error=/home/ecm5702/dev/jobscripts/outputs/overfit/%x_%j.err
+
+# Diagnostics before strict mode (captures startup failures)
+echo "DIAG: hostname=$(hostname -s) date=$(date -u +%FT%T) pid=$$" >&2
+echo "DIAG: SLURM_JOB_ID=${SLURM_JOB_ID:-unset}" >&2
 
 set -euxo pipefail
 

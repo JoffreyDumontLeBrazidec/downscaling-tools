@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Tune fast spectra proxy coefficients for high-k fidelity.")
     p.add_argument(
         "--base-coefficients-json",
-        default="/home/ecm5702/perm/eval/spectra_proxy_calibration/20260303_fast_proxy_bestof_v2_v3/fast_spectra_proxy_coefficients.json",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_calibration/20260303_fast_proxy_bestof_v2_v3/fast_spectra_proxy_coefficients.json",
     )
     p.add_argument("--target-groups", default="t_850,z_500", help="Comma-separated param_level groups.")
     p.add_argument("--focus-ell-min", type=int, default=80)
@@ -89,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--models", default="poly2,linear")
     p.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/spectra_proxy_calibration/20260304_fast_proxy_highk_tz",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_calibration/20260304_fast_proxy_highk_tz",
     )
     return p.parse_args()
 

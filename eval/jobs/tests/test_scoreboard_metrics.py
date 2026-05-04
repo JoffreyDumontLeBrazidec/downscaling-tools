@@ -435,6 +435,14 @@ def test_infer_eval_sampler_min_from_run_root_falls_back_to_logs(tmp_path):
     assert metrics.infer_eval_sampler_min_from_run_root(run_root) == "karras40"
 
 
+def test_infer_eval_sampler_min_from_run_root_falls_back_to_run_id(tmp_path):
+    run_root = tmp_path / "manual_83edcda0_multi_o96_o320_20260331_heun40_sigmax1000"
+    run_root.mkdir()
+    # No EXPERIMENT_CONFIG.yaml and no logs with schedule info
+
+    assert metrics.infer_eval_sampler_min_from_run_root(run_root) == "heun40"
+
+
 def test_generate_scoreboard_markdown_includes_inference_column():
     rows = scoreboard.build_scoreboard_rows(
         sigma_data={"39991df81216460fb7f3bd048df733c3": {"sigma_1": 0.1}},

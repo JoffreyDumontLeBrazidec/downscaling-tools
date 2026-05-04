@@ -39,6 +39,7 @@ REFERENCE_STYLES = {
     "EEFO_O96_0001": {"label": "eefo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
     "ENFO_O96_0001": {"label": "enfo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
     "ENFO_O320_ip6y": {"label": "ip6y", "color": "orange", "linestyle": ":", "linewidth": 2},
+    "IEKM_O96_TARGET": {"label": "iekm-o96", "color": "steelblue", "linestyle": "--", "linewidth": 2},
 }
 
 IDALIA_EXTREME_MSLP_RANGE = (980.0, 990.0)
@@ -420,33 +421,35 @@ def plot_event_curves(
         }
         extreme_series[curve_key] = (vals_msl, vals_wind)
 
-    axs[0].plot(
-        mids_msl,
-        np.ones_like(mids_msl),
-        "--",
-        linewidth=2,
-        color="green",
-        label="OPER AN",
-    )
-    axs[0].set_ylim(*cfg.mslp_ylim)
-    axs[0].set_xlabel("Mean Sea Level Pressure (hPa)", fontsize=14)
-    axs[0].set_ylabel("Normalized Probability Density", fontsize=14)
-    axs[0].set_title("Normalized (by analysis) Distribution MSLP", fontsize=14)
-    axs[0].legend()
+    # Auto-crop x-axis to data range with small margin
+    all_msl = np.concatenate([oper_msl] + [_finite_1d(curves[k].msl) for k in curve_order])
+    all_wind = np.concatenate([oper_wind] + [_finite_1d(curves[k].wind) for k in curve_order])
+    if all_msl.size:
+        axs[0].set_xlim(max(xbins_msl[0], all_msl.min() - 5), min(xbins_msl[-1], all_msl.max() + 5))
+    if all_wind.size:
+        axs[1].set_xlim(0, min(xbins_wind[-1], all_wind.max() + 2))
 
-    axs[1].plot(
-        mids_wind,
-        np.ones_like(mids_wind),
-        "--",
-        linewidth=2,
-        color="green",
-        label="OPER AN",
-    )
-    axs[1].set_ylim(*cfg.wind_ylim)
-    axs[1].set_xlabel("10m wind speed (m/s)", fontsize=14)
-    axs[1].set_ylabel("Normalized Probability Density", fontsize=14)
-    axs[1].set_title("Normalized (by analysis) Distribution 10m Wind Speed", fontsize=14)
-    axs[1].legend()
+    for ax, mids, ylim, xlabel, title in [
+        (axs[0], mids_msl, cfg.mslp_ylim,
+         "Mean Sea Level Pressure (hPa)", "Normalized (by analysis) Distribution MSLP"),
+        (axs[1], mids_wind, cfg.wind_ylim,
+         "10m wind speed (m/s)", "Normalized (by analysis) Distribution 10m Wind Speed"),
+    ]:
+        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="green", label="OPER AN")
+        # Auto-switch to symlog if any plotted data exceeds the configured ylim
+        ydata_max = max(
+            (np.nanmax(line.get_ydata()) for line in ax.get_lines() if line.get_ydata().size),
+            default=0.0,
+        )
+        if np.isfinite(ydata_max) and ydata_max > ylim[1]:
+            ax.set_yscale("symlog", linthresh=ylim[1])
+            ax.set_ylim(0, None)
+        else:
+            ax.set_ylim(*ylim)
+        ax.set_xlabel(xlabel, fontsize=14)
+        ax.set_ylabel("Normalized Probability Density", fontsize=14)
+        ax.set_title(title, fontsize=14)
+        ax.legend()
 
     fig.suptitle(cfg.plot_title)
     fig.tight_layout()

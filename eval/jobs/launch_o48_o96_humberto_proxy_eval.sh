@@ -9,7 +9,7 @@ DEFAULT_TC_EVENTS="humberto"
 DEFAULT_SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
 
 # For strict rebuilt truth-aware bundles, pass:
-#   --input-root /home/ecm5702/perm/eval/<RUN_ID>/bundles_with_y
+#   --input-root /home/ecm5702/scratch/eval/<RUN_ID>/bundles_with_y
 # The wrapper keeps the historical Humberto source tree as the default input root
 # so existing prebuilt runs remain reproducible.
 

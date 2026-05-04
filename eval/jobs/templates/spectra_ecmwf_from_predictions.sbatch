@@ -29,14 +29,14 @@
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_DIR="${RUN_ROOT}/predictions"
 

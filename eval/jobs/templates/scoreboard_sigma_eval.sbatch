@@ -14,7 +14,7 @@
 #SBATCH --mem=64G
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ CHECKPOINT_REF=""                # checkpoint directory under CKPT_ROOT; blank =
 CKPT_NAME="REPLACE_CHECKPOINT_FILENAME.ckpt"   # use non-inference checkpoint (anemoi-*.ckpt)
 EXPECTED_STACK_FLAVOR="new"      # new | old
 CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
-OUT_CSV=""                       # blank => /home/ecm5702/perm/eval/scoreboards/sigma/<RUN_ID>_sigma_eval.csv
+OUT_CSV=""                       # blank => /home/ecm5702/scratch/eval/scoreboards/sigma/<RUN_ID>_sigma_eval.csv
 SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
@@ -100,7 +100,7 @@ REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 [[ -f "${CKPT_ROOT}/${CHECKPOINT_REF}/${CKPT_NAME}" ]] || die "Missing checkpoint: ${CKPT_ROOT}/${CHECKPOINT_REF}/${CKPT_NAME}"
 
 if [[ -z "${OUT_CSV}" ]]; then
-  OUT_CSV="/home/ecm5702/perm/eval/scoreboards/sigma/${RUN_ID}_sigma_eval.csv"
+  OUT_CSV="/home/ecm5702/scratch/eval/scoreboards/sigma/${RUN_ID}_sigma_eval.csv"
 fi
 mkdir -p "$(dirname "${OUT_CSV}")"
 
@@ -135,7 +135,6 @@ cd "${REPO_ROOT}"
 srun -u \
   --ntasks="${NUM_GPUS_PER_MODEL}" \
   --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
-  --gpus-per-task=1 \
   python -u -m eval.sigma_evaluator.run_sigma_evaluator \
     --name_exp "${CHECKPOINT_REF}" \
     --name_ckpt "${CKPT_NAME}" \

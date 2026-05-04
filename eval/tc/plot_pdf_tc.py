@@ -2,6 +2,7 @@ import logging
 import os
 import argparse
 import json
+import re
 
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
@@ -20,6 +21,62 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DIR_DATA_BASE = "/home/ecm5702/hpcperm/data/tc"
+MAX_DISPLAY_LABEL_CHARS = 24
+
+
+def cut_display_label(label: str | None, *, fallback: str) -> str:
+    if label and label.strip():
+        text = label.strip()
+    else:
+        tokens = [t for t in re.split(r"[_\s-]+", fallback) if t]
+        short_hash = ""
+        stack = ""
+        sampler = ""
+        extra = ""
+        for token in tokens:
+            low = token.lower()
+            if low == "manual":
+                continue
+            if not short_hash and re.fullmatch(r"[0-9a-f]{8,}", low):
+                short_hash = low[:4]
+                continue
+            if low in {"old", "new"}:
+                stack = low
+                continue
+            if not sampler and low.startswith("piecewise"):
+                sampler = "pw" + low.removeprefix("piecewise")
+                continue
+            if not sampler and re.fullmatch(r"pw\d+", low):
+                sampler = low
+                continue
+            if not sampler and low.startswith("karras") and low != "karras":
+                sampler = "k" + low.removeprefix("karras")
+                continue
+            if not sampler and low == "karras":
+                sampler = "k"
+                continue
+            if sampler == "k" and re.fullmatch(r"n\d+", low):
+                sampler = "k" + low[1:]
+                continue
+            if low.startswith("sigmax"):
+                extra = low.replace("sigmax100k", "s100k")
+                continue
+        parts = [p for p in [short_hash, stack, sampler, extra] if p]
+        text = " ".join(parts) if parts else fallback
+    text = text.replace("piecewise", "pw")
+    text = text.replace("karras", "k")
+    text = text.replace("sigmax100k", "s100k")
+    text = re.sub(r"\b20\d{6}\b", "", text)
+    text = re.sub(r"[_-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    parts = text.split()
+    if len(parts) > 4:
+        text = " ".join(parts[:4])
+    if len(text) > MAX_DISPLAY_LABEL_CHARS:
+        text = text[:MAX_DISPLAY_LABEL_CHARS].rstrip()
+    return text or fallback[:MAX_DISPLAY_LABEL_CHARS]
+
+
 def run_tc_pdf(
     *,
     expver: str,
@@ -27,9 +84,11 @@ def run_tc_pdf(
     out_name: str = "",
     exp_prefix: str = "ENFO_O320",
     support_mode: str = "regridded",
+    display_label: str = "",
 ) -> str:
     exp_key = f"{exp_prefix}_{expver}"
-    exp_labels = {exp_key: expver}
+    plot_label = cut_display_label(display_label, fallback=expver)
+    exp_labels = {exp_key: plot_label}
     # ip6y is always plotted as a fixed reference in tc_pdf_plot.py.
     # Avoid plotting it twice if user asks for expver=ip6y.
     list_ml_exps = [] if exp_key == "ENFO_O320_ip6y" else [exp_key]
@@ -49,6 +108,8 @@ def run_tc_pdf(
     all_stats: dict[str, object] = {
         "expver": expver,
         "exp_prefix": exp_prefix,
+        "display_label": plot_label,
+        "raw_display_label": display_label,
         "pdf_file": out_pdf,
         "support_mode": support_mode,
         "events": {},
@@ -86,6 +147,11 @@ def main() -> None:
     parser.add_argument("--outdir", default="/home/ecm5702/dev", help="Output directory for combined PDF.")
     parser.add_argument("--out-name", default="", help="Optional output PDF filename.")
     parser.add_argument(
+        "--display-label",
+        default="",
+        help="Short legend label. If omitted, a cut name is derived automatically from --expver.",
+    )
+    parser.add_argument(
         "--exp-prefix",
         default="ENFO_O320",
         help="Prefix for ML TC GRIB ids (e.g. ENFO_O320 or ENFO_O1280).",
@@ -103,6 +169,7 @@ def main() -> None:
         out_name=args.out_name,
         exp_prefix=args.exp_prefix,
         support_mode=args.support_mode,
+        display_label=args.display_label,
     )
 
 

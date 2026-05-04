@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_DIR="/home/ecm5702/perm/eval"
+BASE_DIR="${EVAL_ROOT:-/home/ecm5702/scratch/eval}"
 OUT_FILE="${BASE_DIR}/tc_extreme_scoreboard_all_exps.tsv"
 
 tmp="$(mktemp)"

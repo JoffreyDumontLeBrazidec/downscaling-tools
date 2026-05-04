@@ -51,6 +51,13 @@ O1280_INTERESTING_REGIONS: dict[str, list[float]] = {
     "new_zealand_north": [-38.5, -30.5, 168.5, 180.5],
     "hawaii_big_island": [15.5, 23.5, -161.5, -149.5],
     "japan_hokkaido": [37.5, 45.5, 134.5, 146.5],
+    # Complex non-orographic regions: tropical convection, land-sea contrast,
+    # rainforest heterogeneity — complement the orography-dominated set above.
+    "amazon_forest_west": [-10.0, 0.0, -75.0, -65.0],
+    "southeast_asia_maritime": [-5.0, 5.0, 115.0, 125.0],
+    "central_africa_congo": [-5.0, 5.0, 15.0, 25.0],
+    "greatbarrier_reef_central": [-20.0, -15.0, 145.0, 150.0],
+    "amazon_forest_east": [-10.0, 0.0, -55.0, -45.0],
 }
 
 # Tighter crops for o1280->o2560 residual-focused inspection. These aim to reduce
@@ -69,10 +76,27 @@ O1280_DETAIL_REGIONS: dict[str, list[float]] = {
     "hokkaido_core": [41.0, 44.5, 140.0, 145.5],
 }
 
+# O2560-scale showcase regions for o1280->o2560 DestinE evaluation.
+# Uniform 3° lat × 4° lon crops where O1280 input looks noticeably blurry
+# while O2560 4.4 km detail is visible. Mix of TC, convection, SST, terrain, coast.
+O2560_SHOWCASE_REGIONS: dict[str, list[float]] = {
+    "humberto_core": [22.0, 25.0, -60.0, -56.0],
+    "java_bali_strait": [-9.0, -6.0, 112.0, 116.0],
+    "gbr_reef_tight": [-18.0, -15.0, 146.0, 150.0],
+    "amazon_manaus": [-4.0, -1.0, -62.0, -58.0],
+    "congo_river_delta": [-7.0, -4.0, 11.0, 15.0],
+    "rift_valley_tight": [7.0, 10.0, 37.0, 41.0],
+    "alps_innsbruck": [46.0, 49.0, 10.0, 14.0],
+    "tokyo_bay": [34.0, 37.0, 138.5, 142.5],
+    "florida_keys": [24.0, 27.0, -83.0, -79.0],
+    "crete_south": [34.0, 37.0, 23.5, 27.5],
+}
+
 PREDICTION_REGION_BOXES: dict[str, list[float]] = {
     **O96_INTERESTING_REGIONS,
     **O1280_INTERESTING_REGIONS,
     **O1280_DETAIL_REGIONS,
+    **O2560_SHOWCASE_REGIONS,
     "amazon_forest": [-15.0, 5.0, -75.0, -45.0],
     "eastern_us": [25.0, 45.0, -90.0, -70.0],
     "himalayas": [25.0, 40.0, 75.0, 100.0],
@@ -213,6 +237,8 @@ def _region_boxes_for_names(region_names: list[str] | None, *, grid: str) -> dic
         return O1280_INTERESTING_REGIONS
     if grid == "O96":
         return O96_INTERESTING_REGIONS
+    if grid == "O2560":
+        return O2560_SHOWCASE_REGIONS
 
     return {"amazon_forest": [-15.0, 5.0, -75.0, -45.0]}
 

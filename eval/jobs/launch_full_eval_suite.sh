@@ -8,7 +8,7 @@ Usage:
 
 Options:
   --expver <id>               Required experiment version (e.g. j24v)
-  --eval-root <path>          Eval root (default: /home/ecm5702/perm/eval)
+  --eval-root <path>          Eval root (default: /home/ecm5702/scratch/eval)
   --eval-date <A/B>           MARS eval date range for predictions.nc (default: 20230801/20230802)
   --eval-number <list>        Members for eval.run mars-expver (default: 1/2)
   --eval-step <list>          Steps for eval.run mars-expver (default: 24/120)
@@ -27,7 +27,7 @@ EOF
 }
 
 EXPVER=""
-EVAL_ROOT="/home/ecm5702/perm/eval"
+EVAL_ROOT="/home/ecm5702/scratch/eval"
 EVAL_DATE="20230801/20230802"
 EVAL_NUMBER="1/2"
 EVAL_STEP="24/120"

@@ -64,9 +64,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--predictions-dir", required=True)
     p.add_argument("--out-dir", required=True)
     p.add_argument("--run-label", required=True)
-    p.add_argument("--weather-states", default="10u,10v,2t,msl,t_850,z_500")
+    p.add_argument("--weather-states", default="10u,10v,2t,msl,t_850,z_500,tp")
     p.add_argument("--nside", type=int, default=64)
     p.add_argument("--lmax", type=int, default=319)
+    p.add_argument(
+        "--prediction-var",
+        default="y_pred",
+        help="Dataset variable to compare against truth for full-field spectra (default: y_pred).",
+    )
     p.add_argument(
         "--checkpoint-path",
         default="",
@@ -234,6 +239,7 @@ def build_scope_curves(
     lmax: int,
     member_aggregation: str,
     checkpoint_path_override: str,
+    prediction_var: str = "y_pred",
 ) -> tuple[dict[str, dict[str, list[np.ndarray]]], dict[str, int], Path | None, list[str]]:
     scope_curves: dict[str, dict[str, list[np.ndarray]]] = {
         scope_name: {
@@ -257,11 +263,19 @@ def build_scope_curves(
                 raise RuntimeError(f"Predictions file missing low-resolution input x required for residual spectra: {file_path}")
             if "y" not in ds:
                 raise RuntimeError(f"Predictions file missing truth y required for spectra comparison: {file_path}")
+            if prediction_var not in ds:
+                raise RuntimeError(
+                    f"Predictions file missing variable {prediction_var!r} required for spectra comparison: {file_path}"
+                )
 
             weather_states = [str(value) for value in ds["weather_state"].values.tolist()]
             state_to_index = {state: idx for idx, state in enumerate(weather_states)}
             lat = ds["lat_hres"].values
             lon = ds["lon_hres"].values
+            if lat.ndim > 1:
+                lat = lat[0]
+            if lon.ndim > 1:
+                lon = lon[0]
 
             file_has_x_interp = "x_interp" in ds
             if file_has_x_interp:
@@ -291,7 +305,7 @@ def build_scope_curves(
 
             for member_idx in member_indices(ds):
                 x_member = select_member_array(ds["x"], member_idx)
-                pred_member = select_member_array(ds["y_pred"], member_idx)
+                pred_member = select_member_array(ds[prediction_var], member_idx)
                 truth_member = select_member_array(ds["y"], member_idx)
                 if file_has_x_interp:
                     interp_member = select_member_array(ds["x_interp"], member_idx)
@@ -433,6 +447,7 @@ def build_spectra_artifacts(
     show_individual_curves: bool,
     score_wavenumber_min_exclusive: float,
     checkpoint_path_override: str = "",
+    prediction_var: str = "y_pred",
 ) -> tuple[dict[str, object], dict[str, object]]:
     files = valid_prediction_files(pred_dir)
     cl_from_unstructured, spectra_method_used = resolve_spectra_method(spectra_method)
@@ -445,11 +460,13 @@ def build_spectra_artifacts(
         lmax=lmax,
         member_aggregation=member_aggregation,
         checkpoint_path_override=checkpoint_path_override,
+        prediction_var=prediction_var,
     )
 
     summary: dict[str, object] = {
         "run_label": run_label,
         "predictions_dir": str(pred_dir),
+        "prediction_var": prediction_var,
         "num_files": len(files),
         "nside": nside,
         "lmax": lmax,
@@ -628,6 +645,7 @@ def main() -> None:
         show_individual_curves=args.show_individual_curves,
         score_wavenumber_min_exclusive=args.score_wavenumber_min_exclusive,
         checkpoint_path_override=args.checkpoint_path,
+        prediction_var=args.prediction_var,
     )
 
     out_json = out_dir / "spectra_summary.json"

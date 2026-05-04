@@ -32,6 +32,9 @@ class TCEvent:
     wind_ylim: Tuple[float, float] = (0, 2)
     plot_title: str = ""
     reference_expids: Tuple[str, ...] = ()
+    iekm_target_grib_path: str | None = None
+    member_map_msl_range: Tuple[float, float] | None = None
+    member_map_wind_range: Tuple[float, float] | None = None
 
 
 EVENTS: Dict[str, TCEvent] = {
@@ -45,12 +48,12 @@ EVENTS: Dict[str, TCEvent] = {
         list_expid_ml=[],
         expid_enfo_o320="ENFO_O320_0001",
         expid_eefo_o96="EEFO_O96_0001",
-        area_north=40.0,
-        area_west=-80.0,
-        area_south=10.0,
-        area_east=-50.0,
+        area_north=38.0,
+        area_west=-78.0,
+        area_south=15.0,
+        area_east=-58.0,
         plot_title="Franklin normed pdfs",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+        reference_expids=(),
     ),
     "idalia": TCEvent(
         name="idalia",
@@ -67,13 +70,30 @@ EVENTS: Dict[str, TCEvent] = {
         area_north=40.0,
         area_west=-100.0,
         area_south=10.0,
-        area_east=-70.0,
+        area_east=-80.0,
         plot_title="Idalia normed pdfs",
         mslp_bin_range=(980, 1021, 1),
         wind_bin_range=(0, 35.01, 1),
         mslp_ylim=(0, 4),
         wind_ylim=(0, 2),
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+        reference_expids=(),
+    ),
+    "franklin_idalia": TCEvent(
+        name="franklin_idalia",
+        year="2023",
+        month="08",
+        dates=["20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30"],
+        analysis="OPER_O320_0001",
+        analysis_dates=["20230820", "20230826"],
+        list_expid_ml=[],
+        expid_enfo_o320="ENFO_O320_0001",
+        expid_eefo_o96="EEFO_O96_0001",
+        area_north=40.0,
+        area_west=-100.0,
+        area_south=10.0,
+        area_east=-58.0,
+        plot_title="Franklin + Idalia normed pdfs",
+        reference_expids=(),
     ),
     "hilary": TCEvent(
         name="hilary",
@@ -96,7 +116,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 30.01, 1),
         mslp_ylim=(0, 2),
         wind_ylim=(0, 2),
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+        reference_expids=(),
     ),
     "dora": TCEvent(
         name="dora",
@@ -139,7 +159,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 35.01, 1),
         mslp_ylim=(0, 4),
         wind_ylim=(0, 2),
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+        reference_expids=(),
     ),
     "fernanda": TCEvent(
         name="fernanda",
@@ -162,7 +182,7 @@ EVENTS: Dict[str, TCEvent] = {
         wind_bin_range=(0, 30.01, 1),
         mslp_ylim=(0, 10),
         wind_ylim=(0, 5),
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001", "ENFO_O320_ip6y"),
+        reference_expids=(),
     ),
     "humberto": TCEvent(
         name="humberto",
@@ -180,11 +200,14 @@ EVENTS: Dict[str, TCEvent] = {
         area_west=-90.0,
         area_south=15.0,
         area_east=-50.0,
-        plot_title="Humberto normed pdfs",
+        plot_title="TC Humberto 2025-09 | norm. PDFs (MSLP & 10m Wind)",
         mslp_bin_range=(910, 1025, 1),
         wind_bin_range=(0, 60.01, 1),
         mslp_ylim=(0, 4),
         wind_ylim=(0, 2),
-        reference_expids=("ENFO_O48_0001",),
+        reference_expids=(),
+        iekm_target_grib_path=None,
+        member_map_msl_range=(950, 1025),
+        member_map_wind_range=(0, 45),
     ),
 }

@@ -119,12 +119,34 @@ def _recommended_venv(stack_flavor: str, host_family: str) -> str:
 def _iter_named_datasets(cfg: dict[str, Any], split: str) -> list[tuple[str, str]]:
     try:
         zipped = cfg["dataloader"][split]["dataset"]["zip"]
-    except Exception as exc:
-        raise RuntimeError(
-            f"Cannot read dataloader.{split}.dataset.zip from checkpoint config."
-        ) from exc
+    except (KeyError, TypeError):
+        # Multi-dataset config uses dataloader.<split>.datasets.<role>.dataset
+        try:
+            datasets_dict = cfg["dataloader"][split]["datasets"]
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(
+                f"Cannot read dataloader.{split}.dataset.zip from checkpoint config."
+            ) from exc
+        out: list[tuple[str, str]] = []
+        for role, ds_cfg in (datasets_dict.items() if hasattr(datasets_dict, "items") else []):
+            path = ds_cfg.get("dataset") if isinstance(ds_cfg, dict) else None
+            if path is None:
+                continue
+            # Normalise role names: in_lres->lres, in_hres/out_hres->hres
+            if "lres" in role:
+                name = "lres"
+            elif "hres" in role or "out" in role:
+                name = "hres"
+            else:
+                name = role
+            if isinstance(path, list):
+                for p in path:
+                    out.append((name, str(p)))
+            else:
+                out.append((name, str(path)))
+        return out
 
-    out: list[tuple[str, str]] = []
+    out = []
     for item in zipped:
         if not isinstance(item, dict):
             continue
@@ -188,7 +210,7 @@ def infer_lane_from_config(cfg: dict[str, Any]) -> str:
 
 def infer_stack_from_config(cfg: dict[str, Any]) -> str:
     blob = json.dumps(cfg, default=str)
-    has_new_marker = "multi_dataset_normalizer" in blob
+    has_new_marker = "multi_dataset_normalizer" in blob or "DiffusionDownscaler" in blob
     has_old_marker = ".preprocessing.normalizer.TopNormalizer" in blob
     if has_new_marker and has_old_marker:
         raise RuntimeError("Ambiguous stack markers found in checkpoint config.")

@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--intermediate-nc",
-        default="/home/ecm5702/perm/eval/j2hh_old_intermediate_idalia_20260304/j2hh_idalia_mem06_step048h__intermediate_cached.nc",
+        default="/home/ecm5702/scratch/eval/j2hh_old_intermediate_idalia_20260304/j2hh_idalia_mem06_step048h__intermediate_cached.nc",
         help="Cached intermediate NetCDF from the TARGET run.",
     )
     parser.add_argument("--param", default="2t", help="Weather state (e.g., 2t, 10u, msl).")
@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/j2hh_old_intermediate_idalia_20260304/spectra_sigma_curve_20260305",
+        default="/home/ecm5702/scratch/eval/j2hh_old_intermediate_idalia_20260304/spectra_sigma_curve_20260305",
         help="Directory where the curve/table/README will be written.",
     )
     return parser.parse_args()

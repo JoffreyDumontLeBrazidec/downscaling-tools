@@ -111,7 +111,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir) if args.output_dir else Path(f"/home/ecm5702/perm/eval/{args.expver}")
+    output_dir = Path(args.output_dir) if args.output_dir else Path(f"/home/ecm5702/scratch/eval/{args.expver}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     date_list = pd.date_range(pd.Timestamp(args.date_start), pd.Timestamp(args.date_end), freq=args.date_freq)

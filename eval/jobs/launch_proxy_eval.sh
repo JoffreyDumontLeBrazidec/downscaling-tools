@@ -24,6 +24,7 @@ SCOREBOARD_SPECTRA_DIR_NAME="spectra_harmonized_proxy10total"
 SCOREBOARD_TC_EVENTS="idalia,franklin"
 SCOREBOARD_TC_SUPPORT_MODE="regridded"
 SCOREBOARD_BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+SCOREBOARD_TC_DISPLAY_LABEL=""
 SCOREBOARD_SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
 SCOREBOARD_SPECTRA_NSIDE=128
 SCOREBOARD_SPECTRA_LMAX=319
@@ -39,7 +40,7 @@ Default proxy member scope: member 1 only (default 10 total predictions under th
 
 Options:
   --run-id <id>               Required run id (e.g. proxy_v1)
-  --eval-root <path>          Eval root (default: /home/ecm5702/perm/eval)
+  --eval-root <path>          Eval root (default: /home/ecm5702/scratch/eval)
   --input-root <path>         Bundle input root
   --proxy-bundle-pairs <csv>  Explicit proxy DATE:STEP pairs
   --proxy-n-files <n>         Expected proxy prediction/eval file count
@@ -68,6 +69,8 @@ Options:
                               TC support mode for strict artifacts (native|regridded)
   --scoreboard-base-tc-dir <path>
                               Base TC directory for strict artifacts
+  --scoreboard-tc-display-label <label>
+                              Short TC PDF legend label; blank auto-cuts from run id
   --scoreboard-spectra-weather-states <csv>
                               Weather states for strict spectra generation
   --scoreboard-spectra-nside <n>
@@ -83,7 +86,7 @@ EOF
 }
 
 RUN_ID=""
-EVAL_ROOT="/home/ecm5702/perm/eval"
+EVAL_ROOT="/home/ecm5702/scratch/eval"
 INPUT_ROOT="/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 CKPT_ID=""
 NAME_CKPT=""
@@ -129,6 +132,7 @@ while [[ $# -gt 0 ]]; do
     --scoreboard-tc-events) SCOREBOARD_TC_EVENTS="$2"; shift 2 ;;
     --scoreboard-tc-support-mode) SCOREBOARD_TC_SUPPORT_MODE="$2"; shift 2 ;;
     --scoreboard-base-tc-dir) SCOREBOARD_BASE_TC_DIR="$2"; shift 2 ;;
+    --scoreboard-tc-display-label) SCOREBOARD_TC_DISPLAY_LABEL="$2"; shift 2 ;;
     --scoreboard-spectra-weather-states) SCOREBOARD_SPECTRA_WEATHER_STATES="$2"; shift 2 ;;
     --scoreboard-spectra-nside) SCOREBOARD_SPECTRA_NSIDE="$2"; shift 2 ;;
     --scoreboard-spectra-lmax) SCOREBOARD_SPECTRA_LMAX="$2"; shift 2 ;;
@@ -328,6 +332,7 @@ SCOREBOARD_SPECTRA_DIR_NAME="${SCOREBOARD_SPECTRA_DIR_NAME}"
 SCOREBOARD_TC_EVENTS="${SCOREBOARD_TC_EVENTS}"
 SCOREBOARD_TC_SUPPORT_MODE="${SCOREBOARD_TC_SUPPORT_MODE}"
 SCOREBOARD_BASE_TC_DIR="${SCOREBOARD_BASE_TC_DIR}"
+SCOREBOARD_TC_DISPLAY_LABEL="${SCOREBOARD_TC_DISPLAY_LABEL}"
 SCOREBOARD_SPECTRA_SCRIPT="${SCOREBOARD_SPECTRA_SCRIPT}"
 SCOREBOARD_SPECTRA_WEATHER_STATES="${SCOREBOARD_SPECTRA_WEATHER_STATES}"
 SCOREBOARD_SPECTRA_NSIDE=${SCOREBOARD_SPECTRA_NSIDE}
@@ -403,7 +408,8 @@ if [[ "\${WRITE_SCOREBOARD_ARTIFACTS}" -eq 1 ]]; then
     --out-name "tc_normed_pdfs_\${TC_EVENT_TAG}_\${RUN_ID}_strict.pdf" \\
     --base-tc-dir "\${SCOREBOARD_BASE_TC_DIR}" \\
     --support-mode "\${SCOREBOARD_TC_SUPPORT_MODE}" \\
-    --events "\${SCOREBOARD_TC_EVENTS}"
+    --events "\${SCOREBOARD_TC_EVENTS}" \\
+    --display-label "\${SCOREBOARD_TC_DISPLAY_LABEL:-\${RUN_ID}}"
   python "\${SCOREBOARD_SPECTRA_SCRIPT}" \\
     --predictions-dir "\${SUBSET_PRED_DIR}" \\
     --out-dir "\${SPECTRA_DIR}" \\
@@ -424,6 +430,7 @@ echo "  members: ${PREDICT_MEMBERS}"
 echo "  n_files: ${PROXY_N_FILES}"
 echo "  n_member_predictions: $((PROXY_N_FILES * PROXY_MEMBER_COUNT))"
 echo "  tc_events: ${SCOREBOARD_TC_EVENTS}"
+echo "  tc_display_label: ${SCOREBOARD_TC_DISPLAY_LABEL:-auto-cut from RUN_ID}"
 echo "  spectra_weather_states: ${SCOREBOARD_SPECTRA_WEATHER_STATES}"
 echo "  extra_args_json: ${EXTRA_ARGS_JSON:-<none>}"
 echo "  scoreboard_artifacts: ${WRITE_SCOREBOARD_ARTIFACTS}"

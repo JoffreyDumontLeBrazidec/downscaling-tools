@@ -21,7 +21,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --time=04:00:00
 #SBATCH --mem=64G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 RUN_ID="REPLACE_RUN_ID"
-OUTPUT_ROOT="/home/ecm5702/perm/eval"
+OUTPUT_ROOT="/home/ecm5702/scratch/eval"
 
 # If blank, RUN_ROOT defaults to "${OUTPUT_ROOT}/${RUN_ID}".
 RUN_ROOT=""
@@ -46,6 +46,8 @@ SIGMA_RUN_ID=""
 TC_EVENTS="idalia,franklin"
 TC_SUPPORT_MODE="regridded"       # native | regridded
 BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+TC_EXTRA_REFERENCE_EXPIDS=""      # comma-separated extra reference expids for TC PDF
+TC_DISPLAY_LABEL=""               # blank => auto-cut from RUN_ID for TC PDF legends
 
 # Spectra settings
 # The canonical full-scoreboard spectra contract uses the same proxy10 subset as the
@@ -67,7 +69,7 @@ SPECTRA_COMPARE_MODELS="enfo_o320,eefo_o96"
 SPECTRA_REFERENCE_ROOT="${SPECTRA_REFERENCE_BASE}/enfo_o320"
 
 # Scoreboard outputs
-SCOREBOARD_MD="/home/ecm5702/perm/eval/scoreboards/enfo_o320_scoreboard.md"
+SCOREBOARD_MD="/home/ecm5702/scratch/eval/scoreboards/enfo_o320_scoreboard.md"
 WRITE_CLEAN_SCOREBOARDS=1          # 1=yes, 0=no
 
 # Optional consolidated metrics sidecar in run root
@@ -346,6 +348,12 @@ TC_CMD=(
 )
 if [[ -n "${TC_EVENTS}" ]]; then
   TC_CMD+=(--events "${TC_EVENTS}")
+fi
+if [[ -n "${TC_EXTRA_REFERENCE_EXPIDS}" ]]; then
+  TC_CMD+=(--extra-reference-expids "${TC_EXTRA_REFERENCE_EXPIDS}")
+fi
+if [[ -n "${TC_DISPLAY_LABEL}" ]]; then
+  TC_CMD+=(--display-label "${TC_DISPLAY_LABEL}")
 fi
 "${TC_CMD[@]}"
 

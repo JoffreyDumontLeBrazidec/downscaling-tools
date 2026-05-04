@@ -24,14 +24,14 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --hint=nomultithread
 #SBATCH --mem=256G
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_DIR="${RUN_ROOT}/predictions"
 BUNDLE_DIR="${RUN_ROOT}/bundles_with_y"

@@ -1,11 +1,22 @@
+import logging
+
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 class SigmaEvaluator:
-    def __init__(self, downscaler, datamodule, N_samples):
+    STANDARD_FIELDS = (
+        "10u", "10v", "2d", "2t", "msl",
+        "skt", "sp", "tcw", "z_500", "u_850", "v_850",
+    )
+
+    def __init__(self, downscaler, datamodule, N_samples, name_to_index=None):
         self.downscaler = downscaler
         self.datamodule = datamodule
         self.N_samples = N_samples
+        self.name_to_index = name_to_index or {}
+        self._warned_fields: set = set()
 
     def evaluate_sigma(self, sigma, prediction_on_pure_noise):
         self.downscaler.eval()
@@ -49,14 +60,12 @@ class SigmaEvaluator:
                 )[:, None, ...]
             )
 
-            self.downscaler.x_in_matching_channel_indices = (
-                self.downscaler.x_in_matching_channel_indices.to(
-                    x_in_interp_to_hres.device
-                )
-            )
+            # compute_residuals handles channel selection internally via
+            # data_indices.data.output.full — pass the full x_in_interp_to_hres.
             residuals_target = self.downscaler.model.model.compute_residuals(
                 y,
-                x_in_interp_to_hres[..., self.downscaler.x_in_matching_channel_indices],
+                x_in_interp_to_hres,
+                direct_prediction_indices=getattr(self.downscaler, "direct_prediction_indices", None),
             )
 
             x_in_interp_to_hres = self.downscaler.model.pre_processors(
@@ -112,24 +121,22 @@ class SigmaEvaluator:
             diff = denorm_pred_residuals - denorm_truth_residuals
 
             metrics_next["diff_all_var_non_weighted"] = torch.sqrt(torch.mean(diff**2))
-            FIELD_IDX = {
-                "10u": 0,
-                "10v": 1,
-                "2d": 2,
-                "2t": 3,
-                "msl": 4,
-                "skt": 15,
-                "sp": 16,
-                "tcw": 27,
-                "z_500": 64,
-                "u_850": 36,
-                "v_850": 46,
-            }
 
-            for name, idx in FIELD_IDX.items():
-                metrics_next[f"mse_{name}_non_weighted"] = torch.mean(
-                    diff[..., idx] ** 2
-                )
+            num_output_vars = diff.shape[-1]
+            for name in self.STANDARD_FIELDS:
+                idx = self.name_to_index.get(name)
+                if idx is not None and idx < num_output_vars:
+                    metrics_next[f"mse_{name}_non_weighted"] = torch.mean(
+                        diff[..., idx] ** 2
+                    )
+                else:
+                    metrics_next[f"mse_{name}_non_weighted"] = float("nan")
+                    if name not in self._warned_fields:
+                        self._warned_fields.add(name)
+                        logger.warning(
+                            "Field %r unavailable (idx=%s, n_out=%d) — writing NaN",
+                            name, idx, num_output_vars,
+                        )
 
             del y_pred, residuals_target_noised, x_in, x_in_hres, residuals_target
         return loss, metrics_next

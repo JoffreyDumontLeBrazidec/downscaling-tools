@@ -20,14 +20,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=256G
 #SBATCH --gpus-per-node=1
-#SBATCH --output=/home/ecm5702/perm/eval/%x_%j.out
+#SBATCH --output=/home/ecm5702/scratch/eval/_slurm/%x_%j.out
 
 set -euo pipefail
 
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/perm/eval/REPLACE_RUN_ID"
+RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_FILE="${RUN_ROOT}/predictions/predictions_20230829_step024.nc"
 OUT_DIR="${RUN_ROOT}/tc_contour_plots_step024"

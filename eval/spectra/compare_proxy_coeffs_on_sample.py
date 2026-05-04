@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ai-spectra-root", default="/home/ecm5702/perm/ai_spectra")
     p.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/spectra_proxy_validation/20260304_fast_proxy_overlay_j0ys_highk_tuned",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_validation/20260304_fast_proxy_overlay_j0ys_highk_tuned",
     )
     p.add_argument("--focus-k-min", type=int, default=40)
     return p.parse_args()

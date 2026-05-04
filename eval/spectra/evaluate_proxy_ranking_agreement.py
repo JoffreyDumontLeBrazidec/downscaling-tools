@@ -45,13 +45,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--samples-per-field", type=int, default=5)
     p.add_argument(
         "--coefficients-json",
-        default="/home/ecm5702/perm/eval/spectra_proxy_calibration/20260304_fast_proxy_highk_tz/fast_spectra_proxy_coefficients.json",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_calibration/20260304_fast_proxy_highk_tz/fast_spectra_proxy_coefficients.json",
     )
     p.add_argument("--ai-spectra-root", default="/home/ecm5702/perm/ai_spectra")
     p.add_argument("--reference-root", default="/home/ecm5702/hpcperm/reference_spectra/enfo_o320")
     p.add_argument(
         "--output-dir",
-        default="/home/ecm5702/perm/eval/spectra_proxy_validation/20260304_proxy_ranking_agreement",
+        default="/home/ecm5702/scratch/eval/spectra_proxy_validation/20260304_proxy_ranking_agreement",
     )
     return p.parse_args()
 

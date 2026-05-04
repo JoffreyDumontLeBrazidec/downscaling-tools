@@ -23,10 +23,9 @@ STANDALONE USAGE
 """
 
 from pathlib import Path
+import math
 import sys
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import numpy as np
 
 # ─── user-configurable constants ──────────────────────────────────────────────
 
@@ -107,6 +106,19 @@ def _add_figure_legend(fig, colors_by_name, ncol=3):
     fig.legend(handles=handles, loc="lower center", ncol=ncol,
                fontsize=7.5, framealpha=0.8,
                bbox_to_anchor=(0.5, -0.02))
+
+
+def _all_val_metric_keys(runs):
+    """Return all per-variable validation MSE keys, excluding the aggregate key."""
+    keys = set()
+    for data in runs.values():
+        for key in data["metrics"]:
+            if not key.startswith("val_mse_metric/"):
+                continue
+            if key == VAL_ALL:
+                continue
+            keys.add(key)
+    return sorted(keys)
 
 
 # ─── plot 1: key variable panels ──────────────────────────────────────────────
@@ -235,17 +247,66 @@ def plot_overview(runs, output="overview.png"):
     plt.close()
 
 
+def plot_all_vars(runs, output="all_vars.png"):
+    """Plot every available per-variable validation MSE in one shared grid."""
+    metric_keys = _all_val_metric_keys(runs)
+    if not metric_keys:
+        raise ValueError("No per-variable validation MSE metrics found.")
+
+    colors = _color_map(runs)
+    n_vars = len(metric_keys)
+    n_cols = min(4, n_vars)
+    n_rows = math.ceil(n_vars / n_cols)
+    fig, axs = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(5 * n_cols, 3.8 * n_rows),
+        sharex=False,
+        squeeze=False,
+    )
+
+    for ax, metric_key in zip(axs.flat, metric_keys):
+        drawn = _plot_metric(ax, runs, metric_key, colors, label=False)
+        ylabel = VAR_LABEL.get(metric_key, metric_key.removeprefix("val_mse_metric/").replace("/1", ""))
+        _style(ax, ylabel)
+        if LOG_SCALE_VARS and drawn:
+            ax.set_yscale("log")
+        if not drawn:
+            ax.text(
+                0.5,
+                0.5,
+                "no data",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+                color="gray",
+                fontsize=10,
+            )
+
+    for ax in axs.flat[n_vars:]:
+        ax.axis("off")
+
+    fig.supxlabel("Training step", fontsize=9, y=0.02)
+    fig.suptitle("All variable validation MSE", fontsize=12)
+    _add_figure_legend(fig, colors, ncol=min(len(runs), 4))
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
+    plt.savefig(output, dpi=150, bbox_inches="tight")
+    print(f"Saved: {Path(output).resolve()}")
+    plt.close()
+
+
 # ─── convenience: plot all ────────────────────────────────────────────────────
 
 DEFAULT_OUTPUT_DIR = Path.home() / "perm" / "training_logs_lots"
 
 
 def plot_all(runs, output_dir=None):
-    """Generate both plots. Call this from scripts or notebooks."""
+    """Generate the standard MLflow plot bundle. Call this from scripts or notebooks."""
     d = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
     d.mkdir(parents=True, exist_ok=True)
     plot_key_vars(runs, output=d / "key_vars.png")
-    plot_overview(runs,  output=d / "overview.png")
+    plot_overview(runs, output=d / "overview.png")
+    plot_all_vars(runs, output=d / "all_vars.png")
 
 
 # ─── standalone entry point ───────────────────────────────────────────────────

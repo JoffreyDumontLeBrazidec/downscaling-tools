@@ -19,9 +19,9 @@ This submits:
 - TC plotting (all 5 cyclones): normalized PDF + member field maps
 
 All plots are written in:
-`/home/ecm5702/perm/eval/<EXPVER>/`
+`/home/ecm5702/scratch/eval/<EXPVER>/`
 TC member maps are in:
-`/home/ecm5702/perm/eval/<EXPVER>/tc_members/`
+`/home/ecm5702/scratch/eval/<EXPVER>/tc_members/`
 
 ## Classic Codex Command (Background + Auto-Retry)
 Use this if you want one command that runs in background and auto-retries failed jobs:
@@ -31,8 +31,8 @@ Use this if you want one command that runs in background and auto-retries failed
 ```
 
 Outputs/state:
-- background log: `/home/ecm5702/perm/eval/<EXPVER>/logs/autopilot_background.log`
-- live state: `/home/ecm5702/perm/eval/<EXPVER>/logs/autopilot_state.json`
+- background log: `/home/ecm5702/scratch/eval/<EXPVER>/logs/autopilot_background.log`
+- live state: `/home/ecm5702/scratch/eval/<EXPVER>/logs/autopilot_state.json`
 
 ## Recommended Prompt For Next Codex Session
 Use this exact instruction:
@@ -41,7 +41,7 @@ Use this exact instruction:
 Run the full eval suite for expver <EXPVER> in background using:
 /home/ecm5702/dev/downscaling-tools/eval/jobs/codex_eval --expver <EXPVER>
 
-Then monitor all jobs to completion, fix failures if needed, and confirm final artifacts in /home/ecm5702/perm/eval/<EXPVER>/.
+Then monitor all jobs to completion, fix failures if needed, and confirm final artifacts in /home/ecm5702/scratch/eval/<EXPVER>/.
 ```
 
 ## Useful Monitoring

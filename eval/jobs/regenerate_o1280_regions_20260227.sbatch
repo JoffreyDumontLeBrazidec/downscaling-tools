@@ -16,7 +16,7 @@ python - << 'PY'
 from eval.region_plotting.plot_regions import run_region_plots_from_predictions
 
 run_region_plots_from_predictions(
-    run_parent_dir="/home/ecm5702/perm/eval",
+    run_parent_dir="/home/ecm5702/scratch/eval",
     run_name="o1280_3c54794f_agstyle_evalcheck_full_20260227",
     predictions_filename="predictions.nc",
 )

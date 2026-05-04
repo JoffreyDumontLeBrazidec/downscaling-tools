@@ -170,6 +170,99 @@ def test_build_spectra_artifacts_uses_predictions_x_interp_without_checkpoint(tm
     assert state_summary["scopes"]["residual"]["relative_l2_mean_curve"] == pytest.approx(0.5)
 
 
+def test_build_spectra_artifacts_squeezes_2d_lat_lon(tmp_path: Path, monkeypatch):
+    """Multi-DS predictions store lat_hres/lon_hres with an extra ensemble_member dim.
+
+    The spectra pipeline must squeeze these to 1D so that HEALPix map building
+    works correctly.  Without the fix, 2D coords corrupt the spectra via
+    ``np.add.at`` aliasing.
+    """
+    module = _load_module()
+
+    predictions_dir = tmp_path / "predictions"
+    out_dir = tmp_path / "spectra"
+    predictions_dir.mkdir()
+    out_dir.mkdir()
+
+    n_members = 2
+    n_hres = 2
+    n_lres = 2
+    lat_1d = np.array([10.0, 11.0], dtype=np.float32)
+    lon_1d = np.array([0.0, 1.0], dtype=np.float32)
+
+    ds = xr.Dataset(
+        data_vars={
+            "x": (
+                ["sample", "ensemble_member", "grid_point_lres", "weather_state"],
+                np.full((1, n_members, n_lres, 1), 1.0, dtype=np.float32),
+            ),
+            "x_interp": (
+                ["sample", "ensemble_member", "grid_point_hres", "weather_state"],
+                np.full((1, n_members, n_hres, 1), 2.0, dtype=np.float32),
+            ),
+            "y": (
+                ["sample", "ensemble_member", "grid_point_hres", "weather_state"],
+                np.full((1, n_members, n_hres, 1), 4.0, dtype=np.float32),
+            ),
+            "y_pred": (
+                ["sample", "ensemble_member", "grid_point_hres", "weather_state"],
+                np.full((1, n_members, n_hres, 1), 5.0, dtype=np.float32),
+            ),
+            # 2D lat/lon — the multi-DS shape that triggers the bug
+            "lon_hres": (
+                ["ensemble_member", "grid_point_hres"],
+                np.tile(lon_1d, (n_members, 1)),
+            ),
+            "lat_hres": (
+                ["ensemble_member", "grid_point_hres"],
+                np.tile(lat_1d, (n_members, 1)),
+            ),
+        },
+        coords={
+            "sample": [0],
+            "ensemble_member": list(range(n_members)),
+            "grid_point_lres": list(range(n_lres)),
+            "grid_point_hres": list(range(n_hres)),
+            "weather_state": ["2t"],
+        },
+    )
+    ds.to_netcdf(predictions_dir / "predictions_20230826_step024.nc")
+
+    captured_lat = {}
+
+    def _fake_spectra(lat, lon, val, nside, lmax):
+        captured_lat["shape"] = np.asarray(lat).shape
+        return np.asarray(val, dtype=np.float64)
+
+    monkeypatch.setattr(
+        module,
+        "resolve_spectra_method",
+        lambda method: (_fake_spectra, "fake"),
+    )
+
+    summary, _curve_summary = module.build_spectra_artifacts(
+        pred_dir=predictions_dir,
+        out_dir=out_dir,
+        run_label="demo",
+        states=["2t"],
+        nside=8,
+        lmax=8,
+        spectra_method="auto",
+        member_aggregation="per-file-mean",
+        show_individual_curves=False,
+        score_wavenumber_min_exclusive=0.0,
+    )
+
+    # Core assertion: lat must have been squeezed to 1D before reaching spectra
+    assert captured_lat["shape"] == (n_hres,), (
+        f"Expected 1D lat of shape ({n_hres},), got {captured_lat['shape']} — "
+        "2D lat_hres was not squeezed"
+    )
+
+    state_summary = summary["weather_states"]["2t"]
+    assert state_summary["relative_l2_mean_curve"] == pytest.approx(0.25)
+
+
 def test_consolidated_pdf_failure_is_non_fatal(tmp_path, monkeypatch):
     """PDF consolidation failure must not raise — compute succeeded, only merge failed."""
     module = _load_module()
