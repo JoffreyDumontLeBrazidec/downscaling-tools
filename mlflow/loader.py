@@ -13,6 +13,10 @@ PUBLIC API
   runs = load(experiment_dir)
       → dict  run_name → RunData
 
+  runs = load_run_family(experiment_dir, run_id)
+      → dict  run_name → RunData  for one requested run family, bypassing
+        experiment-wide name filters
+
   RunData keys
       "metrics"   dict  metric_key → {"steps": [...], "vals": [...]}
       "max_step"  int   largest step logged across all metrics
@@ -93,11 +97,24 @@ def _load_single_run(run_dir):
 
 # ─── family merging ────────────────────────────────────────────────────────────
 
+def _collect_descendants(all_runs_raw, root_id):
+    """BFS: collect root + all transitive descendants present in all_runs_raw."""
+    family = []
+    queue = [root_id]
+    while queue:
+        current = queue.pop(0)
+        if current in family:
+            continue
+        family.append(current)
+        children = [rid for rid, r in all_runs_raw.items()
+                    if r["parent"] == current and rid not in family]
+        queue.extend(children)
+    return family
+
+
 def _merge_family(all_runs_raw, root_id):
-    """Combine a root run + all its direct children into one RunData dict."""
-    family = [root_id] + [
-        rid for rid, r in all_runs_raw.items() if r["parent"] == root_id
-    ]
+    """Combine a root run + all transitive descendants into one RunData dict."""
+    family = _collect_descendants(all_runs_raw, root_id)
 
     # gather all (step, val) points per metric across all family members
     combined_raw = {}
@@ -168,6 +185,62 @@ def load(experiment_dir):
         runs[name] = merged
 
     return runs
+
+
+def load_run_family(experiment_dir, run_id):
+    """Load one run family by run_id, bypassing experiment-wide name filters.
+
+    Walks up to the ultimate root ancestor, then BFS-collects all transitive
+    descendants so the full training history is merged (handles deep walltime
+    chains where each continuation is a child of the previous child).
+    """
+    experiment_dir = Path(experiment_dir)
+    run_dir = experiment_dir / run_id
+    if not run_dir.is_dir():
+        return {}
+
+    target = _load_single_run(run_dir)
+
+    # Walk up to ultimate root (max 50 hops to prevent cycles)
+    current_id = target["id"]
+    current = target
+    for _ in range(50):
+        pid = current["parent"]
+        if not pid:
+            break
+        parent_dir = experiment_dir / pid
+        if not parent_dir.is_dir():
+            break
+        current = _load_single_run(parent_dir)
+        current_id = pid
+
+    root_id = current_id
+    root = current
+
+    # Build parent → children map by scanning experiment dir once
+    parent_to_children = {}
+    for child_dir in experiment_dir.iterdir():
+        if not child_dir.is_dir() or child_dir.name == root_id:
+            continue
+        child_parent = _read_tag(child_dir, "mlflow.parentRunId")
+        if child_parent:
+            parent_to_children.setdefault(child_parent, []).append(child_dir.name)
+
+    # BFS from root to collect all descendants
+    all_raw = {root_id: root}
+    queue = [root_id]
+    while queue:
+        cur = queue.pop(0)
+        for child_id in parent_to_children.get(cur, []):
+            if child_id not in all_raw:
+                all_raw[child_id] = _load_single_run(experiment_dir / child_id)
+                queue.append(child_id)
+
+    merged = _merge_family(all_raw, root_id)
+    if not merged["metrics"]:
+        return {}
+
+    return {root["name"] or root_id: merged}
 
 
 # ─── filtering helpers ─────────────────────────────────────────────────────────
