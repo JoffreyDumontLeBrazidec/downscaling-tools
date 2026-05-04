@@ -359,6 +359,29 @@ CANONICAL_OPER_O320_ANALYSIS = {
     },
 }
 
+# Area-cropped O1280 analysis stats for the o320→o1280 lane.
+# Computed from full-globe OPER_O1280_0001 surface AN GRIBs filtered to TC event areas:
+#   franklin: lat 40/10, lon -80/-50 (11 dates 20230820–30)
+#   idalia:   lat 40/10, lon -100/-70 (5 dates 20230826–30)
+CANONICAL_OPER_O1280_ANALYSIS = {
+    "franklin": {
+        "mslp_p1": 1005.650625,
+        "mslp_p01": 996.593214375,
+        "mslp_min": 949.556875,
+        "wind_p99": 13.265388120364777,
+        "wind_p999": 21.547190728996437,
+        "wind_max": 45.27817758191151,
+    },
+    "idalia": {
+        "mslp_p1": 1003.556875,
+        "mslp_p01": 993.149674375,
+        "mslp_min": 957.19875,
+        "wind_p99": 14.016573803777636,
+        "wind_p999": 22.09631693238969,
+        "wind_max": 41.26638880632808,
+    },
+}
+
 
 def _mslp_depth(value: float) -> float:
     """Convert MSLP (hPa) to depth below standard reference: deeper = more extreme."""
@@ -468,15 +491,28 @@ def _multi_depth_enfo_deviation(
 def _normalize_tc_rows(rows: list[dict[str, Any]], *, event_name: str | None = None) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
 
-    When *event_name* is provided and a canonical OPER_O320 analysis row exists
-    for that event, uses the canonical analysis instead of the file-embedded one.
-    Scores are then rescaled so EEFO_O96 maps to 0 and analysis maps to 1.
+    Uses a canonical (area-cropped) analysis anchor for consistent scoring.
+    Selects between O320 and O1280 canonical based on the file-embedded analysis
+    row: if the file contains OPER_O1280_* the O1280 canonical is used, otherwise
+    the O320 canonical. Falls back to the embedded row only when no canonical is
+    available for the event.
 
+    Scores are rescaled so EEFO maps to 0 and analysis maps to 1.
     Falls back to legacy batch-relative normalization when analysis row or
     tail percentiles are not available.
     """
-    canonical = CANONICAL_OPER_O320_ANALYSIS.get(event_name) if event_name else None
-    analysis_row = canonical if canonical is not None else _find_row_by_predicate(rows, _is_analysis_row)
+    embedded_analysis = _find_row_by_predicate(rows, _is_analysis_row)
+
+    # Select canonical based on embedded analysis resolution
+    canonical = None
+    if event_name:
+        embedded_exp = str(embedded_analysis.get("exp", "")).upper() if embedded_analysis else ""
+        if "O1280" in embedded_exp:
+            canonical = CANONICAL_OPER_O1280_ANALYSIS.get(event_name)
+        if canonical is None:
+            canonical = CANONICAL_OPER_O320_ANALYSIS.get(event_name)
+
+    analysis_row = canonical if canonical is not None else embedded_analysis
     enfo_row = _find_row_by_predicate(rows, _is_reference_row)
 
     # If analysis row exists and has tail percentiles, use analysis-anchored scoring
@@ -551,19 +587,27 @@ def _is_reference_row(exp: str) -> bool:
 
 def _choose_tc_row(rows: list[dict[str, Any]], run_id: str) -> dict[str, Any] | None:
     candidates = _tc_candidates(run_id)
+    
+    # First pass: try exact matches
     for candidate in candidates:
         for row in rows:
             exp = str(row.get("exp", "")).strip()
-            if exp == candidate or candidate in exp or exp in candidate:
+            if exp == candidate:
+                return row
+    
+    # Second pass: try substring matches (candidate in exp or exp in candidate)
+    for candidate in candidates:
+        for row in rows:
+            exp = str(row.get("exp", "")).strip()
+            if candidate in exp or exp in candidate:
                 return row
 
+    # Fallback: if only one non-reference row exists, use it
     non_reference = [row for row in rows if not _is_reference_row(str(row.get("exp", "")).strip())]
     if len(non_reference) == 1:
         return non_reference[0]
-    if non_reference:
-        return non_reference[0]
-    if len(rows) == 1:
-        return rows[0]
+    
+    # Otherwise, no clear match found
     return None
 
 
