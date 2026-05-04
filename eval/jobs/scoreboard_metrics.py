@@ -359,29 +359,6 @@ CANONICAL_OPER_O320_ANALYSIS = {
     },
 }
 
-# Area-cropped O1280 analysis stats for the o320→o1280 lane.
-# Computed from full-globe OPER_O1280_0001 surface AN GRIBs filtered to TC event areas:
-#   franklin: lat 40/10, lon -80/-50 (11 dates 20230820–30)
-#   idalia:   lat 40/10, lon -100/-70 (5 dates 20230826–30)
-CANONICAL_OPER_O1280_ANALYSIS = {
-    "franklin": {
-        "mslp_p1": 1005.650625,
-        "mslp_p01": 996.593214375,
-        "mslp_min": 949.556875,
-        "wind_p99": 13.265388120364777,
-        "wind_p999": 21.547190728996437,
-        "wind_max": 45.27817758191151,
-    },
-    "idalia": {
-        "mslp_p1": 1003.556875,
-        "mslp_p01": 993.149674375,
-        "mslp_min": 957.19875,
-        "wind_p99": 14.016573803777636,
-        "wind_p999": 22.09631693238969,
-        "wind_max": 41.26638880632808,
-    },
-}
-
 
 def _mslp_depth(value: float) -> float:
     """Convert MSLP (hPa) to depth below standard reference: deeper = more extreme."""
@@ -491,11 +468,10 @@ def _multi_depth_enfo_deviation(
 def _normalize_tc_rows(rows: list[dict[str, Any]], *, event_name: str | None = None) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
 
-    Uses a canonical (area-cropped) analysis anchor for consistent scoring.
-    Selects between O320 and O1280 canonical based on the file-embedded analysis
-    row: if the file contains OPER_O1280_* the O1280 canonical is used, otherwise
-    the O320 canonical. Falls back to the embedded row only when no canonical is
-    available for the event.
+    When *event_name* is provided and the embedded analysis is O320, uses the
+    canonical OPER_O320 analysis row for that event for consistent scoring.
+    For O1280 lanes (where the embedded analysis is area-cropped OPER_O1280),
+    uses the embedded row directly.
 
     Scores are rescaled so EEFO maps to 0 and analysis maps to 1.
     Falls back to legacy batch-relative normalization when analysis row or
@@ -503,13 +479,11 @@ def _normalize_tc_rows(rows: list[dict[str, Any]], *, event_name: str | None = N
     """
     embedded_analysis = _find_row_by_predicate(rows, _is_analysis_row)
 
-    # Select canonical based on embedded analysis resolution
+    # Use canonical O320 only when the embedded analysis is O320 (not O1280)
     canonical = None
     if event_name:
         embedded_exp = str(embedded_analysis.get("exp", "")).upper() if embedded_analysis else ""
-        if "O1280" in embedded_exp:
-            canonical = CANONICAL_OPER_O1280_ANALYSIS.get(event_name)
-        if canonical is None:
+        if "O1280" not in embedded_exp:
             canonical = CANONICAL_OPER_O320_ANALYSIS.get(event_name)
 
     analysis_row = canonical if canonical is not None else embedded_analysis
@@ -582,7 +556,7 @@ def _is_eefo_row(exp: str) -> bool:
 
 def _is_reference_row(exp: str) -> bool:
     exp_upper = exp.upper()
-    return exp_upper.startswith("ENFO_O320") or exp_upper.startswith("IP6Y")
+    return exp_upper.startswith("ENFO") or exp_upper.startswith("IP6Y")
 
 
 def _choose_tc_row(rows: list[dict[str, Any]], run_id: str) -> dict[str, Any] | None:
