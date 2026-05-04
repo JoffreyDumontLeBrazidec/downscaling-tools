@@ -230,6 +230,12 @@ def locate_mlflow_experiment_dir(
         # Also check ATOS (some Jupiter runs are synced to ATOS)
         exp_dir = _find_local_mlflow_dir(run_id)
         if exp_dir:
+            # ATOS may have incomplete descendants; also sync from Jupiter
+            if not local_only:
+                _rsync_jupiter(run_id, dry_run=dry_run)
+                mirror = _find_jupiter_mirror(run_id)
+                if mirror:
+                    return mirror, f"Jupiter mirror (synced, ATOS fallback): {mirror}/{run_id}"
             return exp_dir, f"Local ATOS (Jupiter-trained): {exp_dir}/{run_id}"
         if local_only:
             return None, "Jupiter MLflow logs not mirrored and --local-only set"
