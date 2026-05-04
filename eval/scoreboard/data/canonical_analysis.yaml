@@ -1,0 +1,22 @@
+# Canonical OPER analysis tail percentiles for TC scoring.
+# Keyed by resolution tag, then event name.
+# Adding new resolutions or events = YAML edit, not code change.
+
+o320:
+  idalia:
+    mslp_p1: 1002.7293048095703
+    mslp_p01: 992.9954538574219
+    mslp_min: 971.3018798828125
+    wind_p99: 14.000569772720336
+    wind_p999: 22.4329648017885
+    wind_max: 32.032962799072266
+  franklin:
+    mslp_p1: 1000.1705812499999
+    mslp_p01: 985.811875
+    mslp_min: 957.39375
+    wind_p99: 18.191709977264132
+    wind_p999: 25.2288104076867
+    wind_max: 36.36738498393529
+
+# O1280 uses area-cropped embedded analysis directly (no canonical override).
+# Add entries here only when a stable canonical anchor is established.
