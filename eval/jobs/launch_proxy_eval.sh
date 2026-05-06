@@ -23,7 +23,7 @@ SCOREBOARD_SUBSET_DIR_NAME="proxy10total_subset"
 SCOREBOARD_SPECTRA_DIR_NAME="spectra_harmonized_proxy10total"
 SCOREBOARD_TC_EVENTS="idalia,franklin"
 SCOREBOARD_TC_SUPPORT_MODE="regridded"
-SCOREBOARD_BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+SCOREBOARD_BASE_TC_DIR="/home/ecm5702/perm/reference/o96_o320/tc"
 SCOREBOARD_TC_DISPLAY_LABEL=""
 SCOREBOARD_SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
 SCOREBOARD_SPECTRA_NSIDE=128
@@ -375,7 +375,7 @@ if [ -f "\${ANCHOR_JSON}" ]; then
   fi
 else
   echo "No anchor TC extremes JSON at \${ANCHOR_JSON} — skipping TC comparison."
-  echo "Generate one with: python -m eval.jobs.diagnose_per_bundle_tc_extremes --predictions-dir <anchor_predictions> --out-json \${ANCHOR_JSON}"
+  echo "Generate one with: python -m eval.jobs.diagnose_per_bundle_tc_extremes --predictions-dir <anchor_predictions> --out-json \${ANCHOR_JSON} --analysis-expid <analysis_expid>"
 fi
 
 if [[ "\${WRITE_SCOREBOARD_ARTIFACTS}" -eq 1 ]]; then

@@ -14,7 +14,8 @@ set -euo pipefail
 RUN_ROOT="/home/ecm5702/scratch/eval/manual_example"
 RUN_ID="manual_example"
 PREDICTIONS_DIR="${RUN_ROOT}/predictions"
-OUT_JSON="${RUN_ROOT}/surface_loss_summary.json"
+# Canonical output path (eval-data-contract)
+OUT_JSON="${RUN_ROOT}/data/surface_loss.json"
 PROJECT_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 SURFACE_SCRIPT="${PROJECT_ROOT}/eval/jobs/scoreboard_surface_loss.py"
 
@@ -42,6 +43,8 @@ esac
 [[ -d "${PREDICTIONS_DIR}" ]] || die "Predictions directory does not exist: ${PREDICTIONS_DIR}"
 [[ -f "${SURFACE_SCRIPT}" ]] || die "Missing surface loss script: ${SURFACE_SCRIPT}"
 
+mkdir -p "${RUN_ROOT}/data"
+
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
@@ -58,5 +61,8 @@ echo "[INFO] python=$(which python) ($("${PYTHON}" -V 2>&1))"
   --out-json "${OUT_JSON}"
 
 [[ -f "${OUT_JSON}" ]] || die "Expected surface-loss summary missing: ${OUT_JSON}"
+
+# Legacy compat symlink
+ln -sfn "data/surface_loss.json" "${RUN_ROOT}/surface_loss_summary.json"
 
 echo "DONE: ${OUT_JSON}"

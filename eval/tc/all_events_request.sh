@@ -60,7 +60,7 @@ RETRIEVE,
     GRID       = ${GRID},
     DATABASE   = ${DATABASE},
     STEP       = ${STEP},
-    TARGET     = "/home/ecm5702/hpcperm/data/tc/idalia/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
+    TARGET     = "/home/ecm5702/perm/reference/o96_o320/tc/idalia/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
 EOF
       mars my_request_${my_date}_${my_time}.mars
       status=$?
@@ -125,7 +125,7 @@ RETRIEVE,
     GRID       = ${GRID},
     DATABASE   = ${DATABASE},
     STEP       = ${STEP},
-    TARGET     = "/home/ecm5702/hpcperm/data/tc/hilary/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
+    TARGET     = "/home/ecm5702/perm/reference/o96_o320/tc/hilary/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
 EOF
       mars my_request_${my_date}_${my_time}.mars
       status=$?
@@ -191,7 +191,7 @@ RETRIEVE,
     GRID       = ${GRID},
     DATABASE   = ${DATABASE},
     STEP       = ${STEP},
-    TARGET     = "/home/ecm5702/hpcperm/data/tc/franklin/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
+    TARGET     = "/home/ecm5702/perm/reference/o96_o320/tc/franklin/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
 EOF
       mars my_request_${my_date}_${my_time}.mars
       status=$?
@@ -255,7 +255,7 @@ RETRIEVE,
     GRID       = ${GRID},
     DATABASE   = ${DATABASE},
     STEP       = ${STEP},
-    TARGET     = "/home/ecm5702/hpcperm/data/tc/fernanda/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
+    TARGET     = "/home/ecm5702/perm/reference/o96_o320/tc/fernanda/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
 EOF
       mars my_request_${my_date}_${my_time}.mars
       status=$?
@@ -319,7 +319,7 @@ RETRIEVE,
     GRID       = ${GRID},
     DATABASE   = ${DATABASE},
     STEP       = ${STEP},
-    TARGET     = "/home/ecm5702/hpcperm/data/tc/dora/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
+    TARGET     = "/home/ecm5702/perm/reference/o96_o320/tc/dora/surface_pf_${STREAM}_${GRID}_${EXPID}_${my_date}.grib"
 EOF
       mars my_request_${my_date}_${my_time}.mars
       status=$?

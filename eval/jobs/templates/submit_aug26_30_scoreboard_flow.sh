@@ -33,6 +33,7 @@ SPECTRA_METHOD="${SPECTRA_METHOD:-ecmwf}"       # proxy | ecmwf
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-regridded}" # native | regridded
 TC_EVENTS="${TC_EVENTS:-idalia,franklin}"
 TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O320_0001,EEFO_O96_0001,ENFO_O320_ip6y}"
+TC_ANALYSIS_EXPID="${TC_ANALYSIS_EXPID:-OPER_O320_0001}"
 
 # TC member maps settings
 RUN_TC_MEMBER_MAPS="${RUN_TC_MEMBER_MAPS:-1}"         # 1 => render per-member TC spatial maps
@@ -206,6 +207,7 @@ set_var "${WRITE_SCRIPT}" SPECTRA_METHOD "${SPECTRA_METHOD}"
 set_var "${WRITE_SCRIPT}" TC_SUPPORT_MODE "${TC_SUPPORT_MODE}"
 set_var "${WRITE_SCRIPT}" TC_EVENTS "${TC_EVENTS}"
 set_var "${WRITE_SCRIPT}" TC_EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+set_var "${WRITE_SCRIPT}" TC_ANALYSIS_EXPID "${TC_ANALYSIS_EXPID}"
 
 # Render TC member maps script.
 if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then

@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from eval.paths import reference_spectra_dir
+
 
 PARAM_CONFIGS = [
     {"param": "2t", "level": "sfc", "dir_name": "2t_sfc"},
@@ -49,14 +51,14 @@ def _build_exp_configs(
         {
             "name": "eefo_o96",
             "type": "hpc",
-            "base_path": "/home/ecm5702/hpcperm/reference_spectra/eefo_o96",
+            "base_path": str(reference_spectra_dir("eefo_o96")),
             "label": "eefo O96",
             "token": eefo_token,
         },
         {
             "name": hres_reference_name,
             "type": "hpc",
-            "base_path": f"/home/ecm5702/hpcperm/reference_spectra/{hres_reference_name}",
+            "base_path": str(reference_spectra_dir(hres_reference_name)),
             "label": hres_reference_label,
             "token": hres_token,
         },
@@ -92,7 +94,7 @@ def main() -> None:
     parser.add_argument(
         "--hres-reference-name",
         default="enfo_o320",
-        help="Reference spectra folder name under /home/ecm5702/hpcperm/reference_spectra.",
+        help="Reference spectra folder name registered under /home/ecm5702/perm/reference.",
     )
     parser.add_argument(
         "--hres-reference-label",

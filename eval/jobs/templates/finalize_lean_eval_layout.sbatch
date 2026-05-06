@@ -29,6 +29,7 @@ set -euo pipefail
 ###############################################################################
 RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
 RUN_ID="REPLACE_RUN_ID"
+LANE=""                            # e.g. o48_o96, o96_o320, o320_o1280, o1280_o2560
 
 # Spectra consolidated PDF names at top level
 SPECTRA_PROXY_PDF_NAME="spectra_proxy.pdf"
@@ -83,11 +84,19 @@ DIRS_TO_MOVE=(
   bundle_build_verification.json
   bundle_preflight.json
   checkpoint_profile.json
-  scoreboard_metrics.json
-  surface_loss_summary.json
   sigma_eval_table.csv
   training_loss_plots_status.json
 )
+# NOTE: scoreboard_metrics.json and surface_loss_summary.json are now symlinks
+# to canonical locations and should NOT be moved. Skip them if they are symlinks.
+for legacy_link in "scoreboard_metrics.json" "surface_loss_summary.json"; do
+  src="${RUN_ROOT}/${legacy_link}"
+  if [[ -e "${src}" ]] && [[ ! -L "${src}" ]] && [[ ! -e "${DATA_DIR}/${legacy_link}" ]]; then
+    mv "${src}" "${DATA_DIR}/${legacy_link}"
+    maybe_link_backcompat "data/${legacy_link}" "${src}"
+    echo "[MOVE] ${legacy_link} -> data/${legacy_link}"
+  fi
+done
 
 for item in "${DIRS_TO_MOVE[@]}"; do
   src="${RUN_ROOT}/${item}"
@@ -112,9 +121,10 @@ for metrics_file in "${RUN_ROOT}"/*_metrics.json; do
   fi
 done
 
-# Move spectra raw data
+# Move spectra raw data (skip symlinks — canonical layout uses symlinks for compat)
 for spectra_dir in "${RUN_ROOT}"/spectra_*/ "${RUN_ROOT}"/spectra_*/; do
   [[ -d "${spectra_dir}" ]] || continue
+  [[ ! -L "${spectra_dir%/}" ]] || continue
   dir_name="$(basename "${spectra_dir}")"
   # Skip if already under data/
   [[ "${spectra_dir}" != "${DATA_DIR}/"* ]] || continue
@@ -167,9 +177,10 @@ for ref_dir in "${RUN_ROOT}"/enfo_*/ "${RUN_ROOT}"/eefo_*/; do
   fi
 done
 
-# Move TC stats JSON files and raw TC PDFs into data/
+# Move TC stats JSON files and raw TC PDFs into data/ (skip symlinks from canonical layout)
 for tc_file in "${RUN_ROOT}"/tc_normed_pdfs_*.stats.json "${RUN_ROOT}"/tc_normed_pdfs_*.pdf; do
   [[ -f "${tc_file}" ]] || continue
+  [[ ! -L "${tc_file}" ]] || continue
   base="$(basename "${tc_file}")"
   dst="${DATA_DIR}/${base}"
   if [[ ! -e "${dst}" ]]; then
@@ -370,7 +381,71 @@ for candidate_dir in \
 done
 
 ###############################################################################
-# STEP 3: Summary
+# STEP 3: Canonical metrics.json assembly
+###############################################################################
+
+# If metrics.json doesn't exist yet, assemble it from available artifacts.
+# This runs LAST so all eval jobs have already written their canonical outputs.
+if [[ ! -f "${RUN_ROOT}/metrics.json" ]]; then
+  DOWNSCALING_TOOLS_ROOT="${DOWNSCALING_TOOLS_ROOT:-/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools}"
+  # Detect lane from EXPERIMENT_CONFIG.yaml if not set
+  EFFECTIVE_LANE="${LANE}"
+  if [[ -z "${EFFECTIVE_LANE}" ]] && [[ -f "${RUN_ROOT}/EXPERIMENT_CONFIG.yaml" ]]; then
+    EFFECTIVE_LANE="$(python3 -c "
+import yaml, sys
+try:
+    config = yaml.safe_load(open('${RUN_ROOT}/EXPERIMENT_CONFIG.yaml'))
+    print(config.get('lane', ''))
+except Exception:
+    pass
+" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${EFFECTIVE_LANE}" ]]; then
+    python3 -c "
+import sys; sys.path.insert(0, '${DOWNSCALING_TOOLS_ROOT}')
+from eval.jobs import scoreboard_metrics as metrics
+from pathlib import Path
+import yaml, json
+
+run_root = Path('${RUN_ROOT}')
+config = {}
+config_path = run_root / 'EXPERIMENT_CONFIG.yaml'
+if config_path.exists():
+    config = yaml.safe_load(config_path.read_text()) or {}
+
+out = metrics.build_run_scoreboard_metrics(
+    run_id=config.get('run_id', '${RUN_ID}'),
+    lane='${EFFECTIVE_LANE}',
+    checkpoint_id=config.get('checkpoint_id', ''),
+    checkpoint_step=int(config.get('checkpoint_step', 0)),
+    output_root=run_root.parent,
+    sigma_run_id=config.get('sigma_run_id', config.get('run_id', '${RUN_ID}')),
+    tc_stats_path=run_root / 'data' / 'tc',
+    spectra_dir=run_root / 'data' / 'spectra',
+    surface_json_path=run_root / 'data' / 'surface_loss.json',
+    event_names=config.get('tc_events', None),
+    scope=config.get('scope', {}),
+)
+(run_root / 'metrics.json').write_text(json.dumps(out, indent=2))
+n_scalars = len(out.get('scalars', {}))
+print(f'[METRICS] Wrote canonical metrics.json ({n_scalars} scalars)')
+" 2>&1 || echo "[WARN] metrics.json assembly failed (non-fatal)"
+
+    # Legacy compat symlinks
+    if [[ -f "${RUN_ROOT}/metrics.json" ]]; then
+      ln -sfn "metrics.json" "${RUN_ROOT}/scoreboard_metrics.json" 2>/dev/null || true
+      if [[ -n "${EFFECTIVE_LANE}" ]]; then
+        ln -sfn "metrics.json" "${RUN_ROOT}/${EFFECTIVE_LANE}_metrics.json" 2>/dev/null || true
+      fi
+    fi
+  else
+    echo "[INFO] Skipping metrics.json assembly: no lane detected"
+  fi
+fi
+
+###############################################################################
+# STEP 4: Summary
 ###############################################################################
 
 echo ""

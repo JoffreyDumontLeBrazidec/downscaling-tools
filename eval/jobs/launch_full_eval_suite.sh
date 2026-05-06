@@ -230,7 +230,7 @@ set -euo pipefail
 STREAM="ENFO"; GRID="${HRES_GRID}"; EXPID="${EXPVER}"; STEP="24/to/120/by/24"
 PARAMS="151.128/165.128/166.128/167.128"; NUMBER="1/to/10/by/1"; CLASS="RD"; TYPE="PF"; LEVEL="SFC"; DATABASE="FDB"
 fetch_event () {
-  local event="\$1"; local area="\$2"; shift 2; local days=("\$@"); local dir="/home/ecm5702/hpcperm/data/tc/\${event}"; mkdir -p "\${dir}"
+  local event="\$1"; local area="\$2"; shift 2; local days=("\$@"); local dir="/home/ecm5702/perm/reference/o96_o320/tc/\${event}"; mkdir -p "\${dir}"
   for d in "\${days[@]}"; do
     date="2023""08"\${d}; target="\${dir}/surface_pf_\${STREAM}_\${GRID}_\${EXPID}_\${date}.grib"
     [ -s "\${target}" ] && continue

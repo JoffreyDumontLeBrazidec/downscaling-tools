@@ -47,11 +47,11 @@ MEMBER_LIST="ALL"                # CSV of member indices (1-based) or ALL
 
 # Weather states to compute spectra for
 WEATHER_STATES="10u,10v,2t,sp,t_850,z_500"
-TEMPLATE_ROOT="/home/ecm5702/hpcperm/reference_spectra/enfo_o1280"
+TEMPLATE_ROOT="/home/ecm5702/perm/reference/o320_o1280/spectra/enfo_o1280"
 TEMPLATE_GRIB_ROOT=""
 
-# Output layout — mirrors grb_to_spectra.sh convention
-SPECTRA_ROOT="${RUN_ROOT}/spectra_ecmwf"
+# Output layout — canonical (eval-data-contract)
+SPECTRA_ROOT="${RUN_ROOT}/data/spectra"
 GRB_DIR="${SPECTRA_ROOT}/grb"
 SH_DIR="${SPECTRA_ROOT}/spectral_harmonics"
 SPECTRA_DIR="${SPECTRA_ROOT}/spectra"
@@ -91,6 +91,9 @@ esac
 [[ -d "${PREDICTIONS_DIR}" ]] || die "Predictions directory does not exist: ${PREDICTIONS_DIR}"
 
 mkdir -p "${GRB_DIR}" "${SH_DIR}" "${SPECTRA_DIR}" "${RUN_ROOT}/logs"
+
+# Legacy compat symlink
+ln -sfn "data/spectra" "${RUN_ROOT}/spectra_ecmwf" 2>/dev/null || true
 
 echo "=== STEP 1: Stage prediction fields as nopoles GRIBs ==="
 
@@ -192,6 +195,11 @@ PYTHON="$(which python)"
   --out-dir "${SPECTRA_DIR}" \
   --weather-states "${WEATHER_STATES}" \
   --summary-path "${SPECTRA_ROOT}/spectra_summary.json"
+
+# Canonical alias: summary.json (eval-data-contract expects data/spectra/summary.json)
+if [[ -f "${SPECTRA_ROOT}/spectra_summary.json" ]] && [[ ! -e "${SPECTRA_ROOT}/summary.json" ]]; then
+  ln -sfn "spectra_summary.json" "${SPECTRA_ROOT}/summary.json"
+fi
 
 echo "[INFO] Spectra computation complete"
 

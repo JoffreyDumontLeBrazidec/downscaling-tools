@@ -1,175 +1,55 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 
-from eval.region_plotting.local_plotting import (
-    LocalInferencePlotter,
-    ensure_x_interp_for_plotting,
-    get_region_ds,
-    plot_x_y,
-    supports_plot_variable,
+from .local_plotting import LocalInferencePlotter, plot_x_y
+from .plotting.config import (
+    DEFAULT_MODEL_VARIABLES as CONFIG_DEFAULT_MODEL_VARIABLES,
+    DEFAULT_WEATHER_STATES as CONFIG_DEFAULT_WEATHER_STATES,
+    O96_INTERESTING_REGIONS as CONFIG_O96_INTERESTING_REGIONS,
+    O1280_DETAIL_REGIONS as CONFIG_O1280_DETAIL_REGIONS,
+    O1280_INTERESTING_REGIONS as CONFIG_O1280_INTERESTING_REGIONS,
+    O2560_SHOWCASE_REGIONS as CONFIG_O2560_SHOWCASE_REGIONS,
+    PREDICTION_REGION_BOXES as CONFIG_PREDICTION_REGION_BOXES,
+    RENDER_DPI,
 )
+from .plotting.coordinate_utils import get_region_ds
+from .plotting.datetime_utils import safe_datetime_str
+from .plotting.manifest import write_manifest
+from .plotting.metadata import sample_meta_title, step_meta_title
+from .plotting.preprocessing import ensure_x_interp_for_plotting
+from .plotting.variable_utils import supports_plot_variable
 from manual_inference.data import DownscalingDatasetProcessor
 
 LOG = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-DEFAULT_MODEL_VARIABLES = ["x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0"]
-DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "msl", "tp", "z_500", "u_850", "v_850", "t_850"]
-
-# O96-scale windows for o48->o96 evaluation. These are intentionally broad
-# continental-scale windows so a 300 km -> 100 km comparison leaves O48 very
-# coarse/blurry while O96 still retains useful terrain/coastline/precipitation
-# structure.
-O96_INTERESTING_REGIONS: dict[str, list[float]] = {
-    "amazon_forest_core": [-25.0, 15.0, -90.0, -30.0],
-    "congo_basin": [-18.0, 18.0, 0.0, 45.0],
-    "andes_central": [-50.0, -5.0, -95.0, -45.0],
-    "himalayas_central": [10.0, 50.0, 55.0, 115.0],
-    "maritime_continent": [-18.0, 30.0, 85.0, 160.0],
-    "eastern_us_coast": [10.0, 55.0, -110.0, -45.0],
-}
-
-# Curated "interesting" O1280 regions discovered from the 2026-02-27 analysis workflow.
-O1280_INTERESTING_REGIONS: dict[str, list[float]] = {
-    "tibet_karakoram": [33.5, 41.5, 79.5, 91.5],
-    "andes_central": [-37.5, -29.5, -75.5, -63.5],
-    "greenland_south_tip": [58.5, 66.5, -54.5, -42.5],
-    "horn_of_africa": [5.5, 13.5, 35.5, 47.5],
-    "iran_zagros": [31.5, 39.5, 46.5, 58.5],
-    "rockies_wyoming": [40.5, 48.5, -113.5, -101.5],
-    "himalayas_west": [31.5, 39.5, 64.5, 76.5],
-    "new_zealand_north": [-38.5, -30.5, 168.5, 180.5],
-    "hawaii_big_island": [15.5, 23.5, -161.5, -149.5],
-    "japan_hokkaido": [37.5, 45.5, 134.5, 146.5],
-    # Complex non-orographic regions: tropical convection, land-sea contrast,
-    # rainforest heterogeneity — complement the orography-dominated set above.
-    "amazon_forest_west": [-10.0, 0.0, -75.0, -65.0],
-    "southeast_asia_maritime": [-5.0, 5.0, 115.0, 125.0],
-    "central_africa_congo": [-5.0, 5.0, 15.0, 25.0],
-    "greatbarrier_reef_central": [-20.0, -15.0, 145.0, 150.0],
-    "amazon_forest_east": [-10.0, 0.0, -55.0, -45.0],
-}
-
-# Tighter crops for o1280->o2560 residual-focused inspection. These aim to reduce
-# large synoptic context and emphasize terrain/coastline/island structure where
-# x_interp versus high-resolution truth/prediction differences should be easier to see.
-O1280_DETAIL_REGIONS: dict[str, list[float]] = {
-    "tibet_karakoram_core": [34.5, 38.5, 78.5, 84.5],
-    "andes_central_core": [-35.5, -31.5, -72.5, -68.5],
-    "greenland_south_fjords": [60.0, 63.5, -49.5, -44.5],
-    "horn_of_africa_highlands": [7.0, 11.5, 38.0, 43.5],
-    "zagros_core": [32.0, 36.5, 48.0, 54.5],
-    "rockies_front_range": [42.0, 46.0, -110.0, -105.0],
-    "himalayas_west_core": [32.0, 36.0, 72.0, 78.0],
-    "new_zealand_north_core": [-39.0, -35.0, 173.0, 178.0],
-    "hawaii_big_island_core": [18.0, 21.5, -157.5, -154.0],
-    "hokkaido_core": [41.0, 44.5, 140.0, 145.5],
-}
-
-# O2560-scale showcase regions for o1280->o2560 DestinE evaluation.
-# Uniform 3° lat × 4° lon crops where O1280 input looks noticeably blurry
-# while O2560 4.4 km detail is visible. Mix of TC, convection, SST, terrain, coast.
-O2560_SHOWCASE_REGIONS: dict[str, list[float]] = {
-    "humberto_core": [22.0, 25.0, -60.0, -56.0],
-    "java_bali_strait": [-9.0, -6.0, 112.0, 116.0],
-    "gbr_reef_tight": [-18.0, -15.0, 146.0, 150.0],
-    "amazon_manaus": [-4.0, -1.0, -62.0, -58.0],
-    "congo_river_delta": [-7.0, -4.0, 11.0, 15.0],
-    "rift_valley_tight": [7.0, 10.0, 37.0, 41.0],
-    "alps_innsbruck": [46.0, 49.0, 10.0, 14.0],
-    "tokyo_bay": [34.0, 37.0, 138.5, 142.5],
-    "florida_keys": [24.0, 27.0, -83.0, -79.0],
-    "crete_south": [34.0, 37.0, 23.5, 27.5],
-}
-
-PREDICTION_REGION_BOXES: dict[str, list[float]] = {
-    **O96_INTERESTING_REGIONS,
-    **O1280_INTERESTING_REGIONS,
-    **O1280_DETAIL_REGIONS,
-    **O2560_SHOWCASE_REGIONS,
-    "amazon_forest": [-15.0, 5.0, -75.0, -45.0],
-    "eastern_us": [25.0, 45.0, -90.0, -70.0],
-    "himalayas": [25.0, 40.0, 75.0, 100.0],
-    "southeast_asia": [-10.0, 20.0, 95.0, 150.0],
-    "central_africa": [-10.0, 10.0, 10.0, 30.0],
-    "idalia": [10.0, 40.0, -100.0, -70.0],
-    "idalia_center": [18.0, 32.0, -92.0, -78.0],
-    "franklin": [10.0, 40.0, -80.0, -50.0],
-    "franklin_center": [18.0, 32.0, -73.0, -59.0],
-}
+DEFAULT_MODEL_VARIABLES = CONFIG_DEFAULT_MODEL_VARIABLES
+DEFAULT_WEATHER_STATES = CONFIG_DEFAULT_WEATHER_STATES
+O96_INTERESTING_REGIONS = CONFIG_O96_INTERESTING_REGIONS
+O1280_INTERESTING_REGIONS = CONFIG_O1280_INTERESTING_REGIONS
+O1280_DETAIL_REGIONS = CONFIG_O1280_DETAIL_REGIONS
+O2560_SHOWCASE_REGIONS = CONFIG_O2560_SHOWCASE_REGIONS
+PREDICTION_REGION_BOXES = CONFIG_PREDICTION_REGION_BOXES
 
 
 def _safe_datetime_str(value) -> str:
-    try:
-        ts = pd.to_datetime(value)
-        if pd.isna(ts):
-            return ""
-        return ts.strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return ""
+    return safe_datetime_str(value)
 
 
 def _sample_meta_title(ds_region: xr.Dataset, region_name: str, sample_idx: int) -> str:
-    parts = [f"{region_name}", f"sample_pos={sample_idx}"]
-    if "sample" in ds_region.coords:
-        try:
-            sample_coord = ds_region["sample"]
-            if "sample" in sample_coord.dims:
-                sample_value = sample_coord.isel(sample=sample_idx).values
-            else:
-                sample_value = sample_coord.values
-            sample_id = int(np.asarray(sample_value).item())
-            parts.append(f"sample_id={sample_id}")
-        except Exception:
-            pass
-    if "date" in ds_region:
-        date_da = ds_region["date"]
-        if "sample" in date_da.dims:
-            date_val = date_da.isel(sample=sample_idx).values
-        else:
-            date_val = date_da.values
-        date_str = _safe_datetime_str(date_val)
-        if date_str:
-            parts.append(f"date={date_str}")
-    if "init_date" in ds_region:
-        init_da = ds_region["init_date"]
-        if "sample" in init_da.dims:
-            init_val = init_da.isel(sample=sample_idx).values
-        else:
-            init_val = init_da.values
-        init_str = _safe_datetime_str(init_val)
-        if init_str:
-            parts.append(f"init={init_str}")
-    if "lead_step_hours" in ds_region:
-        lead_da = ds_region["lead_step_hours"]
-        if "sample" in lead_da.dims:
-            lead_val = lead_da.isel(sample=sample_idx).values
-        else:
-            lead_val = lead_da.values
-        try:
-            lead_int = int(np.asarray(lead_val).item())
-            parts.append(f"lead_h={lead_int}")
-        except Exception:
-            pass
-    return " | ".join(parts)
+    return sample_meta_title(ds_region, region_name, sample_idx)
 
 
 def _step_meta_title(region_name: str, step, forecast_ref_time) -> str:
-    parts = [f"{region_name}", f"step={step}"]
-    ft_str = _safe_datetime_str(forecast_ref_time)
-    if ft_str:
-        parts.append(f"forecast_ref={ft_str}")
-    return " | ".join(parts)
+    return step_meta_title(region_name, step, forecast_ref_time)
 
 
 def _select_prediction_variables(
@@ -206,7 +86,6 @@ def _write_suite_manifest(
     ensemble_member_index: int,
     generated: list[str],
 ) -> Path:
-    manifest_path = out_root / "manifest.json"
     payload = {
         "suite_kind": suite_kind,
         "plot_style": "region_six_panel",
@@ -222,8 +101,7 @@ def _write_suite_manifest(
         "ensemble_member_index": int(ensemble_member_index),
         "generated_files": list(generated),
     }
-    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return manifest_path
+    return write_manifest(out_root=out_root, payload=payload)
 
 
 def _region_boxes_for_names(region_names: list[str] | None, *, grid: str) -> dict[str, list[float]]:
@@ -310,11 +188,11 @@ def render_region_suite_from_predictions_file(
                 )
                 pdf.savefig(fig)
                 region_pdf = out_root / f"{region_name}.pdf"
-                fig.savefig(region_pdf, dpi=220)
+                fig.savefig(region_pdf, dpi=RENDER_DPI)
                 generated.append(str(region_pdf))
                 if also_png:
                     region_png = out_root / f"{region_name}.png"
-                    fig.savefig(region_png, dpi=220)
+                    fig.savefig(region_png, dpi=RENDER_DPI)
                     generated.append(str(region_png))
                 plt.close(fig)
 

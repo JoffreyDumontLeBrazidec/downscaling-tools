@@ -178,6 +178,7 @@ def test_o320_o1280_helper_proxy_render_uses_truth_bundle_stage(tmp_path: Path):
 
     build_text = build_script.read_text(encoding="utf-8")
     predict_text = predict_script.read_text(encoding="utf-8")
+    surface_text = (submit_dir / f"{run_id}_surface_loss.sbatch").read_text(encoding="utf-8")
 
     assert 'SOURCE_GRIB_ROOT="' in build_text
     assert 'MEMBERS="1"' in build_text
@@ -186,6 +187,10 @@ def test_o320_o1280_helper_proxy_render_uses_truth_bundle_stage(tmp_path: Path):
     assert 'ALLOW_REBUILT_BUNDLE_ROOT="1"' in predict_text
     assert f'RUN_ID_OVERRIDE="{run_id}"' in predict_text
     assert 'MEMBERS="1"' in predict_text
+    assert f'PREDICTIONS_DIR="{tmp_path / "output" / run_id / "predictions"}"' in surface_text
+    assert f'OUT_JSON="{tmp_path / "output" / run_id / "data" / "surface_loss.json"}"' in surface_text
+    assert "run_surface_loss=1" in result.stdout
+    assert f"{run_id}_surface_loss.sbatch" in result.stdout
     assert "phase=proxy" in result.stdout
 
 
@@ -225,17 +230,36 @@ def test_o320_o1280_helper_ac_proxy_render_uses_ecmwf_and_cpu_safe_jobs(tmp_path
     build_text = (submit_dir / f"{run_id}_build_truth_bundles.sbatch").read_text(encoding="utf-8")
     local_text = (submit_dir / f"{run_id}_local_plots.sbatch").read_text(encoding="utf-8")
     spectra_text = (submit_dir / f"{run_id}_spectra.sbatch").read_text(encoding="utf-8")
+    surface_text = (submit_dir / f"{run_id}_surface_loss.sbatch").read_text(encoding="utf-8")
     tc_text = (submit_dir / f"{run_id}_tc_eval.sbatch").read_text(encoding="utf-8")
 
     assert "#SBATCH --qos=nf" in build_text
     assert "#SBATCH --qos=nf" in local_text
+    assert "#SBATCH --qos=nf" in surface_text
     assert "#SBATCH --qos=nf" in tc_text
     assert "#SBATCH --gpus-per-node=" not in build_text
     assert "#SBATCH --gpus-per-node=" not in local_text
+    assert "#SBATCH --gpus-per-node=" not in surface_text
     assert "#SBATCH --gpus-per-node=" not in tc_text
     assert 'PREDICTIONS_DIR="' in spectra_text
     assert 'SUBSET_DIR="' not in spectra_text
     assert 'SUPPORT_MODE="regridded"' in tc_text
+
+
+def test_o320_o1280_helper_can_disable_surface_loss_render(tmp_path: Path):
+    result = _run_helper(
+        tmp_path,
+        phase="proxy",
+        extra_env={"RUN_SURFACE_LOSS": "0"},
+    )
+    assert result.returncode == 0, result.stderr
+
+    run_id = "manual_da4d902b_new_o320_o1280_20260327_manual_eval"
+    submit_dir = tmp_path / "submit" / "20260327"
+
+    assert not (submit_dir / f"{run_id}_surface_loss.sbatch").exists()
+    assert "run_surface_loss=0" in result.stdout
+    assert f"{run_id}_surface_loss.sbatch" not in result.stdout
 
 
 def test_o320_o1280_helper_proxy_render_normalizes_default_sampler_json(tmp_path: Path):

@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
 
+from eval.paths import reference_tc_dir
+
 from .data_types import BoundingBox, CurveVectors, SupportMode
 from .events import EVENTS, TCEvent
 from .experiment_config import EXPERIMENT_CONFIGS, TCExperimentConfig
@@ -362,7 +364,7 @@ def run_tc_pdf(
     outdir: str,
     event_names: list[str] | None = None,
     prediction_dir: str | None = None,
-    grib_dir: str = "/home/ecm5702/hpcperm/data/tc",
+    grib_dir: str = str(reference_tc_dir("o96_o320")),
     run_label: str = "",
     display_label: str | None = None,
     out_name: str = "",
@@ -425,13 +427,23 @@ def run_tc_pdf(
                 LOG.warning(
                     "No experiment config for event=%s — skipping GRIB references", event_name
                 )
-            if exp_cfg and analysis_expid:
-                exp_cfg = replace(exp_cfg, analysis_expid=analysis_expid)
+            if analysis_expid:
+                if exp_cfg is None:
+                    exp_cfg = TCExperimentConfig(analysis_expid=analysis_expid, base_tc_dir=grib_dir)
+                else:
+                    exp_cfg = replace(exp_cfg, analysis_expid=analysis_expid)
 
             # Add extra_reference_expids to exp_cfg
             if exp_cfg and extra_reference_expids:
                 merged_refs = list(dict.fromkeys([*exp_cfg.reference_expids, *extra_reference_expids]))
                 exp_cfg = replace(exp_cfg, reference_expids=tuple(merged_refs))
+
+            # Validate: analysis_expid is required to anchor TC PDF statistics.
+            if exp_cfg and exp_cfg.analysis_expid is None:
+                raise ValueError(
+                    f"No analysis_expid configured for event={event_name}. "
+                    "Pass --analysis-expid explicitly (e.g. OPER_O320_0001)."
+                )
 
             # Get plot config, with optional title override
             plot_cfg = PLOT_CONFIGS.get(event_name, TCPlotConfig())
@@ -612,7 +624,7 @@ def run_tc_member_plots_legacy(
     *,
     expver: str,
     outdir: str,
-    base_dir: str = "/home/ecm5702/hpcperm/data/tc",
+    base_dir: str = str(reference_tc_dir("o96_o320")),
     members: list[int] | None = None,
     year: str = "2023",
     month: str = "08",
@@ -779,7 +791,7 @@ def main() -> None:
     pdf_parser.add_argument("--prediction-var", default="y_pred")
     pdf_parser.add_argument("--plot-title", default="")
     pdf_parser.add_argument("--out-name", default="")
-    pdf_parser.add_argument("--base-tc-dir", default="/home/ecm5702/hpcperm/data/tc")
+    pdf_parser.add_argument("--base-tc-dir", default=str(reference_tc_dir("o96_o320")))
     pdf_parser.add_argument("--extra-reference-expids", default="",
                             help="Comma-separated extra reference expids")
     pdf_parser.add_argument("--extra-grib-reference", default="",
@@ -810,7 +822,7 @@ def main() -> None:
     leg_parser = subparsers.add_parser("legacy-members", help="Legacy GRIB-based member plots.")
     leg_parser.add_argument("--expver", required=True)
     leg_parser.add_argument("--outdir", required=True)
-    leg_parser.add_argument("--base-dir", default="/home/ecm5702/hpcperm/data/tc")
+    leg_parser.add_argument("--base-dir", default=str(reference_tc_dir("o96_o320")))
     leg_parser.add_argument("--members", default="1,2,5,7,9")
     leg_parser.add_argument("--year", default="2023")
     leg_parser.add_argument("--month", default="08")

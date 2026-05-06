@@ -364,8 +364,20 @@ def build_run_scoreboard_metrics(
     spectra_dir: Path,
     surface_json_path: Path,
     event_names: tuple[str, ...] | list[str] | None = None,
+    lane: str = "",
+    checkpoint_id: str = "",
+    checkpoint_step: int = 0,
+    scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    out: dict[str, Any] = {"run_id": run_id}
+    """Build canonical metrics.json content for a run root.
+
+    When lane/checkpoint_id/checkpoint_step are provided, the output follows
+    the canonical eval-data-contract schema (schema_version 1.0). Otherwise
+    falls back to legacy flat dict for backward compatibility.
+    """
+    import datetime
+
+    canonical = bool(lane)
 
     sigma_losses = {
         f"sigma_{sigma_fragment(level)}": None
@@ -376,31 +388,91 @@ def build_run_scoreboard_metrics(
         if sigma_csv.exists():
             sigma_losses.update(sigma_losses_for_scoreboard(sigma_csv))
     if all(v is None for v in sigma_losses.values()):
-        run_root_csv = output_root / run_id / "sigma_eval_table.csv"
-        if run_root_csv.exists():
-            sigma_losses.update(sigma_losses_for_scoreboard(run_root_csv))
-    out["sigma_losses"] = sigma_losses
+        # Try canonical location first, then legacy
+        canonical_csv = output_root / run_id / "data" / "sigma_eval.csv"
+        if canonical_csv.exists():
+            sigma_losses.update(sigma_losses_for_scoreboard(canonical_csv))
+        else:
+            run_root_csv = output_root / run_id / "sigma_eval_table.csv"
+            if run_root_csv.exists():
+                sigma_losses.update(sigma_losses_for_scoreboard(run_root_csv))
 
     tc_scores = {}
-    if tc_stats_path.exists():
+    if tc_stats_path.is_dir():
+        # Canonical: tc_stats_path is data/tc/ directory with per-event files
+        for stats_file in sorted(tc_stats_path.glob("*.stats.json")):
+            event_name = stats_file.stem.replace(".stats", "")
+            event_scores = load_tc_extreme_scores_from_json(stats_file, run_id=run_id, event_names=(event_name,))
+            tc_scores.update(event_scores)
+    elif tc_stats_path.exists():
         tc_scores = load_tc_extreme_scores_from_json(tc_stats_path, run_id=run_id, event_names=event_names)
-    out["tc_extreme_scores"] = tc_scores
 
     spectra_metrics = load_spectra_metrics(spectra_dir)
-    if spectra_metrics["mean"] is not None:
-        out["spectra_mean_relative_l2"] = float(spectra_metrics["mean"])
-        out["spectra_relative_l2"] = {
-            field: float(spectra_metrics[field])
-            for field in SPECTRA_FIELDS
-            if spectra_metrics[field] is not None
-        }
 
     surface_metrics = load_surface_loss_metrics(surface_json_path)
     surface_loss = finite_float(surface_metrics.get("weighted_mse"))
-    if surface_loss is not None:
-        out["surface_weighted_mse"] = surface_loss
     surface_nmse = finite_float(surface_metrics.get("weighted_nmse"))
-    if surface_nmse is not None:
-        out["surface_weighted_nmse"] = surface_nmse
 
-    return out
+    if not canonical:
+        # Legacy output format
+        out: dict[str, Any] = {"run_id": run_id}
+        out["sigma_losses"] = sigma_losses
+        out["tc_extreme_scores"] = tc_scores
+        if spectra_metrics["mean"] is not None:
+            out["spectra_mean_relative_l2"] = float(spectra_metrics["mean"])
+            out["spectra_relative_l2"] = {
+                field: float(spectra_metrics[field])
+                for field in SPECTRA_FIELDS
+                if spectra_metrics[field] is not None
+            }
+        if surface_loss is not None:
+            out["surface_weighted_mse"] = surface_loss
+        if surface_nmse is not None:
+            out["surface_weighted_nmse"] = surface_nmse
+        return out
+
+    # Canonical schema_version 1.0
+    scalars: dict[str, Any] = {}
+    if spectra_metrics["mean"] is not None:
+        scalars["spectra_mean_relative_l2"] = float(spectra_metrics["mean"])
+    if surface_loss is not None:
+        scalars["surface_weighted_mse"] = surface_loss
+    if surface_nmse is not None:
+        scalars["surface_weighted_nmse"] = surface_nmse
+    for key, val in sigma_losses.items():
+        if val is not None:
+            scalars[key] = val
+
+    # TC scores in canonical format
+    tc_canonical: dict[str, Any] = {}
+    for event_key, event_val in tc_scores.items():
+        if isinstance(event_val, dict):
+            tc_canonical[event_key] = event_val
+        else:
+            tc_canonical[event_key] = {"extreme_score": event_val}
+
+    # Artifacts (relative paths)
+    artifacts: dict[str, Any] = {
+        "surface_loss": "data/surface_loss.json",
+        "spectra_summary": "data/spectra/summary.json",
+        "spectra_curves": "data/spectra/curves.json",
+        "sigma_eval": "data/sigma_eval.csv",
+    }
+    if tc_scores:
+        artifacts["tc_stats"] = {
+            event: f"data/tc/{event}.stats.json" for event in tc_scores
+        }
+
+    out_canonical: dict[str, Any] = {
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "lane": lane,
+        "checkpoint_id": checkpoint_id,
+        "checkpoint_step": checkpoint_step,
+        "eval_date": datetime.date.today().isoformat(),
+        "scope": scope or {},
+        "scalars": scalars,
+        "tc_scores": tc_canonical,
+        "artifacts": artifacts,
+    }
+    return out_canonical

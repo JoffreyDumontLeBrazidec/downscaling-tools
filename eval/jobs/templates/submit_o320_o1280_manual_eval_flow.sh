@@ -72,6 +72,9 @@ SPECTRA_METHOD="${SPECTRA_METHOD:-auto}"             # auto | proxy | ecmwf
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded; standard TC PDF route runs every evaluation by default
 TC_EVENTS="${TC_EVENTS:-idalia,franklin,franklin_idalia}"
 TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O320_0001,EEFO_O96_0001,ENFO_O320_ip6y}"
+TC_ANALYSIS_EXPID="${TC_ANALYSIS_EXPID:-OPER_O1280_0001}"
+
+RUN_SURFACE_LOSS="${RUN_SURFACE_LOSS:-1}"
 
 HOLD="${HOLD:-0}"                                    # 1 => submit held
 NO_SUBMIT="${NO_SUBMIT:-0}"                          # 1 => render only
@@ -262,6 +265,7 @@ require_bool "${ALLOW_OVERWRITE}"
 require_bool "${RUN_REGIONAL_SUITES}"
 require_bool "${RUN_STORM_PLOTS}"
 require_bool "${RUN_TC_CONTOUR_PLOTS}"
+require_bool "${RUN_SURFACE_LOSS}"
 [[ "${CHECKPOINT_PATH}" != REPLACE_* ]] || die "Set CHECKPOINT_PATH."
 [[ -d "${SOURCE_GRIB_ROOT}" ]] || die "SOURCE_GRIB_ROOT does not exist: ${SOURCE_GRIB_ROOT}"
 [[ "${RUN_SUFFIX}" =~ ^[A-Za-z0-9._-]*$ ]] || die "Unsafe RUN_SUFFIX: ${RUN_SUFFIX}"
@@ -387,8 +391,8 @@ steps = [str(int(token.strip())) for token in steps_raw.split(",") if token.stri
 if not steps:
     raise SystemExit("Resolved step list is empty.")
 
-pair_tuples: list[tuple[str, str]] = []
-seen: set[tuple[str, str]] = set()
+pair_tuples = []
+seen = set()
 for token in bundle_raw.split(","):
     token = token.strip()
     if not token:
@@ -587,6 +591,7 @@ LOCAL_TEMPLATE="${TEMPLATE_DIR}/local_plots_one_date_from_predictions.sbatch"
 REGIONAL_TEMPLATE="${TEMPLATE_DIR}/regional_suite_from_predictions.sbatch"
 PROXY_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_proxy_from_predictions.sbatch"
 ECMWF_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_ecmwf_from_predictions.sbatch"
+SURFACE_TEMPLATE="${TEMPLATE_DIR}/surface_loss_from_predictions.sbatch"
 TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
 TC_CONTOUR_TEMPLATE="${TEMPLATE_DIR}/tc_contour_suite_from_predictions.sbatch"
 TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
@@ -596,6 +601,9 @@ TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
 [[ -f "${REGIONAL_TEMPLATE}" ]] || die "Missing template: ${REGIONAL_TEMPLATE}"
 [[ -f "${PROXY_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${PROXY_SPECTRA_TEMPLATE}"
 [[ -f "${ECMWF_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${ECMWF_SPECTRA_TEMPLATE}"
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  [[ -f "${SURFACE_TEMPLATE}" ]] || die "Missing template: ${SURFACE_TEMPLATE}"
+fi
 [[ -f "${TC_TEMPLATE}" ]] || die "Missing template: ${TC_TEMPLATE}"
 [[ -f "${TC_CONTOUR_TEMPLATE}" ]] || die "Missing template: ${TC_CONTOUR_TEMPLATE}"
 if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
@@ -612,6 +620,7 @@ BUILD_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_build_truth_bundles.sbatch"
 PREDICT_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_predict.sbatch"
 LOCAL_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_local_plots.sbatch"
 SPECTRA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_spectra.sbatch"
+SURFACE_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_surface_loss.sbatch"
 TC_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_eval.sbatch"
 TC_THREE_ROUTE_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_three_route_compare.sbatch"
 REGIONAL_SCRIPTS=()
@@ -669,6 +678,7 @@ if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
 fi
 
 TARGET_SCRIPTS=("${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}")
+[[ "${RUN_SURFACE_LOSS}" == "1" ]] && TARGET_SCRIPTS+=("${SURFACE_SCRIPT}")
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
   TARGET_SCRIPTS=("${BUILD_SCRIPT}" "${TARGET_SCRIPTS[@]}")
 fi
@@ -694,6 +704,9 @@ if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   cp "${PROXY_SPECTRA_TEMPLATE}" "${SPECTRA_SCRIPT}"
 else
   cp "${ECMWF_SPECTRA_TEMPLATE}" "${SPECTRA_SCRIPT}"
+fi
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  cp "${SURFACE_TEMPLATE}" "${SURFACE_SCRIPT}"
 fi
 cp "${TC_TEMPLATE}" "${TC_SCRIPT}"
 for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
@@ -770,6 +783,7 @@ set_var "${TC_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
 set_var "${TC_SCRIPT}" EVENTS "${TC_EVENTS}"
 set_var "${TC_SCRIPT}" SUPPORT_MODE "${RESOLVED_TC_SUPPORT_MODE}"
 set_var "${TC_SCRIPT}" EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+set_var "${TC_SCRIPT}" ANALYSIS_EXPID "${TC_ANALYSIS_EXPID}"
 set_sbatch_directive "${TC_SCRIPT}" job-name "o1280_tc_${CHECKPOINT_SHORT}"
 set_sbatch_directive "${TC_SCRIPT}" mem "${O1280_TC_MEM}"
 
@@ -789,9 +803,17 @@ else
   set_var "${SPECTRA_SCRIPT}" DATE_LIST "${RESOLVED_DATES}"
   set_var "${SPECTRA_SCRIPT}" STEP_LIST "${RESOLVED_STEPS}"
   set_var "${SPECTRA_SCRIPT}" WEATHER_STATES "10u,10v,2t,sp,t_850,z_500"
-  set_var "${SPECTRA_SCRIPT}" TEMPLATE_ROOT "/home/ecm5702/hpcperm/reference_spectra/enfo_o1280"
+  set_var "${SPECTRA_SCRIPT}" TEMPLATE_ROOT "/home/ecm5702/perm/reference/o320_o1280/spectra/enfo_o1280"
 fi
 set_sbatch_directive "${SPECTRA_SCRIPT}" job-name "o1280_spectra_${CHECKPOINT_SHORT}"
+
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  set_var "${SURFACE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+  set_var "${SURFACE_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${SURFACE_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+  set_var "${SURFACE_SCRIPT}" OUT_JSON "${RUN_ROOT}/data/surface_loss.json"
+  set_sbatch_directive "${SURFACE_SCRIPT}" job-name "o1280_surface_${CHECKPOINT_SHORT}"
+fi
 
 for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
   step_padded="$(basename "${regional_script}" | sed -n 's/.*_step\([0-9][0-9][0-9]\)\.sbatch/\1/p')"
@@ -880,6 +902,9 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
     drop_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node
   fi
+  if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+    drop_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node
+  fi
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     drop_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node
   fi
@@ -902,6 +927,9 @@ else
   if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
     set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" gpus-per-node "0"
   fi
+  if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+    set_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node "0"
+  fi
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     set_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node "0"
   fi
@@ -923,26 +951,23 @@ done
 if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
   set_sbatch_directive "${TC_MEMBER_MAPS_SCRIPT}" qos "${CPU_QOS}"
 fi
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  set_sbatch_directive "${SURFACE_SCRIPT}" qos "${CPU_QOS}"
+fi
 if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   set_sbatch_directive "${SPECTRA_SCRIPT}" qos "${CPU_QOS}"
 fi
 
+SYNTAX_CHECK_SCRIPTS=()
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
-  if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
-    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}" "${TC_THREE_ROUTE_SCRIPT}"
-  else
-    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
-  fi
-else
-  if [[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]]; then
-    bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}" "${TC_THREE_ROUTE_SCRIPT}"
-  else
-    bash -n "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"
-  fi
+  SYNTAX_CHECK_SCRIPTS+=("${BUILD_SCRIPT}")
 fi
-if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
-  bash -n "${TC_MEMBER_MAPS_SCRIPT}"
-fi
+SYNTAX_CHECK_SCRIPTS+=("${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}")
+[[ "${RUN_SURFACE_LOSS}" == "1" ]] && SYNTAX_CHECK_SCRIPTS+=("${SURFACE_SCRIPT}")
+[[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]] && SYNTAX_CHECK_SCRIPTS+=("${TC_MEMBER_MAPS_SCRIPT}")
+[[ "${RUN_TC_THREE_ROUTE_COMPARE}" == "1" ]] && SYNTAX_CHECK_SCRIPTS+=("${TC_THREE_ROUTE_SCRIPT}")
+SYNTAX_CHECK_SCRIPTS+=("${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}")
+bash -n "${SYNTAX_CHECK_SCRIPTS[@]}"
 
 echo "[o1280-flow] checkpoint=${RESOLVED_CKPT_PATH}"
 echo "[o1280-flow] stack=${STACK_FLAVOR} lane=${LANE}"
@@ -971,6 +996,7 @@ echo "[o1280-flow] run_storm_plots=${RUN_STORM_PLOTS}"
 echo "[o1280-flow] storm_plot_regions=${STORM_PLOT_REGIONS}"
 echo "[o1280-flow] run_tc_contour_plots=${RUN_TC_CONTOUR_PLOTS}"
 echo "[o1280-flow] tc_contour_out_prefix=${TC_CONTOUR_OUT_PREFIX}"
+echo "[o1280-flow] run_surface_loss=${RUN_SURFACE_LOSS}"
 echo "[o1280-flow] run_tc_member_maps=${RUN_TC_MEMBER_MAPS}"
 echo "[o1280-flow] run_tc_three_route_compare=${RUN_TC_THREE_ROUTE_COMPARE}"
 echo "[o1280-flow] tc_three_route_out_dir=${TC_THREE_ROUTE_OUT_DIR}"
@@ -986,6 +1012,9 @@ echo "  - ${PREDICT_SCRIPT}"
 echo "  - ${LOCAL_SCRIPT}"
 echo "  - ${SPECTRA_SCRIPT}"
 echo "  - ${TC_SCRIPT}"
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  echo "  - ${SURFACE_SCRIPT}"
+fi
 for regional_script in "${REGIONAL_SCRIPTS[@]}"; do
   echo "  - ${regional_script}"
 done
@@ -1045,6 +1074,13 @@ tc_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${T
 tc_job="$(extract_job_id "${tc_submit}")"
 echo "[o1280-flow] ${tc_submit}"
 
+surface_job="skipped"
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  surface_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${SURFACE_SCRIPT}")"
+  surface_job="$(extract_job_id "${surface_submit}")"
+  echo "[o1280-flow] ${surface_submit}"
+fi
+
 storm_jobs=()
 for storm_script in "${STORM_SCRIPTS[@]}"; do
   storm_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${storm_script}")"
@@ -1084,6 +1120,7 @@ if [[ -n "${build_job}" ]]; then
   monitor_jobs+=("${build_job}")
 fi
 monitor_jobs+=("${predict_job}" "${local_job}" "${spectra_job}" "${tc_job}")
+[[ "${surface_job}" != "skipped" ]] && monitor_jobs+=("${surface_job}")
 monitor_jobs+=("${regional_jobs[@]}")
 monitor_jobs+=("${storm_jobs[@]}")
 monitor_jobs+=("${tc_contour_jobs[@]}")
@@ -1126,6 +1163,9 @@ fi
 for script_path in "${PREDICT_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}" "${TC_CONTOUR_SCRIPTS[@]}"; do
   GENERATED_SCRIPT_LINES+="  - ${script_path}"$'\n'
 done
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  GENERATED_SCRIPT_LINES+="  - ${SURFACE_SCRIPT}"$'\n'
+fi
 if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
   GENERATED_SCRIPT_LINES+="  - ${TC_MEMBER_MAPS_SCRIPT}"$'\n'
 fi
@@ -1154,6 +1194,7 @@ ${GENERATED_SCRIPT_LINES}job_ids:
   predict:          ${predict_job} $(if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then printf '(afterok:%s)' "${build_job}"; else printf '(no build dependency)'; fi)
   local_plots:      ${local_job} (afterok:${predict_job})
   spectra:          ${spectra_job} (afterok:${predict_job})
+  surface_loss:     ${surface_job} (afterok:${predict_job})
   tc_eval:          ${tc_job} (afterok:${predict_job})
   regional_suites:  ${regional_job_summary} (afterok:${predict_job})
   storm_plots:      ${storm_job_summary} (afterok:${predict_job})

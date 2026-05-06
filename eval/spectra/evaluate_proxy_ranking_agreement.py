@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from eval.paths import reference_spectra_dir
 from eval.spectra.calibrate_fast_spectra_proxy import (
     apply_log_model,
     cl_from_unstructured,
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         default="/home/ecm5702/scratch/eval/spectra_proxy_calibration/20260304_fast_proxy_highk_tz/fast_spectra_proxy_coefficients.json",
     )
     p.add_argument("--ai-spectra-root", default="/home/ecm5702/perm/ai_spectra")
-    p.add_argument("--reference-root", default="/home/ecm5702/hpcperm/reference_spectra/enfo_o320")
+    p.add_argument("--reference-root", default=str(reference_spectra_dir("enfo_o320")))
     p.add_argument(
         "--output-dir",
         default="/home/ecm5702/scratch/eval/spectra_proxy_validation/20260304_proxy_ranking_agreement",

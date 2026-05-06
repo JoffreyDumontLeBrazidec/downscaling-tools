@@ -124,6 +124,15 @@ def parse_args() -> argparse.Namespace:
             "per-variable PDFs. Typically set to <RUN_ROOT>/spectra_proxy.pdf or spectra_ecmwf.pdf."
         ),
     )
+    p.add_argument(
+        "--plots-dir",
+        default="",
+        help=(
+            "When set, per-variable PDFs are also copied/linked to this directory with "
+            "canonical names (<var>.pdf). Used by the eval-data-contract to produce "
+            "plots/spectra/<var>.pdf alongside the data/ artifacts."
+        ),
+    )
     return p.parse_args()
 
 
@@ -652,9 +661,36 @@ def main() -> None:
     out_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"Wrote spectra summary: {out_json}")
 
-    out_curves = out_dir / "spectra_curve_summary.json"
-    out_curves.write_text(json.dumps(curve_summary, indent=2), encoding="utf-8")
-    print(f"Wrote spectra curve summary: {out_curves}")
+    # Canonical name: curves.json (eval-data-contract)
+    out_curves_canonical = out_dir / "curves.json"
+    out_curves_canonical.write_text(json.dumps(curve_summary, indent=2), encoding="utf-8")
+    print(f"Wrote spectra curves (canonical): {out_curves_canonical}")
+
+    # Legacy name for backward compat
+    out_curves_legacy = out_dir / "spectra_curve_summary.json"
+    out_curves_legacy.write_text(json.dumps(curve_summary, indent=2), encoding="utf-8")
+    print(f"Wrote spectra curve summary (legacy): {out_curves_legacy}")
+
+    # Canonical summary.json alias
+    summary_alias = out_dir / "summary.json"
+    if not summary_alias.exists():
+        summary_alias.symlink_to("spectra_summary.json")
+
+    # --plots-dir: copy per-variable PDFs to canonical location
+    if args.plots_dir:
+        plots_dir = Path(args.plots_dir).expanduser().resolve()
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        import shutil
+        for state in states:
+            for scope_name, spec in SCOPE_SPECS.items():
+                src_pdf = out_dir / spec.pdf_name.format(state=state)
+                if src_pdf.exists():
+                    if scope_name == "full_field":
+                        dst_pdf = plots_dir / f"{state}.pdf"
+                    else:
+                        dst_pdf = plots_dir / f"{state}_{scope_name}.pdf"
+                    shutil.copy2(src_pdf, dst_pdf)
+        print(f"Copied per-variable PDFs to: {plots_dir}")
 
     if args.consolidated_pdf:
         consolidated_path = Path(args.consolidated_pdf).expanduser().resolve()

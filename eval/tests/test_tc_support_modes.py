@@ -124,9 +124,12 @@ def test_analysis_row_indices_supports_with_and_without_leading_analysis_frame()
     assert loading_grib_mod._analysis_row_indices(5, [0, 2]) == [0, 2]
 
 
-def test_humberto_compute_event_stats_uses_event_specific_oper_and_references():
+def test_humberto_compute_event_stats_uses_runtime_oper_and_references():
     event = events_mod.EVENTS["humberto"]
-    exp_cfg = exp_config_mod.EXPERIMENT_CONFIGS["humberto"]
+    exp_cfg = exp_config_mod.TCExperimentConfig(
+        analysis_expid="OPER_O96_0001",
+        reference_expids=("ENFO_O48_0001",),
+    )
     plot_cfg = plot_config_mod.PLOT_CONFIGS["humberto"]
     curves = {
         exp_cfg.analysis_expid: data_types_mod.CurveVectors(

@@ -18,6 +18,14 @@ from eval.scoreboard.row_matching import (
 from eval.scoreboard.types import RowClassification
 
 MSLP_REFERENCE_HPA = 1013.25
+_OVERSHOOT_BETA = 0.5
+
+
+def _asymmetric_ratio_score(ratio: float) -> float:
+    """Score a model/analysis ratio with asymmetric penalty: overshoot penalized at half rate."""
+    if ratio <= 1.0:
+        return ratio
+    return max(0.0, 1.0 - _OVERSHOOT_BETA * (ratio - 1.0))
 
 
 def _finite_float(value: Any) -> float | None:
@@ -54,7 +62,7 @@ def multi_depth_tc_score(
         if a_depth <= 0.0:
             continue
         m_depth = mslp_depth(m_val)
-        mslp_ratios.append(min(m_depth / a_depth, 1.0))
+        mslp_ratios.append(_asymmetric_ratio_score(m_depth / a_depth))
 
     wind_ratios: list[float] = []
     for key in wind_keys:
@@ -64,7 +72,7 @@ def multi_depth_tc_score(
             continue
         if a_val <= 0.0:
             continue
-        wind_ratios.append(min(m_val / a_val, 1.0))
+        wind_ratios.append(_asymmetric_ratio_score(m_val / a_val))
 
     if not mslp_ratios and not wind_ratios:
         return None
@@ -131,6 +139,7 @@ def normalize_tc_rows(
     rows: list[dict[str, Any]],
     *,
     canonical_analysis: dict[str, Any] | None = None,
+    canonical_eefo: dict[str, Any] | None = None,
     event_name: str | None = None,
 ) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
@@ -164,10 +173,13 @@ def normalize_tc_rows(
     enfo_row = find_row_by_predicate(rows, is_reference_row)
 
     if analysis_row is not None and _finite_float(analysis_row.get("mslp_p1")) is not None:
-        eefo_row = find_row_by_predicate(rows, is_eefo_row)
         eefo_raw = None
-        if eefo_row is not None:
-            eefo_raw = multi_depth_tc_score(eefo_row, analysis_row)
+        if canonical_eefo is not None:
+            eefo_raw = multi_depth_tc_score(canonical_eefo, analysis_row)
+        else:
+            eefo_row = find_row_by_predicate(rows, is_eefo_row)
+            if eefo_row is not None:
+                eefo_raw = multi_depth_tc_score(eefo_row, analysis_row)
 
         for row in rows:
             exp = str(row.get("exp", "")).strip()
@@ -220,6 +232,7 @@ def load_tc_extreme_scores_from_json(
     run_id: str,
     event_names: tuple[str, ...] | list[str] | None = None,
     canonical_analysis_by_event: dict[str, dict[str, Any]] | None = None,
+    canonical_eefo_by_event: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, float]:
     """Load TC extreme scores and ENFO deviation from a stats JSON.
 
@@ -228,9 +241,11 @@ def load_tc_extreme_scores_from_json(
     stats_path : Path to the TC stats JSON file.
     run_id : The experiment run ID to match.
     event_names : Which events to score. Defaults to ("idalia", "franklin").
-    canonical_analysis_by_event : dict mapping event name → canonical analysis dict.
+    canonical_analysis_by_event : dict mapping event name -> canonical analysis dict.
         When provided, used instead of internal lookup. Pass None to use the
         old behavior of looking up CANONICAL_OPER_O320_ANALYSIS by event name.
+    canonical_eefo_by_event : dict mapping event name -> canonical EEFO dict.
+        When provided, used as the EEFO floor instead of finding an EEFO row.
 
     Returns
     -------
@@ -265,7 +280,8 @@ def load_tc_extreme_scores_from_json(
         norm_rows = [row for row in rows if isinstance(row, dict)]
 
         canonical = canonical_analysis_by_event.get(event_name) if canonical_analysis_by_event else None
-        normalize_tc_rows(norm_rows, canonical_analysis=canonical, event_name=event_name)
+        eefo = canonical_eefo_by_event.get(event_name) if canonical_eefo_by_event else None
+        normalize_tc_rows(norm_rows, canonical_analysis=canonical, canonical_eefo=eefo, event_name=event_name)
 
         chosen = find_model_row(norm_rows, run_id)
         if chosen is None:

@@ -1,4 +1,4 @@
-"""Default experiment configuration per TC event. Overridable at runtime via CLI flags."""
+"""TC experiment configuration per event. All values come from CLI args at runtime."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,43 +6,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TCExperimentConfig:
-    """Default experiment IDs for a TC event.
+    """Experiment IDs for a TC event.
 
-    CLI --analysis-expid overrides analysis_expid at runtime.
+    CLI --analysis-expid sets analysis_expid at runtime.
     CLI --extra-reference-expids adds references at runtime.
     """
 
-    analysis_expid: str
+    analysis_expid: str | None = None
     reference_expids: tuple[str, ...] = ()
-    base_tc_dir: str = "/home/ecm5702/hpcperm/data/tc"
+    base_tc_dir: str | None = None
 
 
-# One default config per event.
-# Events without an entry (like franklin_idalia) are handled gracefully
-# by workflows: a warning is logged and the event is skipped.
+# Event registry — all values come from CLI args at runtime.
+# The flow helpers are the canonical per-lane source of truth.
 EXPERIMENT_CONFIGS: dict[str, TCExperimentConfig] = {
-    "franklin": TCExperimentConfig(
-        analysis_expid="OPER_O320_0001",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001"),
-    ),
-    "idalia": TCExperimentConfig(
-        analysis_expid="OPER_O320_0001",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001"),
-    ),
-    "hilary": TCExperimentConfig(
-        analysis_expid="OPER_O320_0001",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001"),
-    ),
-    "dora": TCExperimentConfig(
-        analysis_expid="OPER_O320_0001",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001"),
-    ),
-    "fernanda": TCExperimentConfig(
-        analysis_expid="OPER_O320_0001",
-        reference_expids=("ENFO_O320_0001", "EEFO_O96_0001"),
-    ),
-    "humberto": TCExperimentConfig(
-        analysis_expid="OPER_O96_0001",
-        reference_expids=("ENFO_O48_0001",),
-    ),
+    "franklin": TCExperimentConfig(),
+    "idalia": TCExperimentConfig(),
+    "hilary": TCExperimentConfig(),
+    "dora": TCExperimentConfig(),
+    "fernanda": TCExperimentConfig(),
+    "humberto": TCExperimentConfig(),
 }

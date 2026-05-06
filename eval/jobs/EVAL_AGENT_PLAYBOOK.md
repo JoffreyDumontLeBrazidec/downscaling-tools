@@ -184,7 +184,7 @@ Outputs:
 ## Notes
 
 - MARS/FDB retrieval requests can fail transiently or produce incomplete staging. If a TC retrieve job fails or expected files are missing, restart the retrieve step and then rerun dependent TC plotting jobs.
-- Before launching TC plots, verify staged inputs exist under `/home/ecm5702/hpcperm/data/tc/<event>/surface_pf_ENFO_O320_<EXPVER>_YYYYMMDD.grib`.
+- Before launching TC plots, verify staged inputs exist under `/home/ecm5702/perm/reference/o96_o320/tc/<event>/surface_pf_ENFO_O320_<EXPVER>_YYYYMMDD.grib`.
 - If a previous all-dates eval job is running and user requests one-date-only local plots, cancel the broader job and replace it with one-date eval-only submission.
 - For checkpoint mode (`python -m eval.run checkpoint ...`), keep sigma evaluator enabled unless the user explicitly asks to skip.
 - Do not use `python -m eval.tc.workflows pdf --ml-expids ENFO_O320_0001` as the ML curve for run-id evaluations; this duplicates the ENFO reference and is not run-specific.

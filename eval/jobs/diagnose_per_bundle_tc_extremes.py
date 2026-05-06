@@ -15,7 +15,8 @@ Usage:
         --predictions-dir /home/ecm5702/scratch/eval/<RUN_ID>/predictions \
         --out-json /home/ecm5702/scratch/per_bundle_tc_extremes.json \
         --support-mode regridded \
-        --events idalia,franklin
+        --events idalia,franklin \
+        --analysis-expid OPER_O320_0001
 """
 from __future__ import annotations
 
@@ -27,6 +28,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+from eval.paths import reference_tc_dir
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -83,9 +86,10 @@ def _extreme_metrics(curve: CurveVectors) -> dict:
 def diagnose_per_bundle(
     predictions_dir: str,
     *,
-    base_tc_dir: str = "/home/ecm5702/hpcperm/data/tc",
+    base_tc_dir: str = str(reference_tc_dir("o96_o320")),
     support_mode: SupportMode = "regridded",
     event_names: list[str] | None = None,
+    analysis_expid: str | None = None,
 ) -> dict:
     """Compute per date/step TC extreme metrics for each event."""
     pred_dir = Path(predictions_dir).expanduser().resolve()
@@ -118,9 +122,14 @@ def diagnose_per_bundle(
         if support_mode == "regridded":
             days = sorted({int(f"{ymd:08d}"[6:8]) for _, ymd, _ in event_pred_files})
             sample_date = analysis_dates_for_event(cfg, days)[0]
-            analysis_expid = exp_cfg.analysis_expid if exp_cfg else "OPER_O320_0001"
+            event_analysis = analysis_expid or (exp_cfg.analysis_expid if exp_cfg else None)
+            if event_analysis is None:
+                raise ValueError(
+                    f"analysis_expid required for regridded mode (event={event_name}). "
+                    "Pass --analysis-expid explicitly."
+                )
             regrid_res = plot_cfg.regrid_resolution if plot_cfg else 0.25
-            sample_path = f"{base_tc_dir}/{event_name}/surface_an_{analysis_expid}_{sample_date}.grib"
+            sample_path = f"{base_tc_dir}/{event_name}/surface_an_{event_analysis}_{sample_date}.grib"
             target_lon, target_lat = regridded_target_points(
                 cfg.bbox, regrid_res, sample_path,
             )
@@ -217,7 +226,7 @@ def main() -> None:
     )
     parser.add_argument("--predictions-dir", required=True)
     parser.add_argument("--out-json", required=True)
-    parser.add_argument("--base-tc-dir", default="/home/ecm5702/hpcperm/data/tc")
+    parser.add_argument("--base-tc-dir", default=str(reference_tc_dir("o96_o320")))
     parser.add_argument(
         "--support-mode",
         choices=["native", "regridded"],
@@ -227,6 +236,11 @@ def main() -> None:
         "--events",
         default="idalia,franklin",
         help="Comma-separated event names.",
+    )
+    parser.add_argument(
+        "--analysis-expid",
+        default="",
+        help="Analysis truth expid required for regridded mode, e.g. OPER_O320_0001.",
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -243,6 +257,7 @@ def main() -> None:
         base_tc_dir=args.base_tc_dir,
         support_mode=args.support_mode,
         event_names=event_names,
+        analysis_expid=args.analysis_expid or None,
     )
 
     out_path = Path(args.out_json).expanduser().resolve()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Union
@@ -14,43 +15,25 @@ import xarray as xr
 from anemoi.training.diagnostics.maps import Coastlines
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval.checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
+from ..checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
+from .plotting.coordinate_utils import (
+    _coord_name_for_array as shared_coord_name_for_array,
+    get_region_ds as shared_get_region_ds,
+    legacy_plotter_regions_for_grid,
+)
+from .plotting.datetime_utils import extract_date_from_dataset
+from .plotting.preprocessing import ensure_member_zero_plot_variables as shared_ensure_member_zero_plot_variables
+from .plotting.variable_utils import (
+    DERIVED_MODEL_VARIABLE_SPECS as SHARED_DERIVED_MODEL_VARIABLE_SPECS,
+    get_plot_data_array as shared_get_plot_data_array,
+    is_residual_plot_variable as shared_is_residual_plot_variable,
+    supports_plot_variable as shared_supports_plot_variable,
+)
 
 continents = Coastlines()
 LOG = logging.getLogger(__name__)
 
-DERIVED_MODEL_VARIABLE_SPECS: dict[str, dict[str, str]] = {
-    "residuals_pred_0": {
-        "left": "x_interp_0",
-        "right": "y_pred_0",
-        "title": "residuals_pred_0",
-    },
-    "residuals_pred": {
-        "left": "x_interp",
-        "right": "y_pred",
-        "title": "residuals_pred",
-    },
-    "x_interp_minus_y_pred": {
-        "left": "x_interp",
-        "right": "y_pred",
-        "title": "residuals_pred",
-    },
-    "residuals_0": {
-        "left": "x_interp_0",
-        "right": "y_0",
-        "title": "residuals_0",
-    },
-    "residuals": {
-        "left": "x_interp",
-        "right": "y",
-        "title": "residuals",
-    },
-    "x_interp_minus_y": {
-        "left": "x_interp",
-        "right": "y",
-        "title": "residuals",
-    },
-}
+DERIVED_MODEL_VARIABLE_SPECS = SHARED_DERIVED_MODEL_VARIABLE_SPECS
 
 
 def get_minmax_weather_states(
@@ -77,46 +60,15 @@ def get_minmax_weather_states(
 
 
 def supports_plot_variable(ds: xr.Dataset, model_var: str) -> bool:
-    if model_var in ds.variables:
-        return True
-    spec = DERIVED_MODEL_VARIABLE_SPECS.get(model_var)
-    if spec is None:
-        return False
-    return spec["left"] in ds.variables and spec["right"] in ds.variables
+    return shared_supports_plot_variable(ds, model_var)
 
 
 def _coord_name_for_array(ds: xr.Dataset, da: xr.DataArray, axis: str) -> str:
-    attr_name = da.attrs.get(axis)
-    if attr_name in ds.variables or attr_name in ds.coords:
-        return attr_name
-
-    dim_candidates = {
-        "grid_point_hres": f"{axis}_hres",
-        "grid_point_lres": f"{axis}_lres",
-    }
-    for dim_name, coord_name in dim_candidates.items():
-        if dim_name in da.dims and (coord_name in ds.variables or coord_name in ds.coords):
-            return coord_name
-
-    raise KeyError(f"Could not infer {axis} coordinate for {da.name}")
+    return shared_coord_name_for_array(ds, da, axis)
 
 
 def get_plot_data_array(ds: xr.Dataset, model_var: str) -> xr.DataArray:
-    if model_var in ds.variables:
-        return ds[model_var]
-
-    spec = DERIVED_MODEL_VARIABLE_SPECS.get(model_var)
-    if spec is None:
-        raise KeyError(f"Unsupported model variable: {model_var}")
-
-    derived = (ds[spec["left"]] - ds[spec["right"]]).rename(model_var)
-    attrs = dict(ds[spec["left"]].attrs)
-    if "lon" not in attrs and "lon" in ds[spec["right"]].attrs:
-        attrs["lon"] = ds[spec["right"]].attrs["lon"]
-    if "lat" not in attrs and "lat" in ds[spec["right"]].attrs:
-        attrs["lat"] = ds[spec["right"]].attrs["lat"]
-    derived.attrs = attrs
-    return derived
+    return shared_get_plot_data_array(ds, model_var)
 
 
 def ensure_x_interp_for_plotting(
@@ -152,24 +104,7 @@ def ensure_x_interp_for_plotting(
 
 
 def ensure_member_zero_plot_variables(ds: xr.Dataset) -> xr.Dataset:
-    alias_specs = (
-        ("x", "x_0"),
-        ("x_interp", "x_interp_0"),
-        ("y", "y_0"),
-        ("y_pred", "y_pred_0"),
-    )
-    updates: dict[str, xr.DataArray] = {}
-    for base_name, alias_name in alias_specs:
-        if alias_name in ds.variables or base_name not in ds.variables:
-            continue
-        da = ds[base_name]
-        alias = da.isel(ensemble_member=0) if "ensemble_member" in da.dims else da
-        alias = alias.rename(alias_name)
-        alias.attrs = dict(da.attrs)
-        updates[alias_name] = alias
-    if updates:
-        ds = ds.assign(**updates)
-    return ds
+    return shared_ensure_member_zero_plot_variables(ds)
 
 
 def plot_variable_title(model_var: str) -> str:
@@ -177,7 +112,7 @@ def plot_variable_title(model_var: str) -> str:
 
 
 def is_residual_plot_variable(model_var: str) -> bool:
-    return model_var == "y_diff" or model_var in DERIVED_MODEL_VARIABLE_SPECS
+    return shared_is_residual_plot_variable(model_var)
 
 
 def _residual_vmax(da: xr.DataArray) -> float:
@@ -300,143 +235,35 @@ def plot_x_y(
     if title:
         fig.suptitle(title, fontsize=16, y=1.0)
     else:
-        fig.suptitle(str(ds_sample.date.dt.strftime("%Y-%m-%d").values), fontsize=16, y=1.0)
+        fig.suptitle(extract_date_from_dataset(ds_sample) or "Unknown date", fontsize=16, y=1.0)
     fig.tight_layout()
     return fig
 
 
 def get_region_ds(ds: xr.Dataset, region_box: Union[str, list[int]] = "default") -> xr.Dataset:
-    predefined_boxes = {
-        "default": [40, 50, 0, 10],
-        "pyrenees_alpes": [40, 50, 0, 10],
-        "rocky_mountains": [35, 50, -120, -100],
-        "amazon_forest": [-15, 5, -75, -45],
-        "amazon_forest_core": [-25, 15, -90, -30],
-        "southeast_asia": [-10, 20, 95, 150],
-        "maritime_continent": [-18, 30, 85, 160],
-        "west_sahara": [15, 30, -20, 0],
-        "himalayas": [25, 40, 75, 100],
-        "greatbarrier_reef": [-25, -10, 140, 155],
-        "eastern_us": [25, 45, -90, -70],
-        "eastern_us_coast": [10, 55, -110, -45],
-        "idalia": [10, 40, -100, -70],
-        "idalia_center": [18, 32, -92, -78],
-        "central_africa": [-10, 10, 10, 30],
-        "congo_basin": [-18, 18, 0, 45],
-        "andes_central": [-50, -5, -95, -45],
-        "european_arctic": [-25, 0, 75, 90],
-        "rocky_mountains_central": [40, 45, -115, -105],
-        "rocky_mountains_north": [45, 50, -115, -105],
-        "rocky_mountains_south": [35, 40, -110, -100],
-        "amazon_forest_central": [-5, 5, -75, -65],
-        "amazon_forest_west": [-10, 0, -75, -65],
-        "amazon_forest_east": [-10, 0, -55, -45],
-        "southeast_asia_central": [0, 10, 100, 110],
-        "southeast_asia_mainland": [10, 20, 100, 110],
-        "southeast_asia_maritime": [-5, 5, 115, 125],
-        "west_sahara_central": [20, 25, -15, -5],
-        "west_sahara_coastal": [20, 25, -20, -10],
-        "west_sahara_east": [20, 25, -10, 0],
-        "himalayas_central": [10, 50, 55, 115],
-        "himalayas_west": [30, 35, 75, 85],
-        "himalayas_east": [25, 30, 90, 100],
-        "greatbarrier_reef_central": [-20, -15, 145, 150],
-        "greatbarrier_reef_north": [-15, -10, 145, 150],
-        "greatbarrier_reef_south": [-25, -20, 150, 155],
-        "eastern_us_central": [35, 40, -85, -75],
-        "eastern_us_north": [40, 45, -80, -70],
-        "eastern_us_south": [30, 35, -85, -75],
-        "central_africa_congo": [-5, 5, 15, 25],
-        "central_africa_north": [0, 10, 15, 25],
-        "central_africa_south": [-10, 0, 20, 30],
-    }
-
-    if isinstance(region_box, str):
-        region_box = predefined_boxes.get(region_box)
-        if region_box is None:
-            raise ValueError(f"Bounding box '{region_box}' is not predefined.")
-    elif isinstance(region_box, list) and len(region_box) != 4:
-        raise ValueError("Bounding box list must have exactly 4 elements.")
-
-    lat_min, lat_max, lon_min, lon_max = region_box
-    mask_hres = (
-        (ds["lon_hres"] >= lon_min)
-        & (ds["lon_hres"] <= lon_max)
-        & (ds["lat_hres"] >= lat_min)
-        & (ds["lat_hres"] <= lat_max)
-    )
-    region_hres = ds.isel(grid_point_hres=np.flatnonzero(np.asarray(mask_hres.values)))
-    if "lon_lres" in ds.variables:
-        mask_lres = (
-            (ds["lon_lres"] >= lon_min)
-            & (ds["lon_lres"] <= lon_max)
-            & (ds["lat_lres"] >= lat_min)
-            & (ds["lat_lres"] <= lat_max)
-        )
-        region_lres = region_hres.isel(
-            grid_point_lres=np.flatnonzero(np.asarray(mask_lres.values))
-        )
-    else:
-        region_lres = region_hres
-
-    region_lres.attrs["region"] = region_box
-    return region_lres
+    return shared_get_region_ds(ds, region_box)
 
 
 @dataclass
 class LocalInferencePlotter:
+    """Deprecated: use ``render_region_suite_from_predictions_file()`` instead."""
+
     dir_exp: str
     name_exp: str
     name_predictions_file: str
 
     def __post_init__(self):
+        warnings.warn(
+            "LocalInferencePlotter is deprecated. Use render_region_suite_from_predictions_file() from plot_regions.py.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.ds = xr.open_dataset(os.path.join(self.dir_exp, self.name_exp, self.name_predictions_file))
         self.ds = ensure_x_interp_for_plotting(
             self.ds,
             predictions_path=Path(self.dir_exp) / self.name_exp / self.name_predictions_file,
         )
-        if self.ds.attrs["grid"] == "O320":
-            self.regions = [
-                "amazon_forest",
-                "european_arctic",
-                "himalayas",
-                "rocky_mountains",
-                "west_sahara",
-                "pyrenees_alpes",
-                "eastern_us",
-                "central_africa",
-            ]
-        elif self.ds.attrs["grid"] == "O1280":
-            self.regions = [
-                "rocky_mountains_central",
-                "rocky_mountains_north",
-                "rocky_mountains_south",
-                "amazon_forest_central",
-                "amazon_forest_west",
-                "amazon_forest_east",
-                "southeast_asia_central",
-                "southeast_asia_mainland",
-                "southeast_asia_maritime",
-                "west_sahara_central",
-                "west_sahara_coastal",
-                "west_sahara_east",
-                "himalayas_central",
-                "himalayas_west",
-                "himalayas_east",
-                "greatbarrier_reef_central",
-                "greatbarrier_reef_north",
-                "greatbarrier_reef_south",
-                "eastern_us_central",
-                "eastern_us_north",
-                "eastern_us_south",
-                "central_africa_congo",
-                "central_africa_north",
-                "central_africa_south",
-            ]
-        else:
-            raise ValueError(
-                f"Unsupported grid type: {self.ds.attrs['grid']}. Please ensure grid is O320 or O1280."
-            )
+        self.regions = legacy_plotter_regions_for_grid(str(self.ds.attrs["grid"]))
 
     def save_plot(
         self,

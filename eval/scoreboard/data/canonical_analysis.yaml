@@ -18,5 +18,18 @@ o320:
     wind_p999: 25.2288104076867
     wind_max: 36.36738498393529
 
-# O1280 uses area-cropped embedded analysis directly (no canonical override).
-# Add entries here only when a stable canonical anchor is established.
+o1280:
+  idalia:
+    mslp_p1: 1003.5762500000001
+    mslp_p01: 995.8205487500001
+    mslp_min: 972.119375
+    wind_p99: 13.006895962461234
+    wind_p999: 19.56028339747756
+    wind_max: 34.5557112111888
+  franklin:
+    mslp_p1: 1001.50074375
+    mslp_p01: 984.9040237500001
+    mslp_min: 949.556875
+    wind_p99: 18.285049462085823
+    wind_p999: 26.676243323031702
+    wind_max: 45.27817758191151

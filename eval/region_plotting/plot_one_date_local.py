@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval.region_plotting.local_plotting import ensure_x_interp_for_plotting, get_region_ds, plot_x_y, supports_plot_variable
-from eval.region_plotting.plot_regions import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES
+from .local_plotting import plot_x_y
+from .plotting.config import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES, RENDER_DPI
+from .plotting.coordinate_utils import default_region_for_grid, get_region_ds, infer_grid_type
+from .plotting.manifest import write_manifest
+from .plotting.metadata import build_run_plot_title
+from .plotting.preprocessing import ensure_x_interp_for_plotting
+from .plotting.variable_utils import supports_plot_variable
 
 DEFAULT_LOCAL_PLOT_OUT_SUBDIR = "local_plots_one_date"
 
@@ -21,41 +25,13 @@ def _absolute_path(path_like: str | Path) -> Path:
     return Path.cwd() / path
 
 
-def _scalar_text(ds: xr.Dataset, name: str) -> str:
-    if name not in ds:
-        return ""
-    value = ds[name].values
-    if getattr(value, "shape", ()) == ():
-        return str(value.item() if hasattr(value, "item") else value)
-    flat = value.reshape(-1)
-    if len(flat) == 0:
-        return ""
-    first = flat[0]
-    return str(first.item() if hasattr(first, "item") else first)
-
-
 def _default_region_for_grid(grid: str) -> str:
-    grid = str(grid).strip()
-    if grid == "O2560":
-        return "alps_innsbruck"
-    if grid == "O1280":
-        return "amazon_forest_central"
-    if grid == "O96":
-        return "amazon_forest"
-    return "amazon_forest"
+    return default_region_for_grid(grid)
 
 
-def _infer_grid(ds) -> str:
+def _infer_grid(ds: xr.Dataset) -> str:
     """Infer grid from dataset attrs or hres dimension size."""
-    grid = str(getattr(ds, "attrs", {}).get("grid", "")).strip()
-    if grid:
-        return grid
-    hres = ds.sizes.get("grid_point_hres", 0)
-    if hres >= 26_000_000:
-        return "O2560"
-    if hres >= 6_000_000:
-        return "O1280"
-    return ""
+    return infer_grid_type(ds)
 
 
 def _write_one_date_manifest(
@@ -70,7 +46,6 @@ def _write_one_date_manifest(
     weather_states: list[str],
     results: list[tuple[Path, Path | None]],
 ) -> Path:
-    manifest_path = out_root / "manifest.json"
     payload = {
         "suite_kind": "one_date_smoke",
         "plot_style": "region_six_panel",
@@ -88,8 +63,7 @@ def _write_one_date_manifest(
             if path is not None
         ],
     }
-    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return manifest_path
+    return write_manifest(out_root=out_root, payload=payload)
 
 
 def _member_label(ds_member: xr.Dataset, ensemble_member_index: int) -> str:
@@ -131,24 +105,14 @@ def _build_title(
     sample_index: int,
     ensemble_member_index: int,
 ) -> str:
-    parts: list[str] = [region, f"sample_pos={sample_index}"]
-    if run_label:
-        parts.append(f"run={run_label}")
-
-    date_text = _scalar_text(ds_member, "date")
-    if date_text:
-        parts.append(f"date={date_text}")
-
-    init_text = _scalar_text(ds_member, "init_date")
-    if init_text:
-        parts.append(f"init={init_text}")
-
-    lead_text = _scalar_text(ds_member, "lead_step_hours")
-    if lead_text:
-        parts.append(f"lead_h={lead_text}")
-
-    parts.append(_member_label(ds_member, ensemble_member_index))
-    return " | ".join(parts)
+    return build_run_plot_title(
+        ds_member,
+        region=region,
+        run_label=run_label,
+        sample_index=sample_index,
+        member_label=_member_label(ds_member, ensemble_member_index),
+        ensemble_member_index=ensemble_member_index,
+    )
 
 
 def render_prediction_file(
@@ -215,13 +179,13 @@ def render_prediction_file(
         with PdfPages(out_path) as pdf:
             pdf.savefig(fig)
     else:
-        fig.savefig(out_path, dpi=220)
+        fig.savefig(out_path, dpi=RENDER_DPI)
 
     png_path: Path | None = None
     if also_png:
         png_path = _absolute_path(also_png)
         png_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(png_path, dpi=220)
+        fig.savefig(png_path, dpi=RENDER_DPI)
 
     plt.close(fig)
     return out_path, png_path

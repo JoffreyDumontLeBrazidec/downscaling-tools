@@ -1,5 +1,9 @@
 #!/bin/bash --login
-# Post-prediction writer for o48->o96 evaluation runs.
+# DEPRECATED: This template is not called by any eval flow.
+# All lanes now use shared templates + finalize_lean_eval_layout for canonical output.
+# Kept for reference only. Do not modify.
+#
+# (Original description) Post-prediction writer for o48->o96 evaluation runs.
 # Reuses the shared spectra, TC, and surface-loss helpers but writes a compact
 # o48_o96 metrics sidecar for the Humberto and validation-tail workflow.
 #SBATCH --job-name=o48_o96_write
@@ -25,7 +29,7 @@ SIGMA_RUN_ID=""
 TC_EVENTS="humberto"
 TC_SUPPORT_MODE="regridded"      # native | regridded
 TC_DISPLAY_LABEL=""              # optional shorter legend label; blank => RUN_ID
-BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+BASE_TC_DIR="/home/ecm5702/perm/reference/o48_o96/tc"
 
 SPECTRA_WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
 SPECTRA_NSIDE=64

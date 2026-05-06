@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Generate predictions from input bundles — DEPRECATED.
+
+This script is superseded by ``python -m eval.predict.main`` which provides
+the same CLI interface with proper date handling, modular architecture, and
+schema validation.  This file is kept for reference and backward compatibility.
+"""
 from __future__ import annotations
 
 import argparse

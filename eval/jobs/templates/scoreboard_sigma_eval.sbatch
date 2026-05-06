@@ -22,11 +22,12 @@ set -euo pipefail
 # USER SETTINGS (edit only this block)
 ###############################################################################
 RUN_ID="REPLACE_RUN_ID"          # scoreboard run id (should match eval run root name)
+RUN_ROOT=""                      # blank => /home/ecm5702/scratch/eval/<RUN_ID>
 CHECKPOINT_REF=""                # checkpoint directory under CKPT_ROOT; blank => RUN_ID
 CKPT_NAME="REPLACE_CHECKPOINT_FILENAME.ckpt"   # use non-inference checkpoint (anemoi-*.ckpt)
 EXPECTED_STACK_FLAVOR="new"      # new | old
 CKPT_ROOT="/home/ecm5702/scratch/aifs/checkpoint"
-OUT_CSV=""                       # blank => /home/ecm5702/scratch/eval/scoreboards/sigma/<RUN_ID>_sigma_eval.csv
+OUT_CSV=""                       # blank => <RUN_ROOT>/data/sigma_eval.csv
 SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
@@ -99,10 +100,15 @@ REPO_ROOT="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools"
 [[ -f "${VENV}" ]] || die "Missing venv activate script: ${VENV}"
 [[ -f "${CKPT_ROOT}/${CHECKPOINT_REF}/${CKPT_NAME}" ]] || die "Missing checkpoint: ${CKPT_ROOT}/${CHECKPOINT_REF}/${CKPT_NAME}"
 
-if [[ -z "${OUT_CSV}" ]]; then
-  OUT_CSV="/home/ecm5702/scratch/eval/scoreboards/sigma/${RUN_ID}_sigma_eval.csv"
+if [[ -z "${RUN_ROOT}" ]]; then
+  RUN_ROOT="/home/ecm5702/scratch/eval/${RUN_ID}"
 fi
-mkdir -p "$(dirname "${OUT_CSV}")"
+LEGACY_SIGMA_DIR="/home/ecm5702/scratch/eval/scoreboards/sigma"
+if [[ -z "${OUT_CSV}" ]]; then
+  # Canonical output path (eval-data-contract)
+  OUT_CSV="${RUN_ROOT}/data/sigma_eval.csv"
+fi
+mkdir -p "$(dirname "${OUT_CSV}")" "${LEGACY_SIGMA_DIR}"
 
 source "${VENV}"
 if [[ -n "${PYTHONPATH:-}" ]]; then
@@ -145,5 +151,8 @@ srun -u \
     --out_csv "${OUT_CSV}" \
     --num-gpus-per-model "${NUM_GPUS_PER_MODEL}" \
     --device cuda
+
+# Copy to legacy scoreboard aggregator location
+cp "${OUT_CSV}" "${LEGACY_SIGMA_DIR}/${RUN_ID}_sigma_eval.csv" 2>/dev/null || true
 
 echo "DONE: ${OUT_CSV}"

@@ -4,7 +4,7 @@
 # Generates normalized TC PDF plots from predictions_*.nc files using:
 #   <repo>/eval/tc/workflows.py (pdf subcommand)
 #
-# PREREQUISITE: TC reference GRIB data must exist under BASE_TC_DIR.
+# PREREQUISITE: TC reference GRIB data must exist under BASE_TC_DIR in /home/ecm5702/perm/reference.
 # To request/refresh TC reference data for all events, run:
 #   sbatch <repo>/eval/tc/all_events_request.sh
 # (AC-only, needs MARS access. Edit EXPID in that script for your experiment.)
@@ -51,11 +51,11 @@ SUPPORT_MODE="native"           # native | regridded
 EXTRA_REFERENCE_EXPIDS=""       # example: ENFO_O320_j138,ENFO_O1280_0001
 DISPLAY_LABEL=""                # optional shorter legend label; blank => RUN_ID
 PLOT_TITLE=""                   # optional override for TCEvent plot_title; blank => use TCEvent default
-IEKM_TARGET_GRIB_PATH=""       # IEKM target GRIBs; blank => use TCEvent default; "none" => disable
+IEKM_TARGET_GRIB_PATH=""       # IEKM target GRIBs; blank/"none" => disable
 IEKM_LABEL="IEKM_TARGET"      # label for IEKM reference curve
-ANALYSIS_EXPID=""              # override analysis truth anchor, e.g. OPER_O1280_0001; blank => use TCEvent default
+ANALYSIS_EXPID=""              # analysis truth anchor, e.g. OPER_O1280_0001; set by flow helpers
 OUT_STEM=""                     # blank => auto-generated from events + RUN_ID
-BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+BASE_TC_DIR="/home/ecm5702/perm/reference/o96_o320/tc"
 WRITE_EXPERIMENT_CONFIG=0       # 1 => write ${RUN_ROOT}/EXPERIMENT_CONFIG.yaml
 ###############################################################################
 
@@ -110,18 +110,22 @@ if [[ -n "${EVENTS}" ]]; then
   done
 fi
 
-mkdir -p "${OUT_DIR}" "${RUN_ROOT}/logs"
+mkdir -p "${OUT_DIR}" "${RUN_ROOT}/logs" "${RUN_ROOT}/data/tc" "${RUN_ROOT}/plots/tc"
 
+EVENT_TAG="${EVENTS//,/__}"
+if [[ -z "${EVENT_TAG}" ]]; then
+  EVENT_TAG="all_events"
+fi
+
+# Legacy stem for backward-compat symlinks
 if [[ -z "${OUT_STEM}" ]]; then
-  EVENT_TAG="${EVENTS//,/__}"
-  if [[ -z "${EVENT_TAG}" ]]; then
-    EVENT_TAG="all_events"
-  fi
   OUT_STEM="tc_normed_pdfs_${EVENT_TAG}_${RUN_ID}_${SUPPORT_MODE}_from_predictions"
 fi
-PDF_NAME="${OUT_STEM}.pdf"
-PDF_PATH="${OUT_DIR}/${PDF_NAME}"
-STATS_PATH="${OUT_DIR}/${OUT_STEM}.stats.json"
+
+# Canonical output paths (eval-data-contract)
+PDF_NAME="${EVENT_TAG}.pdf"
+PDF_PATH="${RUN_ROOT}/plots/tc/${PDF_NAME}"
+STATS_PATH="${RUN_ROOT}/data/tc/${EVENT_TAG}.stats.json"
 
 # --- Environment activation (cluster-aware) ---
 case "${CLUSTER}" in
@@ -161,7 +165,7 @@ cd "${PROJECT_ROOT}"
 CMD=(
   "${PYTHON}" -m eval.tc.workflows pdf
   --predictions-dir "${PREDICTIONS_DIR}"
-  --outdir "${OUT_DIR}"
+  --outdir "${RUN_ROOT}/plots/tc"
   --run-label "${RUN_ID}"
   --out-name "${PDF_NAME}"
   --base-tc-dir "${BASE_TC_DIR}"
@@ -195,7 +199,18 @@ echo "[INFO] Running: ${CMD[*]}"
 
 # --- Verify outputs ---
 [[ -f "${PDF_PATH}" ]] || die "Expected TC PDF missing: ${PDF_PATH}"
+
+# The Python workflow writes stats.json alongside the PDF; move to canonical data/ location
+STATS_FROM_WORKFLOW="${RUN_ROOT}/plots/tc/${EVENT_TAG}.stats.json"
+if [[ -f "${STATS_FROM_WORKFLOW}" ]]; then
+  mv "${STATS_FROM_WORKFLOW}" "${STATS_PATH}"
+fi
 [[ -f "${STATS_PATH}" ]] || die "Expected TC stats JSON missing: ${STATS_PATH}"
+
+# Legacy compat symlinks
+LEGACY_STEM="${OUT_STEM}"
+ln -sfn "data/tc/${EVENT_TAG}.stats.json" "${RUN_ROOT}/${LEGACY_STEM}.stats.json" 2>/dev/null || true
+ln -sfn "plots/tc/${EVENT_TAG}.pdf" "${RUN_ROOT}/${LEGACY_STEM}.pdf" 2>/dev/null || true
 
 if [[ "${WRITE_EXPERIMENT_CONFIG}" -eq 1 ]]; then
   cat > "${RUN_ROOT}/EXPERIMENT_CONFIG.yaml" <<EOF

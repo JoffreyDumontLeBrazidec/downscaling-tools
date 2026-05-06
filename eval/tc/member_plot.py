@@ -43,8 +43,11 @@ def _source_labels(exp_config: TCExperimentConfig | None) -> tuple[str, str]:
         target_src = _fmt(refs[0])
     elif len(refs) == 1:
         input_src = _fmt(refs[0])
-        analysis_res = exp_config.analysis_expid.split("_")[1]
-        target_src = f"IEKM {analysis_res}"
+        if exp_config.analysis_expid:
+            analysis_res = exp_config.analysis_expid.split("_")[1]
+            target_src = f"IEKM {analysis_res}"
+        else:
+            target_src = "Target"
     else:
         input_src = "Input"
         target_src = "Target"

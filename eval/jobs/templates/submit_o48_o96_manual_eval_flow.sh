@@ -69,10 +69,12 @@ SPECTRA_NSIDE="${SPECTRA_NSIDE:-64}"
 SPECTRA_LMAX="${SPECTRA_LMAX:-95}"
 SPECTRA_MEMBER_AGGREGATION="${SPECTRA_MEMBER_AGGREGATION:-per-file-mean}"
 
-RUN_TC_PDF="${RUN_TC_PDF:-0}"                        # optional; set to 1 to include Humberto TC PDFs
+RUN_TC_PDF="${RUN_TC_PDF:-1}"                        # enabled by default; Humberto is required
+RUN_SURFACE_LOSS="${RUN_SURFACE_LOSS:-1}"
 TC_SUPPORT_MODE="${TC_SUPPORT_MODE:-auto}"           # auto | native | regridded
 TC_EVENTS="${TC_EVENTS:-humberto}"
 TC_EXTRA_REFERENCE_EXPIDS="${TC_EXTRA_REFERENCE_EXPIDS:-ENFO_O48_0001}"
+TC_ANALYSIS_EXPID="${TC_ANALYSIS_EXPID:-OPER_O96_0001}"
 TC_IEKM_TARGET_GRIB_PATH="${TC_IEKM_TARGET_GRIB_PATH:-/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_iekm_date*_time0000_step24to120_sfc_y.grib}"
 TC_IEKM_LABEL="${TC_IEKM_LABEL:-IEKM_O96_TARGET}"
 TC_PLOT_TITLE="${TC_PLOT_TITLE:-TC Humberto 2025-09 | o48→o96 | norm. PDFs (MSLP & 10m Wind)}"
@@ -266,6 +268,7 @@ require_bool "${RUN_ONE_DATE_LOCAL}"
 require_bool "${RUN_REGIONAL_SUITES}"
 require_bool "${RUN_STORM_PLOTS}"
 require_bool "${RUN_TC_PDF}"
+require_bool "${RUN_SURFACE_LOSS}"
 require_bool "${RUN_TC_MEMBER_MAPS}"
 require_bool "${HOLD}"
 require_bool "${NO_SUBMIT}"
@@ -554,6 +557,7 @@ LOCAL_TEMPLATE="${TEMPLATE_DIR}/local_plots_one_date_from_predictions.sbatch"
 REGIONAL_TEMPLATE="${TEMPLATE_DIR}/regional_suite_from_predictions.sbatch"
 PROXY_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_proxy_from_predictions.sbatch"
 ECMWF_SPECTRA_TEMPLATE="${TEMPLATE_DIR}/spectra_ecmwf_from_predictions.sbatch"
+SURFACE_TEMPLATE="${TEMPLATE_DIR}/surface_loss_from_predictions.sbatch"
 TC_TEMPLATE="${TEMPLATE_DIR}/tc_eval_from_predictions.sbatch"
 TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
 
@@ -564,6 +568,9 @@ TC_MEMBER_MAPS_TEMPLATE="${TEMPLATE_DIR}/tc_member_maps_from_predictions.sbatch"
 [[ -f "${REGIONAL_TEMPLATE}" ]] || die "Missing template: ${REGIONAL_TEMPLATE}"
 [[ -f "${PROXY_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${PROXY_SPECTRA_TEMPLATE}"
 [[ -f "${ECMWF_SPECTRA_TEMPLATE}" ]] || die "Missing template: ${ECMWF_SPECTRA_TEMPLATE}"
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  [[ -f "${SURFACE_TEMPLATE}" ]] || die "Missing template: ${SURFACE_TEMPLATE}"
+fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   [[ -f "${TC_TEMPLATE}" ]] || die "Missing template: ${TC_TEMPLATE}"
 fi
@@ -583,6 +590,7 @@ LOSS_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_training_loss.sbatch"
 SIGMA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_sigma_eval.sbatch"
 LOCAL_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_local_plots.sbatch"
 SPECTRA_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_spectra.sbatch"
+SURFACE_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_surface_loss.sbatch"
 TC_SCRIPT="${SUBMIT_DIR}/${RUN_ID}_tc_eval.sbatch"
 TC_MEMBER_MAPS_SCRIPT=""
 if [[ "${RUN_TC_MEMBER_MAPS}" == "1" ]]; then
@@ -622,6 +630,7 @@ PY
 fi
 
 TARGET_SCRIPTS=("${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}")
+[[ "${RUN_SURFACE_LOSS}" == "1" ]] && TARGET_SCRIPTS+=("${SURFACE_SCRIPT}")
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   TARGET_SCRIPTS+=("${TC_SCRIPT}")
 fi
@@ -649,6 +658,9 @@ if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   cp "${PROXY_SPECTRA_TEMPLATE}" "${SPECTRA_SCRIPT}"
 else
   cp "${ECMWF_SPECTRA_TEMPLATE}" "${SPECTRA_SCRIPT}"
+fi
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  cp "${SURFACE_TEMPLATE}" "${SURFACE_SCRIPT}"
 fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   cp "${TC_TEMPLATE}" "${TC_SCRIPT}"
@@ -752,10 +764,18 @@ else
   set_var "${SPECTRA_SCRIPT}" STEP_LIST "${RESOLVED_STEPS}"
   set_var "${SPECTRA_SCRIPT}" MEMBER_LIST "${EFFECTIVE_MEMBERS}"
   set_var "${SPECTRA_SCRIPT}" WEATHER_STATES "${RESOLVED_ECMWF_SPECTRA_WEATHER_STATES}"
-  set_var "${SPECTRA_SCRIPT}" TEMPLATE_ROOT "/home/ecm5702/hpcperm/reference_spectra/eefo_o96"
+  set_var "${SPECTRA_SCRIPT}" TEMPLATE_ROOT "/home/ecm5702/perm/reference/o48_o96/spectra/eefo_o96"
   set_var "${SPECTRA_SCRIPT}" TEMPLATE_GRIB_ROOT "${SOURCE_GRIB_ROOT}"
 fi
 set_sbatch_directive "${SPECTRA_SCRIPT}" job-name "o48_spectra_${CHECKPOINT_SHORT}"
+
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  set_var "${SURFACE_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
+  set_var "${SURFACE_SCRIPT}" RUN_ID "${RUN_ID}"
+  set_var "${SURFACE_SCRIPT}" PREDICTIONS_DIR "${PREDICTIONS_DIR}"
+  set_var "${SURFACE_SCRIPT}" OUT_JSON "${RUN_ROOT}/data/surface_loss.json"
+  set_sbatch_directive "${SURFACE_SCRIPT}" job-name "o48_surface_${CHECKPOINT_SHORT}"
+fi
 
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_var "${TC_SCRIPT}" RUN_ROOT "${RUN_ROOT}"
@@ -764,6 +784,7 @@ if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_var "${TC_SCRIPT}" EVENTS "${TC_EVENTS}"
   set_var "${TC_SCRIPT}" SUPPORT_MODE "${RESOLVED_TC_SUPPORT_MODE}"
   set_var "${TC_SCRIPT}" EXTRA_REFERENCE_EXPIDS "${TC_EXTRA_REFERENCE_EXPIDS}"
+  set_var "${TC_SCRIPT}" ANALYSIS_EXPID "${TC_ANALYSIS_EXPID}"
   set_var "${TC_SCRIPT}" DISPLAY_LABEL "${TC_DISPLAY_LABEL}"
   set_var "${TC_SCRIPT}" IEKM_TARGET_GRIB_PATH "${TC_IEKM_TARGET_GRIB_PATH}"
   set_var "${TC_SCRIPT}" IEKM_LABEL "${TC_IEKM_LABEL}"
@@ -825,6 +846,9 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     drop_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node
   fi
+  if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+    drop_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node
+  fi
   if [[ "${RUN_TC_PDF}" == "1" ]]; then
     drop_sbatch_directive "${TC_SCRIPT}" gpus-per-node
   fi
@@ -846,6 +870,9 @@ else
   if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
     set_sbatch_directive "${SPECTRA_SCRIPT}" gpus-per-node "0"
   fi
+  if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+    set_sbatch_directive "${SURFACE_SCRIPT}" gpus-per-node "0"
+  fi
   if [[ "${RUN_TC_PDF}" == "1" ]]; then
     set_sbatch_directive "${TC_SCRIPT}" gpus-per-node "0"
   fi
@@ -866,6 +893,9 @@ for storm_script in "${STORM_SCRIPTS[@]}"; do
 done
 if [[ "${RESOLVED_SPECTRA_METHOD}" == "proxy" ]]; then
   set_sbatch_directive "${SPECTRA_SCRIPT}" qos "${CPU_QOS}"
+fi
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  set_sbatch_directive "${SURFACE_SCRIPT}" qos "${CPU_QOS}"
 fi
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   set_sbatch_directive "${TC_SCRIPT}" qos "${CPU_QOS}"
@@ -889,23 +919,16 @@ if [[ "${HOST_FAMILY}" == "ac" ]]; then
   fi
 fi
 
+SYNTAX_CHECK_SCRIPTS=()
 if [[ "${USE_PREBUILT_BUNDLES}" -eq 0 ]]; then
-  if [[ "${RUN_TC_PDF}" == "1" ]]; then
-    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}"
-  else
-    bash -n "${BUILD_SCRIPT}" "${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}"
-  fi
-else
-  if [[ "${RUN_TC_PDF}" == "1" ]]; then
-    bash -n "${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${TC_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}"
-  else
-    bash -n "${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}" "${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}"
-  fi
+  SYNTAX_CHECK_SCRIPTS+=("${BUILD_SCRIPT}")
 fi
-
-if [[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]]; then
-  bash -n "${TC_MEMBER_MAPS_SCRIPT}"
-fi
+SYNTAX_CHECK_SCRIPTS+=("${PREDICT_SCRIPT}" "${LOSS_SCRIPT}" "${SIGMA_SCRIPT}" "${LOCAL_SCRIPT}" "${SPECTRA_SCRIPT}")
+[[ "${RUN_SURFACE_LOSS}" == "1" ]] && SYNTAX_CHECK_SCRIPTS+=("${SURFACE_SCRIPT}")
+[[ "${RUN_TC_PDF}" == "1" ]] && SYNTAX_CHECK_SCRIPTS+=("${TC_SCRIPT}")
+[[ -n "${TC_MEMBER_MAPS_SCRIPT}" ]] && SYNTAX_CHECK_SCRIPTS+=("${TC_MEMBER_MAPS_SCRIPT}")
+SYNTAX_CHECK_SCRIPTS+=("${REGIONAL_SCRIPTS[@]}" "${STORM_SCRIPTS[@]}")
+bash -n "${SYNTAX_CHECK_SCRIPTS[@]}"
 
 echo "[o48-flow] checkpoint=${RESOLVED_CKPT_PATH}"
 echo "[o48-flow] sigma_ckpt=${CHECKPOINT_REF}/${SIGMA_CKPT_NAME}"
@@ -933,6 +956,7 @@ echo "[o48-flow] spectra_method=${RESOLVED_SPECTRA_METHOD}"
 if [[ "${RESOLVED_SPECTRA_METHOD}" == "ecmwf" ]]; then
   echo "[o48-flow] ecmwf_spectra_weather_states=${RESOLVED_ECMWF_SPECTRA_WEATHER_STATES}"
 fi
+echo "[o48-flow] run_surface_loss=${RUN_SURFACE_LOSS}"
 echo "[o48-flow] run_tc_pdf=${RUN_TC_PDF}"
 echo "[o48-flow] run_tc_member_maps=${RUN_TC_MEMBER_MAPS}"
 
@@ -994,6 +1018,13 @@ spectra_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job}
 spectra_job="$(extract_job_id "${spectra_submit}")"
 echo "[o48-flow] ${spectra_submit}"
 
+surface_job="skipped"
+if [[ "${RUN_SURFACE_LOSS}" == "1" ]]; then
+  surface_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${SURFACE_SCRIPT}")"
+  surface_job="$(extract_job_id "${surface_submit}")"
+  echo "[o48-flow] ${surface_submit}"
+fi
+
 tc_job="skipped"
 if [[ "${RUN_TC_PDF}" == "1" ]]; then
   tc_submit="$(sbatch "${SBATCH_ARGS[@]}" --dependency=afterok:${predict_job} "${TC_SCRIPT}")"
@@ -1012,6 +1043,7 @@ fi
 FINALIZE_TEMPLATE="${TEMPLATE_DIR}/finalize_lean_eval_layout.sbatch"
 FINALIZE_SCRIPT="${SUBMIT_DIR}/finalize_lean_eval_${RUN_ID}.sbatch"
 layout_jobs=("${predict_job}" "${spectra_job}")
+[[ "${surface_job}" != "skipped" ]] && layout_jobs+=("${surface_job}")
 [[ "${local_job}" != "skipped" ]] && layout_jobs+=("${local_job}")
 [[ "${tc_job}" != "skipped" ]] && layout_jobs+=("${tc_job}")
 [[ "${tc_member_maps_job}" != "skipped" ]] && layout_jobs+=("${tc_member_maps_job}")
@@ -1061,6 +1093,7 @@ job_ids:
   sigma:            ${sigma_job}
   local_plots:      ${local_job}
   spectra:          ${spectra_job}
+  surface_loss:     ${surface_job}
   tc_pdf:           ${tc_job}
   tc_member_maps:   ${tc_member_maps_job}
   regional_suites:  ${regional_jobs[*]:-skipped}

@@ -6,6 +6,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from eval.paths import DEFAULT_REFERENCE_SPECTRA_BASE
+
 
 PARAM_CONFIGS = [
     {"param": "2t", "level": "sfc", "dir_name": "2t_sfc"},
@@ -23,8 +25,8 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--base-dir",
-        default="/home/ecm5702/hpcperm/reference_spectra",
-        help="Base directory containing reference spectra model folders.",
+        default=DEFAULT_REFERENCE_SPECTRA_BASE,
+        help="Base directory containing reference spectra model aliases.",
     )
     p.add_argument(
         "--models",

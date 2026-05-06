@@ -64,6 +64,29 @@ Evaluate from an existing predictions file:
 python -m eval.run predictions --predictions-nc /path/to/predictions.nc
 ```
 
+## Prediction Generation (New)
+
+The `eval/predict/` package provides modular prediction generation from input bundles,
+replacing the monolithic `generate_predictions_25_files.py`:
+
+```bash
+python -m eval.predict.main \
+  --input-root /path/to/bundles \
+  --out-dir /path/to/output \
+  --name-ckpt /path/to/checkpoint.ckpt \
+  --dates 20230826,20230827,20230828,20230829,20230830 \
+  --steps 24,48,72,96,120 \
+  --members 1,2,3,4,5,6,7,8,9,10
+```
+
+**Key improvements over `generate_predictions_25_files.py`:**
+- Correct date metadata in output files (fixes the `date=0` / "1970-01-01" bug)
+- Modular architecture (bundle discovery, model loading, inference, output writing)
+- Schema validation for output files
+- CF-compliant time metadata
+
+See [`eval/predict/README.md`](predict/README.md) for full documentation.
+
 ## Intermediate Diffusion Trajectory Plots
 New wrapper for visualizing denoising/sampling intermediate states (outside `anemoi-core`):
 
@@ -111,12 +134,16 @@ python -m eval.region_plotting.plot_intermediate_presets \
   --out /home/ecm5702/scratch/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/readability_v2/idalia_center_minimal_contour.pdf
 ```
 
-## Legacy Modules
-- `eval/region_plotting` (local region plots)
+## Evaluation Modules
+- `eval/predict` (**new** — modular prediction generation with proper date handling)
+- `eval/region_plotting` (local region plots — refactored with shared `plotting/` utilities)
 - `eval/sigma_evaluator` (sigma sweeps / tables)
 - `eval/quaver` (quaver workflows)
 - `eval/spectra` (spectral analysis)
 - `eval/tc` (tropical cyclone evaluation)
+
+## Deprecated
+- `eval/jobs/generate_predictions_25_files.py` — use `python -m eval.predict.main` instead
 
 Canonical one-date non-TC local plots:
 ```bash

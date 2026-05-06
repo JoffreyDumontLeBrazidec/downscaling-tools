@@ -45,8 +45,9 @@ SIGMA_RUN_ID=""
 # TC settings
 TC_EVENTS="idalia,franklin"
 TC_SUPPORT_MODE="regridded"       # native | regridded
-BASE_TC_DIR="/home/ecm5702/hpcperm/data/tc"
+BASE_TC_DIR="/home/ecm5702/perm/reference/o96_o320/tc"
 TC_EXTRA_REFERENCE_EXPIDS=""      # comma-separated extra reference expids for TC PDF
+TC_ANALYSIS_EXPID=""              # analysis truth anchor, e.g. OPER_O320_0001
 TC_DISPLAY_LABEL=""               # blank => auto-cut from RUN_ID for TC PDF legends
 
 # Spectra settings
@@ -64,7 +65,7 @@ SPECTRA_LMAX=319
 SPECTRA_MEMBER_AGG="raw-members"   # per-file-mean | raw-members
 SPECTRA_MEMBER_LIST="1,2,3,4,5,6,7,8,9,10"
 SPECTRA_TEMPLATE_ROOT=""           # blank => auto-detect from prediction grid point count
-SPECTRA_REFERENCE_BASE="/home/ecm5702/hpcperm/reference_spectra"
+SPECTRA_REFERENCE_BASE="/home/ecm5702/perm/reference/spectra"
 SPECTRA_COMPARE_MODELS="enfo_o320,eefo_o96"
 SPECTRA_REFERENCE_ROOT="${SPECTRA_REFERENCE_BASE}/enfo_o320"
 
@@ -147,22 +148,30 @@ if [[ "${TC_SUPPORT_MODE}" == "regridded" ]]; then
     die "TC_SUPPORT_MODE=regridded requires metview. Use AC or switch to native mode."
 fi
 
-TC_EVENT_TAG="${TC_EVENTS//,/_}"
+TC_EVENT_TAG="${TC_EVENTS//,/__}"
 TC_EVENT_TAG="${TC_EVENT_TAG// /}"
 if [[ -z "${TC_EVENT_TAG}" ]]; then
   TC_EVENT_TAG="all_events"
 fi
-TC_OUT_NAME="tc_normed_pdfs_${TC_EVENT_TAG}_${RUN_ID}_from_predictions.pdf"
-TC_STATS="${RUN_ROOT}/${TC_OUT_NAME%.pdf}.stats.json"
+# Canonical output paths (eval-data-contract)
+mkdir -p "${RUN_ROOT}/data/tc" "${RUN_ROOT}/plots/tc" "${RUN_ROOT}/data/spectra"
+TC_OUT_NAME="${TC_EVENT_TAG}.pdf"
+TC_STATS="${RUN_ROOT}/data/tc/${TC_EVENT_TAG}.stats.json"
+TC_PDF="${RUN_ROOT}/plots/tc/${TC_EVENT_TAG}.pdf"
 
+# Spectra output — always canonical data/spectra
+SPECTRA_OUT="${RUN_ROOT}/data/spectra"
+# Legacy symlink for old-style paths
 if [[ "${SPECTRA_METHOD}" == "ecmwf" ]]; then
-  SPECTRA_OUT="${RUN_ROOT}/spectra_proxy10_subset_ecmwf"
+  ln -sfn "data/spectra" "${RUN_ROOT}/spectra_proxy10_subset_ecmwf" 2>/dev/null || true
 else
-  SPECTRA_OUT="${RUN_ROOT}/spectra_proxy10_subset_proxy"
+  ln -sfn "data/spectra" "${RUN_ROOT}/spectra_proxy10_subset_proxy" 2>/dev/null || true
 fi
 SUBSET_DIR="${RUN_ROOT}/predictions_proxy10_subset"
-SFC_OUT="${RUN_ROOT}/surface_loss_summary.json"
-METRICS_JSON="${RUN_ROOT}/scoreboard_metrics.json"
+# Canonical surface loss and metrics paths
+SFC_OUT="${RUN_ROOT}/data/surface_loss.json"
+METRICS_JSON="${RUN_ROOT}/metrics.json"
+mkdir -p "${RUN_ROOT}/data"
 STAGE_HELPER="${TEMPLATE_DIR}/stage_prediction_spectra_gribs.py"
 COMPUTE_REFERENCE="/home/ecm5702/dev/post_prepml/spectra/compute_reference_spectra.py"
 PLOT_REFERENCE="${REPO_ROOT}/eval/spectra/plot_reference_models_compare.py"
@@ -233,11 +242,11 @@ p = Path(sys.argv[1])
 with xr.open_dataset(p) as ds:
     n = int(ds["lat_hres"].size)
 if n >= 6_000_000:
-    print("/home/ecm5702/hpcperm/reference_spectra/enfo_o1280")
+    print("/home/ecm5702/perm/reference/o320_o1280/spectra/enfo_o1280")
 elif n >= 300_000:
-    print("/home/ecm5702/hpcperm/reference_spectra/enfo_o320")
+    print("/home/ecm5702/perm/reference/o96_o320/spectra/enfo_o320")
 else:
-    print("/home/ecm5702/hpcperm/reference_spectra/eefo_o96")
+    print("/home/ecm5702/perm/reference/o48_o96/spectra/eefo_o96")
 PY
 )"
   fi
@@ -314,8 +323,16 @@ summary = metrics.build_spectra_summary(out_dir, reference_root=ref_root)
 print(f"Wrote scoreboard-compatible spectra summary: {out_dir / 'spectra_summary.json'}")
 PY
 
+  # Create canonical summary.json alias
+  if [[ -f "${SPECTRA_OUT}/spectra_summary.json" ]] && [[ ! -e "${SPECTRA_OUT}/summary.json" ]]; then
+    ln -sfn "spectra_summary.json" "${SPECTRA_OUT}/summary.json"
+  fi
+
   IFS=',' read -r -a SPECTRA_COMPARE_ARRAY <<< "${SPECTRA_COMPARE_MODELS}"
-  PLOT_MODELS="$(basename "${SPECTRA_OUT}")"
+  # For plot_reference, use a named symlink so base-dir model resolution works
+  SPECTRA_PLOT_LINK="data_spectra"
+  ln -sfn "${SPECTRA_OUT}" "${RUN_ROOT}/${SPECTRA_PLOT_LINK}" 2>/dev/null || true
+  PLOT_MODELS="${SPECTRA_PLOT_LINK}"
   for ref_model in "${SPECTRA_COMPARE_ARRAY[@]}"; do
     [[ -n "${ref_model}" ]] || continue
     [[ "${ref_model}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Unsafe reference model token: ${ref_model}"
@@ -340,7 +357,7 @@ cd "${REPO_ROOT}"
 TC_CMD=(
   python -m eval.tc.workflows pdf
   --predictions-dir "${PRED_DIR}"
-  --outdir "${RUN_ROOT}"
+  --outdir "${RUN_ROOT}/plots/tc"
   --run-label "${RUN_ID}"
   --out-name "${TC_OUT_NAME}"
   --base-tc-dir "${BASE_TC_DIR}"
@@ -355,11 +372,28 @@ fi
 if [[ -n "${TC_DISPLAY_LABEL}" ]]; then
   TC_CMD+=(--display-label "${TC_DISPLAY_LABEL}")
 fi
+if [[ -n "${TC_ANALYSIS_EXPID}" ]]; then
+  TC_CMD+=(--analysis-expid "${TC_ANALYSIS_EXPID}")
+fi
 "${TC_CMD[@]}"
+
+# Move stats.json from plots/tc/ to data/tc/ (Python writes it alongside PDF)
+TC_STATS_FROM_WORKFLOW="${RUN_ROOT}/plots/tc/${TC_EVENT_TAG}.stats.json"
+if [[ -f "${TC_STATS_FROM_WORKFLOW}" ]] && [[ "${TC_STATS_FROM_WORKFLOW}" != "${TC_STATS}" ]]; then
+  mv "${TC_STATS_FROM_WORKFLOW}" "${TC_STATS}"
+fi
+
+# Legacy compat symlinks
+LEGACY_TC_STEM="tc_normed_pdfs_${TC_EVENT_TAG}_${RUN_ID}_from_predictions"
+ln -sfn "data/tc/${TC_EVENT_TAG}.stats.json" "${RUN_ROOT}/${LEGACY_TC_STEM}.stats.json" 2>/dev/null || true
+ln -sfn "plots/tc/${TC_EVENT_TAG}.pdf" "${RUN_ROOT}/${LEGACY_TC_STEM}.pdf" 2>/dev/null || true
 
 python "${REPO_ROOT}/eval/jobs/scoreboard_surface_loss.py" \
   --predictions-dir "${PRED_DIR}" \
   --out-json "${SFC_OUT}"
+
+# Legacy compat symlink for surface loss
+ln -sfn "data/surface_loss.json" "${RUN_ROOT}/surface_loss_summary.json" 2>/dev/null || true
 
 if [[ "${WRITE_CLEAN_SCOREBOARDS}" -eq 1 ]]; then
   python "${REPO_ROOT}/eval/jobs/generate_clean_scoreboards.py"
@@ -370,7 +404,7 @@ python "${REPO_ROOT}/eval/jobs/generate_enfo_o320_scoreboard.py" \
   --out-md "${SCOREBOARD_MD}"
 
 if [[ "${WRITE_METRICS_JSON}" -eq 1 ]]; then
-python - "${RUN_ID}" "${OUTPUT_ROOT}" "${SIGMA_RUN_ID}" "${TC_STATS}" "${SPECTRA_OUT}" "${SFC_OUT}" "${METRICS_JSON}" "${REPO_ROOT}" <<'PY'
+python - "${RUN_ID}" "${OUTPUT_ROOT}" "${SIGMA_RUN_ID}" "${TC_STATS}" "${SPECTRA_OUT}" "${SFC_OUT}" "${METRICS_JSON}" "${REPO_ROOT}" "${RUN_ROOT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -385,6 +419,21 @@ tc_stats = Path(sys.argv[4])
 spectra_dir = Path(sys.argv[5])
 surface_json = Path(sys.argv[6])
 out_json = Path(sys.argv[7])
+run_root = Path(sys.argv[9])
+
+# Try to read lane/checkpoint info from EXPERIMENT_CONFIG.yaml
+lane = ""
+checkpoint_id = ""
+checkpoint_step = 0
+scope = {}
+config_path = run_root / "EXPERIMENT_CONFIG.yaml"
+if config_path.exists():
+    import yaml
+    config = yaml.safe_load(config_path.read_text()) or {}
+    lane = config.get("lane", "o96_o320")
+    checkpoint_id = config.get("checkpoint_id", "")
+    checkpoint_step = int(config.get("checkpoint_step", 0))
+    scope = config.get("scope", {})
 
 out = metrics.build_run_scoreboard_metrics(
     run_id=run_id,
@@ -393,17 +442,25 @@ out = metrics.build_run_scoreboard_metrics(
     tc_stats_path=tc_stats,
     spectra_dir=spectra_dir,
     surface_json_path=surface_json,
+    lane=lane,
+    checkpoint_id=checkpoint_id,
+    checkpoint_step=checkpoint_step,
+    scope=scope,
 )
 
 out_json.write_text(json.dumps(out, indent=2))
 print(json.dumps(out, indent=2))
 print(f"Saved: {out_json}")
 PY
+
+# Legacy compat symlinks for metrics
+ln -sfn "metrics.json" "${RUN_ROOT}/scoreboard_metrics.json" 2>/dev/null || true
 fi
 
 echo "DONE run_id=${RUN_ID}"
 echo "SCOREBOARD_MD=${SCOREBOARD_MD}"
 echo "TC_STATS=${TC_STATS}"
+echo "TC_PDF=${TC_PDF}"
 echo "SPECTRA_SUMMARY=${SPECTRA_OUT}/spectra_summary.json"
 echo "SFC_SUMMARY=${SFC_OUT}"
 [[ "${WRITE_METRICS_JSON}" -eq 1 ]] && echo "METRICS_JSON=${METRICS_JSON}"

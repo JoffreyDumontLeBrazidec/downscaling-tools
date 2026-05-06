@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path
+from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path, reference_spectra_dir
 
 
 FIELDS = ["2t_sfc", "10u_sfc", "10v_sfc", "t_850", "z_500"]
@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fields", default=",".join(FIELDS))
     p.add_argument("--samples-per-field", type=int, default=5)
     p.add_argument("--ai-spectra-root", default="/home/ecm5702/perm/ai_spectra")
-    p.add_argument("--reference-root", default="/home/ecm5702/hpcperm/reference_spectra/enfo_o320")
+    p.add_argument("--reference-root", default=str(reference_spectra_dir("enfo_o320")))
     p.add_argument("--eval-root", default=DEFAULT_EVAL_ROOT)
     p.add_argument("--output-dir", default="")
     p.add_argument(

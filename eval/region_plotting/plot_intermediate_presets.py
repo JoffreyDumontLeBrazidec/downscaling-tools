@@ -12,7 +12,10 @@ from anemoi.training.diagnostics.maps import Coastlines
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 
-from eval.region_plotting.local_plotting import get_region_ds, plot_x_y
+from .local_plotting import plot_x_y
+from .plotting.config import RENDER_DPI
+from .plotting.coordinate_utils import get_region_ds
+from .plotting.datetime_utils import is_valid_date
 
 
 CONTINENTS = Coastlines()
@@ -58,7 +61,9 @@ def _build_panel_ds(
         attrs=ds.attrs,
     )
     if "date" in ds_m:
-        out["date"] = ds_m["date"].isel(sample=0)
+        date_value = ds_m["date"].isel(sample=0).values
+        if is_valid_date(date_value):
+            out["date"] = ds_m["date"].isel(sample=0)
 
     model_vars = ["x", "y", "y_pred"]
     for st in ordered_steps:
@@ -210,10 +215,10 @@ def main() -> None:
         with PdfPages(out) as pdf:
             pdf.savefig(fig)
     else:
-        fig.savefig(out, dpi=220)
+        fig.savefig(out, dpi=RENDER_DPI)
 
     if args.also_png:
-        fig.savefig(Path(args.also_png), dpi=220)
+        fig.savefig(Path(args.also_png), dpi=RENDER_DPI)
     plt.close(fig)
 
     print(out)

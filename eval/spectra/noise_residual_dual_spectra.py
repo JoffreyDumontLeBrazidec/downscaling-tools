@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 import xarray as xr
+from eval.paths import reference_spectra_dir
 from eccodes import (
     codes_clone,
     codes_get,
@@ -66,7 +67,7 @@ CASE_CONFIGS: list[CaseConfig] = [
         high_dataset="/home/mlx/ai-ml/datasets/downscaling-od-cf-enfh-0001-mars-o320-2003-2023-12h-v3.zarr",
         matrix_file="/home/ecm5702/hpcperm/data/inter_mat/interpol_O96_to_O320_linear.mat.npz",
         residual_stats_file="/home/ecm5702/hpcperm/data/residuals_statistics/o320_dict_0_72.npy",
-        template_root="/home/ecm5702/hpcperm/reference_spectra/enfo_o320",
+        template_root=str(reference_spectra_dir("enfo_o320")),
     ),
     CaseConfig(
         case_id="o1280_from_o320",
@@ -75,7 +76,7 @@ CASE_CONFIGS: list[CaseConfig] = [
         high_dataset="/home/mlx/ai-ml/datasets/downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3.zarr",
         matrix_file="/home/ecm5702/hpcperm/data/inter_mat/interpol_O320_to_O1280_linear.mat.npz",
         residual_stats_file="/home/ecm5702/hpcperm/data/residuals_statistics/o1280_dict_0_72.npy",
-        template_root="/home/ecm5702/hpcperm/reference_spectra/enfo_o1280",
+        template_root=str(reference_spectra_dir("enfo_o1280")),
     ),
     CaseConfig(
         case_id="o2560_from_o1280",
@@ -84,7 +85,7 @@ CASE_CONFIGS: list[CaseConfig] = [
         high_dataset="/home/mlx/ai-ml/datasets/downscaling-rd-fc-oper-i4ql-mars-o2560-2023-2024-24h-v1.zarr",
         matrix_file="/home/ecm5702/hpcperm/data/inter_mat/interpol_O1280_to_O2560_linear.mat.npz",
         residual_stats_file="/home/ecm5702/hpcperm/data/residuals_statistics/o2560_dict_6_72.npy",
-        template_root="/home/ecm5702/hpcperm/reference_spectra/destine_o2560_i4ql",
+        template_root=str(reference_spectra_dir("destine_o2560_i4ql")),
     ),
 ]
 

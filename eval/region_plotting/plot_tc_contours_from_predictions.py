@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -11,8 +10,11 @@ import xarray as xr
 from anemoi.training.diagnostics.maps import Coastlines
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval.region_plotting.local_plotting import ensure_x_interp_for_plotting, get_region_ds
-from eval.region_plotting.plot_regions import PREDICTION_REGION_BOXES, _sample_meta_title
+from .plotting.config import PREDICTION_REGION_BOXES, RENDER_DPI
+from .plotting.coordinate_utils import get_region_ds
+from .plotting.manifest import write_manifest
+from .plotting.metadata import sample_meta_title
+from .plotting.preprocessing import ensure_x_interp_for_plotting
 
 DEFAULT_REGIONS = ["idalia", "franklin"]
 COASTLINES = Coastlines()
@@ -66,7 +68,6 @@ def _draw_panel(ax, lon: np.ndarray, lat: np.ndarray, field: np.ndarray, *, leve
 
 
 def _write_manifest(*, out_root: Path, predictions_path: Path, region_names: list[str], sample_index: int, ensemble_member_index: int, generated: list[str]) -> Path:
-    manifest_path = out_root / "manifest.json"
     payload = {
         "suite_kind": "storm",
         "plot_style": "tc_contour",
@@ -81,8 +82,7 @@ def _write_manifest(*, out_root: Path, predictions_path: Path, region_names: lis
             "columns": ["x_interp", "y", "y_pred"],
         },
     }
-    manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return manifest_path
+    return write_manifest(out_root=out_root, payload=payload)
 
 
 def render_tc_contour_suite_from_predictions_file(
@@ -179,15 +179,15 @@ def render_tc_contour_suite_from_predictions_file(
                 cbar_bottom = fig.colorbar(bottom_mappables[0], ax=axs[1, :], orientation="horizontal", fraction=0.04, pad=0.07, aspect=45)
                 cbar_bottom.set_label("Wind10m (m/s)", fontsize=10)
 
-                fig.suptitle(_sample_meta_title(ds_region, region_name, sample_index) + " | contour_tc", fontsize=13, y=0.99)
+                fig.suptitle(sample_meta_title(ds_region, region_name, sample_index) + " | contour_tc", fontsize=13, y=0.99)
                 fig.tight_layout(rect=[0, 0.03, 1, 0.96])
                 pdf.savefig(fig)
                 region_pdf = out_root / f"{region_name}.pdf"
-                fig.savefig(region_pdf, dpi=220)
+                fig.savefig(region_pdf, dpi=RENDER_DPI)
                 generated.append(str(region_pdf))
                 if also_png:
                     region_png = out_root / f"{region_name}.png"
-                    fig.savefig(region_png, dpi=220)
+                    fig.savefig(region_png, dpi=RENDER_DPI)
                     generated.append(str(region_png))
                 plt.close(fig)
 

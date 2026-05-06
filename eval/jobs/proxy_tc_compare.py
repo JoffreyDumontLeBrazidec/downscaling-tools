@@ -234,6 +234,11 @@ def main() -> None:
     parser.add_argument("--anchor-json", required=True, help="Path to anchor diagnostic JSON.")
     parser.add_argument("--out-json", default="", help="Output comparison JSON.")
     parser.add_argument("--support-mode", choices=["native", "regridded"], default="native")
+    parser.add_argument(
+        "--analysis-expid",
+        default="",
+        help="Analysis truth expid passed to regridded diagnostics.",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -257,6 +262,7 @@ def main() -> None:
         proxy_data = diagnose_per_bundle(
             args.proxy_predictions_dir,
             support_mode=args.support_mode,
+            analysis_expid=args.analysis_expid or None,
         )
 
     # Compare

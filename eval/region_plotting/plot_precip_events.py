@@ -18,6 +18,8 @@ import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
+from .plotting.datetime_utils import safe_datetime_str
+
 PRECIP_VARS = ("tp", "cp")
 DEFAULT_DLAT = 18
 DEFAULT_DLON = 22
@@ -36,7 +38,7 @@ def _iter_samples(src: Path):
             si = ds.isel(sample=i) if "sample" in ds.dims else ds
             si = si.isel(ensemble_member=0) if "ensemble_member" in si.dims else si
             date_val = si["date"].values if "date" in si else i
-            yield str(date_val), si
+            yield safe_datetime_str(date_val) or str(i), si
         ds.close()
     elif src.is_dir():
         files = sorted(src.glob("predictions_*.nc"))
@@ -47,7 +49,7 @@ def _iter_samples(src: Path):
             si = ds.isel(sample=0) if "sample" in ds.dims else ds
             si = si.isel(ensemble_member=0) if "ensemble_member" in si.dims else si
             date_val = si["date"].values if "date" in si else f.stem
-            yield str(date_val), si
+            yield safe_datetime_str(date_val) or f.stem, si
             ds.close()
     else:
         raise FileNotFoundError(f"Not a file or directory: {src}")

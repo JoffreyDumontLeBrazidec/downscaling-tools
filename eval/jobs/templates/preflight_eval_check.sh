@@ -108,7 +108,7 @@ preflight_predictions_dir() {
 
 preflight_tc_refs() {
   # Check that TC reference GRIB data exists for given events.
-  local base_tc_dir="${2:-/home/ecm5702/hpcperm/data/tc}"
+  local base_tc_dir="${2:-/home/ecm5702/perm/reference/o96_o320/tc}"
   local events
   IFS=',' read -ra events <<< "$1"
   for event in "${events[@]}"; do

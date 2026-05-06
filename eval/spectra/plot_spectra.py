@@ -5,6 +5,8 @@ import os
 import cmcrameri.cm as cmc
 import warnings
 
+from eval.paths import reference_spectra_dir
+
 
 OUTPUT_DIR = "/home/ecm5702/plots/spectra"
 
@@ -79,7 +81,7 @@ EXPVER_CONFIGS += [
     {
         "name": n,
         "type": "hpc",
-        "base_path": f"/home/ecm5702/hpcperm/reference_spectra/{n}",
+        "base_path": str(reference_spectra_dir(n)),
         "label": "eefo O96",
     },
 ]
@@ -89,7 +91,7 @@ EXPVER_CONFIGS += [
     {
         "name": n,
         "type": "hpc",
-        "base_path": f"/home/ecm5702/hpcperm/reference_spectra/{n}",
+        "base_path": str(reference_spectra_dir(n)),
         "label": "enfo O320",
     },
 ]

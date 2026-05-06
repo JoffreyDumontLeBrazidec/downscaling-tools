@@ -144,7 +144,7 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
   - Auto spectra policy:
     - AC submit host -> ECMWF spectra
     - AG submit host -> proxy spectra
-  - `RUN_TC_PDF=1` is optional. Humberto is now registered in `eval/tc/events.py`, but the smooth default still depends on the staged reference GRIBs under `/home/ecm5702/hpcperm/data/tc/humberto/`.
+  - `RUN_TC_PDF=1` is optional. Humberto is now registered in `eval/tc/events.py`, but the smooth default still depends on the staged reference GRIBs under `/home/ecm5702/perm/reference/o48_o96/tc/humberto/`.
 - `submit_o320_o1280_manual_eval_flow.sh`
   - Login-node helper for the weak-agent-safe `o320 -> o1280` lane.
   - Validates checkpoint profile, auto-resolves stack flavor, defaults to `PHASE=proxy`, and renders run-local copies of:

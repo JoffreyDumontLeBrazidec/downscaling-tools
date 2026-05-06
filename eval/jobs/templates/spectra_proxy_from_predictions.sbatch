@@ -34,7 +34,8 @@ RUN_ID="REPLACE_RUN_ID"
 PREDICTIONS_SOURCE_DIR="${RUN_ROOT}/predictions"
 SUBSET_TAG="all_dates_all_steps"
 SUBSET_DIR="${RUN_ROOT}/predictions_subset_${SUBSET_TAG}"
-OUT_DIR="${RUN_ROOT}/spectra_proxy_${SUBSET_TAG}"
+# Canonical output path (eval-data-contract)
+OUT_DIR="${RUN_ROOT}/data/spectra"
 DATE_LIST="ALL"                                          # CSV or ALL
 STEP_LIST="ALL"                                          # CSV or ALL
 WEATHER_STATES="10u,10v,2t,msl,t_850,z_500"
@@ -153,9 +154,21 @@ echo "[INFO] Running: ${CMD[*]}"
 SUMMARY_JSON="${OUT_DIR}/spectra_summary.json"
 [[ -f "${SUMMARY_JSON}" ]] || die "Expected spectra summary missing: ${SUMMARY_JSON}"
 
+# Canonical alias: summary.json (eval-data-contract expects data/spectra/summary.json)
+if [[ -f "${SUMMARY_JSON}" ]] && [[ ! -e "${OUT_DIR}/summary.json" ]]; then
+  ln -sfn "spectra_summary.json" "${OUT_DIR}/summary.json"
+fi
+
+# Legacy compat symlink at old location
+ln -sfn "data/spectra" "${RUN_ROOT}/spectra_proxy_${SUBSET_TAG}" 2>/dev/null || true
+
 # --- PDF generation: always attempted after successful compute (non-fatal) ---
 PLOT_PDF_PY="${PROJECT_ROOT}/eval/jobs/templates/spectra_plot_pdf.py"
 CURVE_SUMMARY="${OUT_DIR}/spectra_curve_summary.json"
+# Also check canonical curves.json name
+if [[ ! -f "${CURVE_SUMMARY}" ]] && [[ -f "${OUT_DIR}/curves.json" ]]; then
+  CURVE_SUMMARY="${OUT_DIR}/curves.json"
+fi
 CONSOLIDATED_PDF="${RUN_ROOT}/spectra_proxy.pdf"
 if [[ -f "${PLOT_PDF_PY}" ]] && [[ -f "${CURVE_SUMMARY}" ]]; then
   echo "[INFO] Generating consolidated PDF from curve summary..."
