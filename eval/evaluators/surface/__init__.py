@@ -1,1 +1,9 @@
-"""surface evaluator. Implementation in Phase 4."""
+"""Surface (nMSE) evaluator."""
+from .scorer import score
+
+EVALUATOR_SPEC = {
+    "name": "surface",
+    "default_enabled": True,
+    "scoreboard": True,
+    "requires": ["predictions"],
+}
