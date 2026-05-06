@@ -53,3 +53,13 @@ class SurfaceMetrics:
     variables: dict[str, dict] = field(default_factory=dict)
     top_contributors: list[dict] = field(default_factory=list)
     source_path: str = ""
+
+
+@dataclass
+class ScoreRecord:
+    """Single metric from an evaluator's score() output."""
+
+    evaluator: str
+    metric: str
+    value: float
+    unit: str
