@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from eval.scoreboard._utils import finite_float, load_json
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -77,22 +78,8 @@ SIGMA_LEVELS = (1.0, 5.0, 10.0, 100.0)
 CHECKPOINT_TOKEN_RE = re.compile(r"(?:^|manual_)([0-9a-f]{7,64})(?:_|$)")
 
 
-def finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
 def sigma_fragment(sigma: float) -> str:
     return f"{sigma:g}"
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    with path.open() as handle:
-        data = json.load(handle)
-    return data if isinstance(data, dict) else {}
 
 
 def load_mapping_file(path: Path) -> dict[str, Any]:
