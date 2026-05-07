@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from eval.scoreboard._surface_compute import SURFACE_NORMALIZATION_SCHEME
 from eval.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
 SURFACE_VAR_LABELS = {
     "10u": "10u",
@@ -17,7 +18,6 @@ SURFACE_VAR_LABELS = {
     "sp": "SP",
     "tcw": "TCW",
 }
-SURFACE_NORMALIZATION_SCHEME = "truth-std"
 
 
 
@@ -68,9 +68,9 @@ def load_x_interp_surface_metrics(
     *,
     truth_std_by_variable: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    from eval.jobs import scoreboard_surface_loss as surface_loss
+    from eval.scoreboard._surface_compute import process_predictions_dir
 
-    metrics = surface_loss.process_predictions_dir(
+    metrics = process_predictions_dir(
         predictions_dir,
         prediction_var="x_interp",
         truth_var="y",
