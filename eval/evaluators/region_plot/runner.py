@@ -37,13 +37,13 @@ def run(
 
     cmd = [
         sys.executable, "-m", "eval.region_plotting.plot_regions",
-        "--predictions-dir", str(predictions_dir),
+        "--predictions-nc", str(pred_files[0].path),
         "--out-dir", str(output_dir),
     ]
 
     region_names = eval_config.get("region_names")
     if region_names:
-        cmd += ["--region-names", ",".join(region_names)]
+        cmd += ["--regions", ",".join(region_names)]
 
     LOG.info("region_plot subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)

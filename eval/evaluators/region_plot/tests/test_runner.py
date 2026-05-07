@@ -25,8 +25,8 @@ def test_run_invokes_plot_regions_module(tmp_path):
     cmd = args[0]
     assert "-m" in cmd
     assert "eval.region_plotting.plot_regions" in cmd
-    assert "--predictions-dir" in cmd
-    assert str(predictions_dir.resolve()) in cmd
+    assert "--predictions-nc" in cmd
+    assert str((predictions_dir / "predictions_20230828_step024.nc").resolve()) in cmd
     assert "--out-dir" in cmd
     assert str(output_dir) in cmd
 
