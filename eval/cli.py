@@ -27,6 +27,7 @@ LOG = logging.getLogger(__name__)
 ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
     "sigma", "mechanistic", "intermediate",
+    "spectra_ecmwf", "mlflow",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -300,10 +301,12 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
 
     predictions_dir = output_dir / "predictions"
 
-    # Resolve input_root from host config
-    env_setup = host_config.get("environment_setup", {})
-    exports = env_setup.get("exports", {})
-    input_root = exports.get("DATA_DIR", "")
+    # Resolve input_root: lane config takes precedence over host DATA_DIR
+    input_root = predict_cfg.get("input_root", "")
+    if not input_root:
+        env_setup = host_config.get("environment_setup", {})
+        exports = env_setup.get("exports", {})
+        input_root = exports.get("DATA_DIR", "")
 
     cmd = [
         sys.executable, "-m", "eval.predict.main",

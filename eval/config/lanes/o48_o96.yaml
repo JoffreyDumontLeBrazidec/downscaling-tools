@@ -1,4 +1,5 @@
 predict:
+  input_root: /home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   steps: [24, 48, 72, 96, 120]
   dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
@@ -43,7 +44,7 @@ regions:
 
 evaluator_groups:
   default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate]
+  diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
 
 resource_profiles:
   predict:
@@ -57,14 +58,14 @@ resource_profiles:
     mem: 128G
   evaluate_tc:
     time: "06:00:00"
-    mem: 256G
+    mem: 128G
     cpus: 4
   evaluate_spectra:
     time: "08:00:00"
     mem: 128G
   evaluate_region_plot:
     time: "06:00:00"
-    mem: 256G
+    mem: 128G
     cpus: 8
   evaluate_sigma:
     gpus: 1
