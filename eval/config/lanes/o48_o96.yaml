@@ -39,6 +39,11 @@ tc:
   mslp_ref: 1013.25
   events: ["humberto"]
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir: "/home/ecm5702/perm/reference/o48_o96/tc"
+  analysis_expid: "OPER_O96_0001"
+  reference_expids: ["ENFO_O48_0001"]
+  # Add IEKM_O48_<EXPID> to reference_expids once surface_pf_IEKM_O48_*_<date>.grib files are staged
+  support_mode: "regridded"
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
