@@ -73,40 +73,6 @@ require_choice() {
   fi
 }
 
-set_var() {
-  local file="$1"
-  local var="$2"
-  local value="$3"
-  python - "$file" "$var" "$value" <<'PY'
-import pathlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-var = sys.argv[2]
-value = sys.argv[3]
-pattern = re.compile(rf"^{re.escape(var)}=.*$")
-lines = path.read_text().splitlines()
-updated = False
-for i, line in enumerate(lines):
-    if pattern.match(line):
-        lines[i] = f'{var}="{value}"'
-        updated = True
-        break
-if not updated:
-    raise SystemExit(f"Variable not found in {path}: {var}")
-path.write_text("\n".join(lines) + "\n")
-PY
-}
-
-extract_job_id() {
-  local submit_output="$1"
-  local job_id
-  job_id="$(printf '%s\n' "${submit_output}" | awk '{print $NF}')"
-  [[ "${job_id}" =~ ^[0-9]+$ ]] || die "Could not parse job id from sbatch output: ${submit_output}"
-  printf '%s\n' "${job_id}"
-}
-
 require_choice "${STACK_FLAVOR}" new old
 require_choice "${LANE}" o96_o320 o320_o1280 o1280_o2560
 require_choice "${SOURCE_HPC}" ac ag leonardo jupiter
@@ -140,6 +106,7 @@ fi
 [[ "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]] || die "Unsafe RUN_ID: ${RUN_ID}"
 
 TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${TEMPLATE_DIR}/render_helpers.sh"
 INFER_TEMPLATE="${TEMPLATE_DIR}/strict_manual_predict_x_bundle.sbatch"
 SIGMA_TEMPLATE="${TEMPLATE_DIR}/scoreboard_sigma_eval.sbatch"
 WRITE_TEMPLATE="${TEMPLATE_DIR}/scoreboard_write_from_predictions.sbatch"
