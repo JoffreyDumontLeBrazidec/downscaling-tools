@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from eval.spectra.calibrate_fast_spectra_proxy import (
+from eval._legacy_kernels.spectra.calibrate_fast_spectra_proxy import (
     aggregate_points,
     apply_log_model,
     collect_samples,

@@ -36,7 +36,7 @@ def run(
         raise FileNotFoundError(f"No prediction files found in {predictions_dir}")
 
     cmd = [
-        sys.executable, "-m", "eval.region_plotting.plot_regions",
+        sys.executable, "-m", "eval._legacy_kernels.region_plotting.plot_regions",
         "--predictions-nc", str(pred_files[0].path),
         "--out-dir", str(output_dir),
     ]

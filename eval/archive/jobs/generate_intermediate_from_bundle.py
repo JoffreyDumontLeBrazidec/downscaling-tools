@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from eval.plot_intermediate.plot_intermediate import _predict_with_intermediates_single_member
+from eval._legacy_kernels.plot_intermediate.plot_intermediate import _predict_with_intermediates_single_member
 from manual_inference.input_data_construction.bundle import (
     extract_target_from_bundle,
     load_inputs_from_bundle_numpy,

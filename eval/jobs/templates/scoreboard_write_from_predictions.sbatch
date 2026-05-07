@@ -362,7 +362,7 @@ fi
 
 cd "${REPO_ROOT}"
 TC_CMD=(
-  python -m eval.tc.workflows pdf
+  python -m eval._legacy_kernels.tc.workflows pdf
   --predictions-dir "${PRED_DIR}"
   --outdir "${RUN_ROOT}/plots/tc"
   --run-label "${RUN_ID}"

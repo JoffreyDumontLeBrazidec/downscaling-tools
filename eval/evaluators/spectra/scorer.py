@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval.scoreboard.spectra import (
+from eval._legacy_kernels.scoreboard.spectra import (
     SPECTRA_FIELDS,
     load_spectra_metrics,
     spectra_score,

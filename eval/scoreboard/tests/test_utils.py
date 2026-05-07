@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from eval.scoreboard._utils import finite_float, load_json
+from eval._legacy_kernels.scoreboard._utils import finite_float, load_json
 
 
 def test_finite_float_accepts_finite_int():

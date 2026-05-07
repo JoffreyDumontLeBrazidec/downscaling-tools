@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from eval.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
+from eval._legacy_kernels.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
 import numpy as np
 
 SPECTRA_FIELDS = ("10u", "10v", "2t", "msl", "t_850", "z_500")

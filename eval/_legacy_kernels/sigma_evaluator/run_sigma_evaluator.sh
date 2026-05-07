@@ -36,4 +36,4 @@ out_file="sigma_eval_table_100000.csv"
 
 
 export PYTHONPATH="/home/ecm5702/dev/downscaling-tools:${PYTHONPATH:-}"
-srun python -u -m eval.sigma_evaluator.run_sigma_evaluator --name_exp $name_exp --name_ckpt $name_ckpt --out_file $out_file
+srun python -u -m eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator --name_exp $name_exp --name_ckpt $name_ckpt --out_file $out_file

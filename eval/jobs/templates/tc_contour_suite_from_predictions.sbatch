@@ -82,7 +82,7 @@ echo "[INFO] out_dir=${OUT_DIR}"
 echo "[INFO] regions=${REGION_NAMES}"
 
 CMD=(
-  "${PYTHON}" -m eval.region_plotting.plot_tc_contours_from_predictions
+  "${PYTHON}" -m eval._legacy_kernels.region_plotting.plot_tc_contours_from_predictions
   --predictions-nc "${PREDICTIONS_FILE}"
   --out-dir "${OUT_DIR}"
   --regions "${REGION_NAMES}"

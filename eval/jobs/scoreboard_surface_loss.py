@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from eval.scoreboard._surface_compute import (
+from eval._legacy_kernels.scoreboard._surface_compute import (
     SURFACE_NORMALIZATION_SCHEME,
     SURFACE_VARIABLES,
     TOTAL_WEIGHT,

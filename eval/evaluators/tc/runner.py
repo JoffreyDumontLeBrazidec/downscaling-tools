@@ -12,16 +12,16 @@ from pathlib import Path
 
 from eval.config.loader import load_event
 from eval.discovery.predictions import find_predictions
-from eval.tc.data_types import BoundingBox
-from eval.tc.events import EVENTS, TCEvent
-from eval.tc.experiment_config import TCExperimentConfig
-from eval.tc.loading_predictions import (
+from eval._legacy_kernels.tc.data_types import BoundingBox
+from eval._legacy_kernels.tc.events import EVENTS, TCEvent
+from eval._legacy_kernels.tc.experiment_config import TCExperimentConfig
+from eval._legacy_kernels.tc.loading_predictions import (
     event_days_steps,
     forecast_dates_for_event,
     select_prediction_files_for_event,
 )
-from eval.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
-from eval.tc.workflows import (
+from eval._legacy_kernels.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
+from eval._legacy_kernels.tc.workflows import (
     _json_default,
     compute_event_stats,
     load_curves_for_event,

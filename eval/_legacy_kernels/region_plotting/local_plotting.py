@@ -15,7 +15,7 @@ import xarray as xr
 from anemoi.training.diagnostics.maps import Coastlines
 from matplotlib.backends.backend_pdf import PdfPages
 
-from ..checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
+from eval.checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
 from .plotting.coordinate_utils import (
     _coord_name_for_array as shared_coord_name_for_array,
     get_region_ds as shared_get_region_ds,

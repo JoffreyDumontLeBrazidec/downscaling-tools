@@ -9,7 +9,7 @@ import pytest
 import xarray as xr
 
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "spectra" / "intermediate_sigma_curve.py"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "_legacy_kernels" / "spectra" / "intermediate_sigma_curve.py"
 
 
 def _load_module():

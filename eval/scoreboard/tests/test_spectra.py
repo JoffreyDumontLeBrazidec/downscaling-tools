@@ -7,7 +7,7 @@ import json
 import numpy as np
 import pytest
 
-from eval.scoreboard.spectra import (
+from eval._legacy_kernels.scoreboard.spectra import (
     finite_positive_mask,
     load_spectra_metrics,
     relative_l2,
@@ -82,7 +82,7 @@ def test_load_spectra_metrics_from_raw_arrays(tmp_path):
         "template_root": str(ref_root),
     }))
 
-    from eval.scoreboard.spectra import RAW_FIELD_DIRS
+    from eval._legacy_kernels.scoreboard.spectra import RAW_FIELD_DIRS
 
     for field_dir in RAW_FIELD_DIRS.values():
         run_dir = spectra_dir / field_dir

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path
-from eval.scoreboard.surface import surface_variable_nmse
+from eval._legacy_kernels.scoreboard.surface import surface_variable_nmse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTEXT_SCOREBOARD_CSV = Path(

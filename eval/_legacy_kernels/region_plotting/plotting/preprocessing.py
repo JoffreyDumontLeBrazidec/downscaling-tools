@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from ...checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
+from eval.checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
 
 
 def ensure_member_zero_plot_variables(ds: xr.Dataset) -> xr.Dataset:

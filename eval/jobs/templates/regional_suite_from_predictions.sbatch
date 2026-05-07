@@ -87,7 +87,7 @@ echo "[INFO] VIRTUAL_ENV=${VIRTUAL_ENV:-unset}"
 echo "[INFO] python=$(which python) ($("${PYTHON}" -V 2>&1))"
 
 CMD=(
-  "${PYTHON}" -m eval.region_plotting.plot_regions
+  "${PYTHON}" -m eval._legacy_kernels.region_plotting.plot_regions
   --predictions-nc "${PREDICTIONS_FILE}"
   --out-dir "${OUT_DIR}"
   --sample-index "${SAMPLE_INDEX}"

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.weight_diagnostics import plot_checkpoint_weights as mod
+from eval._legacy_kernels.weight_diagnostics import plot_checkpoint_weights as mod
 
 
 def test_build_arg_parser_accepts_all_supported_lanes():

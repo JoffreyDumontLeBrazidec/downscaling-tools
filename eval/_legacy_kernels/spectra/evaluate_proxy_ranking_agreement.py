@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from eval.paths import reference_spectra_dir
-from eval.spectra.calibrate_fast_spectra_proxy import (
+from eval._legacy_kernels.spectra.calibrate_fast_spectra_proxy import (
     apply_log_model,
     cl_from_unstructured,
     read_grib_latlon_values,

@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from eval.scoreboard._utils import finite_float as _finite_float
-from eval.scoreboard.row_matching import (
+from eval._legacy_kernels.scoreboard._utils import finite_float as _finite_float
+from eval._legacy_kernels.scoreboard.row_matching import (
     classify_row,
     find_model_row,
     find_row_by_predicate,
@@ -255,7 +255,7 @@ def load_tc_extreme_scores_from_json(
 
     # Backward compat: if no canonical provided, load from YAML
     if canonical_analysis_by_event is None:
-        from eval.scoreboard.canonical_data import load_canonical_analysis
+        from eval._legacy_kernels.scoreboard.canonical_data import load_canonical_analysis
 
         canonical_analysis_by_event = load_canonical_analysis("o320")
 

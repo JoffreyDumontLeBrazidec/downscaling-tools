@@ -12,7 +12,7 @@ import numpy as np
 import xarray as xr
 
 try:
-    from eval.spectra.calibrate_fast_spectra_proxy import (
+    from eval._legacy_kernels.spectra.calibrate_fast_spectra_proxy import (
         cl_from_unstructured as _healpy_cl_from_unstructured,
     )
 except ImportError:

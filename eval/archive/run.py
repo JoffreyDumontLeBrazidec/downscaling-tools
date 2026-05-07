@@ -63,7 +63,7 @@ def _copy_predictions_to_run(predictions_src: str, run_dir: Path) -> Path:
 
 
 def _run_region_plots(run_dir: Path) -> None:
-    from eval.region_plotting.plot_regions import run_region_plots_from_predictions
+    from eval._legacy_kernels.region_plotting.plot_regions import run_region_plots_from_predictions
 
     run_region_plots_from_predictions(
         run_parent_dir=run_dir.parent,
@@ -84,7 +84,7 @@ def _run_sigma_for_checkpoint(
     run_pure_noise: bool,
     run_noised: bool,
 ) -> Path:
-    from eval.sigma_evaluator.run_sigma_evaluator import main as sigma_main
+    from eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator import main as sigma_main
 
     argv = [
         "--name_exp",
@@ -203,7 +203,7 @@ def run_from_predictions(args: argparse.Namespace) -> Path:
 
 
 def run_from_mars_expver(args: argparse.Namespace) -> Path:
-    from eval.region_plotting.plot_regions import (
+    from eval._legacy_kernels.region_plotting.plot_regions import (
         build_predictions_dataset_from_expver,
         save_predictions_dataset,
     )

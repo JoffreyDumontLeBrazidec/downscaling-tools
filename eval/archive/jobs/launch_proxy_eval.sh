@@ -410,7 +410,7 @@ if [[ "\${WRITE_SCOREBOARD_ARTIFACTS}" -eq 1 ]]; then
   fi
   TC_EVENT_TAG="\${SCOREBOARD_TC_EVENTS//,/_}"
   TC_EVENT_TAG="\${TC_EVENT_TAG// /}"
-  python -m eval.tc.workflows pdf \\
+  python -m eval._legacy_kernels.tc.workflows pdf \\
     --predictions-dir "\${SUBSET_PRED_DIR}" \\
     --outdir "\${SUBSET_DIR}" \\
     --run-label "\${RUN_ID}" \\

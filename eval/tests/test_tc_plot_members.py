@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.tc import workflows as mod
+from eval._legacy_kernels.tc import workflows as mod
 
 
 def test_run_tc_member_plots_generates_expected_files(tmp_path: Path, monkeypatch):

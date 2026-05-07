@@ -3,7 +3,7 @@
 #
 # Runs `manual_inference.prediction.predict from-dataloader` with --debug-from-dataloader
 # on a multi-GPU node, validates the output, then immediately renders local region plots
-# via `eval.region_plotting.plot_one_date_local`.
+# via `eval._legacy_kernels.region_plotting.plot_one_date_local`.
 #
 # Designed for the o1280_o2560 lane (256 G model, 4-GPU DDP required) but accepts
 # o48_o96, o96_o320, and o320_o1280 with NTASKS=1 and no EXTRA_PREDICT_FLAGS.
@@ -279,7 +279,7 @@ print(f"Output validation OK: {path}")
 PY
 
 echo "[INFO] rendering local plots"
-python -m eval.region_plotting.plot_one_date_local \
+python -m eval._legacy_kernels.region_plotting.plot_one_date_local \
   --predictions-nc "${PRED_NC}" \
   --out "${PLOT_DIR}/member00_baseline.pdf" \
   --also-png "${PLOT_DIR}/member00_baseline.png" \

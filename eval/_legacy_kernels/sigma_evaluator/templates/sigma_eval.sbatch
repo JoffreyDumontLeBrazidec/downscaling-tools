@@ -88,7 +88,7 @@ OUT_CSV="/home/ecm5702/scratch/eval/scoreboards/sigma/${RUN_ID}_sigma_eval.csv"
 mkdir -p "$(dirname "$OUT_CSV")"
 
 # ---------- Run ----------
-srun python -u -m eval.sigma_evaluator.run_sigma_evaluator \
+srun python -u -m eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator \
     --name_exp "$CHECKPOINT_REF" \
     --name_ckpt "$CKPT_NAME" \
     --out_csv "$OUT_CSV" \
