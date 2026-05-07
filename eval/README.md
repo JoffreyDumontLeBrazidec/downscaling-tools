@@ -13,11 +13,15 @@ or by prepml/anemoi-inference experiment outputs.
 - `eval/notebooks/06_spectra.ipynb`
 - `eval/notebooks/07_tc.ipynb`
 
-## Unified Runner
-Use the orchestration CLI:
+## Evaluation CLI
+
+Canonical entry point for all evaluation workflows:
 ```bash
-python -m eval.run <subcommand> [args]
+python -m eval.cli <subcommand> [args]
 ```
+
+Subcommands: `run` (full pipeline), `predict`, `evaluate`, `scoreboard`.
+See the top-level [ARCHITECTURE.md](../ARCHITECTURE.md) for the full design.
 
 For background full-suite orchestration with retries and auto-monitoring, use:
 ```bash
@@ -38,30 +42,21 @@ CHECKPOINT_PATH=<CKPT_PATH> PHASE=proxy \
 Repo-owned launch templates live under `eval/jobs/templates/`.
 Use `eval/jobs/templates/README.md` as the canonical template entry point.
 
-All artifacts are stored under:
-`/home/ecm5702/scratch/eval/<run_name>/`
-
-Each run folder contains at least:
-- `predictions.nc`
-- `metadata.json`
-- region plot outputs (when enabled)
-- `sigma_eval_table.csv` (checkpoint mode, when enabled)
-
 ### Main Workflows
 
-Evaluate from MARS expver (example requested):
+Evaluate from a checkpoint (full pipeline):
 ```bash
-python -m eval.run mars-expver --expver j24v
+python -m eval.cli run --checkpoint <path> --lane o96_o320
 ```
 
-Evaluate from a checkpoint:
+Evaluate existing predictions:
 ```bash
-python -m eval.run checkpoint --name-ckpt <exp_or_ckpt>
+python -m eval.cli evaluate --predictions-dir /path/to/predictions/ --lane o96_o320
 ```
 
-Evaluate from an existing predictions file:
+Generate scoreboard from evaluation results:
 ```bash
-python -m eval.run predictions --predictions-nc /path/to/predictions.nc
+python -m eval.cli scoreboard --eval-dir /path/to/eval_output/ --lane o96_o320
 ```
 
 ## Prediction Generation (New)
@@ -133,6 +128,14 @@ python -m eval.region_plotting.plot_intermediate_presets \
   --style minimal-pcolor-contour \
   --out /home/ecm5702/scratch/eval/manual_o320r2/eval/intermediate_bundle_idalia_strong/readability_v2/idalia_center_minimal_contour.pdf
 ```
+
+## Wrapper Architecture
+
+New evaluators under `eval/evaluators/` wrap domain logic that currently lives in
+`eval/tc/`, `eval/spectra/`, `eval/region_plotting/`, `eval/sigma_evaluator/`,
+`eval/weight_diagnostics/`, and `eval/plot_intermediate/`. These legacy modules
+are live dependencies -- do not archive them. See
+[ARCHITECTURE.md](../ARCHITECTURE.md) Section 2 for the full evaluator design.
 
 ## Evaluation Modules
 - `eval/predict` (**new** — modular prediction generation with proper date handling)
