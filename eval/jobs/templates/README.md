@@ -1,7 +1,7 @@
 # Strict Manual-Inference And Eval Templates
 
 > **Canonical entry point:** `python -m eval.cli run --checkpoint <CKPT_PATH> --lane <LANE> --host <HOST>`
-> Archived (covered by `eval.cli`): old shell flow scripts, `scoreboard_*_step.sbatch`, `scoreboard_write_from_predictions.sbatch`, `tc_eval_from_predictions.sbatch`, `spectra_proxy_from_predictions.sbatch`, `surface_loss_from_predictions.sbatch`, `regional_suite_from_predictions.sbatch`, `local_plots_one_date_from_predictions.sbatch`, all submit helpers, and their Python helpers — all moved to `archive/`.
+> Archived (covered by `eval.cli`): old shell flow scripts, `scoreboard_*_step.sbatch`, `scoreboard_write_from_predictions.sbatch`, `tc_eval_from_predictions.sbatch`, `spectra_proxy_from_predictions.sbatch`, `surface_loss_from_predictions.sbatch`, `regional_suite_from_predictions.sbatch`, `local_plots_one_date_from_predictions.sbatch`, `build_o*_truth_bundles.sbatch` (superseded by `eval.cli prepare` / `eval.cli run --source-grib-root`), all submit helpers, and their Python helpers — all moved to `archive/`.
 
 This directory is the canonical home for repo-specific eval and manual-inference templates used by `downscaling-tools`.
 If copies exist under `jobscripts/`, treat them as mirrors, not the source of truth.
@@ -29,18 +29,6 @@ preflight_summary
 ## Template Matrix
 
 ### Inference
-- `build_o48_o96_truth_bundles.sbatch`
-  - Canonical truth-aware bundle-build stage for strict `o48 -> o96` manual inference.
-  - Rebuilds member-step bundle NetCDFs with explicit `target_hres_*` from raw `enfo_o48`, `enfo_o96`, and `iekm_o96` Humberto-style GRIB inputs.
-  - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
-- `build_o320_o1280_truth_bundles.sbatch`
-  - Canonical truth-aware bundle-build stage for strict `o320 -> o1280` manual inference.
-  - Rebuilds member-step bundle NetCDFs with explicit `target_hres_*` from the raw `eefo_o320` and `enfo_o1280` GRIB inputs.
-  - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
-- `build_o1280_o2560_truth_bundles.sbatch`
-  - Canonical truth-aware bundle-build stage for strict `o1280 -> o2560` manual inference.
-  - Rebuilds member-step bundle NetCDFs from the DestinE `o1280` input GRIB plus the colocated `o2560` forcing/truth GRIBs using the maintained surface-only contract.
-  - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
 - `predict_recovery.sbatch`
   - **Recovery for walltime-killed prediction runs.**
   - Auto-detects missing prediction files and relaunches only remaining date/step combos.
@@ -120,16 +108,18 @@ Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when th
 ## Smooth Routes By Goal
 - `o48 -> o96` training with correct forcing/LR overrides:
   - copy `train_o48_o96.sbatch`, edit USER SETTINGS, `sbatch`
-- `o48 -> o96` rebuild strict Humberto bundles:
-  - edit `build_o48_o96_truth_bundles.sbatch`, then `sbatch` it
-- `o48 -> o96` full eval:
+- `o48 -> o96` rebuild strict Humberto bundles only:
+  - `python -m eval.cli prepare --lane o48_o96 --source-grib-root <GRIB_ROOT> --bundle-dir <BUNDLE_DIR>`
+- `o48 -> o96` full eval with truth-aware bundles:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o48_o96 --source-grib-root <GRIB_ROOT>`
+- `o48 -> o96` full eval from pre-built bundles:
   - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o48_o96 --host atos_ac`
 - `o96 -> o320` full eval:
   - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o96_o320 --host atos_ac`
-- `o320 -> o1280` full eval:
-  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o320_o1280 --host atos_ac`
-- `o1280 -> o2560` full eval:
-  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o1280_o2560 --host atos_ac`
+- `o320 -> o1280` full eval with truth-aware bundles:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o320_o1280 --source-grib-root <GRIB_ROOT>`
+- `o1280 -> o2560` full eval with truth-aware bundles:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o1280_o2560 --source-grib-root <GRIB_ROOT>`
 - Re-run a single failed pillar from existing predictions:
   - `python -m eval.cli evaluate --predictions-dir <RUN_ROOT>/data/predictions --lane <LANE> --only <pillar>`
 - Recovery:

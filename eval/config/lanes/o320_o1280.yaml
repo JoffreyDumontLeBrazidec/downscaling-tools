@@ -1,3 +1,12 @@
+prepare:
+  bundle_filename_tpl: "eefo_o320_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/eefo_o320_0001_date{date}_time0000_mem1to10_step24to120_sfc.grib"
+    lres_pl_grib:    "{source_grib_root}/eefo_o320_0001_date{date}_time0000_mem1to10_step24to120_pl.grib"
+    hres_grib:       "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_step24to120_sfc.grib"
+    target_sfc_grib: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step24to120_sfc_y.grib"
+    target_pl_grib:  "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step24to120_pl_y.grib"
+
 predict:
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   steps: [24, 48, 72, 96, 120]
@@ -24,6 +33,10 @@ tc:
   mslp_ref: 1013.25
   events: ["idalia", "franklin"]
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir: "/home/ecm5702/perm/reference/o320_o1280/tc"
+  analysis_expid: "OPER_O1280_0001"
+  reference_expids: ["ENFO_O1280_0001", "EEFO_O320_0001"]
+  support_mode: "regridded"
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
@@ -77,18 +90,24 @@ resource_profiles:
     mem: "0"
     cpus: 8
   evaluate:
-    time: "04:00:00"
-    mem: 128G
+    time: "06:00:00"
+    mem: 64G
+    cpus: 8
   evaluate_tc:
-    time: "06:00:00"
-    mem: 128G
-    cpus: 4
-  evaluate_spectra:
     time: "08:00:00"
-    mem: 128G
-  evaluate_region_plot:
+    mem: 64G
+    cpus: 8
+  evaluate_spectra:
+    time: "10:00:00"
+    mem: 64G
+    cpus: 16
+  evaluate_surface:
     time: "06:00:00"
-    mem: 256G
+    mem: 64G
+    cpus: 4
+  evaluate_region_plot:
+    time: "08:00:00"
+    mem: 64G
     cpus: 8
   evaluate_sigma:
     gpus: 1

@@ -1,3 +1,14 @@
+prepare:
+  bundle_filename_tpl: "enfo_o1280_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:       "{source_grib_root}/o1280_inputs/enfo_o1280_0001_date{date}_time0000_step006to120by006_input.grib"
+    lres_pl_grib:        "{source_grib_root}/o1280_inputs/enfo_o1280_0001_date{date}_time0000_step006to120by006_input.grib"
+    hres_grib:           "{source_grib_root}/o2560_forcings/destine_rd_fc_oper_i4ql_o2560_date{date}_time0000_step006to120by006_sfc.grib"
+    target_sfc_grib:     "{source_grib_root}/o2560_forcings/destine_rd_fc_oper_i4ql_o2560_date{date}_time0000_step006to120by006_y.grib"
+    lres_sfc_channels:   "10u,10v,2t,msl"
+    lres_pl_channels:    "NONE"
+    target_sfc_channels: "10u,10v,2t,msl"
+    target_pl_channels:  "NONE"
 predict:
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   steps: [24, 48, 72, 96, 120]
@@ -24,6 +35,11 @@ tc:
   mslp_ref: 1013.25
   events: ["humberto"]
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir: "/home/ecm5702/perm/reference/o1280_o2560/tc"
+  analysis_expid: "OPER_O1280_0001"
+  reference_expids: ["ENFO_O1280_0001"]
+  target_grib: "/home/ecm5702/hpcperm/data/input_data/destine_iekm_o2560_targets_humberto_20250926_20250930/iekm_o2560_iekm_date*_time0000_step24to120_sfc_y.grib"
+  target_label: "IEKM"
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]

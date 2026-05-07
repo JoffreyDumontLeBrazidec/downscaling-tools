@@ -68,6 +68,7 @@ def run(
     grib_dir: str | None = None,
     analysis_expid: str | None = None,
     support_mode: str = "native",
+    extra_grib_references: dict | None = None,
     **kwargs,
 ) -> Path:
     """Run TC evaluation for all configured events.
@@ -82,6 +83,19 @@ def run(
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"TC output directory already has content: {output_dir}. Pass overwrite=True to replace.")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fall back to lane config for reference data not supplied by the caller.
+    grib_dir = grib_dir or eval_config.get("grib_dir")
+    analysis_expid = analysis_expid or eval_config.get("analysis_expid")
+    reference_expids: tuple[str, ...] = tuple(eval_config.get("reference_expids") or ())
+    support_mode = eval_config.get("support_mode", support_mode)
+    # target_grib / target_label are the lane-config-level way to specify the high-res
+    # truth target (e.g. IEKM for o1280_o2560). They are resolved into extra_grib_references
+    # internally so callers never need to use the lower-level dict directly.
+    target_grib = eval_config.get("target_grib")
+    target_label = eval_config.get("target_label", "TARGET")
+    if extra_grib_references is None and target_grib:
+        extra_grib_references = {target_label: target_grib}
 
     event_names = eval_config.get("events", [])
     if not event_names:
@@ -106,6 +120,7 @@ def run(
             exp_cfg = TCExperimentConfig(
                 analysis_expid=analysis_expid,
                 base_tc_dir=grib_dir,
+                reference_expids=reference_expids,
             )
 
         curves = load_curves_for_event(
@@ -113,6 +128,7 @@ def run(
             prediction_dir=predictions_dir,
             grib_dir=grib_dir,
             experiment_config=exp_cfg,
+            extra_grib_references=extra_grib_references,
             support_mode=support_mode,
             run_label=run_label,
             pred_files=event_pred_files,

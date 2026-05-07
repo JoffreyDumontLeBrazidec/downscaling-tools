@@ -113,6 +113,70 @@ def _environment_block(
     return "\n".join(lines)
 
 
+def _post_eval_block(predictions_dir: str, evaluator: str) -> str:
+    """Render post-eval canonical placement block for a single evaluator.
+
+    Copies evaluator outputs to their canonical locations immediately after
+    eval.cli completes, without waiting for a finalize step:
+      - PDFs        → <run_root>/plots/
+      - stats/JSON  → <run_root>/data/<evaluator_canonical>/
+    """
+    lines = [
+        "",
+        f"# Post-eval: surface {evaluator} outputs to canonical locations",
+        f"PRED_DIR={shlex.quote(predictions_dir)}",
+        'DATA_DIR="$(dirname "${PRED_DIR}")"',
+        'RUN_ROOT="$(dirname "${DATA_DIR}")"',
+        f'EVAL_OUT="${{DATA_DIR}}/evaluators/{evaluator}"',
+        'mkdir -p "${RUN_ROOT}/plots"',
+    ]
+
+    if evaluator == "region_plot":
+        lines += [
+            'for pdf in "${EVAL_OUT}"/*.pdf; do',
+            '    [[ -f "${pdf}" ]] || continue',
+            '    cp "${pdf}" "${RUN_ROOT}/plots/"',
+            '    echo "[PLOTS] plots/$(basename "${pdf}")"',
+            'done',
+        ]
+    elif evaluator == "spectra":
+        lines += [
+            'mkdir -p "${DATA_DIR}/spectra"',
+            'for f in "${EVAL_OUT}"/*.json; do',
+            '    [[ -f "${f}" ]] || continue',
+            '    cp "${f}" "${DATA_DIR}/spectra/"',
+            '    echo "[CANON] data/spectra/$(basename "${f}")"',
+            'done',
+            'for pdf in "${EVAL_OUT}"/*.pdf; do',
+            '    [[ -f "${pdf}" ]] || continue',
+            '    cp "${pdf}" "${RUN_ROOT}/plots/"',
+            '    echo "[PLOTS] plots/$(basename "${pdf}")"',
+            'done',
+        ]
+    elif evaluator == "tc":
+        lines += [
+            'mkdir -p "${DATA_DIR}/tc"',
+            'if [[ -f "${EVAL_OUT}/stats.json" ]]; then',
+            '    cp "${EVAL_OUT}/stats.json" "${DATA_DIR}/tc/idalia__franklin.stats.json"',
+            '    echo "[CANON] data/tc/idalia__franklin.stats.json"',
+            'fi',
+            'for pdf in "${EVAL_OUT}"/*.pdf "${EVAL_OUT}/plots"/*.pdf; do',
+            '    [[ -f "${pdf}" ]] || continue',
+            '    cp "${pdf}" "${RUN_ROOT}/plots/"',
+            '    echo "[PLOTS] plots/$(basename "${pdf}")"',
+            'done',
+        ]
+    elif evaluator == "surface":
+        lines += [
+            'if [[ -f "${EVAL_OUT}/surface_loss.json" ]]; then',
+            '    cp "${EVAL_OUT}/surface_loss.json" "${DATA_DIR}/surface_loss.json"',
+            '    echo "[CANON] data/surface_loss.json"',
+            'fi',
+        ]
+
+    return "\n".join(lines)
+
+
 def _cli_command(
     mode: str,
     checkpoint: str,
@@ -207,7 +271,7 @@ def render_sbatch(
         ntasks_per_node = 1
         job_name_suffix = ""
 
-    script = "\n".join([
+    parts = [
         _sbatch_header(
             lane, checkpoint, scheduler, host_cfg["scratch_root"],
             gpus=gpus, ntasks_per_node=ntasks_per_node,
@@ -216,8 +280,17 @@ def render_sbatch(
         _comment_block(lane, host, checkpoint, mode),
         _environment_block(host_cfg["environment_setup"], host_cfg["code_root"]),
         _cli_command(mode, checkpoint, lane, overrides),
-        "",  # trailing newline
-    ])
+    ]
+
+    # Append post-eval canonical placement for single-evaluator evaluate scripts
+    if mode == "evaluate" and overrides:
+        evaluator = overrides.get("--only")
+        predictions_dir = overrides.get("--predictions-dir", "")
+        if evaluator and predictions_dir:
+            parts.append(_post_eval_block(predictions_dir, evaluator))
+
+    parts.append("")  # trailing newline
+    script = "\n".join(parts)
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
