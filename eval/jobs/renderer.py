@@ -265,6 +265,21 @@ def main(argv: list[str] | None = None) -> None:
     if args.include_diagnostics:
         overrides["--include-diagnostics"] = True
 
+    # Resolve resource profile from lane + host config
+    resource_overrides: dict[str, Any] | None = None
+    if args.mode in ("predict", "evaluate", "scoreboard"):
+        from eval.config.loader import load_host, load_lane
+        from eval.jobs.resources import resolve_resources
+
+        lane_config = load_lane(args.lane)
+        host_config = load_host(args.host)
+        evaluator: str | None = None
+        if args.mode == "evaluate" and args.only and "," not in args.only:
+            evaluator = args.only.strip()
+        resource_overrides = resolve_resources(
+            lane_config, host_config, stage=args.mode, evaluator=evaluator,
+        )
+
     output_path = Path(args.output) if args.output and not args.dry_run else None
 
     script = render_sbatch(
@@ -274,6 +289,7 @@ def main(argv: list[str] | None = None) -> None:
         mode=args.mode,
         overrides=overrides if overrides else None,
         output_path=output_path,
+        resource_overrides=resource_overrides,
     )
 
     print(script)

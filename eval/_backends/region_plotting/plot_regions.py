@@ -118,7 +118,11 @@ def _region_boxes_for_names(region_names: list[str] | None, *, grid: str) -> dic
     if grid == "O2560":
         return O2560_SHOWCASE_REGIONS
 
-    return {"amazon_forest": [-15.0, 5.0, -75.0, -45.0]}
+    raise ValueError(
+        f"Cannot determine region suite: no region_names supplied and grid {grid!r} "
+        "has no default suite. Pass explicit region_names or set the 'grid' attribute "
+        "on the predictions dataset."
+    )
 
 
 def render_region_suite_from_predictions_file(
