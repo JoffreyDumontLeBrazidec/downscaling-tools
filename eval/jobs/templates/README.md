@@ -1,5 +1,8 @@
 # Strict Manual-Inference And Eval Templates
 
+> **Canonical entry point:** `python -m eval.cli run --checkpoint <CKPT_PATH> --lane <LANE> --host <HOST>`
+> The old shell flow scripts (`submit_o48_o96_manual_eval_flow.sh`, `submit_o320_o1280_manual_eval_flow.sh`, `submit_o1280_o2560_manual_eval_flow.sh`) and `strict_manual_predict_x_bundle.sbatch` have been moved to `archive/` and are no longer used.
+
 This directory is the canonical home for repo-specific eval and manual-inference templates used by `downscaling-tools`.
 If copies exist under `jobscripts/`, treat them as mirrors, not the source of truth.
 This index lists only the templates that are actually present in this directory.
@@ -43,20 +46,10 @@ preflight_summary
   - Renders run-local copies of the inference, sigma, and post-writer templates under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
   - Those rendered copies are disposable submission artifacts, not the canonical templates.
   - Submits sigma eval, full25 inference, then the scoreboard post-writer with `afterok` dependencies.
-- `strict_manual_predict_x_bundle.sbatch`
-  - Batch generation of `predictions_YYYYMMDD_stepXXX.nc` from any chosen bundle-date set.
-  - Supports explicit `BUNDLE_PAIRS=YYYYMMDD:HH,...` subsets so proxy-like scopes can stay on the canonical template.
-  - Works for `new` and `old` stack.
-  - Enforces fresh run folder and explicit lane/input compatibility.
-  - Allows rebuilt truth-aware bundle roots with explicit `ALLOW_REBUILT_BUNDLE_ROOT=1`.
-  - For `o1280 -> o2560`, now enforces explicit output weather states and `NUM_GPUS_PER_MODEL>=4`.
-  - New stack path keeps `y` mandatory in output files.
-  - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` so scoreboard reporting can recover exact scope and sampler settings.
 - `strict_manual_predict_one_bundle.sbatch`
-  - Single-bundle debug/proof launcher for the same prediction code path.
-  - Uses the same repo-owned checkpoint profiling and sampler normalization as the x-bundle launcher.
+  - Single-bundle debug/proof launcher. Use for smoke-testing a checkpoint before a full `eval.cli` run.
   - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` for downstream reporting.
-  - Not the maintained proof route for `o1280 -> o2560`; that lane now requires the dedicated helper because the imported checkpoint family needs `4` GPU ranks.
+  - Not the maintained proof route for `o1280 -> o2560`; that lane requires `4` GPU ranks.
 - `predict_recovery.sbatch`
   - **Recovery for walltime-killed prediction runs.**
   - Auto-detects missing prediction files and relaunches only remaining date/step combos.
@@ -127,48 +120,6 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
   - Used by `scoreboard_write_from_predictions.sbatch` for the trusted full-scoreboard spectra route.
 
 ### Submission Helper
-- `submit_o48_o96_manual_eval_flow.sh`
-  - Login-node helper for the weak-agent-safe `o48 -> o96` lane.
-  - Validates checkpoint profile, rebuilds strict Humberto truth bundles, runs strict prediction, and submits MLflow loss plots, sigma sweeps, spectra, plus the default regional-summary plot bundle.
-  - Current helper defaults:
-    - sampler: `piecewise21` with `sigma_max=1000`
-    - curated regional suites enabled for `step024` and `step120`
-    - one-date local plots disabled unless `RUN_ONE_DATE_LOCAL=1`
-    - storm-area contour suites disabled unless `RUN_STORM_PLOTS=1`
-    - finalize step rewrites the run root into the lean layout (`data/` for raw artifacts, summary PDFs at top level) without leaving raw back-compat symlink clutter
-    - finalize no longer waits on sigma eval or MLflow loss export; it waits only on the jobs needed to build the user-facing package
-  - Default curated regional-suite names:
-    - `amazon_forest_core,eastern_us_coast,andes_central,himalayas_central,maritime_continent,congo_basin`
-  - Default storm-area contour regions when enabled:
-    - `eastern_us_coast,idalia_center`
-  - Auto spectra policy:
-    - AC submit host -> ECMWF spectra
-    - AG submit host -> proxy spectra
-  - `RUN_TC_PDF=1` is optional. Humberto is now registered in `eval/tc/events.py`, but the smooth default still depends on the staged reference GRIBs under `/home/ecm5702/perm/reference/o48_o96/tc/humberto/`.
-- `submit_o320_o1280_manual_eval_flow.sh`
-  - Login-node helper for the weak-agent-safe `o320 -> o1280` lane.
-  - Validates checkpoint profile, auto-resolves stack flavor, defaults to `PHASE=proxy`, and renders run-local copies of:
-    - `build_o320_o1280_truth_bundles.sbatch`
-    - `strict_manual_predict_x_bundle.sbatch`
-    - `local_plots_one_date_from_predictions.sbatch`
-    - `spectra_proxy_from_predictions.sbatch` or `spectra_ecmwf_from_predictions.sbatch`
-    - `tc_eval_from_predictions.sbatch`
-  - Rebuilds strict truth-aware bundles into `<RUN_ROOT>/bundles_with_y` before prediction.
-  - Supports `PHASE=proxy`, `PHASE=continue-full`, and `PHASE=full-only`.
-  - `PHASE=continue-full` reuses the same run id via `RUN_ID_OVERRIDE=<same_run_id>`.
-  - Default policy:
-    - AG submit host → proxy spectra + native TC
-    - AC submit host → ECMWF spectra + regridded TC
-  - Enforces the host/env rule explicitly for future agents: `ag -> .ds-ag`, `ac -> .ds-dyn`.
-  - Enforces the tested O1280 predict posture (`4` GPUs, `32` CPUs, `24h`) and a high-memory default for O1280 plot-heavy CPU follow-ups (`256G`).
-  - Optionally stages a representative three-route TC compare via `RUN_TC_THREE_ROUTE_COMPARE=1`, using `tc_three_route_compare_from_run.sbatch`.
-  - Supports render-only mode via `NO_SUBMIT=1`.
-- `submit_o1280_o2560_manual_eval_flow.sh`
-  - Login-node helper for the maintained `o1280 -> o2560` DestinE lane.
-  - Validates both checkpoint variants, records checkpoint-profile plus bundle-preflight JSON under the run root, rebuilds strict surface-only truth-aware bundles into `<RUN_ROOT>/bundles_with_y`, and renders strict prediction plus optional local-plots and spectra follow-ups.
-  - Defaults to `PHASE=proof`, explicit `10u,10v,2t,msl` output weather states, and the required `4`-GPU O2560 predict posture.
-  - Supports a guarded `ALLOW_DEBUG_FALLBACK=1` proof path through `debug_from_dataloader_with_plots.sbatch` when the strict bundle contract is not satisfied.
-  - Defaults to proxy spectra even on AC because the current imported checkpoint family is surface-only and does not use the older `sp,t_850,z_500` assumptions.
 - `submit_tc_eval_from_predictions.sh`
   - Login-node helper for standalone TC reruns on an existing predictions tree.
   - Renders a host-safe copy of `tc_eval_from_predictions.sbatch` under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
@@ -265,33 +216,24 @@ Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when th
 For the canonical Aug 26-30 production bundle with minimal manual steps, prefer:
 edit and submit `submit_aug26_30_scoreboard_flow.sh`.
 
-For the canonical weak-agent-safe `o320 -> o1280` manual inference + local plots + spectra + TC route, prefer:
-edit and run `submit_o320_o1280_manual_eval_flow.sh`.
-
 For standalone TC reruns on an existing predictions tree, prefer:
 `bash eval/jobs/templates/submit_tc_eval_from_predictions.sh /path/to/edited_copy.sbatch`
 
 ## Smooth Routes By Goal
-- Quick checkpoint screen (`o96 -> o320`, `10` bundles):
-  - `codex_eval_predictions --ckpt-id <ID>`
 - `o48 -> o96` training with correct forcing/LR overrides:
   - copy `train_o48_o96.sbatch`, edit USER SETTINGS, `sbatch`
 - `o48 -> o96` rebuild strict Humberto bundles:
   - edit `build_o48_o96_truth_bundles.sbatch`, then `sbatch` it
-- `o48 -> o96` smooth full/manual eval route:
-  - `CHECKPOINT_PATH=<CKPT_PATH> bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o48_o96_manual_eval_flow.sh`
-- `o48 -> o96` proxy eval from rebuilt bundles:
-  - `launch_o48_o96_humberto_proxy_eval.sh --input-root /home/ecm5702/scratch/eval/<RUN_ID>/bundles_with_y`
-- Promote a passing run to full250 (`o96 -> o320`):
-  - `codex_eval_predictions --ckpt-id <ID> --run-id <same_run_id> --continue-full`
-- Manual full250 fallback:
-  - edit `submit_aug26_30_scoreboard_flow.sh`
-- `o320 -> o1280` proxy gate:
-  - `CHECKPOINT_PATH=<CKPT_PATH> PHASE=proxy bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh`
-- `o320 -> o1280` continue to `full25` on the same run id:
-  - `CHECKPOINT_PATH=<CKPT_PATH> PHASE=continue-full RUN_ID_OVERRIDE=<same_run_id> bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh`
-- `o320 -> o1280` direct `full25` exception:
-  - `CHECKPOINT_PATH=<CKPT_PATH> PHASE=full-only bash /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh`
+- `o48 -> o96` full eval:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o48_o96 --host atos_ac`
+- `o96 -> o320` full eval:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o96_o320 --host atos_ac`
+- `o320 -> o1280` full eval:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o320_o1280 --host atos_ac`
+- `o1280 -> o2560` full eval:
+  - `python -m eval.cli run --checkpoint <CKPT_PATH> --lane o1280_o2560 --host atos_ac`
+- Re-run a single failed pillar from existing predictions:
+  - `python -m eval.cli evaluate --predictions-dir <RUN_ROOT>/data/predictions --lane <LANE> --only <pillar>`
 - Recovery:
   - edit `predict_recovery.sbatch`
 - Standalone TC eval on existing predictions:
