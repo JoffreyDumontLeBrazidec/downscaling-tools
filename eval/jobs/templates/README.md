@@ -47,13 +47,6 @@ preflight_summary
   - Targets an existing run directory and reruns only the missing files.
   - Works for `new` and `old` stack, AC and AG.
 
-### TC Evaluation
-- `tc_contour_suite_from_predictions.sbatch`
-  - **Canonical TC contour template from predictions.**
-  - Renders contour-style storm-centered TC plots from one `predictions_*.nc` file.
-  - This is also a prediction-only CPU path: no generation and no intermediate-state rebuild.
-  - In the `o320 -> o1280` lane helper, AC submissions are patched to `qos=nf` with no GPU request and the tested `128G` TC posture.
-
 ### Spectra
 - `spectra_ecmwf_from_predictions.sbatch`
   - **Canonical ECMWF spectra template — AC-only (requires gptosp.ser).**
@@ -115,7 +108,6 @@ These are based on observed job outcomes from the checkpoint-eval-pipeline epic.
 | predict25 (O320, GPU) | 12:00:00 | default | ng | 25 files, single GPU |
 | predict75 (O320, GPU) | 48:00:00 | default | ng | 61/75 in 12h observed; use 48h |
 | predict25 (O1280, GPU) | 24:00:00 | default | ng | ~2-3x slower than O320 |
-| TC contours (O1280, prediction-only) | 06:00:00 | 128G on AC `nf` | nf/ng | CPU-only plotting from predictions |
 | Spectra ECMWF (AC) | 48:00:00 | 128G | nf | 300 gptosp transforms; resumable |
 
 ## Cluster / QOS Rules
@@ -158,8 +150,6 @@ Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when th
   - edit `predict_recovery.sbatch`
 - Standalone ECMWF spectra (AC only) on existing predictions:
   - edit `spectra_ecmwf_from_predictions.sbatch`
-- TC contour plots on existing predictions:
-  - edit `tc_contour_suite_from_predictions.sbatch`
 
 ## Notes
 - Resolver tests for the strict inference templates live in:
