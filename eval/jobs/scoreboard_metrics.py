@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from eval._backends.scoreboard._utils import finite_float, load_json
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -15,8 +16,8 @@ import numpy as np
 # These re-exports keep existing callers working unchanged.
 # ---------------------------------------------------------------------------
 
-from eval.scoreboard.canonical_data import load_canonical_analysis as _load_canonical_analysis
-from eval.scoreboard.row_matching import (
+from eval._backends.scoreboard.canonical_data import load_canonical_analysis as _load_canonical_analysis
+from eval._backends.scoreboard.row_matching import (
     classify_row as _classify_row,
     extract_checkpoint_token,
     find_model_row as _choose_tc_row,
@@ -26,7 +27,7 @@ from eval.scoreboard.row_matching import (
     is_reference_row as _is_reference_row,
     tc_candidates as _tc_candidates,
 )
-from eval.scoreboard.spectra import (
+from eval._backends.scoreboard.spectra import (
     AMP_FILE_RE,
     RAW_FIELD_DIRS,
     SPECTRA_FIELD_DIR_ALIASES,
@@ -44,10 +45,10 @@ from eval.scoreboard.spectra import (
     spectra_score,
     spectra_summary_keys,
 )
-from eval.scoreboard.spectra import (
+from eval._backends.scoreboard.spectra import (
     _rescore_from_curve_summary,
 )
-from eval.scoreboard.surface import (
+from eval._backends.scoreboard.surface import (
     SURFACE_NORMALIZATION_SCHEME,
     SURFACE_VAR_LABELS,
     format_surface_loss_for_scoreboard,
@@ -56,9 +57,9 @@ from eval.scoreboard.surface import (
     load_x_interp_surface_metrics,
     surface_weighted_nmse,
 )
-from eval.scoreboard.tc import (
+from eval._backends.scoreboard.tc import (
     MSLP_REFERENCE_HPA,
-    load_tc_extreme_scores_from_json,
+    load_tc_extreme_scores_from_json as _canonical_load_tc_extreme_scores_from_json,
     mslp_depth as _mslp_depth,
     multi_depth_enfo_deviation as _multi_depth_enfo_deviation,
     multi_depth_tc_score as _multi_depth_tc_score,
@@ -67,6 +68,35 @@ from eval.scoreboard.tc import (
 
 # Canonical analysis: loaded from YAML for backward compat
 CANONICAL_OPER_O320_ANALYSIS = _load_canonical_analysis("o320")
+
+def load_tc_extreme_scores_from_json(
+    stats_path: Path,
+    *,
+    run_id: str,
+    event_names: tuple[str, ...] | list[str] | None = None,
+    canonical_analysis_by_event: dict[str, dict[str, Any]] | None = None,
+    canonical_eefo_by_event: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, float]:
+    requested = tuple(event_names or ("idalia", "franklin"))
+    result = _canonical_load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id=run_id,
+        event_names=requested,
+        canonical_analysis_by_event=canonical_analysis_by_event,
+        canonical_eefo_by_event=canonical_eefo_by_event,
+    )
+    missing = [event for event in requested if event not in result]
+    if missing and canonical_analysis_by_event is None and canonical_eefo_by_event is None:
+        fallback = _canonical_load_tc_extreme_scores_from_json(
+            stats_path,
+            run_id=run_id,
+            event_names=missing,
+            canonical_analysis_by_event={},
+            canonical_eefo_by_event={},
+        )
+        result.update(fallback)
+    return result
+
 
 
 # ---------------------------------------------------------------------------
@@ -77,22 +107,8 @@ SIGMA_LEVELS = (1.0, 5.0, 10.0, 100.0)
 CHECKPOINT_TOKEN_RE = re.compile(r"(?:^|manual_)([0-9a-f]{7,64})(?:_|$)")
 
 
-def finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
 def sigma_fragment(sigma: float) -> str:
     return f"{sigma:g}"
-
-
-def load_json(path: Path) -> dict[str, Any]:
-    with path.open() as handle:
-        data = json.load(handle)
-    return data if isinstance(data, dict) else {}
 
 
 def load_mapping_file(path: Path) -> dict[str, Any]:

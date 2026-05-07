@@ -171,79 +171,6 @@ if not isinstance(parsed, dict):
 PY
 }
 
-set_var() {
-  local file="$1"
-  local var="$2"
-  local value="$3"
-  python3 - "$file" "$var" "$value" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-var = sys.argv[2]
-value = sys.argv[3]
-escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-pattern = re.compile(rf"^{re.escape(var)}=.*$")
-lines = path.read_text().splitlines()
-updated = False
-for idx, line in enumerate(lines):
-    if pattern.match(line):
-        lines[idx] = f'{var}="{escaped}"'
-        updated = True
-        break
-if not updated:
-    raise SystemExit(f"Variable not found in {path}: {var}")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-}
-
-set_sbatch_directive() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  python3 - "$file" "$key" "$value" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-key = sys.argv[2]
-value = sys.argv[3]
-prefix = f"#SBATCH --{key}="
-lines = path.read_text().splitlines()
-for idx, line in enumerate(lines):
-    if line.startswith(prefix):
-        lines[idx] = f"{prefix}{value}"
-        break
-else:
-    raise SystemExit(f"Directive not found in {path}: {prefix}")
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-}
-
-drop_sbatch_directive() {
-  local file="$1"
-  local key="$2"
-  python3 - "$file" "$key" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-key = sys.argv[2]
-prefix = f"#SBATCH --{key}="
-lines = [line for line in path.read_text().splitlines() if not line.startswith(prefix)]
-path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-PY
-}
-
-extract_job_id() {
-  local submit_output="$1"
-  local job_id
-  job_id="$(printf '%s\n' "${submit_output}" | awk '{print $NF}')"
-  [[ "${job_id}" =~ ^[0-9]+$ ]] || die "Could not parse job id from sbatch output: ${submit_output}"
-  printf '%s\n' "${job_id}"
-}
-
 require_source_gribs_for_date() {
   local root="$1"
   local date="$2"
@@ -549,6 +476,7 @@ else
 fi
 
 TEMPLATE_DIR="${PROJECT_ROOT}/eval/jobs/templates"
+source "${TEMPLATE_DIR}/render_helpers.sh"
 BUILD_TEMPLATE="${TEMPLATE_DIR}/build_o48_o96_truth_bundles.sbatch"
 INFER_TEMPLATE="${TEMPLATE_DIR}/strict_manual_predict_x_bundle.sbatch"
 LOSS_TEMPLATE="${TEMPLATE_DIR}/training_loss_plots_from_mlflow.sbatch"

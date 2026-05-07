@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from eval.scoreboard.tc import (
+from eval._backends.scoreboard.tc import (
     load_tc_extreme_scores_from_json,
     mslp_depth,
     multi_depth_enfo_deviation,

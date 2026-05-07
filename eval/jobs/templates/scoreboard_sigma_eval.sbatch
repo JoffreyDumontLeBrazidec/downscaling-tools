@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # Canonical sigma-evaluator launcher for scoreboard and manual-eval chains.
 #
 # Default allocation fits o48->o96 and o96->o320.
@@ -141,7 +144,7 @@ cd "${REPO_ROOT}"
 srun -u \
   --ntasks="${NUM_GPUS_PER_MODEL}" \
   --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
-  python -u -m eval.sigma_evaluator.run_sigma_evaluator \
+  python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --name_exp "${CHECKPOINT_REF}" \
     --name_ckpt "${CKPT_NAME}" \
     --ckpt-root "${CKPT_ROOT}" \

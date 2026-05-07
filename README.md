@@ -1,53 +1,29 @@
 # downscaling-tools
 
-Evaluation, manual-inference, and HPC-orchestration layer for anemoi-core
-diffusion downscaling experiments. Consumes checkpoints and predictions, produces
-scoreboards, plots, and metrics across multiple evaluation pillars (TC extremes,
-power spectra, surface loss, regional plots, sigma sweeps), and orchestrates
-multi-stage HPC job chains.
+ML-based atmospheric downscaling: training, inference, and evaluation tools for
+ECMWF's diffusion-based downscaling pipeline.
 
 ## Canonical CLI
 
-```bash
-# Full pipeline: predict + evaluate + scoreboard
-python -m eval.cli run --checkpoint <path> --lane o96_o320 [--host atos_ac] [--only tc,spectra]
+| Operation | Command |
+|-----------|---------|
+| Full eval pipeline | `python -m eval.cli run --lane <lane> --checkpoint <path> --host <host>` |
+| Evaluate predictions | `python -m eval.cli evaluate --predictions-dir <dir> --lane <lane>` |
+| Scoreboard | `python -m eval.cli scoreboard --eval-dir <dir> --lane <lane>` |
+| Generate sbatch chain | `python -m eval.jobs.pipeline --lane <lane> --host <host> --checkpoint <path> --output-dir <dir>` |
+| Render single sbatch | `python -m eval.jobs.renderer --lane <lane> --host <host> --checkpoint <path> --mode <mode>` |
 
-# Predictions only
-python -m eval.cli predict --checkpoint <path> --lane o96_o320
+## Subsystem Index
 
-# Evaluate existing predictions
-python -m eval.cli evaluate --predictions-dir <dir> --lane o96_o320 [--only tc,spectra,surface]
+| Package | Purpose | Docs |
+|---------|---------|------|
+| `eval/` | Evaluation framework | [`eval/README.md`](eval/README.md) |
+| `eval/predict/` | Prediction generation | [`eval/predict/README.md`](eval/predict/README.md) |
+| `eval/evaluators/` | Evaluator modules (tc, spectra, surface, sigma, region_plot) | See eval/README.md |
+| `eval/config/` | Lane/host YAML configuration | `eval/config/lanes/`, `eval/config/hosts/` |
+| `eval/jobs/` | HPC job scripts + pipeline renderer | [`eval/jobs/README.md`](eval/jobs/README.md) |
+| `manual_inference/` | Legacy inference scripts | [`manual_inference/README.md`](manual_inference/README.md) |
 
-# Scoreboard from existing evaluation results
-python -m eval.cli scoreboard --eval-dir <dir> --lane o96_o320
+## Agent Context
 
-# Dry run
-python -m eval.cli run --checkpoint <path> --lane o96_o320 --dry-run
-
-# Manual inference (single checkpoint)
-python -m manual_inference.prediction.predict {from-bundle,from-dataloader,build-bundle}
-
-# Modular prediction generation
-python -m eval.predict.main --input-root ... --out-dir ... --name-ckpt ... --dates ... --steps ... --members ...
-```
-
-## Subsystems
-
-| Package | Purpose | README |
-|---|---|---|
-| `eval/` | Evaluation framework (evaluators, scoreboard, config, discovery) | `eval/README.md` |
-| `eval/predict/` | Modular date-aware prediction generation | `eval/predict/README.md` |
-| `eval/jobs/` | HPC orchestration, sbatch templates, pipeline rendering | `eval/jobs/templates/README.md` |
-| `manual_inference/` | Single-checkpoint inference (bundle/dataloader modes) | `manual_inference/README.md` |
-| `mlflow/` | MLflow loss-plotting utilities | -- |
-| `distributed/` | Multi-GPU distributed helpers | -- |
-
-## Architecture
-
-For the layered design, evaluator architecture, output directory contract, and
-HPC orchestration, see [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Testing
-
-CPU suite: `pytest -m "not gpu"`. GPU suite: `pytest -m gpu --run-gpu`.
-See [TESTING.md](TESTING.md).
+Agent routing: `/home/ecm5702/dev/docs/AGENTS.md`

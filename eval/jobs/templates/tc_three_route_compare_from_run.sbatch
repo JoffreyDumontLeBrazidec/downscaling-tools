@@ -172,7 +172,7 @@ JSON
   [[ -f "${bundle_file}" ]] || die "Selected bundle file missing: ${bundle_file}"
 
   storm_cmd=(
-    "${PYTHON}" -m eval.region_plotting.plot_regions
+    "${PYTHON}" -m eval._backends.region_plotting.plot_regions
     --predictions-nc "${predictions_file}"
     --out-dir "${storm_dir}"
     --regions "${event}"
@@ -182,7 +182,7 @@ JSON
     --suite-kind storm
   )
   contour_cmd=(
-    "${PYTHON}" -m eval.region_plotting.plot_tc_contours_from_predictions
+    "${PYTHON}" -m eval._backends.region_plotting.plot_tc_contours_from_predictions
     --predictions-nc "${predictions_file}"
     --out-dir "${contour_dir}"
     --regions "${event}"
@@ -210,7 +210,7 @@ JSON
     regionstyle_out="${centertrack_dir}/${ws}_${event}_centertrack_regionstyle.png"
     stats_out="${centertrack_dir}/${ws}_${event}_centertrack_stats.json"
     cmd=(
-      "${PYTHON}" -m eval.plot_intermediate.plot_intermediate dataset
+      "${PYTHON}" -m eval._backends.plot_intermediate.plot_intermediate dataset
       --predictions-nc "${intermediate_nc}"
       --sample 0
       --weather-state "${ws}"

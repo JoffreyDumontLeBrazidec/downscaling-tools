@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval.scoreboard.tc import (
+from eval._backends.scoreboard.tc import (
     load_tc_extreme_scores_from_json,
     multi_depth_tc_score,
     normalize_tc_rows,
@@ -29,6 +29,7 @@ def score(
     *,
     run_id: str = "",
     stats_filename: str = "stats.json",
+    **kwargs,
 ) -> list[dict[str, Any]]:
     """Score TC results from a stats JSON.
 

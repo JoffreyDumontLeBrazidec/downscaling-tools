@@ -120,13 +120,16 @@ def _cli_command(
     overrides: dict[str, Any] | None = None,
 ) -> str:
     """Render the ``python -m eval.cli`` invocation."""
-    ckpt_quoted = shlex.quote(checkpoint)
     parts = [
         "",
         "# Run evaluation",
         f"python -m eval.cli {mode} \\",
-        f"    --checkpoint {ckpt_quoted} \\",
     ]
+
+    # --checkpoint is valid for run, predict, evaluate (optional) but not scoreboard
+    if mode != "scoreboard":
+        ckpt_quoted = shlex.quote(checkpoint)
+        parts.append(f"    --checkpoint {ckpt_quoted} \\")
 
     # Collect override flags
     override_parts: list[str] = []

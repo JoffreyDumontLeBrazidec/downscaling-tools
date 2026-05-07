@@ -12,9 +12,9 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval.tc.events import EVENTS
-from eval.tc.pdf_plot import plot_pdf_ratios
-from eval.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
+from eval._backends.tc.events import EVENTS
+from eval._backends.tc.pdf_plot import plot_pdf_ratios
+from eval._backends.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
 
 LOG = logging.getLogger(__name__)
 

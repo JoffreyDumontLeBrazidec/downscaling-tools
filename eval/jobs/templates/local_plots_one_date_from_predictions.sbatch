@@ -114,7 +114,7 @@ if [[ "${RENDER_MODE}" == "suite" ]]; then
   "${PYTHON}" -c "
 import gc, sys
 sys.path.insert(0, '${PROJECT_ROOT}')
-from eval.region_plotting.plot_regions import render_region_suite_from_predictions_file
+from eval._backends.region_plotting.plot_regions import render_region_suite_from_predictions_file
 region_list = '${REGION_LIST}'.split() if '${REGION_LIST}'.strip() else None
 ws = [s.strip() for s in '${WEATHER_STATES}'.split(',')] if '${WEATHER_STATES}'.strip() else None
 if region_list:
@@ -155,7 +155,7 @@ print('Suite rendering complete.')
 else
   # Single mode: render one region per prediction file for all steps.
   CMD=(
-    "${PYTHON}" -m eval.region_plotting.plot_one_date_local
+    "${PYTHON}" -m eval._backends.region_plotting.plot_one_date_local
     --run-root "${RUN_ROOT}"
     --date "${DATE}"
     --out-subdir "${OUT_SUBDIR}"

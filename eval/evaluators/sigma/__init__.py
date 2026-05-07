@@ -5,7 +5,7 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "sigma",
-    "default_enabled": False,
-    "scoreboard": False,
-    "requires": ["predictions"],
+    "default_enabled": True,
+    "scoreboard": True,
+    "requires": ["predictions", "checkpoint"],
 }

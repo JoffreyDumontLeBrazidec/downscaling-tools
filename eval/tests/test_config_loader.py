@@ -114,3 +114,13 @@ def test_load_lane_allows_resource_profiles():
     config = load_lane("o96_o320")
     assert "resource_profiles" in config
     assert "predict" in config["resource_profiles"]
+
+
+def test_lane_configs_do_not_advertise_quaver_group():
+    for lane in ["o48_o96", "o96_o320", "o320_o1280", "o1280_o2560"]:
+        config = load_lane(lane)
+        assert "quaver" not in config
+
+        evaluator_groups = config["evaluator_groups"]
+        for evaluators in evaluator_groups.values():
+            assert "quaver" not in evaluators

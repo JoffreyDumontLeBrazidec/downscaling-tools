@@ -304,3 +304,7 @@ For standalone TC reruns on an existing predictions tree, prefer:
 ## Notes
 - Resolver tests for the strict inference templates live in:
   - `/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/tests/test_checkpoint_profile.py`
+
+## Canonical Entry Points Used By Templates
+
+Shared templates should prefer `python -m eval.cli` for the unified evaluation framework, `python -m eval.predict.main` for repo-native prediction generation, and `python -m manual_inference.prediction.predict` for one-bundle manual inference. Rendered historical scripts under `/home/ecm5702/dev/jobscripts/submit/` are run artifacts and should not be rewritten for documentation-only migrations.

@@ -163,7 +163,7 @@ fi
 cd "${PROJECT_ROOT}"
 
 CMD=(
-  "${PYTHON}" -m eval.tc.workflows pdf
+  "${PYTHON}" -m eval._backends.tc.workflows pdf
   --predictions-dir "${PREDICTIONS_DIR}"
   --outdir "${RUN_ROOT}/plots/tc"
   --run-label "${RUN_ID}"

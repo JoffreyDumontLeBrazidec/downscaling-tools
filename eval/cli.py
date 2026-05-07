@@ -26,7 +26,7 @@ LOG = logging.getLogger(__name__)
 
 ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
-    "sigma", "mechanistic", "intermediate", "quaver",
+    "sigma", "mechanistic", "intermediate",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -291,6 +291,12 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     members_str = ",".join(str(m) for m in predict_cfg["members"])
     steps_str = ",".join(str(s) for s in predict_cfg["steps"])
     dates_str = ",".join(predict_cfg["dates"])
+    bundle_pairs = predict_cfg.get("bundle_pairs", "")
+    if isinstance(bundle_pairs, list):
+        bundle_pairs = ",".join(
+            f"{item.get('date')}:{item.get('step')}" if isinstance(item, dict) else str(item)
+            for item in bundle_pairs
+        )
 
     predictions_dir = output_dir / "predictions"
 
@@ -309,6 +315,8 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         "--input-root", input_root,
         "--allow-existing-out-dir",
     ]
+    if bundle_pairs:
+        cmd += ["--bundle-pairs", str(bundle_pairs)]
 
     LOG.info("Running predictions: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
@@ -378,7 +386,11 @@ def _run_evaluators(
         run_fn = getattr(mod, "run", None)
         if run_fn is not None:
             try:
-                run_fn(predictions_dir, lane_config, eval_config)
+                run_fn(
+                    predictions_dir, lane_config, eval_config,
+                    output_dir=results_dir, overwrite=overwrite,
+                    checkpoint=checkpoint,
+                )
             except Exception:
                 LOG.error("Evaluator '%s' run() failed", name, exc_info=True)
                 continue
@@ -387,7 +399,10 @@ def _run_evaluators(
         score_fn = getattr(mod, "score", None)
         if score_fn is not None:
             try:
-                scores = score_fn(results_dir, lane_config, eval_config)
+                scores = score_fn(
+                    results_dir, lane_config, eval_config,
+                    predictions_dir=predictions_dir,
+                )
                 if scores:
                     metrics_path = results_dir / "metrics.json"
                     metrics_path.write_text(
@@ -400,7 +415,7 @@ def _run_evaluators(
         plot_fn = getattr(mod, "plot", None)
         if plot_fn is not None:
             try:
-                plot_fn(results_dir, lane_config, eval_config, results_dir / "plots")
+                plot_fn(results_dir, lane_config, eval_config, output_dir=results_dir)
             except Exception:
                 LOG.error("Evaluator '%s' plot() failed", name, exc_info=True)
 

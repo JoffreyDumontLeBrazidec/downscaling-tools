@@ -1,11 +1,13 @@
-"""Region plot evaluator — discover predictions, extract regions.
+"""Region-plot evaluator subprocess wrapper around eval.region_plotting.plot_regions.
 
-Delegates to eval.discovery.predictions for file finding and
-eval.region_plotting for actual rendering.
+The legacy module remains the canonical implementation. This runner translates
+EvaluatorContext values into the legacy CLI argv shape.
 """
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from pathlib import Path
 
 from eval.discovery.predictions import find_predictions
@@ -22,7 +24,7 @@ def run(
     overwrite: bool = False,
     **kwargs,
 ) -> Path:
-    """Run region plot evaluation — discover predictions and prepare for rendering."""
+    """Run region plotting by subprocessing into plot_regions."""
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "region_plot"
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
@@ -33,7 +35,16 @@ def run(
     if not pred_files:
         raise FileNotFoundError(f"No prediction files found in {predictions_dir}")
 
-    regions = lane_config.get("regions", {}).get("interesting", {})
-    LOG.info("Region plot: %d predictions, %d regions configured", len(pred_files), len(regions))
+    cmd = [
+        sys.executable, "-m", "eval._backends.region_plotting.plot_regions",
+        "--predictions-nc", str(pred_files[0].path),
+        "--out-dir", str(output_dir),
+    ]
 
+    region_names = eval_config.get("region_names")
+    if region_names:
+        cmd += ["--regions", ",".join(region_names)]
+
+    LOG.info("region_plot subprocess: %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
     return output_dir

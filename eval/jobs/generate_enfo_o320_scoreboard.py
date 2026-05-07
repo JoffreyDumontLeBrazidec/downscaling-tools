@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from eval.paths import DEFAULT_EVAL_ROOT, default_scoreboard_path
+from eval._backends.scoreboard.surface import surface_variable_nmse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTEXT_SCOREBOARD_CSV = Path(
@@ -168,28 +169,6 @@ def _csv_metric(row: dict[str, str], key: str) -> float:
     return value if value is not None else _nan()
 
 
-def _surface_variable_nmse(surface_metrics: dict[str, Any], variable: str) -> float | None:
-    variables = surface_metrics.get("variables")
-    if not isinstance(variables, dict):
-        return None
-    entry = variables.get(variable)
-    if not isinstance(entry, dict):
-        return None
-    mean_nmse = metrics.finite_float(entry.get("mean_nmse"))
-    if mean_nmse is not None:
-        return mean_nmse
-    mean_mse = metrics.finite_float(entry.get("mean_mse"))
-    if mean_mse is None:
-        return None
-    truth_std = metrics.finite_float(entry.get("truth_std"))
-    if truth_std is None:
-        truth_std_by_variable = surface_metrics.get("truth_std_by_variable")
-        if isinstance(truth_std_by_variable, dict):
-            truth_std = metrics.finite_float(truth_std_by_variable.get(variable))
-    if truth_std is None or truth_std <= 0.0:
-        return None
-    return mean_mse / (truth_std * truth_std)
-
 
 def _surface_column_defaults() -> dict[str, float]:
     return {column_key: _nan() for column_key, _, _ in SURFACE_NMSE_COLUMNS}
@@ -197,7 +176,7 @@ def _surface_column_defaults() -> dict[str, float]:
 
 def _apply_surface_columns(row: dict[str, Any], surface_metrics: dict[str, Any]) -> None:
     for column_key, variable, _ in SURFACE_NMSE_COLUMNS:
-        value = _surface_variable_nmse(surface_metrics, variable)
+        value = surface_variable_nmse(surface_metrics, variable)
         if value is not None and math.isfinite(value):
             row[column_key] = float(value)
 

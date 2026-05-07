@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from eval.region_plotting.plot_one_date_local import DEFAULT_LOCAL_PLOT_OUT_SUBDIR, render_one_date_local_plots
+from eval._backends.region_plotting.plot_one_date_local import DEFAULT_LOCAL_PLOT_OUT_SUBDIR, render_one_date_local_plots
 
 
 def _write_prediction_file(path: Path, lead_h: int) -> None:

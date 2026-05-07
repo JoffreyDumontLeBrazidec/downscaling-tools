@@ -1,4 +1,11 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
+# DEPRECATED (2026-05-07): use submit_scoreboard_chain.sh and the four
+# scoreboard_{spectra,tc,surface,finalize}_step.sbatch templates instead.
+# This monolith is preserved for one release and will be archived after
+# downstream callers have been migrated.
 # Canonical post-inference scoreboard writer (Pillars 2-4 + scoreboard refresh).
 #
 # Typical usage (after inference submit):
@@ -355,7 +362,7 @@ fi
 
 cd "${REPO_ROOT}"
 TC_CMD=(
-  python -m eval.tc.workflows pdf
+  python -m eval._backends.tc.workflows pdf
   --predictions-dir "${PRED_DIR}"
   --outdir "${RUN_ROOT}/plots/tc"
   --run-label "${RUN_ID}"

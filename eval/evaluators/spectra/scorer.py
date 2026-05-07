@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval.scoreboard.spectra import (
+from eval._backends.scoreboard.spectra import (
     SPECTRA_FIELDS,
     load_spectra_metrics,
     spectra_score,
@@ -25,6 +25,7 @@ def score(
     eval_config: dict,
     *,
     reference_root: str | Path | None = None,
+    **kwargs,
 ) -> list[dict[str, Any]]:
     """Score spectra results from a spectra output directory.
 

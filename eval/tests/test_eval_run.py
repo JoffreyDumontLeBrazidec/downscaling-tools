@@ -6,7 +6,7 @@ from pathlib import Path
 
 import xarray as xr
 
-from eval import run as eval_run
+from eval.archive import run as eval_run
 
 
 def test_default_checkpoint_run_name():

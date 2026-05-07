@@ -4,7 +4,7 @@ import json
 
 import torch
 
-from eval.sigma_evaluator import scheduler_study as mod
+from eval._backends.sigma_evaluator import scheduler_study as mod
 
 
 def _profiles() -> list[mod.CheckpointProfile]:

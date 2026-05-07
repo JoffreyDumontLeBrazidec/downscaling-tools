@@ -10,20 +10,19 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
-
 from eval.config.loader import load_event
 from eval.discovery.predictions import find_predictions
-from eval.tc.data_types import BoundingBox
-from eval.tc.events import EVENTS, TCEvent
-from eval.tc.experiment_config import TCExperimentConfig
-from eval.tc.loading_predictions import (
+from eval._backends.tc.data_types import BoundingBox
+from eval._backends.tc.events import EVENTS, TCEvent
+from eval._backends.tc.experiment_config import TCExperimentConfig
+from eval._backends.tc.loading_predictions import (
     event_days_steps,
     forecast_dates_for_event,
     select_prediction_files_for_event,
 )
-from eval.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
-from eval.tc.workflows import (
+from eval._backends.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
+from eval._backends.tc.workflows import (
+    _json_default,
     compute_event_stats,
     load_curves_for_event,
 )
@@ -77,6 +76,8 @@ def run(
     Returns the output directory path.
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
+    if not run_label:
+        run_label = predictions_dir.parent.name or "prediction"
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "tc"
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"TC output directory already has content: {output_dir}. Pass overwrite=True to replace.")
@@ -154,13 +155,3 @@ def run(
 
     LOG.info("TC stats written to %s", stats_path)
     return output_dir
-
-
-def _json_default(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
