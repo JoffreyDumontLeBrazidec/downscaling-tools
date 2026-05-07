@@ -238,6 +238,8 @@ def test_generate_predictions_allows_missing_target_unsafe(tmp_path: Path, monke
             str(out_dir),
             "--ckpt-id",
             "dummy",
+            "--device",
+            "cpu",
             "--allow-missing-target-unsafe",
             "--members",
             "1",
@@ -614,6 +616,12 @@ def test_generate_predictions_main_binds_cuda_device_and_gpu_override(
         return object(), object(), "/tmp/dir_exp", "exp_name"
 
     monkeypatch.setattr(mod, "_load_objects", _fake_load_objects)
+    monkeypatch.setattr(
+        mod,
+        "_compute_x_interp_for_export",
+        lambda **kwargs: np.zeros((1, 1, 2, 2), dtype=np.float32),
+    )
+
 
     def _fake_predict_from_bundle(**kwargs):
         x = np.zeros((1, 1, 2, 2), dtype=np.float32)
@@ -765,6 +773,12 @@ def test_generate_predictions_passes_output_selection_and_slim_output(
         "_load_objects",
         lambda **kwargs: (object(), object(), "/tmp/dir_exp", "exp_name"),
     )
+    monkeypatch.setattr(
+        mod,
+        "_compute_x_interp_for_export",
+        lambda **kwargs: np.zeros((1, 1, 2, 3), dtype=np.float32),
+    )
+
 
     def _fake_predict_from_bundle(**kwargs):
         predict_calls.append(kwargs)

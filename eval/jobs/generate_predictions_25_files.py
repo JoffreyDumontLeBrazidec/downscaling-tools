@@ -77,6 +77,20 @@ def parse_output_weather_states(raw: str) -> list[str] | None:
     return requested or None
 
 
+def _member_field_array(name: str, value: np.ndarray) -> np.ndarray:
+    arr = np.asarray(value, dtype=np.float32)
+    while arr.ndim > 2 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.ndim != 2:
+        raise ValueError(f"Unsupported {name} member field shape {arr.shape}; expected 2D after singleton sample/member axes.")
+    return arr
+
+
+def _call_accepts_kwarg(fn, name: str) -> bool:
+    params = inspect.signature(fn).parameters
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _distributed_barrier(*, args_device: str, local_rank: int, world_size: int) -> None:
     if world_size <= 1 or not torch.distributed.is_available() or not torch.distributed.is_initialized():
         return
@@ -364,12 +378,12 @@ def main() -> None:
                         output_weather_states=output_weather_states,
                     )
 
-                    x_members.append(x[0])
+                    x_members.append(_member_field_array("x", x))
                     if keep_outputs:
-                        y_members.append(None if y is None else y[0, 0])
+                        y_members.append(None if y is None else _member_field_array("y", y))
                         if y is None:
                             members_missing_target.append(m)
-                        yp_members.append(y_pred[0, 0])
+                        yp_members.append(_member_field_array("y_pred", y_pred))
                         source_paths.append(str(bundle_path))
 
                     del x, y, y_pred
@@ -438,7 +452,7 @@ def main() -> None:
                             "member_ids": members,
                             "include_member_views": not args.slim_output,
                         }
-                        if "x_interp" in inspect.signature(build_predictions_dataset).parameters:
+                        if _call_accepts_kwarg(build_predictions_dataset, "x_interp"):
                             build_dataset_kwargs["x_interp"] = x_interp_stack
                         ds = build_predictions_dataset(**build_dataset_kwargs)
                         if used_missing_target_unsafe:

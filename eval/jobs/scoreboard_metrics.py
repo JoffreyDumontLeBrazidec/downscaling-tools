@@ -59,7 +59,7 @@ from eval.scoreboard.surface import (
 )
 from eval.scoreboard.tc import (
     MSLP_REFERENCE_HPA,
-    load_tc_extreme_scores_from_json,
+    load_tc_extreme_scores_from_json as _canonical_load_tc_extreme_scores_from_json,
     mslp_depth as _mslp_depth,
     multi_depth_enfo_deviation as _multi_depth_enfo_deviation,
     multi_depth_tc_score as _multi_depth_tc_score,
@@ -68,6 +68,35 @@ from eval.scoreboard.tc import (
 
 # Canonical analysis: loaded from YAML for backward compat
 CANONICAL_OPER_O320_ANALYSIS = _load_canonical_analysis("o320")
+
+def load_tc_extreme_scores_from_json(
+    stats_path: Path,
+    *,
+    run_id: str,
+    event_names: tuple[str, ...] | list[str] | None = None,
+    canonical_analysis_by_event: dict[str, dict[str, Any]] | None = None,
+    canonical_eefo_by_event: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, float]:
+    requested = tuple(event_names or ("idalia", "franklin"))
+    result = _canonical_load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id=run_id,
+        event_names=requested,
+        canonical_analysis_by_event=canonical_analysis_by_event,
+        canonical_eefo_by_event=canonical_eefo_by_event,
+    )
+    missing = [event for event in requested if event not in result]
+    if missing and canonical_analysis_by_event is None and canonical_eefo_by_event is None:
+        fallback = _canonical_load_tc_extreme_scores_from_json(
+            stats_path,
+            run_id=run_id,
+            event_names=missing,
+            canonical_analysis_by_event={},
+            canonical_eefo_by_event={},
+        )
+        result.update(fallback)
+    return result
+
 
 
 # ---------------------------------------------------------------------------

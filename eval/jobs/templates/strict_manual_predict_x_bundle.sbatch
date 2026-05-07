@@ -544,7 +544,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
   fi
   if [[ "${NUM_GPUS_PER_MODEL}" -gt 1 ]]; then
     srun --ntasks="${NUM_GPUS_PER_MODEL}" --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
-      python eval/jobs/generate_predictions_25_files.py \
+      python -m eval.predict.main \
       --input-root "${INPUT_ROOT}" \
       --input-root-mode "${INPUT_ROOT_MODE}" \
       --out-dir "${PRED_DIR}" \
@@ -564,7 +564,7 @@ if [[ "${STACK_FLAVOR}" == "new" ]]; then
       "${NEW_STACK_OUTPUT_FLAGS[@]}" \
       --manifest "${MANIFEST_PATH}"
   else
-    python eval/jobs/generate_predictions_25_files.py \
+    python -m eval.predict.main \
       --input-root "${INPUT_ROOT}" \
       --input-root-mode "${INPUT_ROOT_MODE}" \
       --out-dir "${PRED_DIR}" \
@@ -589,7 +589,7 @@ else
   if [[ "${ALLOW_MISSING_TARGET_OLD}" -eq 1 ]]; then
     OLD_ALLOW_FLAG=(--allow-missing-target)
   fi
-  python eval/jobs/generate_predictions_25_files.py \
+  python -m eval.predict.main \
     --input-root "${INPUT_ROOT}" \
     --out-dir "${PRED_DIR}" \
     --ckpt-id "${CHECKPOINT_REF}" \

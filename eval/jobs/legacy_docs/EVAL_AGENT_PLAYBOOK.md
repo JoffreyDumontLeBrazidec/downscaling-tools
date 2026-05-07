@@ -1,3 +1,8 @@
+> **Status: legacy (pre-refactor).** This playbook is preserved under
+> `eval/jobs/legacy_docs/` for historical reference. For canonical
+> post-refactor workflows see `eval/jobs/README.md`,
+> `eval/jobs/templates/README.md`, and `eval/FULL_SUITE_PLAYBOOK.md`.
+
 # Eval Agent Playbook (Parallel Bundle)
 
 Use this as the default when a user asks to evaluate a run.

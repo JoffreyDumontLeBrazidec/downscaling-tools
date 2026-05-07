@@ -116,6 +116,7 @@ def _run_helper(
             "SUBMIT_ROOT": str(submit_root),
             "RUN_DATE_UTC": "20260421",
             "RUN_SUFFIX": "manual_eval",
+            "PROOF_BUNDLE_PAIRS": "20241108:120",
             "PROFILE_JSON_PATH": str(profile_json),
             "PREFLIGHT_JSON_PATH": str(preflight_json),
             "NO_SUBMIT": "1",

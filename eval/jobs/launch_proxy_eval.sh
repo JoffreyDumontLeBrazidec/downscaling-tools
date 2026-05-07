@@ -207,7 +207,16 @@ if [[ -e "${RUN_DIR}" && "${ALLOW_EXISTING_RUN_DIR}" -ne 1 ]]; then
 fi
 mkdir -p "${JOBS_DIR}" "${RUN_DIR}/logs" "${PRED_DIR}" "${EVAL_RUN_ROOT}"
 
-python - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${CKPT_ID}" "${NAME_CKPT}" "${INPUT_ROOT}" "${PROXY_BUNDLE_PAIRS}" "${PREDICT_MEMBERS}" "${EXTRA_ARGS_JSON}" <<'PY'
+PYTHON_FOR_CONFIG="${PYTHON_FOR_CONFIG:-/home/ecm5702/dev/.ds-dyn/bin/python}"
+if [[ ! -x "${PYTHON_FOR_CONFIG}" ]]; then
+  PYTHON_FOR_CONFIG="$(command -v python3 || command -v python || true)"
+fi
+if [[ -z "${PYTHON_FOR_CONFIG}" ]]; then
+  echo "No Python interpreter found for writing EXPERIMENT_CONFIG.yaml" >&2
+  exit 2
+fi
+
+"${PYTHON_FOR_CONFIG}" - "${RUN_DIR}/EXPERIMENT_CONFIG.yaml" "${RUN_ID}" "${RUN_DIR}" "${CKPT_ID}" "${NAME_CKPT}" "${INPUT_ROOT}" "${PROXY_BUNDLE_PAIRS}" "${PREDICT_MEMBERS}" "${EXTRA_ARGS_JSON}" <<'PY'
 import json
 import sys
 from pathlib import Path

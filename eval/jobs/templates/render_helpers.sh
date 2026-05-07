@@ -7,6 +7,7 @@ set_var() {
   local var="$2"
   local value="$3"
   python3 - "$file" "$var" "$value" <<PY
+import json
 import pathlib
 import re
 import sys
@@ -19,7 +20,7 @@ lines = path.read_text().splitlines()
 updated = False
 for i, line in enumerate(lines):
     if pattern.match(line):
-        lines[i] = f{var}={value}
+        lines[i] = f"{var}={json.dumps(value)}"
         updated = True
         break
 if not updated:

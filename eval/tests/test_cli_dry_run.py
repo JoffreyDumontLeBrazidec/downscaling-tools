@@ -42,3 +42,18 @@ def test_cli_run_dry_run():
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
     assert '"lane": "o96_o320"' in result.stdout
+
+
+def test_cli_evaluate_rejects_quaver_only(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "evaluate",
+            "--dry-run",
+            "--lane", "o96_o320",
+            "--predictions-dir", str(tmp_path),
+            "--only", "quaver",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode != 0
+    assert "Unknown evaluator(s) in --only: ['quaver']" in result.stderr

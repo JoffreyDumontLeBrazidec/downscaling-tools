@@ -44,7 +44,6 @@ regions:
 evaluator_groups:
   default: [tc, spectra, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate]
-  experimental: [quaver]
 
 resource_profiles:
   predict:

@@ -565,8 +565,7 @@ def _validate_output_path(
     parent_name = parent.name
     grandparent_name = parent.parent.name if parent.parent != parent else ""
     if _RUN_NAME_RE.fullmatch(parent_name) and _RUN_NAME_RE.fullmatch(grandparent_name):
-        if (parent.parent.exists() and (parent.parent / "logs").is_dir()
-                and parent.exists() and (parent / "logs").is_dir()):
+        if parent.parent.exists() and (parent.parent / "logs").is_dir():
             raise SystemExit(
                 f"Unsafe nested output path detected: {resolved}. "
                 "Refusing to place a new run folder under an existing run folder."

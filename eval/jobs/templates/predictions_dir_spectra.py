@@ -443,7 +443,7 @@ def plot_one_state(
     return {"relative_l2_mean_curve": rel_l2}
 
 
-def build_spectra_artifacts(
+def _build_spectra_artifact_summaries(
     *,
     pred_dir: Path,
     out_dir: Path,
@@ -571,6 +571,48 @@ def build_spectra_artifacts(
         }
 
     return summary, curve_summary
+
+
+class SpectraArtifactsResult(dict):
+    def __init__(self, summary: dict[str, object], curve_summary: dict[str, object]):
+        super().__init__(summary)
+        self.curve_summary = curve_summary
+
+    def __iter__(self):
+        yield self
+        yield self.curve_summary
+
+
+def build_spectra_artifacts(
+    *,
+    pred_dir: Path,
+    out_dir: Path,
+    run_label: str,
+    states: list[str],
+    nside: int,
+    lmax: int,
+    spectra_method: str,
+    member_aggregation: str,
+    show_individual_curves: bool,
+    score_wavenumber_min_exclusive: float,
+    checkpoint_path_override: str = "",
+    prediction_var: str = "y_pred",
+) -> SpectraArtifactsResult:
+    summary, curve_summary = _build_spectra_artifact_summaries(
+        pred_dir=pred_dir,
+        out_dir=out_dir,
+        run_label=run_label,
+        states=states,
+        nside=nside,
+        lmax=lmax,
+        spectra_method=spectra_method,
+        member_aggregation=member_aggregation,
+        show_individual_curves=show_individual_curves,
+        score_wavenumber_min_exclusive=score_wavenumber_min_exclusive,
+        checkpoint_path_override=checkpoint_path_override,
+        prediction_var=prediction_var,
+    )
+    return SpectraArtifactsResult(summary, curve_summary)
 
 
 def _merge_pdfs_simple(source_pdfs: list[Path], target: Path) -> None:
