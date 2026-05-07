@@ -25,7 +25,7 @@ SURFACE_VARIABLES: OrderedDict[str, float] = OrderedDict(
     ]
 )
 TOTAL_WEIGHT = float(sum(SURFACE_VARIABLES.values()))  # 14.0
-SURFACE_NORMALIZATION_SCHEME = "truth-std"
+from eval.scoreboard.surface import SURFACE_NORMALIZATION_SCHEME
 
 
 def _normalize_weights(weights: np.ndarray) -> np.ndarray:
