@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
+from eval.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
 SURFACE_VAR_LABELS = {
     "10u": "10u",
     "10v": "10v",
@@ -19,19 +19,6 @@ SURFACE_VAR_LABELS = {
 }
 SURFACE_NORMALIZATION_SCHEME = "truth-std"
 
-
-def _finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _load_json(path: Path) -> dict[str, Any]:
-    with path.open() as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
 
 
 def _surface_truth_std_map_from_variables(variables: dict[str, Any]) -> dict[str, float]:

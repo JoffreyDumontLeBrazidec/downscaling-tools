@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 import re
 from pathlib import Path
 from typing import Any
 
+from eval.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
 import numpy as np
 
 SPECTRA_FIELDS = ("10u", "10v", "2t", "msl", "t_850", "z_500")
@@ -33,13 +33,6 @@ def spectra_score(relative_l2: float) -> float:
     """Convert a relative L2 distance to a 0–1 score (higher = better)."""
     return max(0.0, 1.0 - relative_l2)
 
-
-def _finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def empty_spectra_metrics(source_path: str = "na") -> dict[str, Any]:
@@ -173,11 +166,6 @@ def _load_spectra_metadata(spectra_dir: Path) -> dict[str, Any]:
             return data
     return {}
 
-
-def _load_json(path: Path) -> dict[str, Any]:
-    with path.open() as f:
-        data = json.load(f)
-    return data if isinstance(data, dict) else {}
 
 
 def _infer_spectra_token(spectra_dir: Path) -> str:

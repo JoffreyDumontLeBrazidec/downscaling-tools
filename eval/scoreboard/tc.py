@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
+from eval.scoreboard._utils import finite_float as _finite_float
 from eval.scoreboard.row_matching import (
     classify_row,
     find_model_row,
@@ -27,13 +27,6 @@ def _asymmetric_ratio_score(ratio: float) -> float:
         return ratio
     return max(0.0, 1.0 - _OVERSHOOT_BETA * (ratio - 1.0))
 
-
-def _finite_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
 
 
 def mslp_depth(value: float) -> float:
