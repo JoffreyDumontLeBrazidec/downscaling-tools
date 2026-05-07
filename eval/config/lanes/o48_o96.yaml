@@ -42,7 +42,8 @@ tc:
   grib_dir: "/home/ecm5702/perm/reference/o48_o96/tc"
   analysis_expid: "OPER_O96_0001"
   reference_expids: ["ENFO_O48_0001"]
-  # Add IEKM_O48_<EXPID> to reference_expids once surface_pf_IEKM_O48_*_<date>.grib files are staged
+  target_grib: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_iekm_date*_time0000_step24to120_sfc_y.grib"
+  target_label: "IEKM_O96"
   support_mode: "regridded"
 
 spectra:
