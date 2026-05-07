@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 import torch.distributed as dist
-from eval.jobs.checkpoint_profile import infer_lane_from_config
+from eval._backends.checkpoint_utils import infer_lane_from_config
 
 from manual_inference.checkpoints import (
     ObjectFromCheckpointLoader,
