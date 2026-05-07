@@ -34,6 +34,7 @@ class ScopeSpec:
     curve_a_label: str
     curve_b_label: str
     pdf_name: str
+    curve_c_label: str | None = None  # input curve; None means not plotted for this scope
 
 
 SCOPE_SPECS = {
@@ -42,6 +43,7 @@ SCOPE_SPECS = {
         title="full-field spectra",
         curve_a_label="prediction mean",
         curve_b_label="truth mean",
+        curve_c_label="input (interp) mean",
         pdf_name="spectra_{state}.pdf",
     ),
     "residual": ScopeSpec(
@@ -49,6 +51,7 @@ SCOPE_SPECS = {
         title="residual spectra",
         curve_a_label="prediction residual mean",
         curve_b_label="truth residual mean",
+        curve_c_label=None,  # input residual is zero by definition
         pdf_name="spectra_residual_{state}.pdf",
     ),
 }
@@ -260,6 +263,8 @@ def build_scope_curves(
     for scope_name in SCOPE_SPECS:
         for state in states:
             scope_curves[scope_name][f"truth::{state}"] = []
+    for state in states:
+        scope_curves["full_field"][f"input::{state}"] = []
 
     raw_member_curve_counts: dict[str, int] = {state: 0 for state in states}
     checkpoint_path: Path | None = None
@@ -311,6 +316,8 @@ def build_scope_curves(
             for scope_name in SCOPE_SPECS:
                 for state in states:
                     per_file_curves[scope_name][f"truth::{state}"] = []
+            for state in states:
+                per_file_curves["full_field"][f"input::{state}"] = []
 
             for member_idx in member_indices(ds):
                 x_member = select_member_array(ds["x"], member_idx)
@@ -344,6 +351,7 @@ def build_scope_curves(
                         continue
                     pred_curve = cl_from_unstructured(lat, lon, pred_member[:, state_index], nside=nside, lmax=lmax)
                     truth_curve = cl_from_unstructured(lat, lon, truth_member[:, state_index], nside=nside, lmax=lmax)
+                    input_curve = cl_from_unstructured(lat, lon, interp_member[:, state_index], nside=nside, lmax=lmax)
                     residual_pred_curve = cl_from_unstructured(
                         lat,
                         lon,
@@ -360,6 +368,7 @@ def build_scope_curves(
                     )
                     per_file_curves["full_field"][f"pred::{state}"].append(pred_curve)
                     per_file_curves["full_field"][f"truth::{state}"].append(truth_curve)
+                    per_file_curves["full_field"][f"input::{state}"].append(input_curve)
                     per_file_curves["residual"][f"pred::{state}"].append(residual_pred_curve)
                     per_file_curves["residual"][f"truth::{state}"].append(residual_truth_curve)
 
@@ -379,6 +388,12 @@ def build_scope_curves(
                     else:
                         scope_curves[scope_name][pred_key].append(mean_curve(pred_curves))
                         scope_curves[scope_name][truth_key].append(mean_curve(truth_curves))
+                input_key = f"input::{state}"
+                input_curves = per_file_curves["full_field"][input_key]
+                if member_aggregation == "raw-members":
+                    scope_curves["full_field"][input_key].extend(input_curves)
+                else:
+                    scope_curves["full_field"][input_key].append(mean_curve(input_curves))
 
     if not residualization_methods_used:
         raise RuntimeError("No residualization method was available while building spectra curves.")
@@ -390,6 +405,7 @@ def plot_one_state(
     state: str,
     pred_cls: list[np.ndarray],
     truth_cls: list[np.ndarray],
+    input_cls: list[np.ndarray] | None,
     out_pdf: Path,
     run_label: str,
     show_individual_curves: bool,
@@ -422,6 +438,11 @@ def plot_one_state(
         for arr in pred_cls:
             keep = finite_positive_mask(arr, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
             ax.plot(ell[keep], arr[keep], color="#1f77b4", alpha=0.18, linewidth=0.8)
+
+    if input_cls is not None and scope.curve_c_label is not None:
+        input_mean = mean_curve(input_cls)
+        ki = finite_positive_mask(input_mean, wavenumbers=ell, score_wavenumber_min_exclusive=0.0)
+        ax.plot(ell[ki], input_mean[ki], color="#888888", linewidth=2.2, linestyle="--", label=scope.curve_c_label)
 
     ax.plot(ell[kt], truth_mean[kt], color="#333333", linewidth=2.2, label=scope.curve_b_label)
     ax.plot(ell[kp], pred_mean[kp], color="#1f77b4", linewidth=2.2, label=scope.curve_a_label)
@@ -528,11 +549,13 @@ def _build_spectra_artifact_summaries(
         for scope_name, spec in SCOPE_SPECS.items():
             pred_curves = scope_curves[scope_name][f"pred::{state}"]
             truth_curves = scope_curves[scope_name][f"truth::{state}"]
+            input_curves = scope_curves["full_field"].get(f"input::{state}") if scope_name == "full_field" else None
             out_pdf = out_dir / spec.pdf_name.format(state=state)
             metrics = plot_one_state(
                 state=state,
                 pred_cls=pred_curves,
                 truth_cls=truth_curves,
+                input_cls=input_curves or None,
                 out_pdf=out_pdf,
                 run_label=run_label,
                 show_individual_curves=show_individual_curves,
