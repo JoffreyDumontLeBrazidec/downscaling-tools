@@ -1,3 +1,17 @@
+prepare:
+  bundle_filename_tpl: "enfo_o48_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/enfo_o48_0001_date{date}_time0000_mem1to10_step24to120_sfc.grib"
+    lres_pl_grib:    "{source_grib_root}/enfo_o48_0001_date{date}_time0000_mem1to10_step24to120_pl.grib"
+    hres_grib:       "{source_grib_root}/enfo_o96_0001_date{date}_time0000_step24to120_sfc.grib"
+    target_sfc_grib: "{source_grib_root}/iekm_o96_iekm_date{date}_time0000_step24to120_sfc_y.grib"
+    target_pl_grib:  "{source_grib_root}/iekm_o96_iekm_date{date}_time0000_step24to120_pl_y.grib"
+  optional_sidecars:
+    - file: "{source_grib_root}/enfo_o48_0001_date{date}_time0000_mem1to10_step24to120_sfc_tp.grib"
+      arg:  lres_sfc_extra_grib
+    - file: "{source_grib_root}/iekm_o96_iekm_date{date}_time0000_step24to120_sfc_y_tp.grib"
+      arg:  target_sfc_extra_grib
+
 predict:
   input_root: /home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -35,12 +49,19 @@ surface:
 
 regions:
   interesting:
-    amazon_forest_core: [-25.0, 15.0, -90.0, -30.0]
-    congo_basin: [-18.0, 18.0, 0.0, 45.0]
-    andes_central: [-50.0, -5.0, -95.0, -45.0]
-    himalayas_central: [10.0, 50.0, 55.0, 115.0]
-    maritime_continent: [-18.0, 30.0, 85.0, 160.0]
+    humberto_atlantic: [5.0, 45.0, -80.0, -40.0]
     eastern_us_coast: [10.0, 55.0, -110.0, -45.0]
+    caribbean_and_antilles: [8.0, 28.0, -90.0, -55.0]
+    amazon_forest_core: [-25.0, 15.0, -90.0, -30.0]
+    andes_central: [-50.0, -5.0, -95.0, -45.0]
+
+region_plot:
+  region_names:
+    - humberto_atlantic
+    - eastern_us_coast
+    - caribbean_and_antilles
+    - amazon_forest_core
+    - andes_central
 
 evaluator_groups:
   default: [tc, spectra, surface, region_plot]

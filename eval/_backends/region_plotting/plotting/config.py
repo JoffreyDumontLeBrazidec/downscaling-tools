@@ -14,6 +14,8 @@ LEGACY_LOCAL_REGION_BOXES: dict[str, list[float]] = {
     "greatbarrier_reef": [-25.0, -10.0, 140.0, 155.0],
     "eastern_us": [25.0, 45.0, -90.0, -70.0],
     "eastern_us_coast": [10.0, 55.0, -110.0, -45.0],
+    "humberto_atlantic": [5.0, 45.0, -80.0, -40.0],
+    "caribbean_and_antilles": [8.0, 28.0, -90.0, -55.0],
     "idalia": [10.0, 40.0, -100.0, -70.0],
     "idalia_center": [18.0, 32.0, -92.0, -78.0],
     "central_africa": [-10.0, 10.0, 10.0, 30.0],
@@ -47,12 +49,13 @@ LEGACY_LOCAL_REGION_BOXES: dict[str, list[float]] = {
 }
 
 O96_INTERESTING_REGIONS: dict[str, list[float]] = {
-    "amazon_forest_core": [-25.0, 15.0, -90.0, -30.0],
-    "congo_basin": [-18.0, 18.0, 0.0, 45.0],
-    "andes_central": [-50.0, -5.0, -95.0, -45.0],
-    "himalayas_central": [10.0, 50.0, 55.0, 115.0],
-    "maritime_continent": [-18.0, 30.0, 85.0, 160.0],
+    # Humberto-specific: Atlantic hurricane basin and impact zone
+    "humberto_atlantic": [5.0, 45.0, -80.0, -40.0],
     "eastern_us_coast": [10.0, 55.0, -110.0, -45.0],
+    "caribbean_and_antilles": [8.0, 28.0, -90.0, -55.0],
+    # Orographic benchmarks
+    "amazon_forest_core": [-25.0, 15.0, -90.0, -30.0],
+    "andes_central": [-50.0, -5.0, -95.0, -45.0],
 }
 
 O1280_INTERESTING_REGIONS: dict[str, list[float]] = {

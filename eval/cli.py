@@ -82,6 +82,22 @@ def _add_lane_override_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
+    """Add truth-aware bundle-building args."""
+    parser.add_argument(
+        "--source-grib-root", default=None,
+        help="Root directory of source GRIB files for truth-aware bundle building.",
+    )
+    parser.add_argument(
+        "--source-forcing-root", default=None,
+        help="Root directory of forcing GRIB files (o1280_o2560 only).",
+    )
+    parser.add_argument(
+        "--bundle-dir", default=None,
+        help="Output directory for built bundles (default: <output-dir>/bundles).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with subcommands."""
     parser = argparse.ArgumentParser(
@@ -96,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--checkpoint", required=True, help="Path to model checkpoint.")
     _add_evaluator_filter_args(p_run)
     _add_lane_override_args(p_run)
+    _add_prepare_args(p_run)
     p_run.add_argument(
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
@@ -106,6 +123,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(p_predict)
     p_predict.add_argument("--checkpoint", required=True, help="Path to model checkpoint.")
     _add_lane_override_args(p_predict)
+    _add_prepare_args(p_predict)
+
+    # --- prepare ---
+    p_prepare = subparsers.add_parser("prepare", help="Build truth-aware bundles only (no prediction).")
+    _add_common_args(p_prepare)
+    _add_lane_override_args(p_prepare)
+    p_prepare.add_argument(
+        "--source-grib-root", required=True,
+        help="Root directory of source GRIB files.",
+    )
+    p_prepare.add_argument(
+        "--source-forcing-root", default=None,
+        help="Root directory of forcing GRIB files (o1280_o2560 only).",
+    )
+    p_prepare.add_argument(
+        "--bundle-dir", default=None,
+        help="Output directory for built bundles (default: <output-dir>/bundles).",
+    )
 
     # --- evaluate ---
     p_eval = subparsers.add_parser("evaluate", help="Run evaluators on existing predictions.")
@@ -289,6 +324,38 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     predict_cfg = lane_config["predict"]
     checkpoint = args.checkpoint
 
+    source_grib_root = getattr(args, "source_grib_root", None) or ""
+
+    # --- Prepare: build truth-aware bundles if lane has prepare: section ---
+    if lane_config.get("prepare") and source_grib_root:
+        from eval.prepare.builder import build_bundles
+        source_forcing_root = getattr(args, "source_forcing_root", None) or ""
+        bundle_dir_arg = getattr(args, "bundle_dir", None)
+        bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
+        bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
+        if isinstance(bundle_pairs_raw, str):
+            bundle_pairs_raw = [bp.strip() for bp in bundle_pairs_raw.split(",") if bp.strip()]
+        LOG.info("=== Phase 0: Bundle preparation ===")
+        build_bundles(
+            lane_config=lane_config,
+            bundle_dir=bundle_dir,
+            source_grib_root=source_grib_root,
+            source_forcing_root=source_forcing_root,
+            dates=list(predict_cfg.get("dates", [])),
+            steps=[int(s) for s in predict_cfg.get("steps", [])],
+            members=[int(m) for m in predict_cfg.get("members", [])],
+            bundle_pairs=list(bundle_pairs_raw),
+            verification_path=output_dir / "bundle_build_verification.json",
+        )
+        input_root = str(bundle_dir)
+    else:
+        # Resolve input_root: lane config takes precedence over host DATA_DIR
+        input_root = predict_cfg.get("input_root", "")
+        if not input_root:
+            env_setup = host_config.get("environment_setup", {})
+            exports = env_setup.get("exports", {})
+            input_root = exports.get("DATA_DIR", "")
+
     members_str = ",".join(str(m) for m in predict_cfg["members"])
     steps_str = ",".join(str(s) for s in predict_cfg["steps"])
     dates_str = ",".join(predict_cfg["dates"])
@@ -300,13 +367,6 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         )
 
     predictions_dir = output_dir / "predictions"
-
-    # Resolve input_root: lane config takes precedence over host DATA_DIR
-    input_root = predict_cfg.get("input_root", "")
-    if not input_root:
-        env_setup = host_config.get("environment_setup", {})
-        exports = env_setup.get("exports", {})
-        input_root = exports.get("DATA_DIR", "")
 
     cmd = [
         sys.executable, "-m", "eval.predict.main",
@@ -428,6 +488,24 @@ def _run_evaluators(
     return evaluators_run
 
 
+def _consolidate_plots(output_dir: Path) -> None:
+    """Copy all PDFs and PNGs from evaluators/* to <output_dir>/plots/.
+
+    Gives a flat, browsable plots/ folder at the run root regardless of
+    which evaluators ran or how they organise their internal output.
+    """
+    import shutil
+    plots_dir = output_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    evaluators_dir = output_dir / "evaluators"
+    if not evaluators_dir.exists():
+        return
+    for src in sorted(evaluators_dir.rglob("*.pdf")) + sorted(evaluators_dir.rglob("*.png")):  # type: ignore[operator]
+        dest = plots_dir / f"{src.parent.relative_to(evaluators_dir).as_posix().replace('/', '__')}__{src.name}"
+        shutil.copy2(src, dest)
+    LOG.info("Plots consolidated to %s (%d files)", plots_dir, len(list(plots_dir.iterdir())))
+
+
 def _run_scoreboard(
     eval_dir: Path,
     lane_config: dict,
@@ -455,6 +533,38 @@ def _run_scoreboard(
     print()
 
 
+def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
+    """Build truth-aware bundles only (no prediction)."""
+    from eval.prepare.builder import build_bundles
+
+    prepare_cfg = lane_config.get("prepare")
+    if not prepare_cfg:
+        raise SystemExit(f"Lane '{args.lane}' has no 'prepare:' section in its config.")
+
+    source_grib_root = args.source_grib_root
+    source_forcing_root = getattr(args, "source_forcing_root", None) or ""
+    bundle_dir_arg = getattr(args, "bundle_dir", None)
+    bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
+
+    predict_cfg = lane_config.get("predict", {})
+    bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
+    if isinstance(bundle_pairs_raw, str):
+        bundle_pairs_raw = [bp.strip() for bp in bundle_pairs_raw.split(",") if bp.strip()]
+
+    build_bundles(
+        lane_config=lane_config,
+        bundle_dir=bundle_dir,
+        source_grib_root=source_grib_root,
+        source_forcing_root=source_forcing_root,
+        dates=list(predict_cfg.get("dates", [])),
+        steps=[int(s) for s in predict_cfg.get("steps", [])],
+        members=[int(m) for m in predict_cfg.get("members", [])],
+        bundle_pairs=list(bundle_pairs_raw),
+        verification_path=bundle_dir.parent / "bundle_build_verification.json",
+    )
+    LOG.info("Bundle preparation complete. Bundles in: %s", bundle_dir)
+
+
 def cmd_run(args: argparse.Namespace, lane_config: dict, host_config: dict, evaluators: list[str], output_dir: Path) -> None:
     """Full pipeline: predict + evaluate + scoreboard."""
     predictions_dir = output_dir / "predictions"
@@ -475,6 +585,9 @@ def cmd_run(args: argparse.Namespace, lane_config: dict, host_config: dict, eval
     # Step 3: Scoreboard
     LOG.info("=== Phase 3/3: Scoreboard ===")
     _run_scoreboard(output_dir, lane_config, evaluators, output_dir)
+
+    # Step 4: Consolidate all plots to <run_root>/plots/
+    _consolidate_plots(output_dir)
 
     # Update effective config with completion info
     _update_effective_config_completion(output_dir, evaluators_run)
@@ -531,6 +644,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.subcommand == "evaluate" and hasattr(args, "predictions_dir") and args.predictions_dir:
         # Place evaluator outputs alongside predictions
         output_dir = Path(args.predictions_dir).parent
+    elif args.subcommand == "prepare":
+        bundle_dir_arg = getattr(args, "bundle_dir", None)
+        output_dir = Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)
     else:
         output_dir = _resolve_output_dir(host_config, lane_name)
 
@@ -563,6 +679,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_run(args, lane_config, host_config, evaluators, output_dir)
     elif args.subcommand == "predict":
         cmd_predict(args, lane_config, host_config, output_dir)
+    elif args.subcommand == "prepare":
+        cmd_prepare(args, lane_config, host_config, output_dir)
     elif args.subcommand == "evaluate":
         predictions_dir = Path(args.predictions_dir)
         evaluators_run = _run_evaluators(
@@ -570,6 +688,7 @@ def main(argv: list[str] | None = None) -> None:
             overwrite=getattr(args, "overwrite", False),
             checkpoint=getattr(args, "checkpoint", None),
         )
+        _consolidate_plots(output_dir)
         _update_effective_config_completion(output_dir, evaluators_run)
     elif args.subcommand == "scoreboard":
         eval_dir = Path(args.eval_dir)
