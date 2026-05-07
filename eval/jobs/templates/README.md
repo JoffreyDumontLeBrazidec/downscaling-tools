@@ -1,7 +1,7 @@
 # Strict Manual-Inference And Eval Templates
 
 > **Canonical entry point:** `python -m eval.cli run --checkpoint <CKPT_PATH> --lane <LANE> --host <HOST>`
-> The old shell flow scripts (`submit_o48_o96_manual_eval_flow.sh`, `submit_o320_o1280_manual_eval_flow.sh`, `submit_o1280_o2560_manual_eval_flow.sh`) and `strict_manual_predict_x_bundle.sbatch` have been moved to `archive/` and are no longer used.
+> Archived (covered by `eval.cli`): old shell flow scripts, `scoreboard_*_step.sbatch`, `scoreboard_write_from_predictions.sbatch`, `tc_eval_from_predictions.sbatch`, `spectra_proxy_from_predictions.sbatch`, `surface_loss_from_predictions.sbatch`, `regional_suite_from_predictions.sbatch`, `local_plots_one_date_from_predictions.sbatch`, all submit helpers, and their Python helpers — all moved to `archive/`.
 
 This directory is the canonical home for repo-specific eval and manual-inference templates used by `downscaling-tools`.
 If copies exist under `jobscripts/`, treat them as mirrors, not the source of truth.
@@ -41,11 +41,6 @@ preflight_summary
   - Canonical truth-aware bundle-build stage for strict `o1280 -> o2560` manual inference.
   - Rebuilds member-step bundle NetCDFs from the DestinE `o1280` input GRIB plus the colocated `o2560` forcing/truth GRIBs using the maintained surface-only contract.
   - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
-- `submit_aug26_30_scoreboard_flow.sh`
-  - Canonical login-node helper for the full Aug 26-30 production chain.
-  - Renders run-local copies of the inference, sigma, and post-writer templates under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
-  - Those rendered copies are disposable submission artifacts, not the canonical templates.
-  - Submits sigma eval, full25 inference, then the scoreboard post-writer with `afterok` dependencies.
 - `strict_manual_predict_one_bundle.sbatch`
   - Single-bundle debug/proof launcher. Use for smoke-testing a checkpoint before a full `eval.cli` run.
   - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` for downstream reporting.
@@ -56,13 +51,7 @@ preflight_summary
   - Targets an existing run directory and reruns only the missing files.
   - Works for `new` and `old` stack, AC and AG.
 
-### Local Plots
-- `local_plots_one_date_from_predictions.sbatch`
-  - **Canonical one-date local-plot template — works on both AC and AG.**
-  - Renders the standard `local_plots_one_date/` tree from an existing `predictions_*.nc` run root using `plot_one_date_local`.
-  - Enforces the host/env rule explicitly: `ag -> /home/ecm5702/dev/.ds-ag/bin/activate`, `ac -> /home/ecm5702/dev/.ds-dyn/bin/activate`.
-  - Uses a higher default memory posture for O1280 plot-heavy work (`256G`).
-  - Preferred launch path for the `o320 -> o1280` weak-agent route is the combined helper below, which patches the CPU scheduler posture automatically.
+### Diagnostics
 - `tc_three_route_compare_from_run.sbatch`
   - **Canonical representative intermediate-state TC route-compare template for `o320 -> o1280`.**
   - Selects one representative case per requested event from an existing full predictions tree, then renders:
@@ -74,18 +63,6 @@ preflight_summary
   - Uses a high-memory O1280 posture (`256G`) and keeps the GPU requirement because route 3 rebuilds a cached intermediate trajectory.
 
 ### TC Evaluation
-For the `o320 -> o1280` lane, treat this prediction-only TC package as part of every standard evaluation run, not as an optional add-on.
-- `tc_eval_from_predictions.sbatch`
-  - **Canonical TC PDF template — works on both AC and AG.**
-  - Generates normalized TC PDF plots from `predictions_*.nc`.
-  - Uses `eval/tc/workflows.py` (pdf subcommand) from this repo.
-  - This is a prediction-only CPU path: no generation and no intermediate-state rebuild.
-  - Supports `native` and `regridded` modes (`regridded` requires metview, AC-only).
-  - Checks TC reference data exists; points to request script if missing.
-  - Preferred submit helper:
-    - `eval/jobs/templates/submit_tc_eval_from_predictions.sh`
-    - default auto profile: `ac -> qos=nf with no GPU request`, `ag -> qos=ng with --gpus-per-node=0`
-    - on AC, keep the tested prediction-only posture within `128G` unless a different queue decision is recorded
 - `tc_contour_suite_from_predictions.sbatch`
   - **Canonical TC contour template from predictions.**
   - Renders contour-style storm-centered TC plots from one `predictions_*.nc` file.
@@ -93,14 +70,6 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
   - In the `o320 -> o1280` lane helper, AC submissions are patched to `qos=nf` with no GPU request and the tested `128G` TC posture.
 
 ### Spectra
-- `scoreboard_write_from_predictions.sbatch`
-  - Canonical full-scoreboard post-writer for Aug 26-30 runs.
-  - Produces spectra, TC, weighted surface loss, scoreboard metrics JSON, and refreshes scoreboard markdown.
-  - Full-route spectra now use the canonical proxy10 subset rather than the older step120-only five-date slice.
-- `scoreboard_sigma_eval.sbatch`
-  - Canonical sigma-evaluator launcher for the Aug 26-30 full scoreboard chain.
-  - Uses the repo root dynamically instead of a hard-coded checkout path.
-  - For `o320 -> o1280` and `o1280 -> o2560`, sigma must run on AG with `NUM_GPUS_PER_MODEL=4` and a matching `srun`/Slurm 4-task allocation; single-GPU AG launches are not reliable for those lanes.
 - `spectra_ecmwf_from_predictions.sbatch`
   - **Canonical ECMWF spectra template — AC-only (requires gptosp.ser).**
   - Follows the same 3-stage pipeline as `eval/spectra/grb_to_spectra.sh`:
@@ -109,29 +78,6 @@ For the `o320 -> o1280` lane, treat this prediction-only TC package as part of e
     3. `compute_spectra-3.py` → spectra amplitudes
   - Resumable: skips already-completed `gptosp` transforms on resubmission.
   - Uses short `$TMPDIR` symlinks to avoid `gptosp` path-length truncation.
-- `spectra_proxy_from_predictions.sbatch`
-  - **Canonical lightweight proxy spectra template — works on both AC and AG.**
-  - Builds a filtered symlink subset of `predictions_*.nc` and runs `predictions_dir_spectra.py` on that subset.
-  - Preferred AG-side spectra path for the weak-agent `o320 -> o1280` flow.
-- `predictions_dir_spectra.py`
-  - Helper used by `launch_proxy_eval.sh` for proxy scoreboard spectra artifacts.
-- `stage_prediction_spectra_gribs.py`
-  - Repo-owned helper for staging prediction NetCDF files into ECMWF-style no-poles GRIBs.
-  - Used by `scoreboard_write_from_predictions.sbatch` for the trusted full-scoreboard spectra route.
-
-### Submission Helper
-- `submit_tc_eval_from_predictions.sh`
-  - Login-node helper for standalone TC reruns on an existing predictions tree.
-  - Renders a host-safe copy of `tc_eval_from_predictions.sbatch` under `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/`.
-  - Default `auto` profile chooses:
-    - `ac_cpu_safe` on AC (`qos=nf`, drops the GPU request)
-    - `ag_cpu_safe` on AG (`qos=ng`, sets `--gpus-per-node=0`)
-  - Optional env overrides:
-    - `TC_SUBMIT_MEM_OVERRIDE=128G`
-    - `TC_SUBMIT_TIME_OVERRIDE=04:00:00`
-    - `TC_SUBMIT_HOLD=1`
-    - `TC_SUBMIT_NO_SUBMIT=1` to render only
-
 ### Preflight
 - `preflight_eval_check.sh`
   - **Source this before any submission** to validate cluster, venv, data, QOS, and walltime.
@@ -160,7 +106,6 @@ do not reimplement their logic in ad-hoc scratch scripts.
 
 | Tool | Path | Purpose |
 |------|------|---------|
-| TC plotting | `eval/tc/workflows.py` | TC normalized PDF plots from predictions |
 | TC data request | `eval/tc/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
 | Spectra pipeline | `eval/spectra/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
 | Spectra compute | `/home/ecm5702/dev/post_prepml/spectra/spectra_ml/individual_files/compute_spectra-3.py` | Spectral harmonics → amplitude spectra |
@@ -185,11 +130,8 @@ These are based on observed job outcomes from the checkpoint-eval-pipeline epic.
 | predict25 (O320, GPU) | 12:00:00 | default | ng | 25 files, single GPU |
 | predict75 (O320, GPU) | 48:00:00 | default | ng | 61/75 in 12h observed; use 48h |
 | predict25 (O1280, GPU) | 24:00:00 | default | ng | ~2-3x slower than O320 |
-| TC eval (O320) | 04:00:00 | 128G | ng | Cross-cluster default uses `gpus-per-node=1` for submission compatibility |
-| TC eval / contours (O1280, prediction-only) | 06:00:00 | 128G on AC `nf` | nf/ng | CPU-only plotting from predictions; no generation or intermediate rebuild |
+| TC contours (O1280, prediction-only) | 06:00:00 | 128G on AC `nf` | nf/ng | CPU-only plotting from predictions |
 | Spectra ECMWF (AC) | 48:00:00 | 128G | nf | 300 gptosp transforms; resumable |
-| Spectra proxy (AG) | 08:00:00 | 128G | ng | healpy-based, CPU-only |
-| Local or regional plots (O1280) | 06:00:00 | 256G | ng/nf | Use the high-memory default for O1280 local/regional/storm six-panel follow-ups |
 | Representative TC three-route compare (O1280) | 08:00:00 | 256G | ng | GPU job: route 3 builds cached intermediates before plotting |
 
 ## Cluster / QOS Rules
@@ -213,12 +155,6 @@ Common mistakes to avoid:
 
 Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when the goal is to change shared template behavior for future runs.
 
-For the canonical Aug 26-30 production bundle with minimal manual steps, prefer:
-edit and submit `submit_aug26_30_scoreboard_flow.sh`.
-
-For standalone TC reruns on an existing predictions tree, prefer:
-`bash eval/jobs/templates/submit_tc_eval_from_predictions.sh /path/to/edited_copy.sbatch`
-
 ## Smooth Routes By Goal
 - `o48 -> o96` training with correct forcing/LR overrides:
   - copy `train_o48_o96.sbatch`, edit USER SETTINGS, `sbatch`
@@ -236,12 +172,10 @@ For standalone TC reruns on an existing predictions tree, prefer:
   - `python -m eval.cli evaluate --predictions-dir <RUN_ROOT>/data/predictions --lane <LANE> --only <pillar>`
 - Recovery:
   - edit `predict_recovery.sbatch`
-- Standalone TC eval on existing predictions:
-  - edit `tc_eval_from_predictions.sbatch`, then run `bash eval/jobs/templates/submit_tc_eval_from_predictions.sh /path/to/edited_copy.sbatch`
-- Standalone one-date local plots on existing predictions:
-  - edit `local_plots_one_date_from_predictions.sbatch`
-- Standalone proxy spectra on existing predictions:
-  - edit `spectra_proxy_from_predictions.sbatch`
+- Standalone ECMWF spectra (AC only) on existing predictions:
+  - edit `spectra_ecmwf_from_predictions.sbatch`
+- TC contour plots on existing predictions:
+  - edit `tc_contour_suite_from_predictions.sbatch`
 
 ## Notes
 - Resolver tests for the strict inference templates live in:
