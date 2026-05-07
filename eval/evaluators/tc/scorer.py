@@ -29,6 +29,7 @@ def score(
     *,
     run_id: str = "",
     stats_filename: str = "stats.json",
+    **kwargs,
 ) -> list[dict[str, Any]]:
     """Score TC results from a stats JSON.
 

@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # Canonical sigma-evaluator launcher for scoreboard and manual-eval chains.
 #
 # Default allocation fits o48->o96 and o96->o320.

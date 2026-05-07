@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 #SBATCH --job-name=scoreboard_finalize
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

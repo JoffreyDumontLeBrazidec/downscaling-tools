@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # Launcher for the four scoreboard step sbatches.
 
 set -euo pipefail

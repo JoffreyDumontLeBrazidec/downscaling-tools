@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # Weighted surface loss from completed prediction NetCDFs.
 
 #SBATCH --job-name=surface_loss_from_predictions

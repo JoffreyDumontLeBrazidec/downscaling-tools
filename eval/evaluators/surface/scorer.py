@@ -14,6 +14,7 @@ from eval.scoreboard.surface import (
     load_surface_loss_metrics,
     load_x_interp_surface_metrics,
 )
+from eval.scoreboard._surface_compute import process_predictions_dir
 
 LOG = logging.getLogger(__name__)
 
@@ -48,7 +49,13 @@ def score(
     if json_path.exists():
         metrics = load_surface_loss_metrics(json_path)
     elif predictions_dir:
-        metrics = load_x_interp_surface_metrics(Path(predictions_dir))
+        # Compute from predictions using y_pred vs y (standard evaluation)
+        raw = process_predictions_dir(Path(predictions_dir))
+        metrics = {
+            "weighted_mse": raw.get("weighted_surface_mse"),
+            "weighted_nmse": raw.get("weighted_surface_nmse"),
+            "variables": raw.get("variables", {}),
+        }
     else:
         # Try the results_dir as a predictions directory
         metrics = load_x_interp_surface_metrics(results_dir)

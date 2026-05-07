@@ -25,6 +25,7 @@ def score(
     eval_config: dict,
     *,
     reference_root: str | Path | None = None,
+    **kwargs,
 ) -> list[dict[str, Any]]:
     """Score spectra results from a spectra output directory.
 

@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # DEPRECATED (2026-05-07): use submit_scoreboard_chain.sh and the four
 # scoreboard_{spectra,tc,surface,finalize}_step.sbatch templates instead.
 # This monolith is preserved for one release and will be archived after

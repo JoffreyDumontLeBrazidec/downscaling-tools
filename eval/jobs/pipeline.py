@@ -102,6 +102,7 @@ def render_pipeline(
     overrides: dict[str, Any] | None = None,
     split_evaluators: bool = True,
     output_dir: Path | None = None,
+    eval_output_dir: str | None = None,
 ) -> PipelineManifest:
     """Render a full multi-job pipeline with dependency chaining.
 
@@ -120,12 +121,20 @@ def render_pipeline(
         If False, generate a single evaluate sbatch for all evaluators.
     output_dir : Path | None
         If given, write all scripts to this directory.
+    eval_output_dir : str | None
+        Shared evaluation output directory for the pipeline.
+        If None, auto-generated as ``{scratch_root}/eval/{lane}/run_{timestamp}``.
+        The predict step writes to ``{eval_output_dir}/predictions/``,
+        the evaluate steps read from there, and scoreboard reads from
+        ``{eval_output_dir}/``.
 
     Returns
     -------
     PipelineManifest
         Manifest of generated scripts and the submit launcher.
     """
+    from datetime import datetime, timezone
+
     from eval.config.loader import load_host, load_lane
     from eval.jobs.renderer import render_sbatch
     from eval.jobs.resources import resolve_resources
@@ -133,6 +142,14 @@ def render_pipeline(
     lane_config = load_lane(lane)
     host_config = load_host(host)
     code_root = host_config["code_root"]
+    scratch_root = host_config["scratch_root"]
+
+    # Compute shared eval output directory
+    if eval_output_dir is None:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        ckpt_short = Path(checkpoint).name[:12]
+        eval_output_dir = f"{scratch_root}/eval/{lane}/run_{ts}_{ckpt_short}"
+    predictions_dir = f"{eval_output_dir}/predictions"
 
     evaluators = lane_config["evaluator_groups"]["default"]
     scripts: list[ScriptEntry] = []
@@ -166,6 +183,7 @@ def render_pipeline(
 
             cli_overrides = dict(overrides) if overrides else {}
             cli_overrides["--only"] = evaluator
+            cli_overrides["--predictions-dir"] = predictions_dir
 
             eval_script = render_sbatch(
                 lane=lane, host=host, checkpoint=checkpoint,
@@ -186,9 +204,11 @@ def render_pipeline(
             lane_config, host_config, stage="evaluate",
         )
         eval_resources["job_name_suffix"] = "-eval"
+        cli_overrides = dict(overrides) if overrides else {}
+        cli_overrides["--predictions-dir"] = predictions_dir
         eval_script = render_sbatch(
             lane=lane, host=host, checkpoint=checkpoint,
-            mode="evaluate", overrides=overrides,
+            mode="evaluate", overrides=cli_overrides,
             resource_overrides=eval_resources,
         )
         eval_script = _inject_preflight(eval_script, code_root)
@@ -206,9 +226,11 @@ def render_pipeline(
         lane_config, host_config, stage="scoreboard",
     )
     scoreboard_resources["job_name_suffix"] = "-scoreboard"
+    sb_overrides = dict(overrides) if overrides else {}
+    sb_overrides["--eval-dir"] = eval_output_dir
     scoreboard_script = render_sbatch(
         lane=lane, host=host, checkpoint=checkpoint,
-        mode="scoreboard", overrides=overrides,
+        mode="scoreboard", overrides=sb_overrides,
         resource_overrides=scoreboard_resources,
     )
     scoreboard_script = _inject_preflight(scoreboard_script, code_root)

@@ -1,4 +1,7 @@
 #!/bin/bash --login
+# DEPRECATED: Use python -m eval.jobs.pipeline instead.
+# This template is kept for historical reference. New evaluation runs
+# should use the unified CLI (python -m eval.cli) and pipeline renderer.
 # Canonical proxy spectra template — works on both AC and AG.
 #
 # Computes the lightweight healpy-based spectra summary from an existing

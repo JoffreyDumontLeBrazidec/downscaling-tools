@@ -76,6 +76,8 @@ def run(
     Returns the output directory path.
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
+    if not run_label:
+        run_label = predictions_dir.parent.name or "prediction"
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "tc"
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"TC output directory already has content: {output_dir}. Pass overwrite=True to replace.")
