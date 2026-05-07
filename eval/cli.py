@@ -291,6 +291,12 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     members_str = ",".join(str(m) for m in predict_cfg["members"])
     steps_str = ",".join(str(s) for s in predict_cfg["steps"])
     dates_str = ",".join(predict_cfg["dates"])
+    bundle_pairs = predict_cfg.get("bundle_pairs", "")
+    if isinstance(bundle_pairs, list):
+        bundle_pairs = ",".join(
+            f"{item.get(chr(100)+chr(97)+chr(116)+chr(101))}:{item.get(chr(115)+chr(116)+chr(101)+chr(112))}" if isinstance(item, dict) else str(item)
+            for item in bundle_pairs
+        )
 
     predictions_dir = output_dir / "predictions"
 
@@ -309,6 +315,8 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         "--input-root", input_root,
         "--allow-existing-out-dir",
     ]
+    if bundle_pairs:
+        cmd += ["--bundle-pairs", str(bundle_pairs)]
 
     LOG.info("Running predictions: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
