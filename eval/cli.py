@@ -89,10 +89,6 @@ def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
         help="Root directory of source GRIB files for truth-aware bundle building.",
     )
     parser.add_argument(
-        "--source-forcing-root", default=None,
-        help="Root directory of forcing GRIB files (o1280_o2560 only).",
-    )
-    parser.add_argument(
         "--bundle-dir", default=None,
         help="Output directory for built bundles (default: <output-dir>/bundles).",
     )
@@ -132,10 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument(
         "--source-grib-root", required=True,
         help="Root directory of source GRIB files.",
-    )
-    p_prepare.add_argument(
-        "--source-forcing-root", default=None,
-        help="Root directory of forcing GRIB files (o1280_o2560 only).",
     )
     p_prepare.add_argument(
         "--bundle-dir", default=None,
@@ -329,7 +321,6 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     # --- Prepare: build truth-aware bundles if lane has prepare: section ---
     if lane_config.get("prepare") and source_grib_root:
         from eval.prepare.builder import build_bundles
-        source_forcing_root = getattr(args, "source_forcing_root", None) or ""
         bundle_dir_arg = getattr(args, "bundle_dir", None)
         bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
         bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
@@ -340,7 +331,6 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
             lane_config=lane_config,
             bundle_dir=bundle_dir,
             source_grib_root=source_grib_root,
-            source_forcing_root=source_forcing_root,
             dates=list(predict_cfg.get("dates", [])),
             steps=[int(s) for s in predict_cfg.get("steps", [])],
             members=[int(m) for m in predict_cfg.get("members", [])],
@@ -488,14 +478,18 @@ def _run_evaluators(
     return evaluators_run
 
 
-def _consolidate_plots(output_dir: Path) -> None:
-    """Copy all PDFs and PNGs from evaluators/* to <output_dir>/plots/.
+def _consolidate_plots(output_dir: Path, *, plots_dir: Path | None = None) -> None:
+    """Copy all PDFs and PNGs from evaluators/* to plots/.
 
     Gives a flat, browsable plots/ folder at the run root regardless of
     which evaluators ran or how they organise their internal output.
+
+    plots_dir defaults to output_dir/plots.  Pass an explicit path when
+    output_dir is a sub-directory of the run root (e.g. data/) so plots
+    land at the run root level rather than inside data/.
     """
     import shutil
-    plots_dir = output_dir / "plots"
+    plots_dir = plots_dir if plots_dir is not None else output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     evaluators_dir = output_dir / "evaluators"
     if not evaluators_dir.exists():
@@ -542,7 +536,6 @@ def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         raise SystemExit(f"Lane '{args.lane}' has no 'prepare:' section in its config.")
 
     source_grib_root = args.source_grib_root
-    source_forcing_root = getattr(args, "source_forcing_root", None) or ""
     bundle_dir_arg = getattr(args, "bundle_dir", None)
     bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
 
@@ -555,7 +548,6 @@ def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         lane_config=lane_config,
         bundle_dir=bundle_dir,
         source_grib_root=source_grib_root,
-        source_forcing_root=source_forcing_root,
         dates=list(predict_cfg.get("dates", [])),
         steps=[int(s) for s in predict_cfg.get("steps", [])],
         members=[int(m) for m in predict_cfg.get("members", [])],
@@ -688,6 +680,7 @@ def main(argv: list[str] | None = None) -> None:
             overwrite=getattr(args, "overwrite", False),
             checkpoint=getattr(args, "checkpoint", None),
         )
+        # output_dir is predictions_dir.parent == run root; plots go there.
         _consolidate_plots(output_dir)
         _update_effective_config_completion(output_dir, evaluators_run)
     elif args.subcommand == "scoreboard":

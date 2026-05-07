@@ -42,17 +42,14 @@ def run(
         "--out-dir", str(output_dir),
     ]
 
-    region_names = eval_config.get("region_names")
-    if region_names:
-        lane_regions = lane_config.get("regions", {}).get("interesting", {})
-        boxes = {name: lane_regions[name] for name in region_names if name in lane_regions}
-        missing = [name for name in region_names if name not in lane_regions]
-        if missing:
-            raise ValueError(
-                f"region_plot.region_names contains {missing} but these are not defined in "
-                "lane config regions.interesting. Add them there with explicit boxes."
-            )
-        cmd += ["--region-boxes-json", json.dumps(boxes)]
+    # Collect all boxes from all region groups in the lane config and pass them explicitly,
+    # so the subprocess never needs to guess from a 'grid' NC attribute.
+    lane_boxes: dict[str, list[float]] = {}
+    for group in lane_config.get("regions", {}).values():
+        if isinstance(group, dict):
+            lane_boxes.update(group)
+    if lane_boxes:
+        cmd += ["--region-boxes-json", json.dumps(lane_boxes)]
 
     LOG.info("region_plot subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
