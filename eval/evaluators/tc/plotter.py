@@ -49,7 +49,7 @@ def plot(
         LOG.warning("No event data in %s", stats_path)
         return plots_dir
 
-    pdf_path = plots_dir / "tc_pdf_ratios.pdf"
+    pdf_path = plots_dir / "pdf_ratios.pdf"
     with PdfPages(pdf_path) as pdf:
         for event_name, event_stats in events_data.items():
             if event_stats.get("prediction_only"):
