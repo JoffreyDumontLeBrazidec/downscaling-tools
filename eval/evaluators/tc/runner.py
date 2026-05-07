@@ -10,8 +10,6 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
-
 from eval.config.loader import load_event
 from eval.discovery.predictions import find_predictions
 from eval.tc.data_types import BoundingBox
@@ -24,6 +22,7 @@ from eval.tc.loading_predictions import (
 )
 from eval.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
 from eval.tc.workflows import (
+    _json_default,
     compute_event_stats,
     load_curves_for_event,
 )
@@ -154,13 +153,3 @@ def run(
 
     LOG.info("TC stats written to %s", stats_path)
     return output_dir
-
-
-def _json_default(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")

@@ -31,7 +31,7 @@ from .loading_predictions import (
 from .member_plot import _plot_member_page
 from .pdf_plot import plot_pdf_ratios
 from .plot_config import PLOT_CONFIGS, TCPlotConfig
-from .stats import extreme_tail_table, summary_stats, tail_summary, variable_stats
+from .stats import _finite_1d, extreme_tail_table, summary_stats, tail_summary, variable_stats
 
 LOG = logging.getLogger(__name__)
 
@@ -102,10 +102,6 @@ def cut_display_label(label: str | None, *, fallback: str) -> str:
 
 # --- Building blocks ---
 
-
-def _finite_1d(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=np.float64).ravel()
-    return x[np.isfinite(x)]
 
 
 def load_curves_for_event(
