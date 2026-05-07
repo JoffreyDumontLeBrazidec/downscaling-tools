@@ -32,6 +32,9 @@ def _sbatch_header(
     checkpoint: str,
     scheduler: dict[str, Any],
     scratch_root: str,
+    gpus: int = 0,
+    ntasks_per_node: int = 1,
+    job_name_suffix: str = "",
 ) -> str:
     """Render ``#SBATCH`` directive block."""
     short = _checkpoint_short(checkpoint)
@@ -43,15 +46,21 @@ def _sbatch_header(
 
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name=eval-{lane}-{short}",
+        f"#SBATCH --job-name=eval-{lane}{job_name_suffix}-{short}",
         f"#SBATCH --qos={qos}",
         f"#SBATCH --time={time_limit}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --cpus-per-task={cpus}",
         "#SBATCH --nodes=1",
-        "#SBATCH --ntasks-per-node=1",
+        f"#SBATCH --ntasks-per-node={ntasks_per_node}",
         f"#SBATCH --output={slurm_out}",
     ]
+
+    if gpus > 0:
+        lines.append(f"#SBATCH --gpus-per-node={gpus}")
+    elif qos == "ng":
+        lines.append("#SBATCH --gpus-per-node=0")
+
     return "\n".join(lines)
 
 
@@ -145,6 +154,7 @@ def render_sbatch(
     mode: str = "run",
     overrides: dict[str, Any] | None = None,
     output_path: Path | None = None,
+    resource_overrides: dict[str, Any] | None = None,
 ) -> str:
     """Generate an sbatch script from config.
 
@@ -164,6 +174,10 @@ def render_sbatch(
         strings or ``True`` for boolean flags.
     output_path : Path | None
         If given, write the script to this path.
+    resource_overrides : dict | None
+        SLURM resource overrides (from ``resolve_resources``).
+        Keys: qos, time, mem, cpus, gpus, ntasks_per_node.
+        When provided, these override host scheduler defaults.
 
     Returns
     -------
@@ -175,8 +189,27 @@ def render_sbatch(
 
     host_cfg = load_host(host)
 
+    if resource_overrides:
+        scheduler = dict(host_cfg["scheduler"])
+        scheduler["qos"] = resource_overrides.get("qos", scheduler["qos"])
+        scheduler["default_time"] = resource_overrides.get("time", scheduler.get("default_time", "04:00:00"))
+        scheduler["default_mem"] = resource_overrides.get("mem", scheduler.get("default_mem", "64G"))
+        scheduler["default_cpus"] = resource_overrides.get("cpus", scheduler.get("default_cpus", 16))
+        gpus = resource_overrides.get("gpus", 0)
+        ntasks_per_node = resource_overrides.get("ntasks_per_node", 1)
+        job_name_suffix = resource_overrides.get("job_name_suffix", "")
+    else:
+        scheduler = host_cfg["scheduler"]
+        gpus = 0
+        ntasks_per_node = 1
+        job_name_suffix = ""
+
     script = "\n".join([
-        _sbatch_header(lane, checkpoint, host_cfg["scheduler"], host_cfg["scratch_root"]),
+        _sbatch_header(
+            lane, checkpoint, scheduler, host_cfg["scratch_root"],
+            gpus=gpus, ntasks_per_node=ntasks_per_node,
+            job_name_suffix=job_name_suffix,
+        ),
         _comment_block(lane, host, checkpoint, mode),
         _environment_block(host_cfg["environment_setup"], host_cfg["code_root"]),
         _cli_command(mode, checkpoint, lane, overrides),

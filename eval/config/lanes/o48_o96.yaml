@@ -45,3 +45,34 @@ evaluator_groups:
   default: [tc, spectra, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate]
   experimental: [quaver]
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    time: "12:00:00"
+    mem: "0"
+    cpus: 16
+  evaluate:
+    time: "04:00:00"
+    mem: 128G
+  evaluate_tc:
+    time: "06:00:00"
+    mem: 256G
+    cpus: 4
+  evaluate_spectra:
+    time: "08:00:00"
+    mem: 128G
+  evaluate_region_plot:
+    time: "06:00:00"
+    mem: 256G
+    cpus: 8
+  evaluate_sigma:
+    gpus: 1
+    time: "01:00:00"
+    mem: 64G
+    cpus: 8
+  scoreboard:
+    time: "00:30:00"
+    mem: 16G
+    cpus: 1

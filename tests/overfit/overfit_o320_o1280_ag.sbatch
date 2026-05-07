@@ -170,8 +170,8 @@ python "${VALIDATE}" \
   --full-field-threshold 0.05 \
   --residual-threshold 0.30 \
   --rmse-threshold 1.0 \
-  --temp-min 180 \
-  --temp-max 340
+  --range-min 180 \
+  --range-max 340
 
 echo ""
 echo "Test artifacts: ${WORK_DIR}"
