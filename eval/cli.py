@@ -378,7 +378,7 @@ def _run_evaluators(
         run_fn = getattr(mod, "run", None)
         if run_fn is not None:
             try:
-                run_fn(predictions_dir, lane_config, eval_config)
+                run_fn(predictions_dir, lane_config, eval_config, checkpoint=checkpoint)
             except Exception:
                 LOG.error("Evaluator '%s' run() failed", name, exc_info=True)
                 continue
