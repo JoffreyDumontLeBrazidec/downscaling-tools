@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -130,6 +131,7 @@ def render_region_suite_from_predictions_file(
     predictions_nc: str | Path,
     out_dir: str | Path,
     region_names: list[str] | None = None,
+    region_boxes: dict[str, list[float]] | None = None,
     model_variables: list[str] | None = None,
     weather_states: list[str] | None = None,
     sample_index: int = 0,
@@ -152,10 +154,11 @@ def render_region_suite_from_predictions_file(
 
     requested_weather_states = weather_states or DEFAULT_WEATHER_STATES
     with xr.open_dataset(predictions_path) as ds_pred:
-        region_boxes = _region_boxes_for_names(
-            region_names,
-            grid=str(ds_pred.attrs.get("grid", "")).strip(),
-        )
+        if region_boxes is None:
+            region_boxes = _region_boxes_for_names(
+                region_names,
+                grid=str(ds_pred.attrs.get("grid", "")).strip(),
+            )
 
         if "sample" in ds_pred.dims:
             if not 0 <= sample_index < int(ds_pred.sizes["sample"]):
@@ -428,6 +431,13 @@ def main() -> None:
         help="Comma-separated region names for direct predictions rendering mode. Blank => default suite.",
     )
     parser.add_argument(
+        "--region-boxes-json",
+        type=str,
+        default="",
+        help='JSON object mapping region names to [lat_min, lat_max, lon_min, lon_max] boxes. '
+             'When provided, bypasses PREDICTION_REGION_BOXES lookup entirely.',
+    )
+    parser.add_argument(
         "--model-variables",
         type=str,
         default=",".join(DEFAULT_MODEL_VARIABLES),
@@ -448,10 +458,15 @@ def main() -> None:
     if args.predictions_nc:
         if not args.out_dir:
             raise SystemExit("--out-dir is required with --predictions-nc")
+        explicit_boxes: dict[str, list[float]] | None = None
+        if args.region_boxes_json:
+            explicit_boxes = json.loads(args.region_boxes_json)
+        explicit_names = [v.strip() for v in args.regions.split(",") if v.strip()] or None
         generated = render_region_suite_from_predictions_file(
             predictions_nc=args.predictions_nc,
             out_dir=args.out_dir,
-            region_names=[v.strip() for v in args.regions.split(",") if v.strip()] or None,
+            region_names=list(explicit_boxes) if explicit_boxes else explicit_names,
+            region_boxes=explicit_boxes,
             model_variables=[v.strip() for v in args.model_variables.split(",") if v.strip()],
             weather_states=[v.strip() for v in args.weather_states.split(",") if v.strip()],
             sample_index=args.sample_index,

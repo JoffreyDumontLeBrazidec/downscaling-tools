@@ -116,12 +116,11 @@ MASTER_ONLY_PREDICTION_REGION_BOXES: dict[str, list[float]] = {
 
 PREDICTION_REGION_BOXES: dict[str, list[float]] = {
     **LEGACY_LOCAL_REGION_BOXES,
+    **O96_INTERESTING_REGIONS,
     **O1280_INTERESTING_REGIONS,
     **O1280_DETAIL_REGIONS,
     **O2560_SHOWCASE_REGIONS,
     **MASTER_ONLY_PREDICTION_REGION_BOXES,
-    # O96 last so its boxes win over O1280 for shared names (e.g. andes_central)
-    **O96_INTERESTING_REGIONS,
 }
 
 DEFAULT_MODEL_VARIABLES = ["x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0"]

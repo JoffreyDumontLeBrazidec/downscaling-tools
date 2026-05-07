@@ -5,6 +5,7 @@ EvaluatorContext values into the legacy CLI argv shape.
 """
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import sys
@@ -43,7 +44,15 @@ def run(
 
     region_names = eval_config.get("region_names")
     if region_names:
-        cmd += ["--regions", ",".join(region_names)]
+        lane_regions = lane_config.get("regions", {}).get("interesting", {})
+        boxes = {name: lane_regions[name] for name in region_names if name in lane_regions}
+        missing = [name for name in region_names if name not in lane_regions]
+        if missing:
+            raise ValueError(
+                f"region_plot.region_names contains {missing} but these are not defined in "
+                "lane config regions.interesting. Add them there with explicit boxes."
+            )
+        cmd += ["--region-boxes-json", json.dumps(boxes)]
 
     LOG.info("region_plot subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
