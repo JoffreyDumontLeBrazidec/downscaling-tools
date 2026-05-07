@@ -1,9 +1,4 @@
-"""Spectra evaluator subprocess wrapper around predictions_dir_spectra.py.
-
-The legacy script lives at eval/jobs/templates/predictions_dir_spectra.py and
-remains the canonical implementation. This runner translates the evaluator
-context into the script argv shape.
-"""
+"""Spectra (proxy) evaluator — subprocess wrapper around proxy_runner.py."""
 from __future__ import annotations
 
 import logging
@@ -13,10 +8,7 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
-_SPECTRA_SCRIPT = (
-    Path(__file__).resolve().parents[3]
-    / "eval" / "jobs" / "templates" / "predictions_dir_spectra.py"
-)
+_SPECTRA_SCRIPT = Path(__file__).resolve().parent / "proxy_runner.py"
 
 
 def run(
@@ -29,7 +21,7 @@ def run(
     run_label: str = "",
     **kwargs,
 ) -> Path:
-    """Run spectra computation by subprocessing into predictions_dir_spectra.py."""
+    """Run proxy spectra computation via proxy_runner.py."""
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "spectra"
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
