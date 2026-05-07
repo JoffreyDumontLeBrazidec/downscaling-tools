@@ -24,7 +24,7 @@ def test_run_invokes_plot_regions_module(tmp_path):
     args, _ = mock_run.call_args
     cmd = args[0]
     assert "-m" in cmd
-    assert "eval._legacy_kernels.region_plotting.plot_regions" in cmd
+    assert "eval._backends.region_plotting.plot_regions" in cmd
     assert "--predictions-nc" in cmd
     assert str((predictions_dir / "predictions_20230828_step024.nc").resolve()) in cmd
     assert "--out-dir" in cmd

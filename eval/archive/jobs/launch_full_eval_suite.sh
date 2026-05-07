@@ -215,7 +215,7 @@ module unload ifs || true
 module load ecmwf-toolbox
 source /home/ecm5702/dev/.ds-dyn/bin/activate
 export PYTHONPATH="${PROJECT_ROOT}:\${PYTHONPATH:-}"
-python -m eval._legacy_kernels.spectra.plot_spectra_compare --expver ${EXPVER} --date-start "2023-08-26 00:00:00" --date-end "2023-08-26 00:00:00" --steps ${SPECTRA_STEP} --members 1 --output-dir ${RUN_DIR} --hres-reference-name ${SPECTRA_HRES_REF_NAME} --hres-reference-label "${SPECTRA_HRES_LABEL}"
+python -m eval._backends.spectra.plot_spectra_compare --expver ${EXPVER} --date-start "2023-08-26 00:00:00" --date-end "2023-08-26 00:00:00" --steps ${SPECTRA_STEP} --members 1 --output-dir ${RUN_DIR} --hres-reference-name ${SPECTRA_HRES_REF_NAME} --hres-reference-label "${SPECTRA_HRES_LABEL}"
 EOF
 
 cat > "${JOBS_DIR}/tc_retrieve_${EXPVER}.sbatch" <<EOF
@@ -261,8 +261,8 @@ source /home/ecm5702/dev/.ds-dyn/bin/activate
 module unload ifs || true
 module load ecmwf-toolbox
 export PYTHONPATH="${PROJECT_ROOT}:\${PYTHONPATH:-}"
-python -m eval._legacy_kernels.tc.workflows legacy-members --expver ${EXPVER} --outdir ${RUN_DIR}
-python -m eval._legacy_kernels.tc.workflows pdf --outdir ${RUN_DIR} --out-name tc_normed_pdfs_all_events_${EXPVER}.pdf --ml-expids ${TC_EXP_PREFIX}_${EXPVER}
+python -m eval._backends.tc.workflows legacy-members --expver ${EXPVER} --outdir ${RUN_DIR}
+python -m eval._backends.tc.workflows pdf --outdir ${RUN_DIR} --out-name tc_normed_pdfs_all_events_${EXPVER}.pdf --ml-expids ${TC_EXP_PREFIX}_${EXPVER}
 EOF
 
 chmod +x "${JOBS_DIR}"/*.sbatch

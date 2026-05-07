@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from eval._legacy_kernels.weight_diagnostics import mechanistic_compare_v1 as run_mod
-from eval._legacy_kernels.weight_diagnostics import plot_mechanistic_compare_v1 as plot_mod
+from eval._backends.weight_diagnostics import mechanistic_compare_v1 as run_mod
+from eval._backends.weight_diagnostics import plot_mechanistic_compare_v1 as plot_mod
 
 
 def test_tensor_helpers_and_attention_accumulator():

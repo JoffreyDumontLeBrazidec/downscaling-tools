@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import xarray as xr
 
-from eval._legacy_kernels.region_plotting.local_plotting import get_region_ds
+from eval._backends.region_plotting.local_plotting import get_region_ds
 from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.predict import (

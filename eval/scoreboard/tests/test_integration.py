@@ -37,7 +37,7 @@ class TestTCGolden:
             "events": input_data["events"],
         }))
 
-        from eval._legacy_kernels.scoreboard.tc import load_tc_extreme_scores_from_json
+        from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
 
         result = load_tc_extreme_scores_from_json(
             stats_path,
@@ -54,7 +54,7 @@ class TestTCGolden:
 
     def test_tc_individual_functions_match_hand_calc(self):
         """Verify individual scoring functions match hand-calculated values."""
-        from eval._legacy_kernels.scoreboard.tc import (
+        from eval._backends.scoreboard.tc import (
             mslp_depth,
             multi_depth_enfo_deviation,
             multi_depth_tc_score,
@@ -102,7 +102,7 @@ class TestSurfaceGolden:
 
     def test_truth_std_normalization(self, tmp_path):
         """Verify truth-std nMSE calculation matches expected values."""
-        from eval._legacy_kernels.scoreboard.surface import load_surface_loss_metrics
+        from eval._backends.scoreboard.surface import load_surface_loss_metrics
 
         summary = tmp_path / "surface_loss_summary.json"
         summary.write_text(json.dumps({
@@ -130,7 +130,7 @@ class TestSpectraGolden:
 
     def test_spectra_score_inversion(self):
         """Verify spectra_score is the simple 1 - relative_l2 inversion."""
-        from eval._legacy_kernels.scoreboard.spectra import spectra_score
+        from eval._backends.scoreboard.spectra import spectra_score
 
         assert spectra_score(0.0) == pytest.approx(1.0)
         assert spectra_score(0.25) == pytest.approx(0.75)

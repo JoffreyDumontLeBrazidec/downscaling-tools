@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval._legacy_kernels.scoreboard.tc import (
+from eval._backends.scoreboard.tc import (
     load_tc_extreme_scores_from_json,
     multi_depth_tc_score,
     normalize_tc_rows,

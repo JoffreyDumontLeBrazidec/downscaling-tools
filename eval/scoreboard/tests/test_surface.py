@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from eval._legacy_kernels.scoreboard.surface import (
+from eval._backends.scoreboard.surface import (
     format_surface_loss_for_scoreboard,
     load_surface_loss_metrics,
     surface_weighted_nmse,

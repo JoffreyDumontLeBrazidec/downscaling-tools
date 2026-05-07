@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from eval._legacy_kernels.scoreboard.row_matching import (
+from eval._backends.scoreboard.row_matching import (
     RowClassification,
     classify_row,
     extract_checkpoint_token,

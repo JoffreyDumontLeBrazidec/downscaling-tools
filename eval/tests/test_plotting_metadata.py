@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from eval._legacy_kernels.region_plotting.plotting.metadata import PlotMetadata
+from eval._backends.region_plotting.plotting.metadata import PlotMetadata
 
 
 @pytest.fixture

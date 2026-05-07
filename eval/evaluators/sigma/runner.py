@@ -43,7 +43,7 @@ def run(
     validation_frequency = str(eval_config.get("validation_frequency", "50h"))
 
     cmd = [
-        sys.executable, "-m", "eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator",
+        sys.executable, "-m", "eval._backends.sigma_evaluator.run_sigma_evaluator",
         "--name_exp", name_exp,
         "--name_ckpt", name_ckpt,
         "--ckpt-root", ckpt_root,

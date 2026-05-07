@@ -72,7 +72,7 @@ Each evaluator exports `EVALUATOR_SPEC`, `run()`, `score()`, and optionally `plo
 Lane configuration: `eval/config/lanes/<lane>.yaml`
 Host configuration: `eval/config/hosts/<host>.yaml`
 
-## Legacy Kernels (`eval/_legacy_kernels/`)
+## Backends (`eval/_backends/`)
 
 Internal implementation details of the evaluator wrappers. **Never invoke directly.**
 

@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from eval._legacy_kernels.tc import events as events_mod
-from eval._legacy_kernels.tc import workflows as workflows_mod
-from eval._legacy_kernels.tc import loading_grib as loading_grib_mod
-from eval._legacy_kernels.tc import loading_predictions as loading_pred_mod
-from eval._legacy_kernels.tc import data_types as data_types_mod
-from eval._legacy_kernels.tc import plot_config as plot_config_mod
-from eval._legacy_kernels.tc import experiment_config as exp_config_mod
+from eval._backends.tc import events as events_mod
+from eval._backends.tc import workflows as workflows_mod
+from eval._backends.tc import loading_grib as loading_grib_mod
+from eval._backends.tc import loading_predictions as loading_pred_mod
+from eval._backends.tc import data_types as data_types_mod
+from eval._backends.tc import plot_config as plot_config_mod
+from eval._backends.tc import experiment_config as exp_config_mod
 
 
 def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):

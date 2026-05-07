@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from eval._legacy_kernels.scoreboard._utils import finite_float, load_json
+from eval._backends.scoreboard._utils import finite_float, load_json
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -16,8 +16,8 @@ import numpy as np
 # These re-exports keep existing callers working unchanged.
 # ---------------------------------------------------------------------------
 
-from eval._legacy_kernels.scoreboard.canonical_data import load_canonical_analysis as _load_canonical_analysis
-from eval._legacy_kernels.scoreboard.row_matching import (
+from eval._backends.scoreboard.canonical_data import load_canonical_analysis as _load_canonical_analysis
+from eval._backends.scoreboard.row_matching import (
     classify_row as _classify_row,
     extract_checkpoint_token,
     find_model_row as _choose_tc_row,
@@ -27,7 +27,7 @@ from eval._legacy_kernels.scoreboard.row_matching import (
     is_reference_row as _is_reference_row,
     tc_candidates as _tc_candidates,
 )
-from eval._legacy_kernels.scoreboard.spectra import (
+from eval._backends.scoreboard.spectra import (
     AMP_FILE_RE,
     RAW_FIELD_DIRS,
     SPECTRA_FIELD_DIR_ALIASES,
@@ -45,10 +45,10 @@ from eval._legacy_kernels.scoreboard.spectra import (
     spectra_score,
     spectra_summary_keys,
 )
-from eval._legacy_kernels.scoreboard.spectra import (
+from eval._backends.scoreboard.spectra import (
     _rescore_from_curve_summary,
 )
-from eval._legacy_kernels.scoreboard.surface import (
+from eval._backends.scoreboard.surface import (
     SURFACE_NORMALIZATION_SCHEME,
     SURFACE_VAR_LABELS,
     format_surface_loss_for_scoreboard,
@@ -57,7 +57,7 @@ from eval._legacy_kernels.scoreboard.surface import (
     load_x_interp_surface_metrics,
     surface_weighted_nmse,
 )
-from eval._legacy_kernels.scoreboard.tc import (
+from eval._backends.scoreboard.tc import (
     MSLP_REFERENCE_HPA,
     load_tc_extreme_scores_from_json as _canonical_load_tc_extreme_scores_from_json,
     mslp_depth as _mslp_depth,

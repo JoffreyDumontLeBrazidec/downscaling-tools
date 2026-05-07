@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from eval._legacy_kernels.region_plotting.plotting.coordinate_utils import get_region_ds
+from eval._backends.region_plotting.plotting.coordinate_utils import get_region_ds
 
 
 @pytest.fixture

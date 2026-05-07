@@ -6,8 +6,8 @@ import math
 from pathlib import Path
 from typing import Any
 
-from eval._legacy_kernels.scoreboard._surface_compute import SURFACE_NORMALIZATION_SCHEME
-from eval._legacy_kernels.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
+from eval._backends.scoreboard._surface_compute import SURFACE_NORMALIZATION_SCHEME
+from eval._backends.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
 SURFACE_VAR_LABELS = {
     "10u": "10u",
     "10v": "10v",
@@ -68,7 +68,7 @@ def load_x_interp_surface_metrics(
     *,
     truth_std_by_variable: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    from eval._legacy_kernels.scoreboard._surface_compute import process_predictions_dir
+    from eval._backends.scoreboard._surface_compute import process_predictions_dir
 
     metrics = process_predictions_dir(
         predictions_dir,

@@ -144,7 +144,7 @@ cd "${REPO_ROOT}"
 srun -u \
   --ntasks="${NUM_GPUS_PER_MODEL}" \
   --ntasks-per-node="${NUM_GPUS_PER_MODEL}" \
-  python -u -m eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator \
+  python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --name_exp "${CHECKPOINT_REF}" \
     --name_ckpt "${CKPT_NAME}" \
     --ckpt-root "${CKPT_ROOT}" \

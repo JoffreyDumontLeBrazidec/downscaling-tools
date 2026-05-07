@@ -123,7 +123,7 @@ if [[ -n "${TC_EVENTS// /}" ]]; then
   TC_EVENT_TAG="${TC_EVENT_TAG// /}"
   TC_OUT_NAME="tc_normed_pdfs_${TC_EVENT_TAG}_${RUN_ID}_from_predictions.pdf"
   if [[ -n "${TC_DISPLAY_LABEL}" ]]; then
-    python -m eval._legacy_kernels.tc.workflows pdf \
+    python -m eval._backends.tc.workflows pdf \
       --predictions-dir "${PRED_DIR}" \
       --outdir "${RUN_ROOT}" \
       --run-label "${RUN_ID}" \
@@ -134,7 +134,7 @@ if [[ -n "${TC_EVENTS// /}" ]]; then
       --events "${TC_EVENTS}" \
       --prediction-var "${PREDICTION_VAR}"
   else
-    python -m eval._legacy_kernels.tc.workflows pdf \
+    python -m eval._backends.tc.workflows pdf \
       --predictions-dir "${PRED_DIR}" \
       --outdir "${RUN_ROOT}" \
       --run-label "${RUN_ID}" \

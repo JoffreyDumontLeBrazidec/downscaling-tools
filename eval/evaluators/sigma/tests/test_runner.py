@@ -26,7 +26,7 @@ def test_run_invokes_run_sigma_evaluator_module(tmp_path):
     args, _ = mock_run.call_args
     cmd = args[0]
     assert "-m" in cmd
-    assert "eval._legacy_kernels.sigma_evaluator.run_sigma_evaluator" in cmd
+    assert "eval._backends.sigma_evaluator.run_sigma_evaluator" in cmd
     assert "--name_exp" in cmd
     assert "abcd1234" in cmd
     assert "--name_ckpt" in cmd

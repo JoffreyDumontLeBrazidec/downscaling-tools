@@ -6,13 +6,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from eval._legacy_kernels.region_plotting.local_plotting import (
+from eval._backends.region_plotting.local_plotting import (
     ensure_member_zero_plot_variables,
     ensure_x_interp_for_plotting,
     get_plot_data_array,
     plot_variable_title,
 )
-from eval._legacy_kernels.region_plotting import plot_regions as mod
+from eval._backends.region_plotting import plot_regions as mod
 
 
 def test_sample_meta_title_includes_indices_and_dates():
@@ -401,7 +401,7 @@ def test_ensure_x_interp_for_plotting_reconstructs_missing_interp(tmp_path: Path
             return np.asarray([[7.0], [8.0]], dtype=np.float64)
 
     monkeypatch.setattr(
-        "eval._legacy_kernels.region_plotting.local_plotting.CheckpointResidualInterpolator",
+        "eval._backends.region_plotting.local_plotting.CheckpointResidualInterpolator",
         _FakeInterpolator,
     )
 

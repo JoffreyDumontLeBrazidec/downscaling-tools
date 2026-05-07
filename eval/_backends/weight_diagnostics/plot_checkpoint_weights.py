@@ -3,7 +3,7 @@
 Weight distribution diagnostics for checkpoint evaluation.
 
 CLI entry point:
-    python -m eval._legacy_kernels.weight_diagnostics.plot_checkpoint_weights
+    python -m eval._backends.weight_diagnostics.plot_checkpoint_weights
 
 IMPORTANT: Must be run with .ds-dyn virtual environment (not .ds-multi).
 Training checkpoints cannot be loaded with the newer anemoi-models in .ds-multi.

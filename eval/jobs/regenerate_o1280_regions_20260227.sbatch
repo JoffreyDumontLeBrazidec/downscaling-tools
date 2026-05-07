@@ -13,7 +13,7 @@ PROJECT_ROOT="/home/ecm5702/dev/downscaling-tools"
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 
 python - << 'PY'
-from eval._legacy_kernels.region_plotting.plot_regions import run_region_plots_from_predictions
+from eval._backends.region_plotting.plot_regions import run_region_plots_from_predictions
 
 run_region_plots_from_predictions(
     run_parent_dir="/home/ecm5702/scratch/eval",

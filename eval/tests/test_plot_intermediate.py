@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from eval._legacy_kernels.plot_intermediate.plot_intermediate import (
+from eval._backends.plot_intermediate.plot_intermediate import (
     plot_intermediate_trajectory,
     resolve_capture_steps,
     select_sampling_steps,

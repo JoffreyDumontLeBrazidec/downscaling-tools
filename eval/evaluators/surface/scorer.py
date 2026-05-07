@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval._legacy_kernels.scoreboard.surface import (
+from eval._backends.scoreboard.surface import (
     load_surface_loss_metrics,
     load_x_interp_surface_metrics,
 )
-from eval._legacy_kernels.scoreboard._surface_compute import process_predictions_dir
+from eval._backends.scoreboard._surface_compute import process_predictions_dir
 
 LOG = logging.getLogger(__name__)
 
