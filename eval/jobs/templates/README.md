@@ -41,26 +41,11 @@ preflight_summary
   - Canonical truth-aware bundle-build stage for strict `o1280 -> o2560` manual inference.
   - Rebuilds member-step bundle NetCDFs from the DestinE `o1280` input GRIB plus the colocated `o2560` forcing/truth GRIBs using the maintained surface-only contract.
   - Verifies the expected rebuilt bundle count and writes `${RUN_ROOT}/bundle_build_verification.json`.
-- `strict_manual_predict_one_bundle.sbatch`
-  - Single-bundle debug/proof launcher. Use for smoke-testing a checkpoint before a full `eval.cli` run.
-  - Writes `${RUN_ROOT}/EXPERIMENT_CONFIG.yaml` for downstream reporting.
-  - Not the maintained proof route for `o1280 -> o2560`; that lane requires `4` GPU ranks.
 - `predict_recovery.sbatch`
   - **Recovery for walltime-killed prediction runs.**
   - Auto-detects missing prediction files and relaunches only remaining date/step combos.
   - Targets an existing run directory and reruns only the missing files.
   - Works for `new` and `old` stack, AC and AG.
-
-### Diagnostics
-- `tc_three_route_compare_from_run.sbatch`
-  - **Canonical representative intermediate-state TC route-compare template for `o320 -> o1280`.**
-  - Selects one representative case per requested event from an existing full predictions tree, then renders:
-    - storm-centered six-panel local plots,
-    - contour-style six-panel TC plots,
-    - O96-style center-track `tcstyle` plus `regionstyle` plots from a cached intermediate bundle.
-  - This is a separate intermediate-state diagnostic, not part of the default prediction-only TC package.
-  - Uses the same host/env rule explicitly: `ag -> .ds-ag`, `ac -> .ds-dyn`.
-  - Uses a high-memory O1280 posture (`256G`) and keeps the GPU requirement because route 3 rebuilds a cached intermediate trajectory.
 
 ### TC Evaluation
 - `tc_contour_suite_from_predictions.sbatch`
@@ -132,7 +117,6 @@ These are based on observed job outcomes from the checkpoint-eval-pipeline epic.
 | predict25 (O1280, GPU) | 24:00:00 | default | ng | ~2-3x slower than O320 |
 | TC contours (O1280, prediction-only) | 06:00:00 | 128G on AC `nf` | nf/ng | CPU-only plotting from predictions |
 | Spectra ECMWF (AC) | 48:00:00 | 128G | nf | 300 gptosp transforms; resumable |
-| Representative TC three-route compare (O1280) | 08:00:00 | 256G | ng | GPU job: route 3 builds cached intermediates before plotting |
 
 ## Cluster / QOS Rules
 
