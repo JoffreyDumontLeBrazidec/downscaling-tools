@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 """
+DEPRECATED (2026-05-07): the `_compute_metrics_from_predictions` path imports
+`eval.tc_extremes`, which does not exist in the live tree. Only the
+`--anchor-ref` path is functional. Do not extend; use
+`python -m eval.evaluators.tc.runner` (via `eval.cli evaluate --only tc`) for
+new TC scoring needs.
+"""
+"""
 Compare proxy TC extremes against the anchor baseline.
 
 After running proxy predictions (10 bundles), this script computes TC extreme
