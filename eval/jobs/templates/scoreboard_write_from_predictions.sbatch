@@ -1,4 +1,8 @@
 #!/bin/bash --login
+# DEPRECATED (2026-05-07): use submit_scoreboard_chain.sh and the four
+# scoreboard_{spectra,tc,surface,finalize}_step.sbatch templates instead.
+# This monolith is preserved for one release and will be archived after
+# downstream callers have been migrated.
 # Canonical post-inference scoreboard writer (Pillars 2-4 + scoreboard refresh).
 #
 # Typical usage (after inference submit):
