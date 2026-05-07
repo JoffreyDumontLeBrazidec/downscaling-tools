@@ -47,7 +47,7 @@ regions:
 
 evaluator_groups:
   default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate]
+  diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
 
 resource_profiles:
   predict:

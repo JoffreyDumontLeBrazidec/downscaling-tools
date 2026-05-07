@@ -258,23 +258,14 @@ def locate_mlflow_experiment_dir(
 
 def _load_and_filter(experiment_dir: Path, run_id: str) -> dict:
     """Load only the requested run family, bypassing experiment-wide filtering."""
-    # Add the mlflow tools dir to sys.path for loader/plot imports
-    tools_dir = Path(__file__).parent
-    if str(tools_dir) not in sys.path:
-        sys.path.insert(0, str(tools_dir))
-
-    from loader import load_run_family  # noqa: E402
+    from ._loader import load_run_family  # noqa: E402
 
     return load_run_family(experiment_dir, run_id)
 
 
 def _generate_plots(runs: dict, run_root: Path):
     """Generate the standard plot bundle into run_root."""
-    tools_dir = Path(__file__).parent
-    if str(tools_dir) not in sys.path:
-        sys.path.insert(0, str(tools_dir))
-
-    from plot import plot_key_vars, plot_overview, plot_all_vars  # noqa: E402
+    from ._plot import plot_key_vars, plot_overview, plot_all_vars  # noqa: E402
 
     plot_key_vars(runs, output=run_root / "key_vars.png")
     plot_overview(runs, output=run_root / "overview.png")

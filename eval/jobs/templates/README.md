@@ -47,15 +47,6 @@ preflight_summary
   - Targets an existing run directory and reruns only the missing files.
   - Works for `new` and `old` stack, AC and AG.
 
-### Spectra
-- `spectra_ecmwf_from_predictions.sbatch`
-  - **Canonical ECMWF spectra template — AC-only (requires gptosp.ser).**
-  - Follows the same 3-stage pipeline as `eval/spectra/grb_to_spectra.sh`:
-    1. Stage predictions as nopoles GRIBs
-    2. `gptosp.ser` → spectral harmonics
-    3. `compute_spectra-3.py` → spectra amplitudes
-  - Resumable: skips already-completed `gptosp` transforms on resubmission.
-  - Uses short `$TMPDIR` symlinks to avoid `gptosp` path-length truncation.
 ### Preflight
 - `preflight_eval_check.sh`
   - **Source this before any submission** to validate cluster, venv, data, QOS, and walltime.
@@ -71,12 +62,6 @@ preflight_summary
   - Edit the USER SETTINGS block and copy to
     `/home/ecm5702/dev/jobscripts/submit/<YYYYMMDD>/` before submitting.
 
-### Training Loss
-- `training_loss_plots_from_mlflow.sbatch`
-  - Canonical best-effort MLflow loss plotting template.
-  - Writes `key_vars.png` and `overview.png` into the run root when a matching MLflow run is found.
-  - Writes `training_loss_plots_status.json` even when no match exists, so helpers can stay smooth without failing the whole eval chain.
-
 ## Canonical Upstream Tools
 
 These are the authoritative eval tools in `downscaling-tools`. Templates wrap them;
@@ -86,7 +71,8 @@ do not reimplement their logic in ad-hoc scratch scripts.
 |------|------|---------|
 | TC data request | `eval/tc/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
 | Spectra pipeline | `eval/spectra/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
-| Spectra compute | `/home/ecm5702/dev/post_prepml/spectra/spectra_ml/individual_files/compute_spectra-3.py` | Spectral harmonics → amplitude spectra |
+| ECMWF spectra evaluator | `eval/evaluators/spectra_ecmwf/` | `eval.cli evaluate --only spectra_ecmwf` (AC-only) |
+| MLflow evaluator | `eval/evaluators/mlflow/` | `eval.cli evaluate --only mlflow` (requires `--checkpoint`) |
 
 ## Design Invariants
 - Manual-inference templates keep host/env resolution explicit and validated:
@@ -148,8 +134,10 @@ Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when th
   - `python -m eval.cli evaluate --predictions-dir <RUN_ROOT>/data/predictions --lane <LANE> --only <pillar>`
 - Recovery:
   - edit `predict_recovery.sbatch`
-- Standalone ECMWF spectra (AC only) on existing predictions:
-  - edit `spectra_ecmwf_from_predictions.sbatch`
+- ECMWF spectra (AC only) on existing predictions:
+  - `python -m eval.cli evaluate --predictions-dir <DIR> --lane <LANE> --only spectra_ecmwf`
+- MLflow training-loss plots:
+  - `python -m eval.cli evaluate --predictions-dir <DIR> --lane <LANE> --only mlflow --checkpoint <CKPT>`
 
 ## Notes
 - Resolver tests for the strict inference templates live in:
