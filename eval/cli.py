@@ -294,7 +294,7 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     bundle_pairs = predict_cfg.get("bundle_pairs", "")
     if isinstance(bundle_pairs, list):
         bundle_pairs = ",".join(
-            f"{item.get(chr(100)+chr(97)+chr(116)+chr(101))}:{item.get(chr(115)+chr(116)+chr(101)+chr(112))}" if isinstance(item, dict) else str(item)
+            f"{item.get(\"date\")}:{item.get(\"step\")}" if isinstance(item, dict) else str(item)
             for item in bundle_pairs
         )
 
