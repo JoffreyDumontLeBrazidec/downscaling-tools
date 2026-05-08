@@ -16,6 +16,37 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 
+def _to_plain_container(value: Any) -> Any:
+    """Convert common config container objects to builtin Python containers."""
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(value):
+            return OmegaConf.to_container(value, resolve=True)
+    except Exception:
+        pass
+
+    if hasattr(value, "model_dump"):
+        try:
+            return _to_plain_container(value.model_dump())
+        except Exception:
+            pass
+
+    if hasattr(value, "dict"):
+        try:
+            return _to_plain_container(value.dict())
+        except Exception:
+            pass
+
+    if not isinstance(value, dict):
+        try:
+            return vars(value)
+        except TypeError:
+            return value
+
+    return value
+
+
 def resolve_expver(expver: str | None, lane_config: dict) -> str:
     """Resolve the expver to use for PrepML inference.
 
@@ -89,29 +120,17 @@ def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:
 
     config = ckpt.get("hyper_parameters", {}).get("config", {})
 
-    # Config may be an OmegaConf, Pydantic, or dataclass object — convert to dict
+    config = _to_plain_container(config)
     if not isinstance(config, dict):
-        try:
-            from omegaconf import OmegaConf
-            if OmegaConf.is_config(config):
-                config = OmegaConf.to_container(config, resolve=True)
-        except (ImportError, Exception):
-            pass
-    if not isinstance(config, dict):
-        try:
-            config = config.model_dump() if hasattr(config, "model_dump") else vars(config)
-        except Exception:
-            LOG.warning("Cannot convert checkpoint config to dict (type=%s)", type(config).__name__)
-            return []
+        LOG.warning("Cannot convert checkpoint config to dict (type=%s)", type(config).__name__)
+        return []
 
     data_cfg = config.get("data", {})
+    data_cfg = _to_plain_container(data_cfg)
     if not isinstance(data_cfg, dict):
-        try:
-            data_cfg = data_cfg.model_dump() if hasattr(data_cfg, "model_dump") else vars(data_cfg)
-        except Exception:
-            data_cfg = {}
+        data_cfg = {}
     output_names = data_cfg.get("forcing", [])
-    diagnostic_names = data_cfg.get("diagnostic", [])
+    diagnostic_names = data_cfg.get("diagnostic", []) or []
 
     if not output_names and not diagnostic_names:
         LOG.warning(
@@ -123,27 +142,76 @@ def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:
     return list(output_names) + list(diagnostic_names)
 
 
-def _generate_sbatch_script(
+def _launch_prepml(
     prepml_config_path: Path,
     expver: str,
-    output_dir: Path,
-) -> Path:
-    """Generate the sbatch wrapper script for PrepML inference."""
-    script = output_dir / "prepml_launch.sh"
-    script.write_text(f"""#!/bin/bash
-#SBATCH --job-name=prepml_{expver}
-#SBATCH --output={output_dir}/prepml_%j.out
-#SBATCH --error={output_dir}/prepml_%j.err
+) -> None:
+    """Launch PrepML inference by pushing config to ecFlow.
 
-set -euo pipefail
+    PrepML is a job orchestrator: `prepml inference` pushes the config to an
+    ecFlow server which schedules the actual GPU inference jobs. This returns
+    quickly — use _wait_for_prepml() to block until inference completes.
+    """
+    # Set expver
+    result = subprocess.run(
+        ["prepml", "expver", "--set", expver],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"prepml expver --set {expver} failed: {result.stderr.strip()}")
+    LOG.info("Set expver to %s", expver)
 
-module load prepml/0.99
+    # Push config to ecFlow
+    result = subprocess.run(
+        ["prepml", "inference", str(prepml_config_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"prepml inference failed: {result.stderr.strip()}"
+        )
+    LOG.info("PrepML config pushed to ecFlow. stdout:\n%s", result.stdout.strip())
 
-prepml expver --set {expver}
-prepml inference {prepml_config_path}
-""")
-    script.chmod(0o755)
-    return script
+
+def _wait_for_prepml(
+    expver: str,
+    poll_interval: int = 60,
+    timeout: int = 43200,
+) -> None:
+    """Poll `prepml status --expver` until the ecFlow suite completes.
+
+    Args:
+        expver: experiment version to monitor
+        poll_interval: seconds between status checks (default 60)
+        timeout: max seconds to wait (default 12 hours)
+    """
+    import time
+
+    elapsed = 0
+    while elapsed < timeout:
+        result = subprocess.run(
+            ["prepml", "--quiet", "status", "--expver", expver],
+            capture_output=True, text=True,
+        )
+        status_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        LOG.info("PrepML status (expver=%s, elapsed=%ds): %s", expver, elapsed, status_line)
+
+        if status_line == "complete":
+            LOG.info("PrepML suite completed for expver=%s", expver)
+            return
+        if status_line in ("aborted", "suspended"):
+            raise RuntimeError(
+                f"PrepML suite {status_line} for expver={expver}. "
+                f"Check ecFlow logs at ~/prepml/{expver}/"
+            )
+
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
+    raise RuntimeError(
+        f"PrepML suite timed out after {timeout}s for expver={expver}. "
+        f"Last status: {status_line}"
+    )
 
 
 def _write_provenance(
@@ -205,6 +273,22 @@ def prepml_predict(
 
     # 2. Extract weather states from checkpoint
     weather_states = _extract_weather_states_from_checkpoint(checkpoint)
+    if weather_states:
+        from eval.predict.mars_retrieve import weather_state_to_mars
+
+        invalid_states: list[str] = []
+        for state in weather_states:
+            try:
+                weather_state_to_mars(state)
+            except ValueError:
+                invalid_states.append(state)
+        if invalid_states:
+            LOG.warning(
+                "Checkpoint metadata yielded non-MARS weather states %s. "
+                "Will use lane config weather states.",
+                invalid_states,
+            )
+            weather_states = []
     if not weather_states:
         weather_states = lane_config.get("spectra", {}).get("fields", [])
         if not weather_states:
@@ -227,24 +311,10 @@ def prepml_predict(
     )
     LOG.info("PrepML config written to %s", prepml_config_path)
 
-    # 4. Launch PrepML via sbatch --wait
-    sbatch_script = _generate_sbatch_script(prepml_config_path, resolved_expver, output_dir)
-    LOG.info("Launching PrepML: sbatch --wait %s", sbatch_script)
-    result = subprocess.run(
-        ["sbatch", "--wait", str(sbatch_script)],
-        capture_output=True, text=True,
-    )
-    slurm_job_id = None
-    if result.stdout.strip():
-        parts = result.stdout.strip().split()
-        if parts:
-            slurm_job_id = parts[-1]
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"PrepML sbatch failed (exit {result.returncode}). "
-            f"stderr: {result.stderr.strip()}"
-        )
-    LOG.info("PrepML job completed (job_id=%s)", slurm_job_id)
+    # 4. Launch PrepML (pushes to ecFlow) and wait for completion
+    _launch_prepml(prepml_config_path, resolved_expver)
+    LOG.info("Waiting for PrepML ecFlow suite to complete...")
+    _wait_for_prepml(resolved_expver)
 
     # 5. Retrieve from MARS and assemble predictions_*.nc
     predictions_dir = output_dir / "predictions"
@@ -284,6 +354,6 @@ def prepml_predict(
 
     _write_provenance(
         output_dir, resolved_expver, prepml_config_path,
-        checkpoint, weather_states, slurm_job_id,
+        checkpoint, weather_states,
     )
     LOG.info("PrepML predict complete. Predictions in %s", predictions_dir)
