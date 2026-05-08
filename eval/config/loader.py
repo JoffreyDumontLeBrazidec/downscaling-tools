@@ -11,7 +11,7 @@ _CONFIG_DIR = Path(__file__).parent
 
 _LANE_REQUIRED_KEYS = {"predict", "evaluator_groups"}
 _LANE_ALLOWED_KEYS = {
-    "predict", "tc", "spectra", "surface", "regions",
+    "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
     "evaluator_groups", "sigma", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare",
 }

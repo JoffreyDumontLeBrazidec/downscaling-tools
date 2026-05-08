@@ -56,9 +56,10 @@ def run(
     weather_states: list[str] = eval_config.get("weather_states", _DEFAULT_WEATHER_STATES)
     weather_states_str = ",".join(weather_states) if isinstance(weather_states, list) else str(weather_states)
     template_root: str = eval_config.get("template_root", "")
+    template_grib_root: str = eval_config.get("template_grib_root", "")
     predict_cfg = lane_config.get("predict", {})
-    date_list = ",".join(predict_cfg.get("dates", []))
-    step_list = ",".join(str(s) for s in predict_cfg.get("steps", [120]))
+    date_list = ",".join(str(d) for d in eval_config.get("dates", predict_cfg.get("dates", [])))
+    step_list = ",".join(str(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120])))
 
     grb_dir = output_dir / "grb"
     sh_dir  = output_dir / "spectral_harmonics"
@@ -113,6 +114,8 @@ def _stage_gribs(
     ]
     if template_root:
         cmd += ["--template-root", template_root]
+    if template_grib_root:
+        cmd += ["--template-grib-root", template_grib_root]
     subprocess.run(cmd, check=True)
 
 
