@@ -515,6 +515,10 @@ def _consolidate_plots(output_dir: Path) -> None:
     import shutil
     run_root = _resolve_run_root(output_dir)
     plots_dir = run_root / "plots"
+    # Wipe and rebuild so stale files from previous runs or parallel
+    # evaluators never linger.  Each call produces a complete snapshot.
+    if plots_dir.exists():
+        shutil.rmtree(plots_dir)
     plots_dir.mkdir(parents=True, exist_ok=True)
     evaluators_dir = output_dir / "evaluators"
     if not evaluators_dir.exists():

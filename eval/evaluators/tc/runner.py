@@ -21,7 +21,7 @@ from eval._backends.tc.loading_predictions import (
     load_prediction_curves,
     select_prediction_files_for_event,
 )
-from eval._backends.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
+from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
 from eval._backends.tc.workflows import (
     _json_default,
     compute_event_stats,
@@ -184,7 +184,7 @@ def run(
             oper_key = analysis_display_label
 
         if oper_key:
-            plot_cfg = PLOT_CONFIGS.get(event_name, TCPlotConfig())
+            plot_cfg = resolve_plot_config(event_name, eval_config)
             event_stats = compute_event_stats(
                 curves,
                 analysis_key=oper_key,
@@ -212,24 +212,62 @@ def run(
     # Member maps (optional, controlled by eval_config["member_maps"])
     mm_cfg = eval_config.get("member_maps") or {}
     if mm_cfg.get("enabled"):
-        mm_dates = mm_cfg.get("dates") or []
         mm_steps = mm_cfg.get("steps") or [24, 120]
         mm_members = mm_cfg.get("members") or list(range(10))
-        mm_events = mm_cfg.get("events") or list(event_names)
         mm_outdir = output_dir / "member_maps"
-        for date in mm_dates:
-            try:
-                run_member_maps(
-                    predictions_dir=str(predictions_dir),
-                    outdir=str(mm_outdir),
-                    run_label=run_label,
-                    event_names=mm_events,
-                    date=date,
-                    steps=mm_steps,
-                    members=mm_members,
-                )
-                LOG.info("Member maps written for date=%s to %s", date, mm_outdir)
-            except Exception:
-                LOG.error("Member maps failed for date=%s", date, exc_info=True)
+
+        # Per-event dates (preferred) or global dates (legacy)
+        event_dates = mm_cfg.get("event_dates") or {}
+        if event_dates:
+            for evt, date in event_dates.items():
+                try:
+                    run_member_maps(
+                        predictions_dir=str(predictions_dir),
+                        outdir=str(mm_outdir),
+                        run_label=run_label,
+                        event_names=[evt],
+                        date=str(date),
+                        steps=mm_steps,
+                        members=mm_members,
+                    )
+                    LOG.info("Member maps written for event=%s date=%s", evt, date)
+                except Exception:
+                    LOG.error("Member maps failed for event=%s date=%s", evt, date, exc_info=True)
+        else:
+            mm_dates = mm_cfg.get("dates") or []
+            mm_events = mm_cfg.get("events") or list(event_names)
+            for date in mm_dates:
+                try:
+                    run_member_maps(
+                        predictions_dir=str(predictions_dir),
+                        outdir=str(mm_outdir),
+                        run_label=run_label,
+                        event_names=mm_events,
+                        date=date,
+                        steps=mm_steps,
+                        members=mm_members,
+                    )
+                    LOG.info("Member maps written for date=%s", date)
+                except Exception:
+                    LOG.error("Member maps failed for date=%s", date, exc_info=True)
+
+        # Combined PDF: merge all individual member map PDFs into one
+        if mm_cfg.get("combined_pdf") and mm_outdir.exists():
+            individual_pdfs = sorted(mm_outdir.glob("tc_members_*.pdf"))
+            if len(individual_pdfs) > 1:
+                try:
+                    from pypdf import PdfReader, PdfWriter
+                    writer = PdfWriter()
+                    for pdf_path in individual_pdfs:
+                        for page in PdfReader(str(pdf_path)).pages:
+                            writer.add_page(page)
+                    combined_name = "_".join(event_dates.keys()) if event_dates else "combined"
+                    safe_label = run_label.replace(" ", "_").replace("/", "_")
+                    combined_path = mm_outdir / f"tc_members_{combined_name}_{safe_label}.pdf"
+                    with open(combined_path, "wb") as f:
+                        writer.write(f)
+                    LOG.info("Combined member maps PDF: %s", combined_path)
+                except Exception:
+                    LOG.error("Failed to merge member map PDFs", exc_info=True)
 
     return output_dir

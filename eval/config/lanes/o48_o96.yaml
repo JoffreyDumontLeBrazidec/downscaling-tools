@@ -45,6 +45,10 @@ tc:
   target_grib: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_iekm_date*_time0000_step24to120_sfc_y.grib"
   target_label: "IEKM_O96"
   support_mode: "regridded"
+  plot_config:
+    humberto:
+      mslp_bin_range: [910, 1025, 4]
+      wind_bin_range: [0, 60.01, 3]
   member_maps:
     enabled: true
     event_dates:
@@ -83,6 +87,9 @@ region_plot:
     - caribbean_and_antilles
     - amazon_forest_core
     - andes_central
+
+sigma:
+  num_gpus_per_model: 1
 
 evaluator_groups:
   default: [tc, spectra, spectra_ecmwf, surface, region_plot]

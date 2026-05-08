@@ -360,7 +360,7 @@ def run_tc_pdf(
     outdir: str,
     event_names: list[str] | None = None,
     prediction_dir: str | None = None,
-    grib_dir: str = str(reference_tc_dir("o96_o320")),
+    grib_dir: str,
     run_label: str = "",
     display_label: str | None = None,
     out_name: str = "",
@@ -379,6 +379,8 @@ def run_tc_pdf(
 
     Works for predictions, GRIBs, or a mix of both.
     """
+    if not grib_dir:
+        raise ValueError("grib_dir is required")
     out_dir = Path(outdir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -620,13 +622,15 @@ def run_tc_member_plots_legacy(
     *,
     expver: str,
     outdir: str,
-    base_dir: str = str(reference_tc_dir("o96_o320")),
+    base_dir: str,
     members: list[int] | None = None,
     year: str = "2023",
     month: str = "08",
     resol: float = 0.25,
 ) -> list[str]:
     """Legacy GRIB-based member plots using DataRetriever (preserved for backward compat)."""
+    if not base_dir:
+        raise ValueError("base_dir is required")
     from .tools.loading_data import DataRetriever
 
     members = members or [1, 2, 5, 7, 9]

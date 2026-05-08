@@ -1,7 +1,7 @@
 """Per-event visualization defaults and reference styles."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,35 @@ PLOT_CONFIGS: dict[str, TCPlotConfig] = {
         member_map_wind_range=(0, 45),
     ),
 }
+
+
+_TUPLE_FIELDS = {"mslp_bin_range", "wind_bin_range", "mslp_ylim", "wind_ylim", "member_map_msl_range", "member_map_wind_range"}
+
+
+def resolve_plot_config(event_name: str, eval_config: dict | None = None) -> TCPlotConfig:
+    """Return plot config for *event_name*, with optional per-lane overrides.
+
+    *eval_config* is the ``tc:`` section of a lane YAML.  If it contains a
+    ``plot_config:<event_name>`` mapping, those fields override the base
+    PLOT_CONFIGS entry via ``dataclasses.replace()``.
+
+    Example lane YAML::
+
+        tc:
+          plot_config:
+            humberto:
+              mslp_bin_range: [910, 1025, 4]
+              wind_bin_range: [0, 60.01, 3]
+    """
+    base = PLOT_CONFIGS.get(event_name, TCPlotConfig())
+    if not eval_config:
+        return base
+    overrides = (eval_config.get("plot_config") or {}).get(event_name)
+    if not overrides:
+        return base
+    # YAML lists → tuples for frozen-dataclass fields
+    coerced = {k: tuple(v) if k in _TUPLE_FIELDS and isinstance(v, list) else v for k, v in overrides.items()}
+    return replace(base, **coerced)
 
 
 REFERENCE_STYLES: dict[str, dict] = {

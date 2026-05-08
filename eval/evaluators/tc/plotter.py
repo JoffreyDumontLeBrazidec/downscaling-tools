@@ -14,7 +14,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from eval._backends.tc.events import EVENTS
 from eval._backends.tc.pdf_plot import plot_pdf_ratios
-from eval._backends.tc.plot_config import PLOT_CONFIGS, TCPlotConfig
+from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
 
 LOG = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def plot(
                 LOG.info("Skipping plot for prediction-only event=%s", event_name)
                 continue
 
-            plot_cfg = PLOT_CONFIGS.get(event_name, TCPlotConfig())
+            plot_cfg = resolve_plot_config(event_name, eval_config)
 
             fig = plot_pdf_ratios(
                 plot_cfg,

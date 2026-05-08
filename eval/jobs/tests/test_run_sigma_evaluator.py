@@ -336,7 +336,7 @@ def test_sigma_evaluator_single_variable_model():
 
     import torch
 
-    se_mod = _load_module("eval.sigma_evaluator.sigma_evaluator")
+    se_mod = _load_module("eval._backends.sigma_evaluator.sigma_evaluator")
     SigmaEvaluator = se_mod.SigmaEvaluator
 
     name_to_index = {"2t": 0}  # single-variable model
@@ -370,7 +370,7 @@ def test_sigma_evaluator_missing_data_indices():
 
     import torch
 
-    se_mod = _load_module("eval.sigma_evaluator.sigma_evaluator")
+    se_mod = _load_module("eval._backends.sigma_evaluator.sigma_evaluator")
     SigmaEvaluator = se_mod.SigmaEvaluator
 
     evaluator = SigmaEvaluator.__new__(SigmaEvaluator)

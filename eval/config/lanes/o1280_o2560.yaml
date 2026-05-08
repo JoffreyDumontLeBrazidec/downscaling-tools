@@ -70,6 +70,10 @@ regions:
     florida_keys: [24.0, 27.0, -83.0, -79.0]
     crete_south: [34.0, 37.0, 23.5, 27.5]
 
+sigma:
+  num_gpus_per_model: 4
+  residual_statistics_fallback: "o2560_dict_6_72.npy"
+
 evaluator_groups:
   default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, mlflow]

@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--predictions-dir", required=True)
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--template-root", default="/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280")
+    p.add_argument("--template-root", default="")
     p.add_argument("--template-grib-root", default="")
     p.add_argument("--weather-states", default="10u,10v,2t,sp,t_850,z_500")
     p.add_argument("--date-list", default="ALL")

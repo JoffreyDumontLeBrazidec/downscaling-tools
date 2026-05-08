@@ -6,7 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from eval.paths import DEFAULT_REFERENCE_SPECTRA_BASE
+from eval.paths import reference_spectra_dir
 
 
 PARAM_CONFIGS = [
@@ -25,13 +25,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--base-dir",
-        default=DEFAULT_REFERENCE_SPECTRA_BASE,
-        help="Base directory containing reference spectra model aliases.",
+        default="",
+        help="Optional base directory override. If empty, each model is resolved via reference_spectra_dir().",
     )
     p.add_argument(
         "--models",
         default="eefo_o96,eefo_o320,enfo_o320,enfo_o1280,destine_o2560_i4ql,destine_o2560_i4ql_step72_100d",
-        help="Comma-separated model directory names under base-dir.",
+        help="Comma-separated model directory names.",
     )
     p.add_argument(
         "--output-dir",
@@ -88,14 +88,14 @@ def collect_arrays(model_dir: Path, param_dir: str, param: str, level: str, step
 
 def main() -> None:
     args = parse_args()
-    base_dir = Path(args.base_dir)
+    base_dir = Path(args.base_dir) if args.base_dir else None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model_names = [m.strip() for m in args.models.split(",") if m.strip()]
     model_info: list[dict] = []
     for name in model_names:
-        d = base_dir / name
+        d = base_dir / name if base_dir else reference_spectra_dir(name)
         steps = discover_steps(d) if d.exists() else []
         chosen = choose_step(steps, args.prefer_step)
         model_info.append(

@@ -45,6 +45,16 @@ def run(
         "--consolidated-pdf", str(output_dir / "all_spectra_proxy.pdf"),
     ]
 
+    truth_cache_dir = eval_config.get("truth_cache_dir", "")
+    if truth_cache_dir:
+        cache_file = Path(truth_cache_dir) / "truth_curves.json"
+        if cache_file.exists():
+            cmd.extend(["--truth-cache-dir", truth_cache_dir])
+
+    spectra_steps = eval_config.get("steps")
+    if spectra_steps:
+        cmd.extend(["--steps", ",".join(str(s) for s in spectra_steps)])
+
     LOG.info("spectra subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
     return output_dir

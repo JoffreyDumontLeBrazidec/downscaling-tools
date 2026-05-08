@@ -9,8 +9,11 @@ LEGACY_EVAL_ROOT = "/home/ecm5702/perm/eval"
 
 REFERENCE_ROOT_ENV = "REFERENCE_ROOT"
 CANONICAL_REFERENCE_ROOT = "/home/ecm5702/perm/reference"
+# Deprecated: standalone script convenience only. The eval.cli pipeline passes
+# explicit paths from lane configs and never uses these constants.
 DEFAULT_REFERENCE_LANE = "o96_o320"
 
+# Deprecated: standalone script convenience only.
 SPECTRA_MODEL_LANES = {
     "eefo_o96": "o48_o96",
     "enfo_o320": "o96_o320",
@@ -61,18 +64,14 @@ def reference_lane_dir(lane: str = DEFAULT_REFERENCE_LANE, *, kind: str | None =
     return path / kind if kind else path
 
 
-def reference_spectra_base(*, root: str | Path | None = None) -> Path:
-    return resolve_reference_root(root) / "spectra"
-
-
 def reference_spectra_dir(name: str, *, lane: str | None = None, root: str | Path | None = None) -> Path:
     raw = Path(name).expanduser()
     if raw.is_absolute() or len(raw.parts) > 1:
         return raw
     resolved_lane = lane or SPECTRA_MODEL_LANES.get(name)
-    if resolved_lane:
-        return reference_lane_dir(resolved_lane, kind="spectra", root=root) / name
-    return reference_spectra_base(root=root) / name
+    if not resolved_lane:
+        raise ValueError(f"Unknown spectra model {name!r}; add it to SPECTRA_MODEL_LANES or pass lane= explicitly")
+    return reference_lane_dir(resolved_lane, kind="spectra_ecmwf", root=root) / name
 
 
 def reference_tc_dir(lane: str = DEFAULT_REFERENCE_LANE, *, root: str | Path | None = None) -> Path:
@@ -81,6 +80,10 @@ def reference_tc_dir(lane: str = DEFAULT_REFERENCE_LANE, *, root: str | Path | N
 
 def reference_tc_event_dir(event: str, lane: str = DEFAULT_REFERENCE_LANE, *, root: str | Path | None = None) -> Path:
     return reference_tc_dir(lane, root=root) / event
+
+
+def reference_spectra_proxy_dir(lane: str = DEFAULT_REFERENCE_LANE, *, root: str | Path | None = None) -> Path:
+    return reference_lane_dir(lane, kind="spectra_proxy", root=root)
 
 
 def reference_grib_dir(lane: str = DEFAULT_REFERENCE_LANE, *, root: str | Path | None = None) -> Path:
@@ -93,5 +96,3 @@ DEFAULT_SLURM_DIR = default_slurm_dir()
 DEFAULT_SLURM_OUTPUT_PATTERN = default_slurm_output_pattern()
 
 DEFAULT_REFERENCE_ROOT = default_reference_root()
-DEFAULT_REFERENCE_SPECTRA_BASE = str(reference_spectra_base())
-DEFAULT_REFERENCE_TC_DIR = str(reference_tc_dir())

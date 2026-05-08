@@ -75,6 +75,9 @@ region_plot:
     - eastern_us
     - central_africa
 
+sigma:
+  num_gpus_per_model: 1
+
 evaluator_groups:
   default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, mlflow]

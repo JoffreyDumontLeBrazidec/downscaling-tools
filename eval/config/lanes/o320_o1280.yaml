@@ -96,6 +96,9 @@ regions:
     hawaii_big_island_core: [18.0, 21.5, -157.5, -154.0]
     hokkaido_core: [41.0, 44.5, 140.0, 145.5]
 
+sigma:
+  num_gpus_per_model: 4
+
 evaluator_groups:
   default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, mlflow]
