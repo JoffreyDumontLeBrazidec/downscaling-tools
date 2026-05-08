@@ -90,30 +90,30 @@ def build_prediction_request(
 
     requests: list[dict[str, Any]] = []
 
+    # Base request fields. Include "domain": "g" to force grid-point output
+    # and avoid earthkit's spectral→grid expansion which uses enormous memory.
+    base = {
+        "class": output_mars["class"],
+        "stream": output_mars["stream"],
+        "type": output_mars["type"],
+        "expver": expver,
+        "date": date,
+        "time": "0000",
+        "step": step,
+        "number": number_str,
+        "domain": "g",
+    }
+
     if groups["sfc"]["params"]:
         requests.append({
-            "class": output_mars["class"],
-            "stream": output_mars["stream"],
-            "type": output_mars["type"],
-            "expver": expver,
-            "date": date,
-            "time": "0000",
-            "step": step,
-            "number": number_str,
+            **base,
             "levtype": "sfc",
             "param": groups["sfc"]["params"],
         })
 
     if groups["pl"]["params"]:
         requests.append({
-            "class": output_mars["class"],
-            "stream": output_mars["stream"],
-            "type": output_mars["type"],
-            "expver": expver,
-            "date": date,
-            "time": "0000",
-            "step": step,
-            "number": number_str,
+            **base,
             "levtype": "pl",
             "param": groups["pl"]["params"],
             "levelist": sorted(groups["pl"]["levels"]),
@@ -214,34 +214,53 @@ def assemble_predictions_file(
     members: list[int],
     output_mars: dict[str, str],
     weather_states: list[str],
-    truth_root: str | Path,
+    bundle_dir: str | Path,
+    bundle_filename_tpl: str,
     output_dir: Path,
 ) -> Path:
-    """Retrieve predictions from MARS, load truth, assemble and write predictions_*.nc.
+    """Retrieve predictions from MARS, load truth+input from bundles, write predictions_*.nc.
+
+    Args:
+        bundle_dir: directory containing input bundle .nc files (predict.input_root)
+        bundle_filename_tpl: bundle filename template with {date}, {member:02d}, {step:03d} placeholders
 
     Returns path to written file.
     """
+    import pandas as pd
     import xarray as xr
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"predictions_{date}_step{int(step):03d}.nc"
 
+    # 1. Retrieve predictions from MARS and extract y_pred
     LOG.info("Retrieving predictions for date=%s step=%d", date, step)
     ds_raw = retrieve_predictions_from_mars(
         expver=expver, date=date, step=step, members=members,
         output_mars=output_mars, weather_states=weather_states,
     )
     ds_pred = _reshape_to_prediction_format(ds_raw, weather_states)
+    # Extract only what we need, then free the raw MARS data
+    y_pred_ds = ds_pred[["y_pred", "lon_hres", "lat_hres"]].load()
+    del ds_raw, ds_pred
 
-    truth_root = Path(truth_root)
-    ds_truth = _load_truth_reference(truth_root, date, step, weather_states)
+    # 2. Load truth (y) and input (x) from bundle
+    bundle_dir = Path(bundle_dir)
+    ds_bundle = _load_bundle_truth_and_input(
+        bundle_dir, bundle_filename_tpl, date, step, weather_states,
+    )
 
-    if ds_truth is not None:
-        ds_out = xr.merge([ds_pred[["y_pred", "lon_hres", "lat_hres"]], ds_truth])
+    # 3. Merge y_pred + y + x + coords
+    # Keep y_pred's coords (lon_hres, lat_hres already wrapped to -180..180)
+    # and drop duplicate coords from bundle to avoid merge conflicts.
+    if ds_bundle is not None:
+        bundle_vars = {k: ds_bundle[k] for k in ds_bundle.data_vars
+                       if k not in y_pred_ds and k not in y_pred_ds.coords}
+        ds_out = y_pred_ds.assign(bundle_vars)
     else:
-        ds_out = ds_pred[["y_pred", "lon_hres", "lat_hres"]]
-        LOG.warning("No truth reference found for date=%s step=%d", date, step)
+        ds_out = y_pred_ds
+        LOG.warning("No bundle truth found for date=%s step=%d — writing y_pred only", date, step)
 
+    # 4. Write
     if out_path.exists():
         out_path.unlink()
     ds_out.to_netcdf(out_path, mode="w")
@@ -249,40 +268,162 @@ def assemble_predictions_file(
     return out_path
 
 
-def _load_truth_reference(
-    truth_root: Path,
+def _extract_state_from_bundle(
+    ds: "xr.Dataset",
+    prefix: str,
+    state: str,
+    grid_dim: str,
+    level_dim: str | None = None,
+) -> "np.ndarray":
+    """Extract a single weather state from bundle variables.
+
+    Maps weather state names to bundle variable names:
+      '2t' -> f'{prefix}_2t' (surface, shape: (grid_points,))
+      'z_500' -> f'{prefix}_z' at level=500 (PL, shape: (grid_points,))
+    """
+    mapped = weather_state_to_mars(state)
+    param = mapped["param"]
+    var_name = f"{prefix}_{param}"
+
+    if var_name not in ds:
+        raise KeyError(f"Bundle variable '{var_name}' not found for state '{state}'")
+
+    arr = ds[var_name]
+    if mapped["levtype"] == "pl":
+        level = mapped["level"]
+        if level_dim and level_dim in arr.dims:
+            arr = arr.sel({level_dim: level})
+        else:
+            raise KeyError(
+                f"PL variable '{var_name}' has no '{level_dim}' dim for level={level}"
+            )
+
+    return arr.values
+
+
+def _load_bundle_truth_and_input(
+    bundle_dir: Path,
+    bundle_filename_tpl: str,
     date: str,
     step: int,
     weather_states: list[str],
+    member: int = 1,
 ) -> "xr.Dataset | None":
-    """Load truth (y) and input (x) from reference GRIBs under truth_root.
+    """Load truth (y) and input (x) from an input bundle file.
 
-    Discovers available GRIB files under truth_root/grib/ and loads them.
-    Returns None if no matching GRIB files are found.
+    Uses member 1 by default — truth is the same across ensemble members.
+    Returns a dataset with 'y', 'x', coordinate arrays, or None if bundle not found.
     """
-    import earthkit.data as ekd
+    import pandas as pd
     import xarray as xr
 
-    grib_dir = truth_root / "grib"
-    if not grib_dir.exists():
-        LOG.warning("Truth GRIB dir not found: %s", grib_dir)
+    bundle_name = bundle_filename_tpl.format(date=date, member=member, step=step)
+    bundle_path = bundle_dir / bundle_name
+    if not bundle_path.exists():
+        LOG.warning("Bundle not found: %s", bundle_path)
         return None
 
-    candidates = sorted(grib_dir.glob(f"enfo_reference_*{date}*.grib"))
-    if not candidates:
-        candidates = sorted(grib_dir.glob("enfo_reference_*early-august*.grib"))
-    if not candidates:
-        candidates = sorted(grib_dir.glob("*.grib"))
+    LOG.info("Loading truth+input from bundle: %s", bundle_path)
+    # Use netCDF4 directly instead of xarray to avoid OOM — xarray's
+    # open_dataset loads all metadata/chunks greedily even with drop_variables.
+    import netCDF4 as nc
+    import pandas as pd
+    import xarray as xr
 
-    if not candidates:
-        return None
-
-    grib_path = candidates[0]
-    LOG.info("Loading truth reference from %s", grib_path)
     try:
-        ds_ref = ekd.from_source("file", str(grib_path)).to_xarray(squeeze=False)
+        ds = nc.Dataset(str(bundle_path), "r")
     except Exception:
-        LOG.warning("Failed to load truth GRIB: %s", grib_path, exc_info=True)
+        LOG.warning("Failed to open bundle: %s", bundle_path, exc_info=True)
         return None
 
-    return ds_ref
+    try:
+        # Build y (truth) from target_hres_* variables
+        y_arrays = []
+        for state in weather_states:
+            mapped = weather_state_to_mars(state)
+            param = mapped["param"]
+            var_name = f"target_hres_{param}"
+            if var_name not in ds.variables:
+                LOG.warning("Bundle missing truth variable %s", var_name)
+                return None
+            arr = ds[var_name][:]
+            if mapped["levtype"] == "pl":
+                # Select the target level from the target_level dimension
+                level = mapped["level"]
+                target_levels = ds["target_level"][:] if "target_level" in ds.variables else None
+                if target_levels is not None:
+                    level_idx = int(np.where(target_levels == level)[0][0])
+                    arr = arr[level_idx]
+                else:
+                    LOG.warning("No target_level dim for PL variable %s", var_name)
+                    return None
+            y_arrays.append(arr)
+
+        y = np.stack(y_arrays, axis=0)  # (weather_state, grid_point_hres)
+
+        # Build x (input) from in_lres_* variables
+        x_arrays = []
+        for state in weather_states:
+            mapped = weather_state_to_mars(state)
+            param = mapped["param"]
+            var_name = f"in_lres_{param}"
+            if var_name not in ds.variables:
+                LOG.debug("Input variable %s not in bundle, skipping x", var_name)
+                x_arrays = []
+                break
+            arr = ds[var_name][:]
+            if mapped["levtype"] == "pl":
+                level = mapped["level"]
+                levels = ds["level"][:] if "level" in ds.variables else None
+                if levels is not None:
+                    level_idx = int(np.where(levels == level)[0][0])
+                    arr = arr[level_idx]
+                else:
+                    x_arrays = []
+                    break
+            x_arrays.append(arr)
+
+        # Load coordinate arrays
+        coords_data: dict[str, np.ndarray] = {}
+        for coord in ("lat_hres", "lon_hres", "lat_lres", "lon_lres"):
+            if coord in ds.variables:
+                coords_data[coord] = ds[coord][:]
+
+    except Exception:
+        LOG.warning("Failed to extract truth/input from bundle: %s", bundle_path, exc_info=True)
+        return None
+    finally:
+        ds.close()
+
+    # Build xarray dataset from numpy arrays
+    result_vars: dict[str, Any] = {}
+
+    result_vars["y"] = xr.DataArray(
+        y,
+        dims=["weather_state", "grid_point_hres"],
+        coords={
+            "weather_state": pd.Index(weather_states, name="weather_state"),
+            "grid_point_hres": np.arange(y.shape[1]),
+        },
+    )
+    result_vars["y"].attrs["lon"] = "lon_hres"
+    result_vars["y"].attrs["lat"] = "lat_hres"
+
+    if x_arrays:
+        x = np.stack(x_arrays, axis=0)
+        result_vars["x"] = xr.DataArray(
+            x,
+            dims=["weather_state", "grid_point_lres"],
+            coords={
+                "weather_state": pd.Index(weather_states, name="weather_state"),
+                "grid_point_lres": np.arange(x.shape[1]),
+            },
+        )
+        result_vars["x"].attrs["lon"] = "lon_lres"
+        result_vars["x"].attrs["lat"] = "lat_lres"
+
+    for coord_name, coord_arr in coords_data.items():
+        dim = "grid_point_hres" if "hres" in coord_name else "grid_point_lres"
+        result_vars[coord_name] = xr.DataArray(coord_arr, dims=[dim])
+
+    return xr.Dataset(result_vars)

@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,23 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 PREPML_BIN = "/usr/local/apps/prepml/0.99/bin/prepml"
+
+# Regex to parse bundle filenames and extract the template pattern
+_BUNDLE_RE = re.compile(
+    r"^(.+)_date(\d{8})_time\d{4}_mem(\d{2,3})_step(\d{3})h_input_bundle\.nc$"
+)
+
+
+def _discover_bundle_template(bundle_dir: Path) -> str:
+    """Auto-discover bundle filename template from first .nc file in directory."""
+    for f in sorted(bundle_dir.glob("*_input_bundle.nc")):
+        m = _BUNDLE_RE.match(f.name)
+        if m:
+            prefix = m.group(1)
+            tpl = f"{prefix}_date{{date}}_time0000_mem{{member:02d}}_step{{step:03d}}h_input_bundle.nc"
+            LOG.info("Auto-discovered bundle template: %s", tpl)
+            return tpl
+    raise FileNotFoundError(f"No input bundle files found in {bundle_dir}")
 
 
 def _to_plain_container(value: Any) -> Any:
@@ -334,7 +352,12 @@ def prepml_predict(
     steps = predict_cfg["steps"]
     members = predict_cfg["members"]
     output_mars = prepml_cfg["output"]
-    truth_root = prepml_cfg["truth"]["root"]
+    bundle_dir = predict_cfg.get("input_root", "")
+    # Bundle filename template from prepare section or auto-discover
+    bundle_filename_tpl = lane_config.get("prepare", {}).get("bundle_filename_tpl", "")
+    if not bundle_filename_tpl and bundle_dir:
+        # Auto-discover from first bundle file in directory
+        bundle_filename_tpl = _discover_bundle_template(Path(bundle_dir))
 
     manifest_rows: list[tuple[str, int, int, str]] = []
     total = len(dates) * len(steps)
@@ -349,7 +372,8 @@ def prepml_predict(
                 members=members,
                 output_mars=output_mars,
                 weather_states=weather_states,
-                truth_root=truth_root,
+                bundle_dir=bundle_dir,
+                bundle_filename_tpl=bundle_filename_tpl,
                 output_dir=predictions_dir,
             )
             done += 1
