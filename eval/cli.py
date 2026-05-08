@@ -305,6 +305,8 @@ def _build_effective_config(
         "output_dir": str(output_dir),
         "evaluators": evaluators,
         "evaluators_run": [],
+        "mode": getattr(args, "mode", "manual"),
+        "expver": getattr(args, "expver", None),
     }
 
 
@@ -722,6 +724,22 @@ def main(argv: list[str] | None = None) -> None:
     # --- Dry run ---
     if args.dry_run:
         print(json.dumps(effective, indent=2, default=str))
+        if getattr(args, "mode", "manual") == "prepml" and args.subcommand in ("run", "predict"):
+            from eval.predict.prepml_config import generate_prepml_config
+            from eval.predict.prepml import resolve_expver
+            try:
+                resolved_expver = resolve_expver(getattr(args, "expver", None), lane_config)
+                prepml_cfg = generate_prepml_config(
+                    lane_config=lane_config,
+                    checkpoint_path=getattr(args, "checkpoint", ""),
+                    runner_override=getattr(args, "prepml_runner", None),
+                )
+                import yaml
+                print("\n--- PrepML Config Preview ---")
+                print(yaml.dump(prepml_cfg, default_flow_style=False, sort_keys=False))
+                print(f"Expver: {resolved_expver}")
+            except Exception as exc:
+                print(f"\n--- PrepML Config Preview (error) ---\n{exc}")
         return
 
     # --- Preflight: write effective config ---
