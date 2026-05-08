@@ -5,7 +5,6 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
@@ -14,11 +13,7 @@ from .local_plotting import LocalInferencePlotter, plot_x_y
 from .plotting.config import (
     DEFAULT_MODEL_VARIABLES as CONFIG_DEFAULT_MODEL_VARIABLES,
     DEFAULT_WEATHER_STATES as CONFIG_DEFAULT_WEATHER_STATES,
-    O96_INTERESTING_REGIONS as CONFIG_O96_INTERESTING_REGIONS,
-    O1280_DETAIL_REGIONS as CONFIG_O1280_DETAIL_REGIONS,
-    O1280_INTERESTING_REGIONS as CONFIG_O1280_INTERESTING_REGIONS,
-    O2560_SHOWCASE_REGIONS as CONFIG_O2560_SHOWCASE_REGIONS,
-    PREDICTION_REGION_BOXES as CONFIG_PREDICTION_REGION_BOXES,
+    KNOWN_REGION_BOXES,
     RENDER_DPI,
 )
 from .plotting.coordinate_utils import get_region_ds
@@ -34,11 +29,7 @@ logging.basicConfig(level=logging.INFO)
 
 DEFAULT_MODEL_VARIABLES = CONFIG_DEFAULT_MODEL_VARIABLES
 DEFAULT_WEATHER_STATES = CONFIG_DEFAULT_WEATHER_STATES
-O96_INTERESTING_REGIONS = CONFIG_O96_INTERESTING_REGIONS
-O1280_INTERESTING_REGIONS = CONFIG_O1280_INTERESTING_REGIONS
-O1280_DETAIL_REGIONS = CONFIG_O1280_DETAIL_REGIONS
-O2560_SHOWCASE_REGIONS = CONFIG_O2560_SHOWCASE_REGIONS
-PREDICTION_REGION_BOXES = CONFIG_PREDICTION_REGION_BOXES
+PREDICTION_REGION_BOXES = KNOWN_REGION_BOXES  # backward compat alias
 
 
 def _safe_datetime_str(value) -> str:
@@ -105,24 +96,20 @@ def _write_suite_manifest(
     return write_manifest(out_root=out_root, payload=payload)
 
 
-def _region_boxes_for_names(region_names: list[str] | None, *, grid: str) -> dict[str, list[float]]:
+def _region_boxes_for_names(
+    region_names: list[str] | None,
+    *,
+    region_boxes: dict[str, list[float]] | None = None,
+) -> dict[str, list[float]]:
+    if region_boxes is not None:
+        return region_boxes
     if region_names:
-        unknown = [name for name in region_names if name not in PREDICTION_REGION_BOXES]
+        unknown = [name for name in region_names if name not in KNOWN_REGION_BOXES]
         if unknown:
-            raise ValueError(f"Unknown region names: {unknown}. Known regions: {sorted(PREDICTION_REGION_BOXES)}")
-        return {name: PREDICTION_REGION_BOXES[name] for name in region_names}
-
-    if grid == "O1280":
-        return O1280_INTERESTING_REGIONS
-    if grid == "O96":
-        return O96_INTERESTING_REGIONS
-    if grid == "O2560":
-        return O2560_SHOWCASE_REGIONS
-
+            raise ValueError(f"Unknown region names: {unknown}. Known regions: {sorted(KNOWN_REGION_BOXES)}")
+        return {name: KNOWN_REGION_BOXES[name] for name in region_names}
     raise ValueError(
-        f"Cannot determine region suite: no region_names supplied and grid {grid!r} "
-        "has no default suite. Pass explicit region_names or set the 'grid' attribute "
-        "on the predictions dataset."
+        "Cannot determine region suite: no region_names or region_boxes supplied."
     )
 
 
@@ -155,10 +142,7 @@ def render_region_suite_from_predictions_file(
     requested_weather_states = weather_states or DEFAULT_WEATHER_STATES
     with xr.open_dataset(predictions_path) as ds_pred:
         if region_boxes is None:
-            region_boxes = _region_boxes_for_names(
-                region_names,
-                grid=str(ds_pred.attrs.get("grid", "")).strip(),
-            )
+            region_boxes = _region_boxes_for_names(region_names)
 
         if "sample" in ds_pred.dims:
             if not 0 <= sample_index < int(ds_pred.sizes["sample"]):
@@ -210,54 +194,6 @@ def render_region_suite_from_predictions_file(
         generated.append(str(manifest_path))
 
     return generated
-
-
-def _save_custom_o1280_plots(
-    *,
-    ds_pred: xr.Dataset,
-    out_pdf_path: Path,
-    selected_variables: list[str],
-    regions: dict[str, list[float]] = O1280_INTERESTING_REGIONS,
-) -> None:
-    weather_states = [w for w in DEFAULT_WEATHER_STATES if w in ds_pred["weather_state"].values]
-    if out_pdf_path.exists():
-        out_pdf_path.unlink()
-    with PdfPages(out_pdf_path) as pdf:
-        for region_name, region_box in regions.items():
-            LOG.info("Plotting custom O1280 region %s %s", region_name, region_box)
-            region_ds = get_region_ds(ds_pred, region_box)
-            region_ds.attrs["region_name"] = region_name
-            if "sample" in region_ds.dims:
-                n_available = int(region_ds.sizes.get("sample", 0))
-                n_to_plot = min(2, n_available)
-                for sample_idx in range(n_to_plot):
-                    title = _sample_meta_title(region_ds, region_name, sample_idx)
-                    fig = plot_x_y(
-                        ds_sample=region_ds.sel(sample=sample_idx),
-                        list_model_variables=selected_variables,
-                        weather_states=weather_states,
-                        title=title,
-                    )
-                    pdf.savefig(fig)
-                    plt.close(fig)
-            else:
-                sample_count = 0
-                for step in region_ds.step.values:
-                    for ft in np.atleast_1d(region_ds.forecast_reference_time.values):
-                        if sample_count >= 2:
-                            break
-                        title = _step_meta_title(region_name, step, ft)
-                        fig = plot_x_y(
-                            ds_sample=region_ds.sel(step=step, forecast_reference_time=ft),
-                            list_model_variables=selected_variables,
-                            weather_states=weather_states,
-                            title=title,
-                        )
-                        pdf.savefig(fig)
-                        plt.close(fig)
-                        sample_count += 1
-                    if sample_count >= 2:
-                        break
 
 
 def build_predictions_dataset_from_expver(
@@ -322,15 +258,6 @@ def run_region_plots_from_predictions(
             ds_pred,
             model_variables=model_variables,
         )
-        if ds_pred.attrs.get("grid") == "O1280":
-            out_pdf = run_parent_dir / run_name / "all_regions_plots.pdf"
-            LOG.info("Saving custom O1280 region plots for %s", run_name)
-            _save_custom_o1280_plots(
-                ds_pred=ds_pred,
-                out_pdf_path=out_pdf,
-                selected_variables=selected_variables,
-            )
-            return
     lip = LocalInferencePlotter(str(run_parent_dir), run_name, predictions_filename)
     LOG.info("Saving default region plots for %s", run_name)
     lip.save_plot(

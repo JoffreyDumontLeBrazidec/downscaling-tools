@@ -6,7 +6,7 @@ from typing import Sequence
 import numpy as np
 import xarray as xr
 
-from .config import GRID_CONFIG, LEGACY_LOCAL_REGION_BOXES, PREDICTION_REGION_BOXES
+from .config import KNOWN_REGION_BOXES
 
 
 def _coord_name_for_array(ds: xr.Dataset, da: xr.DataArray, axis: str) -> str:
@@ -29,12 +29,9 @@ def _coord_name_for_array(ds: xr.Dataset, da: xr.DataArray, axis: str) -> str:
 def resolve_region_box(region_box: str | Sequence[float]) -> list[float]:
     """Resolve a region name or explicit bounds into ``[lat_min, lat_max, lon_min, lon_max]``."""
     if isinstance(region_box, str):
-        if region_box in LEGACY_LOCAL_REGION_BOXES:
-            return list(LEGACY_LOCAL_REGION_BOXES[region_box])
-        if region_box in PREDICTION_REGION_BOXES:
-            return list(PREDICTION_REGION_BOXES[region_box])
+        if region_box in KNOWN_REGION_BOXES:
+            return list(KNOWN_REGION_BOXES[region_box])
         raise ValueError(f"Bounding box '{region_box}' is not predefined.")
-
     values = [float(value) for value in region_box]
     if len(values) != 4:
         raise ValueError("Bounding box list must have exactly 4 elements.")
@@ -83,12 +80,31 @@ def infer_grid_type(ds: xr.Dataset) -> str:
 
 def default_region_for_grid(grid: str) -> str:
     """Return the default plotting region for a grid name."""
-    return str(GRID_CONFIG.get(str(grid).strip(), {}).get("default_region", "amazon_forest"))
+    return "amazon_forest"
+
+
+_LEGACY_O320_PLOTTER_REGIONS = [
+    "amazon_forest", "european_arctic", "himalayas", "rocky_mountains",
+    "west_sahara", "pyrenees_alpes", "eastern_us", "central_africa",
+]
+
+_LEGACY_O1280_PLOTTER_REGIONS = [
+    "rocky_mountains_central", "rocky_mountains_north", "rocky_mountains_south",
+    "amazon_forest_central", "amazon_forest_west", "amazon_forest_east",
+    "southeast_asia_central", "southeast_asia_mainland", "southeast_asia_maritime",
+    "west_sahara_central", "west_sahara_coastal", "west_sahara_east",
+    "himalayas_central", "himalayas_west", "himalayas_east",
+    "greatbarrier_reef_central", "greatbarrier_reef_north", "greatbarrier_reef_south",
+    "eastern_us_central", "eastern_us_north", "eastern_us_south",
+    "central_africa_congo", "central_africa_north", "central_africa_south",
+]
 
 
 def legacy_plotter_regions_for_grid(grid: str) -> list[str]:
     """Return the legacy ``LocalInferencePlotter`` region list for a grid."""
-    regions = GRID_CONFIG.get(str(grid).strip(), {}).get("legacy_plotter_regions")
-    if regions is None:
-        raise ValueError(f"Unsupported grid type: {grid}. Please ensure grid is O320 or O1280.")
-    return list(regions)
+    grid = str(grid).strip()
+    if grid == "O320":
+        return list(_LEGACY_O320_PLOTTER_REGIONS)
+    if grid == "O1280":
+        return list(_LEGACY_O1280_PLOTTER_REGIONS)
+    raise ValueError(f"Unsupported grid type: {grid}. Please ensure grid is O320 or O1280.")

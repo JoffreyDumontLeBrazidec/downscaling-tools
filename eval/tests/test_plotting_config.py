@@ -5,14 +5,13 @@ import pytest
 from eval._backends.region_plotting.plotting.config import (
     DEFAULT_MODEL_VARIABLES,
     DEFAULT_WEATHER_STATES,
-    GRID_CONFIG,
-    PREDICTION_REGION_BOXES,
+    KNOWN_REGION_BOXES,
 )
 
 
 @pytest.fixture
 def prediction_region_boxes() -> dict[str, list[float]]:
-    return PREDICTION_REGION_BOXES
+    return KNOWN_REGION_BOXES
 
 
 def test_prediction_region_boxes_is_non_empty_dict(prediction_region_boxes: dict[str, list[float]]) -> None:
@@ -47,10 +46,3 @@ def test_default_model_variables_is_non_empty() -> None:
 def test_default_weather_states_is_non_empty() -> None:
     assert isinstance(DEFAULT_WEATHER_STATES, list)
     assert DEFAULT_WEATHER_STATES
-
-
-@pytest.mark.parametrize("grid_name", ["O96", "O1280", "O2560"])
-def test_grid_config_contains_expected_entries(grid_name: str) -> None:
-    assert grid_name in GRID_CONFIG
-    assert isinstance(GRID_CONFIG[grid_name], dict)
-    assert GRID_CONFIG[grid_name]

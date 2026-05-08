@@ -33,7 +33,7 @@ def test_sample_meta_title_includes_indices_and_dates():
     assert "lead_h=24" in title
 
 
-def test_run_region_plots_uses_custom_path_for_o1280(tmp_path: Path, monkeypatch):
+def test_run_region_plots_uses_standard_path_for_o1280(tmp_path: Path, monkeypatch):
     run_parent = tmp_path / "eval"
     run_name = "myrun"
     run_dir = run_parent / run_name
@@ -62,10 +62,7 @@ def test_run_region_plots_uses_custom_path_for_o1280(tmp_path: Path, monkeypatch
     checkpoint_path = tmp_path / "model.ckpt"
     checkpoint_path.write_text("base\n", encoding="utf-8")
 
-    called = {"custom": False, "default": False}
-
-    def _fake_custom(**kwargs):
-        called["custom"] = True
+    called = {"default": False}
 
     class _FakeLIP:
         def __init__(self, *args, **kwargs):
@@ -75,7 +72,6 @@ def test_run_region_plots_uses_custom_path_for_o1280(tmp_path: Path, monkeypatch
         def save_plot(self, *args, **kwargs):
             called["default"] = True
 
-    monkeypatch.setattr(mod, "_save_custom_o1280_plots", _fake_custom)
     monkeypatch.setattr(mod, "LocalInferencePlotter", _FakeLIP)
 
     mod.run_region_plots_from_predictions(
@@ -84,8 +80,7 @@ def test_run_region_plots_uses_custom_path_for_o1280(tmp_path: Path, monkeypatch
         predictions_filename="predictions.nc",
     )
 
-    assert called["custom"] is True
-    assert called["default"] is False
+    assert called["default"] is True
 
 
 def test_run_region_plots_accepts_slim_prediction_variables(tmp_path: Path, monkeypatch):
@@ -268,7 +263,6 @@ def test_region_boxes_accept_o48_helper_regions():
             "maritime_continent",
             "congo_basin",
         ],
-        grid="O96",
     )
     assert sorted(boxes) == [
         "amazon_forest_core",
