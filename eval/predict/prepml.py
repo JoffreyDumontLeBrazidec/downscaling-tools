@@ -89,7 +89,27 @@ def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:
 
     config = ckpt.get("hyper_parameters", {}).get("config", {})
 
+    # Config may be an OmegaConf, Pydantic, or dataclass object — convert to dict
+    if not isinstance(config, dict):
+        try:
+            from omegaconf import OmegaConf
+            if OmegaConf.is_config(config):
+                config = OmegaConf.to_container(config, resolve=True)
+        except (ImportError, Exception):
+            pass
+    if not isinstance(config, dict):
+        try:
+            config = config.model_dump() if hasattr(config, "model_dump") else vars(config)
+        except Exception:
+            LOG.warning("Cannot convert checkpoint config to dict (type=%s)", type(config).__name__)
+            return []
+
     data_cfg = config.get("data", {})
+    if not isinstance(data_cfg, dict):
+        try:
+            data_cfg = data_cfg.model_dump() if hasattr(data_cfg, "model_dump") else vars(data_cfg)
+        except Exception:
+            data_cfg = {}
     output_names = data_cfg.get("forcing", [])
     diagnostic_names = data_cfg.get("diagnostic", [])
 
