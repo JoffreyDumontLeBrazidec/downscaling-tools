@@ -149,6 +149,9 @@ def load_lane(name: str, overrides: dict | None = None) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Lane config not found: {path}")
     config = _load_yaml(path)
+    if "base" in config:
+        base_config = load_lane(config.pop("base"))
+        config = _deep_merge(base_config, config)
     if overrides:
         config = _deep_merge(config, overrides)
     _validate_lane(config, path)
