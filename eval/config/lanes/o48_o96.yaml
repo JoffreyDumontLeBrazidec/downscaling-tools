@@ -125,3 +125,45 @@ resource_profiles:
     time: "00:30:00"
     mem: 16G
     cpus: 1
+
+prepml:
+  debug_expvers: ["TBD_CREATE_3", "TBD_CREATE_4"]
+  runner: anemoi-dev
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
+  input:
+    class: od
+    stream: enfo
+    type: pf
+    grid: O48
+  output:
+    class: rd
+    stream: enfo
+    type: pf
+  output_template: /home/ecm5702/hpcperm/data/o96-template.grib
+  forcings_npz: /home/ecm5702/hpcperm/data/o48-forcings.npz
+  constant_high_res_forcings:
+    - cos_latitude
+    - cos_longitude
+    - lsm
+    - sin_latitude
+    - sin_longitude
+    - z
+  high_res_input:
+    - cos_julian_day
+    - cos_latitude
+    - cos_local_time
+    - cos_longitude
+    - insolation
+    - lsm
+    - sin_julian_day
+    - sin_latitude
+    - sin_local_time
+    - sin_longitude
+    - z
+  truth:
+    root: /home/ecm5702/perm/reference/o48_o96
+  time_step: 24h
+  lead_time: 240h
+  platform:
+    gpu:
+      time: "0-12:18"

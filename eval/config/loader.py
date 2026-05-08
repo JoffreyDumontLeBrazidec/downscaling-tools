@@ -13,7 +13,7 @@ _LANE_REQUIRED_KEYS = {"predict", "evaluator_groups"}
 _LANE_ALLOWED_KEYS = {
     "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
     "evaluator_groups", "sigma", "mechanistic", "intermediate",
-    "resource_profiles", "region_plot", "prepare",
+    "resource_profiles", "region_plot", "prepare", "prepml",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
