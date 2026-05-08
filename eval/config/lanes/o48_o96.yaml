@@ -49,6 +49,7 @@ tc:
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
+  steps: [120]
   truth_cache_dir: "/home/ecm5702/perm/reference/o48_o96/spectra_proxy"
 
 spectra_ecmwf:
@@ -56,6 +57,7 @@ spectra_ecmwf:
   weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   reference_dir: "/home/ecm5702/perm/reference/o48_o96/spectra_ecmwf"
   steps: [120]
+  members: [1]
 
 surface:
   weighting: "truth-std"

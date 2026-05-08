@@ -30,13 +30,25 @@ tc:
   support_mode: "regridded"
   member_maps:
     enabled: true
-    dates: ["20230829", "20230828"]
+    event_dates:
+      idalia: "20230829"
+      franklin: "20230828"
+      franklin_idalia: "20230829"
     steps: [24, 120]
     members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
+  steps: [120]
+  truth_cache_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_proxy"
+
+spectra_ecmwf:
+  template_root: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf/enfo_o320"
+  weather_states: ["10u", "10v", "2t", "sp", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf"
+  steps: [120]
+  members: [1]
 
 surface:
   weighting: "truth-std"
@@ -64,8 +76,8 @@ region_plot:
     - central_africa
 
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
+  diagnostics: [sigma, mechanistic, intermediate, mlflow]
 
 resource_profiles:
   predict:

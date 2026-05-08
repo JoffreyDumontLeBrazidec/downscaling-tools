@@ -63,6 +63,7 @@ def run(
     predict_cfg = lane_config.get("predict", {})
     date_list = ",".join(str(d) for d in eval_config.get("dates", predict_cfg.get("dates", [])))
     step_list = ",".join(str(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120])))
+    member_list = ",".join(str(m) for m in eval_config.get("members", [])) or "ALL"
     reference_dir: str = eval_config.get("reference_dir", "")
 
     # --- Prediction spectra (always recomputed) ---
@@ -77,6 +78,7 @@ def run(
         template_grib_root=template_grib_root,
         date_list=date_list,
         step_list=step_list,
+        member_list=member_list,
     )
 
     # --- Reference spectra (truth + input): compute once, save to reference_dir ---
@@ -99,6 +101,7 @@ def run(
                 template_grib_root=template_grib_root,
                 date_list=date_list,
                 step_list=step_list,
+                member_list=member_list,
             )
 
     return output_dir
@@ -127,6 +130,7 @@ def _run_pipeline(
     template_grib_root: str,
     date_list: str,
     step_list: str,
+    member_list: str = "ALL",
 ) -> None:
     """Run the full 3-stage pipeline for a single variable."""
     grb_dir = output_dir / "grb"
@@ -145,6 +149,7 @@ def _run_pipeline(
         date_list=date_list,
         step_list=step_list,
         prediction_var=prediction_var,
+        member_list=member_list,
         summary_path=output_dir / "staging_summary.json",
     )
 
@@ -170,6 +175,7 @@ def _stage_gribs(
     date_list: str,
     step_list: str,
     prediction_var: str = "y_pred",
+    member_list: str = "ALL",
     summary_path: Path,
 ) -> None:
     cmd = [
@@ -179,7 +185,7 @@ def _stage_gribs(
         "--weather-states", weather_states,
         "--date-list", date_list,
         "--step-list", step_list,
-        "--member-list", "ALL",
+        "--member-list", member_list,
         "--prediction-var", prediction_var,
         "--summary-path", str(summary_path),
     ]

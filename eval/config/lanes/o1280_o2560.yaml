@@ -44,6 +44,15 @@ tc:
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
+  steps: [120]
+  truth_cache_dir: "/home/ecm5702/perm/reference/o1280_o2560/spectra_proxy"
+
+spectra_ecmwf:
+  template_grib_root: "/home/ecm5702/hpcperm/data/input_data/o1280_o2560/humberto_20250926_20250930/o2560_targets"
+  weather_states: ["10u", "10v", "2t", "msl"]
+  reference_dir: "/home/ecm5702/perm/reference/o1280_o2560/spectra_ecmwf"
+  steps: [120]
+  members: [1]
 
 surface:
   weighting: "truth-std"
@@ -62,8 +71,8 @@ regions:
     crete_south: [34.0, 37.0, 23.5, 27.5]
 
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
+  diagnostics: [sigma, mechanistic, intermediate, mlflow]
 
 resource_profiles:
   predict:

@@ -40,6 +40,13 @@ tc:
   input_label: "input O320"
   target_nc_label: "target O1280"
   analysis_display_label: "OPER-AN O1280"
+  member_maps:
+    enabled: true
+    event_dates:
+      idalia: "20230829"
+      franklin: "20230828"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
@@ -47,6 +54,15 @@ spectra:
   nside: 512
   lmax: 1279
   member_aggregation: "raw-members"
+  steps: [120]
+  truth_cache_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_proxy"
+
+spectra_ecmwf:
+  template_grib_root: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
 
 surface:
   weighting: "truth-std"
@@ -81,8 +97,8 @@ regions:
     hokkaido_core: [41.0, 44.5, 140.0, 145.5]
 
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
+  diagnostics: [sigma, mechanistic, intermediate, mlflow]
 
 resource_profiles:
   predict:
