@@ -122,7 +122,12 @@ def _stage_gribs(
 
 
 def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> None:
-    """Run gptosp.ser for all GRIBs; skip existing harmonics (resumable)."""
+    """Run gptosp.ser for all GRIBs; skip existing harmonics (resumable).
+
+    gptosp.ser has a ~128-char path limit (Fortran CHARACTER buffer).
+    We work around this by creating a short /tmp symlink to sh_dir and
+    writing output there.
+    """
     param_dirs = [
         _WEATHER_STATE_TO_DIR[ws]
         for ws in weather_states
@@ -136,21 +141,24 @@ def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> No
         "module load pifsenv 2>/dev/null || true",
         "module load ifs     2>/dev/null || true",
         "export DR_HOOK_ASSERT_MPI_INITIALIZED=0",
+        # Short symlink to avoid gptosp path-length truncation
+        f'SHORT_SH="$(mktemp -d)/sh"',
+        f'ln -s "{sh_dir}" "$SHORT_SH"',
     ]
     for pd in param_dirs:
         in_dir  = grb_dir / pd
-        out_dir = sh_dir  / pd
         lines += [
-            f'mkdir -p "{out_dir}"',
+            f'mkdir -p "$SHORT_SH/{pd}"',
             f'for grb_file in "{in_dir}"/*.grb; do',
             '  [[ -f "$grb_file" ]] || continue',
             '  grb_base="$(basename "$grb_file")"',
-            f'  sh_out="{out_dir}/${{grb_base}}_sh"',
+            f'  sh_out="$SHORT_SH/{pd}/${{grb_base}}_sh"',
             '  [[ -f "$sh_out" ]] && [[ -s "$sh_out" ]] && continue',
             '  echo "[gptosp] $grb_base"',
             '  gptosp.ser -l -g "$grb_file" -S "$sh_out"',
             'done',
         ]
+    lines.append('rm "$SHORT_SH"')
 
     subprocess.run(
         ["bash", "--login", "-c", "\n".join(lines)],
