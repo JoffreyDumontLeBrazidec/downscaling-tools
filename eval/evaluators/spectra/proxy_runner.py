@@ -333,7 +333,12 @@ def select_member_array(da: xr.DataArray, member_idx: int) -> np.ndarray:
         member_da = member_da.isel(forecast_reference_time=0)
     if "step" in member_da.dims:
         member_da = member_da.isel(step=0)
-    return member_da.values.astype(np.float64)
+    arr = member_da.values.astype(np.float64)
+    # PrepML format stores as (weather_state, grid_point); spectra expects
+    # (grid_point, weather_state) — transpose if needed.
+    if member_da.dims and member_da.dims[0] == "weather_state" and arr.ndim == 2:
+        arr = arr.T
+    return arr
 
 
 def build_scope_curves(
