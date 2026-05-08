@@ -46,7 +46,7 @@ def test_generate_prepml_yaml_structure():
     assert config["model"]["checkpoint"] == "/path/to/checkpoint.ckpt"
     assert config["model"]["name"] == "anemoi"
     assert config["model"]["runner"] == "downscaling"
-    assert config["model"]["lead_time"] == "240h"
+    assert config["model"]["lead_time"] == "120h"
     assert config["runner"]["name"] == "anemoi-dev"
     assert config["runner"]["venv"] == "/home/ecm5702/dev/.ds-dyn-wrap"
     assert config["input"]["grid"] == "O96"

@@ -26,6 +26,13 @@ def _members_to_loop(members: list[int]) -> str:
     return "/".join(str(m) for m in members_sorted)
 
 
+def _steps_to_lead_time(steps: list[int]) -> str:
+    """Convert forecast step list to the PrepML lead_time string."""
+    if not steps:
+        raise ValueError("predict.steps must contain at least one forecast step")
+    return f"{max(int(step) for step in steps)}h"
+
+
 def generate_prepml_config(
     *,
     lane_config: dict,
@@ -41,6 +48,7 @@ def generate_prepml_config(
     prepml = lane_config["prepml"]
 
     venv = runner_override or prepml["venv"]
+    lead_time = _steps_to_lead_time(predict["steps"])
 
     config: dict[str, Any] = {
         "description": description or f"Generated from eval.cli for {Path(checkpoint_path).stem}",
@@ -71,7 +79,7 @@ def generate_prepml_config(
             "name": "anemoi",
             "runner": "downscaling",
             "checkpoint": str(checkpoint_path),
-            "lead_time": prepml["lead_time"],
+            "lead_time": lead_time,
             "development_hacks": {
                 "time_step": prepml["time_step"],
                 "output_template": prepml["output_template"],
