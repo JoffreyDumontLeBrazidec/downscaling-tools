@@ -47,10 +47,46 @@ def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:
 
     Loads checkpoint hyper_parameters config (CPU-only, no GPU needed)
     and extracts the weather state names the model was trained to produce.
+
+    Handles both base checkpoints (dict with hyper_parameters.config) and
+    inference checkpoints (serialized AnemoiModelInterface objects). If the
+    checkpoint is an inference variant, tries to find the companion base
+    checkpoint for metadata extraction.
     """
     import torch
+    from pathlib import Path
 
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    ckpt_path = Path(checkpoint_path)
+
+    # Inference checkpoints (inference-*.ckpt) are serialized model objects,
+    # not dicts. Try the companion base checkpoint for metadata instead.
+    if ckpt_path.name.startswith("inference-"):
+        base_name = ckpt_path.name.replace("inference-", "", 1)
+        base_path = ckpt_path.parent / base_name
+        if base_path.exists():
+            LOG.info("Using base checkpoint for metadata: %s", base_path)
+            ckpt_path = base_path
+        else:
+            LOG.warning(
+                "Inference checkpoint detected but no companion base checkpoint at %s. "
+                "Cannot extract weather states from model object.",
+                base_path,
+            )
+            return []
+
+    try:
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+    except Exception:
+        LOG.warning("Failed to load checkpoint for metadata: %s", ckpt_path, exc_info=True)
+        return []
+
+    if not isinstance(ckpt, dict):
+        LOG.warning(
+            "Checkpoint is not a dict (got %s). Cannot extract weather states.",
+            type(ckpt).__name__,
+        )
+        return []
+
     config = ckpt.get("hyper_parameters", {}).get("config", {})
 
     data_cfg = config.get("data", {})
