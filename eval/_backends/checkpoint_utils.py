@@ -8,6 +8,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# NOTE: LANE_BY_RESOLUTION_PAIR and infer_lane_from_config() are informational/diagnostic
+# only. They are NOT used for runtime behavior decisions (GPU counts, fallback paths, etc.)
+# — those values come from the YAML lane configs via eval_config.
 LANE_BY_RESOLUTION_PAIR: dict[tuple[int, int], str] = {
     (48, 96): "o48_o96",
     (96, 320): "o96_o320",

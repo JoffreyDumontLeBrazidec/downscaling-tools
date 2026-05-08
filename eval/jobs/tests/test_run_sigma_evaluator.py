@@ -31,7 +31,7 @@ def test_run_sigma_evaluator_preserves_four_gpu_model_parallel_for_o1280_family(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval.sigma_evaluator.run_sigma_evaluator",
+        "eval._backends.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -101,12 +101,13 @@ def test_run_sigma_evaluator_preserves_four_gpu_model_parallel_for_o1280_family(
         out_file="sigma_eval_table.csv",
         out_csv=str(out_csv),
         device="cpu",
-        num_gpus_per_model=0,
+        num_gpus_per_model=4,
         n_samples=1,
         validation_frequency="50h",
         sigmas="1",
         run_pure_noise=False,
         run_noised=False,
+        residual_statistics_fallback="",
     )
 
     mod.run_sigma_evaluator(args)
@@ -125,7 +126,7 @@ def test_run_sigma_evaluator_defaults_to_single_gpu_for_lower_res_lanes(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval.sigma_evaluator.run_sigma_evaluator",
+        "eval._backends.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -195,12 +196,13 @@ def test_run_sigma_evaluator_defaults_to_single_gpu_for_lower_res_lanes(
         out_file="sigma_eval_table.csv",
         out_csv=str(out_csv),
         device="cpu",
-        num_gpus_per_model=0,
+        num_gpus_per_model=1,
         n_samples=1,
         validation_frequency="50h",
         sigmas="1",
         run_pure_noise=False,
         run_noised=False,
+        residual_statistics_fallback="",
     )
 
     mod.run_sigma_evaluator(args)
@@ -217,7 +219,7 @@ def test_run_sigma_evaluator_applies_o1280_o2560_residual_stats_fallback(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval.sigma_evaluator.run_sigma_evaluator",
+        "eval._backends.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -317,6 +319,7 @@ def test_run_sigma_evaluator_applies_o1280_o2560_residual_stats_fallback(
         sigmas="1",
         run_pure_noise=False,
         run_noised=False,
+        residual_statistics_fallback="o2560_dict_6_72.npy",
     )
 
     mod.run_sigma_evaluator(args)
@@ -393,7 +396,7 @@ def test_sigma_evaluator_missing_data_indices():
 
 def test_adapt_config_hpc_missing_hardware_key(tmp_path: Path, monkeypatch):
     """When adapt_config_hpc raises due to missing hardware key, fallback is used."""
-    mod = _load_module("eval.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
 
     created_loaders = []
     inject_called = []
@@ -469,12 +472,13 @@ def test_adapt_config_hpc_missing_hardware_key(tmp_path: Path, monkeypatch):
         out_file="sigma_eval_table.csv",
         out_csv=str(out_csv),
         device="cpu",
-        num_gpus_per_model=0,
+        num_gpus_per_model=1,
         n_samples=1,
         validation_frequency="50h",
         sigmas="1",
         run_pure_noise=False,
         run_noised=False,
+        residual_statistics_fallback="",
     )
 
     mod.run_sigma_evaluator(args)

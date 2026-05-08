@@ -30,13 +30,6 @@ from .sigmas import sigmas
 logger = logging.getLogger(__name__)
 
 
-O1280_FAMILY_LANES = {"o320_o1280", "o1280_o2560"}
-O1280_FAMILY_NUM_GPUS_PER_MODEL = 4
-RESIDUAL_STATISTICS_FALLBACK_BY_LANE = {
-    "o1280_o2560": "o2560_dict_6_72.npy",
-}
-
-
 def _normalize_cfg_for_lane_inference(cfg):
     if hasattr(cfg, "model_dump"):
         cfg = cfg.model_dump()
@@ -50,7 +43,7 @@ def _normalize_cfg_for_lane_inference(cfg):
     return cfg
 
 
-def _maybe_fix_missing_residual_statistics(cfg) -> Path | None:
+def _maybe_fix_missing_residual_statistics(cfg, fallback_name: str = "") -> Path | None:
     try:
         residual_dir = getattr(cfg.hardware.paths, "residual_statistics")
         residual_file = getattr(cfg.hardware.files, "residual_statistics")
@@ -64,12 +57,6 @@ def _maybe_fix_missing_residual_statistics(cfg) -> Path | None:
     if current_path.exists():
         return None
 
-    try:
-        lane = infer_lane_from_config(_normalize_cfg_for_lane_inference(cfg))
-    except Exception:
-        return None
-
-    fallback_name = RESIDUAL_STATISTICS_FALLBACK_BY_LANE.get(lane)
     if not fallback_name or fallback_name == residual_file:
         return None
 
@@ -232,6 +219,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Evaluate noised-target mode. If neither mode flag is set, this is enabled by default.",
     )
+    parser.add_argument(
+        "--residual-statistics-fallback",
+        type=str,
+        default="",
+        help="Fallback residual statistics filename when the configured file is missing.",
+    )
     return parser
 
 
@@ -291,26 +284,17 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
         _nw.validation = 1
 
     inferred_lane = infer_lane_from_config(_normalize_cfg_for_lane_inference(config_checkpoint))
-    required_model_parallel_gpus = (
-        O1280_FAMILY_NUM_GPUS_PER_MODEL if inferred_lane in O1280_FAMILY_LANES else 1
-    )
-    requested_model_parallel_gpus = (
-        int(args.num_gpus_per_model)
-        if int(args.num_gpus_per_model) > 0
-        else required_model_parallel_gpus
-    )
-    if (
-        inferred_lane in O1280_FAMILY_LANES
-        and requested_model_parallel_gpus != required_model_parallel_gpus
-    ):
-        raise RuntimeError(
-            f"Lane {inferred_lane} requires num_gpus_per_model={required_model_parallel_gpus} "
-            "for sigma evaluation. Single-GPU AG launches are not reliable for this lane."
-        )
+    requested = int(args.num_gpus_per_model)
+    if requested <= 0:
+        try:
+            requested = int(config_checkpoint.hardware.num_gpus_per_model)
+        except (AttributeError, TypeError):
+            requested = 1
+    requested_model_parallel_gpus = requested
     if requested_model_parallel_gpus > 1 and world_size != requested_model_parallel_gpus:
         raise RuntimeError(
-            f"Expected world_size={requested_model_parallel_gpus} for sigma evaluation on lane "
-            f"{inferred_lane}, got {world_size}. Launch with srun/torchrun across "
+            f"Expected world_size={requested_model_parallel_gpus} for sigma evaluation, "
+            f"got {world_size}. Launch with srun/torchrun across "
             f"{requested_model_parallel_gpus} tasks."
         )
 
@@ -328,7 +312,7 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
         object_loader.config_checkpoint,
         object_loader.config_for_datamodule,
     ):
-        repaired = _maybe_fix_missing_residual_statistics(cfg_candidate)
+        repaired = _maybe_fix_missing_residual_statistics(cfg_candidate, args.residual_statistics_fallback)
         if repaired is not None and fallback_residuals is None:
             fallback_residuals = repaired
     if fallback_residuals is not None:

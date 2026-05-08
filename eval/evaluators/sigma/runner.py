@@ -51,6 +51,11 @@ def run(
         "--n_samples", n_samples,
         "--validation_frequency", validation_frequency,
     ]
+    num_gpus = str(eval_config.get("num_gpus_per_model", 0))
+    cmd += ["--num-gpus-per-model", num_gpus]
+    residual_fallback = str(eval_config.get("residual_statistics_fallback", ""))
+    if residual_fallback:
+        cmd += ["--residual-statistics-fallback", residual_fallback]
     if eval_config.get("sigmas"):
         cmd += ["--sigmas", str(eval_config["sigmas"])]
     if eval_config.get("run_pure_noise"):
