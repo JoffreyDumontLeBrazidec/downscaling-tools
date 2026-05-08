@@ -177,43 +177,51 @@ def _launch_prepml(
 
 def _wait_for_prepml(
     expver: str,
-    poll_interval: int = 60,
     timeout: int = 43200,
 ) -> None:
-    """Poll `prepml status --expver` until the ecFlow suite completes.
+    """Wait for PrepML ecFlow suite to complete using the prepml Python API.
+
+    Uses prepml.utils.ecflow_client.EcflowClient.wait() which polls the
+    ecFlow server directly — no subprocess needed.
 
     Args:
         expver: experiment version to monitor
-        poll_interval: seconds between status checks (default 60)
         timeout: max seconds to wait (default 12 hours)
     """
-    import time
+    import sys
+    from getpass import getuser
 
-    elapsed = 0
-    while elapsed < timeout:
-        result = subprocess.run(
-            [PREPML_BIN, "--quiet", "status", "--expver", expver],
-            capture_output=True, text=True,
+    # Import from prepml's own Python environment
+    prepml_python_path = "/usr/local/apps/prepml/0.99/env/lib/python3.11/site-packages"
+    if prepml_python_path not in sys.path:
+        sys.path.insert(0, prepml_python_path)
+
+    from prepml.utils.ecflow_client import EcflowClient
+
+    owner = getuser()
+    client = EcflowClient(owner, expver, verbose=True)
+    state = client.state()
+    LOG.info("PrepML ecFlow state for expver=%s: %s", expver, state)
+
+    if state == "complete":
+        LOG.info("PrepML suite already complete for expver=%s", expver)
+        return
+
+    if state in ("aborted",):
+        raise RuntimeError(
+            f"PrepML suite aborted for expver={expver}. "
+            f"Check ecFlow logs at ~/prepml/{expver}/"
         )
-        status_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-        LOG.info("PrepML status (expver=%s, elapsed=%ds): %s", expver, elapsed, status_line)
 
-        if status_line == "complete":
-            LOG.info("PrepML suite completed for expver=%s", expver)
-            return
-        if status_line in ("aborted", "suspended"):
-            raise RuntimeError(
-                f"PrepML suite {status_line} for expver={expver}. "
-                f"Check ecFlow logs at ~/prepml/{expver}/"
-            )
+    LOG.info("Waiting for PrepML suite to complete (timeout=%ds)...", timeout)
+    try:
+        client.wait("complete", timeout=timeout)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"PrepML suite timed out after {timeout}s for expver={expver}."
+        ) from exc
 
-        time.sleep(poll_interval)
-        elapsed += poll_interval
-
-    raise RuntimeError(
-        f"PrepML suite timed out after {timeout}s for expver={expver}. "
-        f"Last status: {status_line}"
-    )
+    LOG.info("PrepML suite completed for expver=%s", expver)
 
 
 def _write_provenance(
