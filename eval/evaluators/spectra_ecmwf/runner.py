@@ -216,24 +216,24 @@ def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> No
         "module load pifsenv 2>/dev/null || true",
         "module load ifs     2>/dev/null || true",
         "export DR_HOOK_ASSERT_MPI_INITIALIZED=0",
-        # Short symlink to avoid gptosp path-length truncation
-        f'SHORT_SH="$(mktemp -d)/sh"',
-        f'ln -s "{sh_dir}" "$SHORT_SH"',
+        # Short symlinks to avoid gptosp ~128-char path-length truncation
+        'SHORT_TMP="$(mktemp -d)"',
+        f'ln -s "{grb_dir}" "$SHORT_TMP/g"',
+        f'ln -s "{sh_dir}" "$SHORT_TMP/s"',
     ]
     for pd in param_dirs:
-        in_dir  = grb_dir / pd
         lines += [
-            f'mkdir -p "$SHORT_SH/{pd}"',
-            f'for grb_file in "{in_dir}"/*.grb; do',
+            f'mkdir -p "$SHORT_TMP/s/{pd}"',
+            f'for grb_file in "$SHORT_TMP/g/{pd}"/*.grb; do',
             '  [[ -f "$grb_file" ]] || continue',
             '  grb_base="$(basename "$grb_file")"',
-            f'  sh_out="$SHORT_SH/{pd}/${{grb_base}}_sh"',
+            f'  sh_out="$SHORT_TMP/s/{pd}/${{grb_base}}_sh"',
             '  [[ -f "$sh_out" ]] && [[ -s "$sh_out" ]] && continue',
             '  echo "[gptosp] $grb_base"',
             '  gptosp.ser -l -g "$grb_file" -S "$sh_out"',
             'done',
         ]
-    lines.append('rm "$SHORT_SH"')
+    lines += ['rm "$SHORT_TMP/g" "$SHORT_TMP/s"', 'rmdir "$SHORT_TMP"']
 
     subprocess.run(
         ["bash", "--login", "-c", "\n".join(lines)],
