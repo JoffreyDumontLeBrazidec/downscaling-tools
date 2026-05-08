@@ -6,6 +6,9 @@ Stage 3: compute spectra amplitudes from harmonics              (_amplitude_comp
 
 AC-only: gptosp.ser and the eclib/pifsenv/ifs modules are not available on AG.
 Resumable: stage 2 skips existing *_sh files on resubmission.
+
+Reference spectra (truth/input) are computed once and saved to reference_dir
+for reuse across runs.  Only prediction spectra are recomputed each time.
 """
 from __future__ import annotations
 
@@ -60,14 +63,79 @@ def run(
     predict_cfg = lane_config.get("predict", {})
     date_list = ",".join(str(d) for d in eval_config.get("dates", predict_cfg.get("dates", [])))
     step_list = ",".join(str(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120])))
+    reference_dir: str = eval_config.get("reference_dir", "")
 
+    # --- Prediction spectra (always recomputed) ---
+    _run_pipeline(
+        label="prediction",
+        predictions_dir=predictions_dir,
+        output_dir=output_dir,
+        prediction_var="y_pred",
+        weather_states=weather_states,
+        weather_states_str=weather_states_str,
+        template_root=template_root,
+        template_grib_root=template_grib_root,
+        date_list=date_list,
+        step_list=step_list,
+    )
+
+    # --- Reference spectra (truth + input): compute once, save to reference_dir ---
+    if reference_dir:
+        ref_path = Path(reference_dir).expanduser().resolve()
+        for var_name, var_label in [("y", "truth"), ("x_interp", "input")]:
+            var_amp_dir = ref_path / var_label / "spectra"
+            if _has_amplitudes(var_amp_dir, weather_states):
+                LOG.info("spectra_ecmwf: %s reference cached at %s — skipping", var_label, var_amp_dir)
+                continue
+            LOG.info("spectra_ecmwf: computing %s reference spectra → %s", var_label, ref_path / var_label)
+            _run_pipeline(
+                label=var_label,
+                predictions_dir=predictions_dir,
+                output_dir=ref_path / var_label,
+                prediction_var=var_name,
+                weather_states=weather_states,
+                weather_states_str=weather_states_str,
+                template_root=template_root,
+                template_grib_root=template_grib_root,
+                date_list=date_list,
+                step_list=step_list,
+            )
+
+    return output_dir
+
+
+def _has_amplitudes(amp_dir: Path, weather_states: list[str]) -> bool:
+    """Check if amplitude directory already has npy files for all weather states."""
+    if not amp_dir.exists():
+        return False
+    for ws in weather_states:
+        ws_dir = amp_dir / _WEATHER_STATE_TO_DIR.get(ws, ws)
+        if not ws_dir.exists() or not list(ws_dir.glob("ampl_*.npy")):
+            return False
+    return True
+
+
+def _run_pipeline(
+    *,
+    label: str,
+    predictions_dir: Path,
+    output_dir: Path,
+    prediction_var: str,
+    weather_states: list[str],
+    weather_states_str: str,
+    template_root: str,
+    template_grib_root: str,
+    date_list: str,
+    step_list: str,
+) -> None:
+    """Run the full 3-stage pipeline for a single variable."""
     grb_dir = output_dir / "grb"
     sh_dir  = output_dir / "spectral_harmonics"
     amp_dir = output_dir / "spectra"
     for d in (grb_dir, sh_dir, amp_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    LOG.info("=== spectra_ecmwf 1/3: stage GRIBs ===")
+    LOG.info("=== spectra_ecmwf [%s] 1/3: stage GRIBs ===", label)
     _stage_gribs(
         predictions_dir=predictions_dir,
         grb_dir=grb_dir,
@@ -76,21 +144,20 @@ def run(
         template_grib_root=template_grib_root,
         date_list=date_list,
         step_list=step_list,
+        prediction_var=prediction_var,
         summary_path=output_dir / "staging_summary.json",
     )
 
-    LOG.info("=== spectra_ecmwf 2/3: gptosp transforms ===")
+    LOG.info("=== spectra_ecmwf [%s] 2/3: gptosp transforms ===", label)
     _run_gptosp(grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states)
 
-    LOG.info("=== spectra_ecmwf 3/3: compute amplitudes ===")
+    LOG.info("=== spectra_ecmwf [%s] 3/3: compute amplitudes ===", label)
     _compute_amplitudes(
         sh_dir=sh_dir,
         amp_dir=amp_dir,
         weather_states=weather_states_str,
         summary_path=output_dir / "spectra_summary.json",
     )
-
-    return output_dir
 
 
 def _stage_gribs(
@@ -102,6 +169,7 @@ def _stage_gribs(
     template_grib_root: str,
     date_list: str,
     step_list: str,
+    prediction_var: str = "y_pred",
     summary_path: Path,
 ) -> None:
     cmd = [
@@ -112,6 +180,7 @@ def _stage_gribs(
         "--date-list", date_list,
         "--step-list", step_list,
         "--member-list", "ALL",
+        "--prediction-var", prediction_var,
         "--summary-path", str(summary_path),
     ]
     if template_root:

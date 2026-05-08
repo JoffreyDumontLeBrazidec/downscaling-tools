@@ -187,6 +187,101 @@ def build_pdf_ecmwf(spectra_dir: Path, out_pdf: Path) -> int:
     return pages
 
 
+def _load_mean_curve(amp_dir: Path, param_name: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """Load and average all ampl/wvn npy files for a param directory."""
+    d = amp_dir / param_name
+    if not d.exists():
+        return None
+    ampl_files = sorted(d.glob("ampl_*.npy"))
+    if not ampl_files:
+        return None
+    wvn_files = sorted(d.glob("wvn_*.npy"))
+    ampls = [np.load(f) for f in ampl_files]
+    if len(set(len(a) for a in ampls)) > 1:
+        return None
+    ampl_mean = np.mean(np.stack(ampls, axis=0), axis=0)
+    if wvn_files:
+        wvn = np.mean(np.stack([np.load(f) for f in wvn_files], axis=0), axis=0)
+    else:
+        wvn = np.arange(len(ampl_mean), dtype=float)
+    return wvn, ampl_mean
+
+
+def build_pdf_ecmwf_with_references(
+    pred_amp_dir: Path,
+    out_pdf: Path,
+    *,
+    truth_amp_dir: Path | None = None,
+    input_amp_dir: Path | None = None,
+) -> int:
+    """Build PDF with prediction + optional truth/input reference curves."""
+    param_dirs = sorted(
+        d for d in pred_amp_dir.iterdir()
+        if d.is_dir() and list(d.glob("ampl_*.npy"))
+    )
+
+    pages = 0
+    with PdfPages(out_pdf) as pdf:
+        for param_dir in param_dirs:
+            pname = param_dir.name
+            ampl_files = sorted(param_dir.glob("ampl_*.npy"))
+            wvn_files = sorted(param_dir.glob("wvn_*.npy"))
+            if wvn_files and len(ampl_files) != len(wvn_files):
+                continue
+
+            ampls = [np.load(f) for f in ampl_files]
+            if len(set(len(a) for a in ampls)) > 1:
+                continue
+            if wvn_files:
+                wvn = np.mean(np.stack([np.load(f) for f in wvn_files], axis=0), axis=0)
+            else:
+                wvn = np.arange(len(ampls[0]), dtype=float)
+
+            pred_mean = np.mean(np.stack(ampls, axis=0), axis=0)
+            pred_std = np.std(np.stack(ampls, axis=0), axis=0)
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            mask = wvn > 0
+
+            # Truth reference
+            if truth_amp_dir:
+                ref = _load_mean_curve(truth_amp_dir, pname)
+                if ref is not None:
+                    rwvn, rampl = ref
+                    rmask = rwvn > 0
+                    ax.loglog(rwvn[rmask], rampl[rmask], label="truth (IEKM)", color="tab:orange", linestyle="--", linewidth=2)
+
+            # Input reference
+            if input_amp_dir:
+                ref = _load_mean_curve(input_amp_dir, pname)
+                if ref is not None:
+                    rwvn, rampl = ref
+                    rmask = rwvn > 0
+                    ax.loglog(rwvn[rmask], rampl[rmask], label="input (interp)", color="#888888", linestyle="--", linewidth=2)
+
+            # Prediction
+            ax.loglog(wvn[mask], pred_mean[mask], label="prediction", color="tab:blue", linewidth=2)
+            ax.fill_between(
+                wvn[mask],
+                np.maximum(pred_mean[mask] - pred_std[mask], 1e-30),
+                pred_mean[mask] + pred_std[mask],
+                alpha=0.2,
+                color="tab:blue",
+            )
+
+            ax.set_xlabel("Wavenumber ℓ")
+            ax.set_ylabel("Spectral amplitude")
+            ax.set_title(f"{pname}  (n={len(ampl_files)})")
+            ax.legend(fontsize=8)
+            ax.grid(True, which="both", linestyle=":", linewidth=0.4, alpha=0.6)
+            fig.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+            pages += 1
+
+    return pages
+
+
 # ---------------------------------------------------------------------------
 # Top-level auto-detect
 # ---------------------------------------------------------------------------

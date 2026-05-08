@@ -49,12 +49,14 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--predictions-dir", required=True)
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--template-root", default="/home/ecm5702/perm/reference/o320_o1280/spectra/enfo_o1280")
+    p.add_argument("--template-root", default="/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280")
     p.add_argument("--template-grib-root", default="")
     p.add_argument("--weather-states", default="10u,10v,2t,sp,t_850,z_500")
     p.add_argument("--date-list", default="ALL")
     p.add_argument("--step-list", default="ALL")
     p.add_argument("--member-list", default="ALL")
+    p.add_argument("--prediction-var", default="y_pred",
+                   help="Variable to extract: y_pred, y, or x_interp")
     p.add_argument("--summary-path", default="")
     return p.parse_args()
 
@@ -257,8 +259,10 @@ def main() -> None:
         with xr.open_dataset(path) as ds:
             weather_states = [str(value) for value in ds["weather_state"].values.tolist()]
             state_to_index = {name: idx for idx, name in enumerate(weather_states)}
-            y_pred = ds["y_pred"].isel(sample=0)
-            if "ensemble_member" in ds.coords:
+            var_name = args.prediction_var
+            data_var = ds[var_name].isel(sample=0) if "sample" in ds[var_name].dims else ds[var_name]
+            has_members = "ensemble_member" in ds[var_name].dims
+            if has_members:
                 member_ids = [int(value) for value in ds["ensemble_member"].values.tolist()]
             else:
                 member_ids = [1]
@@ -269,8 +273,8 @@ def main() -> None:
                 member_ids_seen.add(member_id)
                 for state in requested_states:
                     cfg = VARIABLE_CONFIGS[state]
-                    arr = np.asarray(
-                        y_pred.isel(ensemble_member=member_pos, weather_state=state_to_index[state]).values,
+                    sel = data_var.isel(ensemble_member=member_pos, weather_state=state_to_index[state]) if has_members else data_var.isel(weather_state=state_to_index[state])
+                    arr = np.asarray(sel.values,
                         dtype=np.float64,
                     )
                     out_path = out_dir / cfg.dir_name / f"1_{ymd}_{step}_{member_id}_nopoles.grb"
