@@ -75,7 +75,7 @@ region_plot:
     - andes_central
 
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, spectra_ecmwf, mlflow]
 
 resource_profiles:
