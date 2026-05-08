@@ -194,13 +194,6 @@ def render_region_suite_from_predictions_file(
                     title=title,
                 )
                 pdf.savefig(fig)
-                region_pdf = out_root / f"{region_name}.pdf"
-                fig.savefig(region_pdf, dpi=RENDER_DPI)
-                generated.append(str(region_pdf))
-                if also_png:
-                    region_png = out_root / f"{region_name}.png"
-                    fig.savefig(region_png, dpi=RENDER_DPI)
-                    generated.append(str(region_png))
                 plt.close(fig)
 
         manifest_path = _write_suite_manifest(

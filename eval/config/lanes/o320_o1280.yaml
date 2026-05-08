@@ -35,8 +35,11 @@ tc:
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
   grib_dir: "/home/ecm5702/perm/reference/o320_o1280/tc"
   analysis_expid: "OPER_O1280_0001"
-  reference_expids: ["ENFO_O1280_0001", "EEFO_O320_0001"]
+  reference_expids: []
   support_mode: "regridded"
+  input_label: "input O320"
+  target_nc_label: "target O1280"
+  analysis_display_label: "OPER-AN O1280"
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]

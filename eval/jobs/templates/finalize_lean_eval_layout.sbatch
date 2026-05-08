@@ -27,9 +27,9 @@ set -euo pipefail
 ###############################################################################
 # USER SETTINGS (edit only this block)
 ###############################################################################
-RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"
-RUN_ID="REPLACE_RUN_ID"
-LANE=""                            # e.g. o48_o96, o96_o320, o320_o1280, o1280_o2560
+RUN_ROOT="${RUN_ROOT:-/home/ecm5702/scratch/eval/REPLACE_RUN_ID}"
+RUN_ID="${RUN_ID:-REPLACE_RUN_ID}"
+LANE="${LANE:-}"                   # e.g. o48_o96, o96_o320, o320_o1280, o1280_o2560
 
 # Spectra consolidated PDF names at top level
 SPECTRA_PROXY_PDF_NAME="spectra_proxy.pdf"
