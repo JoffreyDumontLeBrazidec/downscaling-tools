@@ -15,6 +15,8 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
+PREPML_BIN = "/usr/local/apps/prepml/0.99/bin/prepml"
+
 
 def _to_plain_container(value: Any) -> Any:
     """Convert common config container objects to builtin Python containers."""
@@ -154,7 +156,7 @@ def _launch_prepml(
     """
     # Set expver
     result = subprocess.run(
-        ["prepml", "expver", "--set", expver],
+        [PREPML_BIN, "expver", "--set", expver],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -163,7 +165,7 @@ def _launch_prepml(
 
     # Push config to ecFlow
     result = subprocess.run(
-        ["prepml", "inference", str(prepml_config_path)],
+        [PREPML_BIN, "inference", str(prepml_config_path)],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -190,7 +192,7 @@ def _wait_for_prepml(
     elapsed = 0
     while elapsed < timeout:
         result = subprocess.run(
-            ["prepml", "--quiet", "status", "--expver", expver],
+            [PREPML_BIN, "--quiet", "status", "--expver", expver],
             capture_output=True, text=True,
         )
         status_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
