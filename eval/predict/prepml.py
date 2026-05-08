@@ -181,9 +181,10 @@ def _launch_prepml(
         raise RuntimeError(f"prepml expver --set {expver} failed: {result.stderr.strip()}")
     LOG.info("Set expver to %s", expver)
 
-    # Push config to ecFlow
+    # Push config to ecFlow. --force skips the interactive overwrite prompt
+    # for debug expvers that already have data.
     result = subprocess.run(
-        [PREPML_BIN, "inference", str(prepml_config_path)],
+        [PREPML_BIN, "--force", "inference", str(prepml_config_path)],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
