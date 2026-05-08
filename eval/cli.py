@@ -520,8 +520,7 @@ def _consolidate_plots(output_dir: Path) -> None:
     if not evaluators_dir.exists():
         return
     for src in sorted(evaluators_dir.rglob("*.pdf")) + sorted(evaluators_dir.rglob("*.png")):  # type: ignore[operator]
-        dest = plots_dir / f"{src.parent.relative_to(evaluators_dir).as_posix().replace('/', '__')}__{src.name}"
-        shutil.copy2(src, dest)
+        shutil.copy2(src, plots_dir / src.name)
     LOG.info("Plots consolidated to %s (%d files)", plots_dir, len(list(plots_dir.iterdir())))
 
 

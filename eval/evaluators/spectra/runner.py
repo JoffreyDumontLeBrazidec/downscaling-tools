@@ -42,7 +42,7 @@ def run(
         "--nside", nside,
         "--lmax", lmax,
         "--member-aggregation", member_aggregation,
-        "--consolidated-pdf", str(output_dir / "all_spectra.pdf"),
+        "--consolidated-pdf", str(output_dir / "all_spectra_proxy.pdf"),
     ]
 
     LOG.info("spectra subprocess: %s", " ".join(cmd))

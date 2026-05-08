@@ -762,7 +762,7 @@ def main() -> None:
     consolidated_path = (
         Path(args.consolidated_pdf).expanduser().resolve()
         if args.consolidated_pdf
-        else out_dir / "all_spectra.pdf"
+        else out_dir / "all_spectra_proxy.pdf"
     )
     try:
         build_consolidated_spectra_pdf_from_existing(
