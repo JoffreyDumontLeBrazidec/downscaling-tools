@@ -94,6 +94,22 @@ def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_prepml_args(parser: argparse.ArgumentParser) -> None:
+    """Add PrepML-specific args to run and predict subcommands."""
+    parser.add_argument(
+        "--mode", choices=["manual", "prepml"], default="manual",
+        help="Prediction backend: manual (bundle-based) or prepml (MARS/FDB). Default: manual.",
+    )
+    parser.add_argument(
+        "--expver", default=None,
+        help="PrepML expver. If omitted in prepml mode, uses debug expver from lane config.",
+    )
+    parser.add_argument(
+        "--prepml-runner", default=None,
+        help="Override PrepML runner/venv path from lane config.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with subcommands."""
     parser = argparse.ArgumentParser(
@@ -109,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_evaluator_filter_args(p_run)
     _add_lane_override_args(p_run)
     _add_prepare_args(p_run)
+    _add_prepml_args(p_run)
     p_run.add_argument(
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
@@ -120,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_predict.add_argument("--checkpoint", required=True, help="Path to model checkpoint.")
     _add_lane_override_args(p_predict)
     _add_prepare_args(p_predict)
+    _add_prepml_args(p_predict)
 
     # --- prepare ---
     p_prepare = subparsers.add_parser("prepare", help="Build truth-aware bundles only (no prediction).")
@@ -318,6 +336,19 @@ def _update_effective_config_completion(
 
 def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
     """Run predictions via subprocess call to eval.predict.main."""
+    mode = getattr(args, "mode", "manual")
+    if mode == "prepml":
+        from eval.predict.prepml import prepml_predict
+        prepml_predict(
+            checkpoint=args.checkpoint,
+            lane_config=lane_config,
+            host_config=host_config,
+            output_dir=output_dir,
+            expver=getattr(args, "expver", None),
+            runner_override=getattr(args, "prepml_runner", None),
+        )
+        return
+
     predict_cfg = lane_config["predict"]
     checkpoint = args.checkpoint
 
@@ -652,6 +683,17 @@ def main(argv: list[str] | None = None) -> None:
         ) from exc
     except Exception as exc:
         raise SystemExit(f"Failed to load host config '{host_name}': {exc}") from exc
+
+    # --- Propagate --steps to evaluator sections ---
+    # When --steps is passed, override not just predict.steps but also any
+    # evaluator-specific steps (e.g. spectra.steps, spectra_ecmwf.steps) so
+    # evaluators don't request forecast steps that don't exist in predictions.
+    if getattr(args, "steps", None) is not None and args.subcommand in ("evaluate", "run"):
+        cli_steps = _parse_int_csv(args.steps)
+        for section_name, section_val in lane_config.items():
+            if section_name != "predict" and isinstance(section_val, dict) and "steps" in section_val:
+                section_val["steps"] = cli_steps
+                lane_overrides.setdefault(section_name, {})["steps"] = cli_steps
 
     # --- Resolve evaluators (for subcommands that need them) ---
     evaluators: list[str] = []
