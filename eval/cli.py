@@ -151,6 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
     )
+    p_eval.add_argument(
+        "--run-label", default="",
+        help="Short display label for this run (used in TC/plot legends). "
+             "Overrides the automatic fallback from the predictions directory name.",
+    )
 
     # --- scoreboard ---
     p_sb = subparsers.add_parser("scoreboard", help="Generate scoreboard from evaluation results.")
@@ -384,6 +389,7 @@ def _run_evaluators(
     *,
     overwrite: bool = False,
     checkpoint: str | None = None,
+    run_label: str = "",
 ) -> list[str]:
     """Run selected evaluators on existing predictions. Returns list of evaluators that ran."""
     evaluators_run: list[str] = []
@@ -430,6 +436,9 @@ def _run_evaluators(
             )
             continue
 
+        if results_dir.exists() and overwrite:
+            import shutil
+            shutil.rmtree(results_dir)
         results_dir.mkdir(parents=True, exist_ok=True)
         eval_config = lane_config.get(name, {})
 
@@ -443,6 +452,7 @@ def _run_evaluators(
                     predictions_dir, lane_config, eval_config,
                     output_dir=results_dir, overwrite=overwrite,
                     checkpoint=checkpoint,
+                    run_label=run_label,
                 )
             except Exception:
                 LOG.error("Evaluator '%s' run() failed", name, exc_info=True)
@@ -478,18 +488,33 @@ def _run_evaluators(
     return evaluators_run
 
 
-def _consolidate_plots(output_dir: Path, *, plots_dir: Path | None = None) -> None:
-    """Copy all PDFs and PNGs from evaluators/* to plots/.
+def _resolve_run_root(output_dir: Path) -> Path:
+    """Resolve the run root from output_dir.
 
-    Gives a flat, browsable plots/ folder at the run root regardless of
-    which evaluators ran or how they organise their internal output.
+    output_dir must be either the run root itself (containing evaluators/)
+    directly) or <run_root>/data (the canonical layout when evaluate is
+    called with --predictions-dir).  Any other structure raises ValueError
+    so callers cannot silently misplace outputs.
+    """
+    if output_dir.name == "data":
+        return output_dir.parent
+    if (output_dir / "evaluators").exists() or (output_dir / "predictions").exists():
+        return output_dir
+    raise ValueError(
+        f"Cannot resolve run root from output_dir={output_dir!r}. "
+        "Expected either <run_root>/data or a directory containing evaluators/ or predictions/."
+    )
 
-    plots_dir defaults to output_dir/plots.  Pass an explicit path when
-    output_dir is a sub-directory of the run root (e.g. data/) so plots
-    land at the run root level rather than inside data/.
+
+def _consolidate_plots(output_dir: Path) -> None:
+    """Copy all PDFs and PNGs from evaluators/* to <run_root>/plots/.
+
+    Always writes to <run_root>/plots/ regardless of how output_dir is
+    structured, so plots are never buried inside data/.
     """
     import shutil
-    plots_dir = plots_dir if plots_dir is not None else output_dir / "plots"
+    run_root = _resolve_run_root(output_dir)
+    plots_dir = run_root / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     evaluators_dir = output_dir / "evaluators"
     if not evaluators_dir.exists():
@@ -679,8 +704,8 @@ def main(argv: list[str] | None = None) -> None:
             predictions_dir, lane_config, evaluators, output_dir,
             overwrite=getattr(args, "overwrite", False),
             checkpoint=getattr(args, "checkpoint", None),
+            run_label=getattr(args, "run_label", ""),
         )
-        # output_dir is predictions_dir.parent == run root; plots go there.
         _consolidate_plots(output_dir)
         _update_effective_config_completion(output_dir, evaluators_run)
     elif args.subcommand == "scoreboard":

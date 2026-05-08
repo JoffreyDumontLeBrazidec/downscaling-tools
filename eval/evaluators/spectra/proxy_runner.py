@@ -741,7 +741,7 @@ def main() -> None:
     if not summary_alias.exists():
         summary_alias.symlink_to("spectra_summary.json")
 
-    # --plots-dir: copy per-variable PDFs to canonical location
+    # --plots-dir: copy per-variable PDFs before consolidation removes them.
     if args.plots_dir:
         plots_dir = Path(args.plots_dir).expanduser().resolve()
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -757,21 +757,30 @@ def main() -> None:
                     shutil.copy2(src_pdf, dst_pdf)
         print(f"Copied per-variable PDFs to: {plots_dir}")
 
-    if args.consolidated_pdf:
-        consolidated_path = Path(args.consolidated_pdf).expanduser().resolve()
-        try:
-            build_consolidated_spectra_pdf_from_existing(
-                out_dir=out_dir,
-                consolidated_pdf_path=consolidated_path,
-                states=states,
-            )
-        except Exception as exc:
-            print(f"[WARN] PDF consolidation failed (non-fatal): {exc}", flush=True)
-            print(
-                f"[WARN] Re-run to generate PDF: "
-                f"python spectra_plot_pdf.py --spectra-dir {out_dir} --out-pdf {consolidated_path}",
-                flush=True,
-            )
+    # Always build the consolidated all_spectra.pdf, then remove individual per-state PDFs.
+    # Only the consolidated file is kept in out_dir.
+    consolidated_path = (
+        Path(args.consolidated_pdf).expanduser().resolve()
+        if args.consolidated_pdf
+        else out_dir / "all_spectra.pdf"
+    )
+    try:
+        build_consolidated_spectra_pdf_from_existing(
+            out_dir=out_dir,
+            consolidated_pdf_path=consolidated_path,
+            states=states,
+        )
+        # Remove all individual per-state PDFs — only the consolidated file should remain.
+        for individual in sorted(out_dir.glob("spectra_*.pdf")):
+            if individual.resolve() != consolidated_path.resolve():
+                individual.unlink()
+    except Exception as exc:
+        print(f"[WARN] PDF consolidation failed (non-fatal): {exc}", flush=True)
+        print(
+            f"[WARN] Re-run to generate PDF: "
+            f"python spectra_plot_pdf.py --spectra-dir {out_dir} --out-pdf {consolidated_path}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
