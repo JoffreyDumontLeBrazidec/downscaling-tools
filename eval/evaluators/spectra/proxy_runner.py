@@ -326,9 +326,13 @@ def mean_curve(curves: list[np.ndarray]) -> np.ndarray:
 
 
 def select_member_array(da: xr.DataArray, member_idx: int) -> np.ndarray:
-    member_da = da.isel(sample=0)
+    member_da = da.isel(sample=0) if "sample" in da.dims else da
     if "ensemble_member" in member_da.dims:
         member_da = member_da.isel(ensemble_member=member_idx)
+    if "forecast_reference_time" in member_da.dims:
+        member_da = member_da.isel(forecast_reference_time=0)
+    if "step" in member_da.dims:
+        member_da = member_da.isel(step=0)
     return member_da.values.astype(np.float64)
 
 

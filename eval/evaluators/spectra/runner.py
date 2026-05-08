@@ -55,6 +55,10 @@ def run(
     if spectra_steps:
         cmd.extend(["--steps", ",".join(str(s) for s in spectra_steps)])
 
+    checkpoint_path = kwargs.get("checkpoint", "")
+    if checkpoint_path:
+        cmd.extend(["--checkpoint-path", str(checkpoint_path)])
+
     LOG.info("spectra subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
     return output_dir
