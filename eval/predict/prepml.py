@@ -276,6 +276,87 @@ def _write_manifest(
         writer.writerows(rows)
 
 
+def _generate_retrieve_script(
+    retrieve_config_path: Path,
+    output_dir: Path,
+    host_config: dict,
+) -> Path:
+    """Generate sbatch script for MARS retrieval + bundle assembly.
+
+    The retrieval needs ~16-32G memory due to earthkit's grid expansion.
+    """
+    venv = host_config.get("environment_setup", {}).get("venv_activate", "")
+    code_root = host_config.get("code_root", "/home/ecm5702/dev/downscaling-tools")
+    script = output_dir / "retrieve_predictions.sh"
+    script.write_text(f"""#!/bin/bash
+#SBATCH --job-name=prepml_retrieve
+#SBATCH --output={output_dir}/retrieve_%j.out
+#SBATCH --error={output_dir}/retrieve_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=2
+#SBATCH --qos=nf
+
+set -euo pipefail
+source {venv}
+cd {code_root}
+
+python -m eval.predict.prepml --retrieve {retrieve_config_path}
+""")
+    script.chmod(0o755)
+    return script
+
+
+def run_retrieval(retrieve_config_path: str) -> None:
+    """Standalone entry point for MARS retrieval, called from the sbatch job.
+
+    Reads retrieve_config.json and runs assemble_predictions_file for each
+    date/step pair.
+    """
+    from eval.predict.mars_retrieve import assemble_predictions_file
+
+    config_path = Path(retrieve_config_path)
+    config = json.loads(config_path.read_text())
+
+    expver = config["expver"]
+    dates = config["dates"]
+    steps = config["steps"]
+    members = config["members"]
+    output_mars = config["output_mars"]
+    weather_states = config["weather_states"]
+    bundle_dir = config["bundle_dir"]
+    bundle_filename_tpl = config["bundle_filename_tpl"]
+    predictions_dir = Path(config["predictions_dir"])
+    predictions_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_rows: list[tuple[str, int, int, str]] = []
+    total = len(dates) * len(steps)
+    done = 0
+
+    for date in dates:
+        for step in steps:
+            out_path = assemble_predictions_file(
+                expver=expver,
+                date=date,
+                step=step,
+                members=members,
+                output_mars=output_mars,
+                weather_states=weather_states,
+                bundle_dir=bundle_dir,
+                bundle_filename_tpl=bundle_filename_tpl,
+                output_dir=predictions_dir,
+            )
+            done += 1
+            LOG.info("[%d/%d] %s", done, total, out_path)
+            for member in members:
+                manifest_rows.append((date, step, member, str(out_path)))
+
+    manifest_path = predictions_dir / "predictions_manifest.csv"
+    _write_manifest(manifest_path, manifest_rows)
+    LOG.info("Manifest written to %s", manifest_path)
+    LOG.info("Retrieval complete: %d files in %s", done, predictions_dir)
+
+
 def prepml_predict(
     *,
     checkpoint: str,
@@ -345,6 +426,7 @@ def prepml_predict(
     _wait_for_prepml(resolved_expver)
 
     # 5. Retrieve from MARS and assemble predictions_*.nc
+    #    This runs as a batch job (needs ~16G for earthkit MARS retrieval).
     predictions_dir = output_dir / "predictions"
     predictions_dir.mkdir(parents=True, exist_ok=True)
 
@@ -353,41 +435,55 @@ def prepml_predict(
     members = predict_cfg["members"]
     output_mars = prepml_cfg["output"]
     bundle_dir = predict_cfg.get("input_root", "")
-    # Bundle filename template from prepare section or auto-discover
     bundle_filename_tpl = lane_config.get("prepare", {}).get("bundle_filename_tpl", "")
     if not bundle_filename_tpl and bundle_dir:
-        # Auto-discover from first bundle file in directory
         bundle_filename_tpl = _discover_bundle_template(Path(bundle_dir))
 
-    manifest_rows: list[tuple[str, int, int, str]] = []
-    total = len(dates) * len(steps)
-    done = 0
+    retrieve_config = {
+        "expver": resolved_expver,
+        "dates": dates,
+        "steps": steps,
+        "members": members,
+        "output_mars": output_mars,
+        "weather_states": weather_states,
+        "bundle_dir": str(bundle_dir),
+        "bundle_filename_tpl": bundle_filename_tpl,
+        "predictions_dir": str(predictions_dir),
+    }
+    retrieve_config_path = output_dir / "retrieve_config.json"
+    retrieve_config_path.write_text(json.dumps(retrieve_config, indent=2) + "\n")
 
-    for date in dates:
-        for step in steps:
-            out_path = assemble_predictions_file(
-                expver=resolved_expver,
-                date=date,
-                step=step,
-                members=members,
-                output_mars=output_mars,
-                weather_states=weather_states,
-                bundle_dir=bundle_dir,
-                bundle_filename_tpl=bundle_filename_tpl,
-                output_dir=predictions_dir,
-            )
-            done += 1
-            LOG.info("[%d/%d] %s", done, total, out_path)
-            for member in members:
-                manifest_rows.append((date, step, member, str(out_path)))
+    retrieve_script = _generate_retrieve_script(
+        retrieve_config_path, output_dir, host_config,
+    )
+    LOG.info("Submitting MARS retrieval batch job: %s", retrieve_script)
+    result = subprocess.run(
+        ["sbatch", "--wait", str(retrieve_script)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"MARS retrieval batch job failed (exit {result.returncode}). "
+            f"Check logs at {output_dir}/retrieve_*.out"
+        )
+    LOG.info("MARS retrieval batch job completed")
 
-    # 6. Write manifest and provenance
-    manifest_path = predictions_dir / "predictions_manifest.csv"
-    _write_manifest(manifest_path, manifest_rows)
-    LOG.info("Manifest written to %s", manifest_path)
-
+    # 6. Write provenance
     _write_provenance(
         output_dir, resolved_expver, prepml_config_path,
         checkpoint, weather_states,
     )
     LOG.info("PrepML predict complete. Predictions in %s", predictions_dir)
+
+
+if __name__ == "__main__":
+    import argparse as _ap
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+    _parser = _ap.ArgumentParser()
+    _parser.add_argument("--retrieve", required=True, help="Path to retrieve_config.json")
+    _args = _parser.parse_args()
+    run_retrieval(_args.retrieve)
