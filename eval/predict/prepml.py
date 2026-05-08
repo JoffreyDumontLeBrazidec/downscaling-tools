@@ -217,30 +217,54 @@ def _wait_for_prepml(
 
     from prepml.utils.ecflow_client import EcflowClient
 
+    import time as _time
+
     owner = getuser()
-    client = EcflowClient(owner, expver, verbose=True)
-    state = client.state()
-    LOG.info("PrepML ecFlow state for expver=%s: %s", expver, state)
+    client = EcflowClient(owner, expver, verbose=False)
 
-    if state == "complete":
-        LOG.info("PrepML suite already complete for expver=%s", expver)
-        return
+    # Wait for ecFlow node to appear (may not exist immediately after push)
+    elapsed = 0
+    while elapsed < timeout:
+        state = client.state()
+        LOG.info("PrepML ecFlow state for expver=%s: %s (elapsed=%ds)", expver, state, elapsed)
 
-    if state in ("aborted",):
-        raise RuntimeError(
-            f"PrepML suite aborted for expver={expver}. "
-            f"Check ecFlow logs at ~/prepml/{expver}/"
-        )
+        if state == "complete":
+            LOG.info("PrepML suite completed for expver=%s", expver)
+            return
+        if state == "aborted":
+            raise RuntimeError(
+                f"PrepML suite aborted for expver={expver}. "
+                f"Check ecFlow logs at ~/prepml/{expver}/"
+            )
+        if state is not None and state not in ("unknown",):
+            # Node exists and is running — switch to ecFlow client polling
+            break
 
-    LOG.info("Waiting for PrepML suite to complete (timeout=%ds)...", timeout)
-    try:
-        client.wait("complete", timeout=timeout)
-    except TimeoutError as exc:
-        raise RuntimeError(
-            f"PrepML suite timed out after {timeout}s for expver={expver}."
-        ) from exc
+        _time.sleep(10)
+        elapsed += 10
 
-    LOG.info("PrepML suite completed for expver=%s", expver)
+    LOG.info("Waiting for PrepML suite to complete (timeout=%ds)...", timeout - elapsed)
+    remaining = timeout - elapsed
+    poll_elapsed = 0
+    while poll_elapsed < remaining:
+        state = client.state()
+        LOG.info("PrepML status: %s (elapsed=%ds)", state, elapsed + poll_elapsed)
+
+        if state == "complete":
+            LOG.info("PrepML suite completed for expver=%s", expver)
+            return
+        if state == "aborted":
+            raise RuntimeError(
+                f"PrepML suite aborted for expver={expver}. "
+                f"Check ecFlow logs at ~/prepml/{expver}/"
+            )
+
+        _time.sleep(30)
+        poll_elapsed += 30
+
+    raise RuntimeError(
+        f"PrepML suite timed out after {timeout}s for expver={expver}."
+    )
 
 
 def _write_provenance(
