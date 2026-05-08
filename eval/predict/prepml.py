@@ -207,48 +207,27 @@ def _wait_for_prepml(
         expver: experiment version to monitor
         timeout: max seconds to wait (default 12 hours)
     """
-    import sys
-    from getpass import getuser
-
-    # Import from prepml's own Python environment
-    prepml_python_path = "/usr/local/apps/prepml/0.99/env/lib/python3.11/site-packages"
-    if prepml_python_path not in sys.path:
-        sys.path.insert(0, prepml_python_path)
-
-    from prepml.utils.ecflow_client import EcflowClient
-
     import time as _time
 
-    owner = getuser()
-    client = EcflowClient(owner, expver, verbose=False)
-
-    # Wait for ecFlow node to appear (may not exist immediately after push)
     elapsed = 0
     while elapsed < timeout:
-        state = client.state()
-        LOG.info("PrepML ecFlow state for expver=%s: %s (elapsed=%ds)", expver, state, elapsed)
+        # Use prepml CLI for status — the Python EcflowClient doesn't work
+        # reliably from non-prepml venvs.
+        result = subprocess.run(
+            [PREPML_BIN, "--quiet", "status", "--expver", expver],
+            capture_output=True, text=True,
+        )
+        # Extract the last word from output (e.g., "active", "complete", "aborted")
+        lines = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+        state = lines[-1] if lines else None
+        # prepml status outputs "family j5d7 # state:active ..." in verbose
+        # or just "active" in quiet mode
+        if state and "state:" in state:
+            import re as _re
+            m = _re.search(r"state:(\w+)", state)
+            state = m.group(1) if m else state
 
-        if state == "complete":
-            LOG.info("PrepML suite completed for expver=%s", expver)
-            return
-        if state == "aborted":
-            raise RuntimeError(
-                f"PrepML suite aborted for expver={expver}. "
-                f"Check ecFlow logs at ~/prepml/{expver}/"
-            )
-        if state is not None and state not in ("unknown",):
-            # Node exists and is running — switch to ecFlow client polling
-            break
-
-        _time.sleep(10)
-        elapsed += 10
-
-    LOG.info("Waiting for PrepML suite to complete (timeout=%ds)...", timeout - elapsed)
-    remaining = timeout - elapsed
-    poll_elapsed = 0
-    while poll_elapsed < remaining:
-        state = client.state()
-        LOG.info("PrepML status: %s (elapsed=%ds)", state, elapsed + poll_elapsed)
+        LOG.info("PrepML status (expver=%s, elapsed=%ds): %s", expver, elapsed, state)
 
         if state == "complete":
             LOG.info("PrepML suite completed for expver=%s", expver)
@@ -260,7 +239,7 @@ def _wait_for_prepml(
             )
 
         _time.sleep(30)
-        poll_elapsed += 30
+        elapsed += 30
 
     raise RuntimeError(
         f"PrepML suite timed out after {timeout}s for expver={expver}."
