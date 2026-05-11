@@ -48,17 +48,23 @@ def ensure_x_interp_for_plotting(
             return ensure_member_zero_plot_variables(ds)
 
         interpolator = CheckpointResidualInterpolator(resolved_checkpoint)
-        interpolated = interpolator.interpolate(np.asarray(ds["x"].values))
+        x_da = ds["x"]
+        x_np = np.asarray(x_da.values, dtype=np.float32)
+        # Interpolator expects (grid_point_lres, features); transpose if needed.
+        ws_first = "weather_state" in x_da.dims and x_da.dims.index("weather_state") == 0
+        if ws_first:
+            x_np = x_np.T  # (weather_state, grid_point_lres) → (grid_point_lres, weather_state)
+        interpolated = interpolator.interpolate(x_np)  # → (grid_point_hres, weather_state)
+        if ws_first:
+            interpolated = interpolated.T  # → (weather_state, grid_point_hres)
+        ws_coord = x_da.coords.get("weather_state", ds.coords.get("weather_state"))
         x_interp = xr.DataArray(
             interpolated.astype(np.float32),
-            dims=ds["y_pred"].dims,
-            coords={dim: ds.coords[dim] for dim in ds["y_pred"].dims if dim in ds.coords},
-            attrs=dict(ds["y_pred"].attrs),
+            dims=("weather_state", "grid_point_hres"),
+            coords={"weather_state": ws_coord} if ws_coord is not None else {},
             name="x_interp",
         )
-        if "lon" not in x_interp.attrs and "lon_hres" in ds.coords:
-            x_interp.attrs["lon"] = "lon_hres"
-        if "lat" not in x_interp.attrs and "lat_hres" in ds.coords:
-            x_interp.attrs["lat"] = "lat_hres"
+        x_interp.attrs["lon"] = "lon_hres"
+        x_interp.attrs["lat"] = "lat_hres"
         ds = ds.assign(x_interp=x_interp)
     return ensure_member_zero_plot_variables(ds)

@@ -26,8 +26,9 @@ tc:
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
   grib_dir: "/home/ecm5702/perm/reference/o96_o320/tc"
   analysis_expid: "OPER_O320_0001"
+  extreme_reference_expid: "ENFO_O320_0001"
   reference_expids: ["EEFO_O96_0001", "ENFO_O320_0001"]
-  support_mode: "regridded"
+  support_mode: "both"
   member_maps:
     enabled: true
     event_dates:
@@ -40,6 +41,8 @@ tc:
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
+  nside: 187
+  lmax: 374
   steps: [120]
   truth_cache_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_proxy"
 
@@ -49,6 +52,9 @@ spectra_ecmwf:
   reference_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf"
   steps: [120]
   members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 
 surface:
   weighting: "truth-std"
@@ -94,14 +100,14 @@ resource_profiles:
     mem: 128G
   evaluate_tc:
     time: "06:00:00"
-    mem: 256G
+    mem: 128G
     cpus: 4
   evaluate_spectra:
     time: "08:00:00"
     mem: 128G
   evaluate_region_plot:
     time: "06:00:00"
-    mem: 256G
+    mem: 128G
     cpus: 8
   evaluate_sigma:
     gpus: 1
@@ -114,7 +120,7 @@ resource_profiles:
     cpus: 1
 
 prepml:
-  debug_expvers: ["TBD_CREATE_1", "TBD_CREATE_2"]
+  debug_expvers: ["j5d7"]
   runner: anemoi-dev
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
   input:

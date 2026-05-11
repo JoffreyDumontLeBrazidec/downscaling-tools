@@ -170,6 +170,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow re-running over existing evaluator outputs.",
     )
     p_eval.add_argument(
+        "--plot-only", action="store_true", default=False,
+        help="Skip run() and score(); only re-render plot() against existing results_dir. "
+             "Useful for cheap re-plot after fixing plotting code (e.g. intermediate states).",
+    )
+    p_eval.add_argument(
+        "--output-dir", default=None,
+        help="Override output directory (defaults to <scratch>/eval/<lane>/run_<TS>). "
+             "Use this with --plot-only to target an existing run directory.",
+    )
+    p_eval.add_argument(
         "--run-label", default="",
         help="Short display label for this run (used in TC/plot legends). "
              "Overrides the automatic fallback from the predictions directory name.",
@@ -409,6 +419,11 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     if bundle_pairs:
         cmd += ["--bundle-pairs", str(bundle_pairs)]
 
+    # Pass sampler config from lane YAML if present, overriding predict.main defaults
+    sampler_cfg = predict_cfg.get("sampler")
+    if sampler_cfg:
+        cmd += ["--extra-args-json", json.dumps(sampler_cfg)]
+
     LOG.info("Running predictions: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
     LOG.info("Predictions written to %s", predictions_dir)
@@ -421,6 +436,7 @@ def _run_evaluators(
     output_dir: Path,
     *,
     overwrite: bool = False,
+    plot_only: bool = False,
     checkpoint: str | None = None,
     run_label: str = "",
 ) -> list[str]:
@@ -459,27 +475,36 @@ def _run_evaluators(
 
         # Determine results directory
         results_dir = output_dir / "evaluators" / name
-
-        # Check overwrite guard
-        if results_dir.exists() and not overwrite:
-            LOG.warning(
-                "Evaluator '%s' output already exists at %s. "
-                "Use --overwrite to re-run. Skipping.",
-                name, results_dir,
-            )
-            continue
-
-        if results_dir.exists() and overwrite:
-            import shutil
-            shutil.rmtree(results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
         eval_config = lane_config.get(name, {})
 
-        LOG.info("Running evaluator: %s", name)
+        if plot_only:
+            if not results_dir.exists():
+                LOG.warning(
+                    "Evaluator '%s' --plot-only: results_dir does not exist (%s). Skipping.",
+                    name, results_dir,
+                )
+                continue
+            LOG.info("Re-plotting evaluator (plot-only): %s", name)
+        else:
+            # Check overwrite guard
+            if results_dir.exists() and not overwrite:
+                LOG.warning(
+                    "Evaluator '%s' output already exists at %s. "
+                    "Use --overwrite to re-run. Skipping.",
+                    name, results_dir,
+                )
+                continue
 
-        # Run
+            if results_dir.exists() and overwrite:
+                import shutil
+                shutil.rmtree(results_dir)
+            results_dir.mkdir(parents=True, exist_ok=True)
+
+            LOG.info("Running evaluator: %s", name)
+
+        # Run (skipped in plot-only mode)
         run_fn = getattr(mod, "run", None)
-        if run_fn is not None:
+        if run_fn is not None and not plot_only:
             try:
                 run_fn(
                     predictions_dir, lane_config, eval_config,
@@ -706,8 +731,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.subcommand == "scoreboard" and hasattr(args, "eval_dir") and args.eval_dir:
         output_dir = Path(args.eval_dir)
     elif args.subcommand == "evaluate" and hasattr(args, "predictions_dir") and args.predictions_dir:
-        # Place evaluator outputs alongside predictions
-        output_dir = Path(args.predictions_dir).parent
+        # Place evaluator outputs alongside predictions, unless --output-dir overrides
+        explicit_out = getattr(args, "output_dir", None)
+        output_dir = Path(explicit_out) if explicit_out else Path(args.predictions_dir).parent
     elif args.subcommand == "prepare":
         bundle_dir_arg = getattr(args, "bundle_dir", None)
         output_dir = Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)
@@ -766,6 +792,7 @@ def main(argv: list[str] | None = None) -> None:
         evaluators_run = _run_evaluators(
             predictions_dir, lane_config, evaluators, output_dir,
             overwrite=getattr(args, "overwrite", False),
+            plot_only=getattr(args, "plot_only", False),
             checkpoint=getattr(args, "checkpoint", None),
             run_label=getattr(args, "run_label", ""),
         )

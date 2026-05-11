@@ -61,6 +61,7 @@ def score(
         stats_path,
         run_id=run_id,
         event_names=event_names,
+        extreme_reference_expid=eval_config.get("extreme_reference_expid"),
     )
 
     records: list[dict[str, Any]] = []
@@ -78,6 +79,13 @@ def score(
                 "value": scores[enfo_dev_key],
                 "unit": "deviation",
             })
+        enfo_match_key = f"{event_name}_enfo_match"
+        if enfo_match_key in scores:
+            records.append({
+                "metric": f"tc_{event_name}_enfo_match",
+                "value": scores[enfo_match_key],
+                "unit": "score_0_1",
+            })
 
     # Compute aggregate TC score (mean of per-event extreme scores)
     event_scores = [r["value"] for r in records if r["metric"].endswith("_extreme_score")]
@@ -85,6 +93,18 @@ def score(
         records.append({
             "metric": "tc_mean_extreme_score",
             "value": sum(event_scores) / len(event_scores),
+            "unit": "score_0_1",
+        })
+
+    # Compute aggregate ENFO match (mean of per-event ENFO match scores)
+    match_scores = [
+        r["value"] for r in records
+        if r["metric"].endswith("_enfo_match") and r["metric"] != "tc_mean_enfo_match"
+    ]
+    if match_scores:
+        records.append({
+            "metric": "tc_mean_enfo_match",
+            "value": sum(match_scores) / len(match_scores),
             "unit": "score_0_1",
         })
 

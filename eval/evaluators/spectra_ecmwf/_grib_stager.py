@@ -15,6 +15,8 @@ from eccodes import (
     codes_get_array,
     codes_grib_new_from_file,
     codes_release,
+    codes_set_long,
+    codes_set_string,
     codes_set_values,
     codes_write,
 )
@@ -90,6 +92,39 @@ def first_template_path(template_root: Path, dir_name: str) -> Path:
     if not candidates:
         raise FileNotFoundError(f"No *_nopoles.grb templates found in {template_root / dir_name}")
     return candidates[0]
+
+
+def resolve_or_synthesize_template(
+    template_root: Path,
+    dir_name: str,
+    short_name: str,
+    level: int | None,
+) -> Path:
+    var_dir = template_root / dir_name
+    existing = sorted(var_dir.glob("*_nopoles.grb"))
+    if existing:
+        return existing[0]
+    seed = next(iter(sorted(template_root.glob("*/*_nopoles.grb"))), None)
+    if seed is None:
+        raise FileNotFoundError(
+            f"No *_nopoles.grb templates anywhere under {template_root} to synthesize from"
+        )
+    var_dir.mkdir(parents=True, exist_ok=True)
+    out_path = var_dir / "auto_synth_template_nopoles.grb"
+    with seed.open("rb") as handle:
+        gid = codes_grib_new_from_file(handle)
+        if gid is None:
+            raise RuntimeError(f"Could not read seed template {seed}")
+        clone = codes_clone(gid)
+        codes_release(gid)
+    try:
+        codes_set_string(clone, "shortName", short_name)
+        codes_set_long(clone, "level", level if level is not None else 0)
+        with out_path.open("wb") as handle:
+            codes_write(clone, handle)
+    finally:
+        codes_release(clone)
+    return out_path
 
 
 def read_template_grid(template_path: Path) -> tuple[np.ndarray, np.ndarray, float]:
@@ -202,7 +237,12 @@ def main() -> None:
     pred_files = discover_prediction_files(pred_dir)
     if template_grib_root is None:
         template_paths = {
-            state: first_template_path(template_root, VARIABLE_CONFIGS[state].dir_name)
+            state: resolve_or_synthesize_template(
+                template_root,
+                VARIABLE_CONFIGS[state].dir_name,
+                short_name="t" if state == "t_850" else "z" if state == "z_500" else state,
+                level=850 if state == "t_850" else 500 if state == "z_500" else None,
+            )
             for state in requested_states
         }
     else:
@@ -277,6 +317,7 @@ def main() -> None:
                     arr = np.asarray(sel.values,
                         dtype=np.float64,
                     )
+                    arr = arr.squeeze()
                     out_path = out_dir / cfg.dir_name / f"1_{ymd}_{step}_{member_id}_nopoles.grb"
                     if template_grib_root is None:
                         assert pole_mask is not None

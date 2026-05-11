@@ -213,6 +213,8 @@ def build_pdf_ecmwf_with_references(
     *,
     truth_amp_dir: Path | None = None,
     input_amp_dir: Path | None = None,
+    truth_label: str = "truth",
+    input_label: str = "input",
 ) -> int:
     """Build PDF with prediction + optional truth/input reference curves."""
     param_dirs = sorted(
@@ -249,7 +251,7 @@ def build_pdf_ecmwf_with_references(
                 if ref is not None:
                     rwvn, rampl = ref
                     rmask = rwvn > 0
-                    ax.loglog(rwvn[rmask], rampl[rmask], label="truth (IEKM)", color="tab:orange", linestyle="--", linewidth=2)
+                    ax.loglog(rwvn[rmask], rampl[rmask], label=f"truth ({truth_label})", color="tab:orange", linestyle="--", linewidth=2)
 
             # Input reference
             if input_amp_dir:
@@ -257,7 +259,7 @@ def build_pdf_ecmwf_with_references(
                 if ref is not None:
                     rwvn, rampl = ref
                     rmask = rwvn > 0
-                    ax.loglog(rwvn[rmask], rampl[rmask], label="input (interp)", color="#888888", linestyle="--", linewidth=2)
+                    ax.loglog(rwvn[rmask], rampl[rmask], label=f"input ({input_label})", color="#888888", linestyle="--", linewidth=2)
 
             # Prediction
             ax.loglog(wvn[mask], pred_mean[mask], label="prediction", color="tab:blue", linewidth=2)

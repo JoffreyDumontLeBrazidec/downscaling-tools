@@ -76,6 +76,7 @@ def load_tc_extreme_scores_from_json(
     event_names: tuple[str, ...] | list[str] | None = None,
     canonical_analysis_by_event: dict[str, dict[str, Any]] | None = None,
     canonical_eefo_by_event: dict[str, dict[str, Any]] | None = None,
+    extreme_reference_expid: str | None = None,
 ) -> dict[str, float]:
     requested = tuple(event_names or ("idalia", "franklin"))
     result = _canonical_load_tc_extreme_scores_from_json(
@@ -84,6 +85,7 @@ def load_tc_extreme_scores_from_json(
         event_names=requested,
         canonical_analysis_by_event=canonical_analysis_by_event,
         canonical_eefo_by_event=canonical_eefo_by_event,
+        extreme_reference_expid=extreme_reference_expid,
     )
     missing = [event for event in requested if event not in result]
     if missing and canonical_analysis_by_event is None and canonical_eefo_by_event is None:
@@ -93,6 +95,7 @@ def load_tc_extreme_scores_from_json(
             event_names=missing,
             canonical_analysis_by_event={},
             canonical_eefo_by_event={},
+            extreme_reference_expid=extreme_reference_expid,
         )
         result.update(fallback)
     return result

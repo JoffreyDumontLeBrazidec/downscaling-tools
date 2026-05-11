@@ -6,13 +6,25 @@ import os
 from pathlib import Path
 from typing import Iterable, Sequence
 
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
 import torch
 import xarray as xr
 
-from eval._backends.region_plotting.local_plotting import get_region_ds
+
+def _ensure_plot_libs():
+    """Lazy-load matplotlib + region_plotting so --output-nc-only works without them.
+
+    Bare-name lookups inside this module skip __getattr__, so we explicitly
+    populate module globals on first plotting call.
+    """
+    if "plt" in globals():
+        return
+    import matplotlib.pyplot as _plt
+    import matplotlib.ticker as _ticker
+    from eval._backends.region_plotting.local_plotting import get_region_ds as _get_region_ds
+    globals()["plt"] = _plt
+    globals()["ticker"] = _ticker
+    globals()["get_region_ds"] = _get_region_ds
 from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.predict import (
@@ -763,7 +775,9 @@ def plot_intermediate_trajectory(
     panel_scale_mode: str = "percentile",
     dpi: int = 320,
     hide_coordinates: bool = True,
-) -> Path:
+    return_fig: bool = False,
+):
+    _ensure_plot_libs()
     if "inter_state" not in ds.variables:
         raise ValueError("Dataset does not contain 'inter_state'.")
     if weather_state not in ds.weather_state.values:
@@ -1138,6 +1152,9 @@ def plot_intermediate_trajectory(
     )
     fig.subplots_adjust(left=0.035, right=0.995, bottom=0.045, top=0.92, wspace=0.24, hspace=0.32)
 
+    if return_fig:
+        return fig
+
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=max(120, int(dpi)), bbox_inches="tight")
@@ -1212,6 +1229,222 @@ def plot_intermediate_trajectory(
     return out
 
 
+def select_steps_from_half(available_steps, n: int = 5) -> list[int]:
+    """Pick `n` captured sampling_steps from approximately the second half of the trajectory.
+
+    Step ordering convention in the netCDF: step 0 = noise, step max = clean prediction.
+    "Begin at step = 1/2 max_steps": first selected step is the smallest captured step
+    that is >= max/2; we then keep all captured steps >= max/2 and prepend the nearest
+    captured below if needed to reach `n`.
+    """
+    steps = sorted(int(s) for s in available_steps)
+    if len(steps) <= n:
+        return steps
+    max_step = steps[-1]
+    half = max_step / 2.0
+    second_half = [s for s in steps if s >= half]
+    if len(second_half) >= n:
+        idxs = np.linspace(0, len(second_half) - 1, n).astype(int)
+        return [second_half[int(i)] for i in sorted(set(idxs.tolist()))]
+    needed = n - len(second_half)
+    first_half = [s for s in steps if s < half]
+    return first_half[-needed:] + second_half
+
+
+_UNIT_TRANSFORMS = {
+    # state -> (scale, offset, label)
+    "msl": (0.01, 0.0, "hPa"),
+    "sp": (0.01, 0.0, "hPa"),
+    "2t": (1.0, -273.15, "°C"),
+    "2d": (1.0, -273.15, "°C"),
+    "skt": (1.0, -273.15, "°C"),
+    "tcw": (1.0, 0.0, "kg m⁻²"),
+    "tcwv": (1.0, 0.0, "kg m⁻²"),
+    "10u": (1.0, 0.0, "m s⁻¹"),
+    "10v": (1.0, 0.0, "m s⁻¹"),
+    "u_850": (1.0, 0.0, "m s⁻¹"),
+    "v_850": (1.0, 0.0, "m s⁻¹"),
+    "z_500": (1.0, 0.0, "m² s⁻²"),
+}
+
+
+def _to_display_units(weather_state: str, values):
+    scale, offset, label = _UNIT_TRANSFORMS.get(weather_state, (1.0, 0.0, ""))
+    return values * scale + offset, label
+
+
+def _approx_sigma(step: int, max_step: int) -> float | None:
+    """Approximate sigma at a sampling step under the experimental_piecewise schedule.
+
+    Real schedule has high (exponential, sigma_max→sigma_transition) for first 10 steps,
+    then low (karras, sigma_transition→sigma_min) for next 20. Here we just need a
+    visual hint, not exact values, so use a log-linear interpolation of the standard
+    schedule used by the o96_o320 runs (sigma_max=1000, sigma_min=0.03, 30 steps).
+    """
+    import math
+    if max_step <= 0:
+        return None
+    sigma_max, sigma_min = 1000.0, 0.03
+    if step >= max_step:
+        return 0.0
+    frac = step / max_step
+    return sigma_max * (sigma_min / sigma_max) ** frac
+
+
+def plot_intermediate_region_grid(
+    *,
+    ds: xr.Dataset,
+    region_name: str,
+    region_box: list[float],
+    weather_states: list[str],
+    sampling_steps: list[int],
+    sample: int = 0,
+    member: int = 0,
+    suptitle_extra: str = "",
+    dpi: int = 220,
+):
+    """Render a single page: rows=weather_states, cols=sampling_steps + y (truth).
+
+    One page per region. Layout matches the all_regions_plots.pdf aesthetic:
+      - scatter on the irregular hres grid
+      - per-row vmin/vmax shared from y_pred percentiles (so noise panels saturate
+        and the clean panels show real structure with proper contrast)
+      - per-cell colorbar with units
+      - viridis cmap, integer-degree axis labels, Coastlines overlay
+      - last column is the ground truth `y` for visual comparison
+      - K → °C unit conversion for temperature states; Pa → hPa for pressure
+    """
+    _ensure_plot_libs()
+    from anemoi.training.diagnostics.maps import Coastlines  # type: ignore
+    coast = Coastlines()
+
+    n_rows = len(weather_states)
+    n_cols = len(sampling_steps) + 1  # +1 for the truth column
+    if n_rows == 0:
+        raise ValueError("plot_intermediate_region_grid: no weather_states")
+
+    if "ensemble_member" in ds.dims:
+        ds_sel = ds.isel(sample=sample, ensemble_member=member)
+    else:
+        ds_sel = ds.isel(sample=sample)
+
+    lat_full = np.asarray(ds["lat_hres"].values)
+    lon_full = np.asarray(ds["lon_hres"].values)
+    # Normalize lon to the convention of the region box. Region boxes use
+    # [-180, 180] (negative-west convention); some lanes' NCs store [0, 360].
+    lon_full_norm = np.where(lon_full > 180.0, lon_full - 360.0, lon_full)
+    mask = (
+        (lat_full >= region_box[0])
+        & (lat_full <= region_box[1])
+        & (lon_full_norm >= region_box[2])
+        & (lon_full_norm <= region_box[3])
+    )
+    if not mask.any():
+        raise ValueError(
+            f"No grid points in region {region_name} {region_box} "
+            f"(lon range in NC: [{lon_full.min():.1f}, {lon_full.max():.1f}], "
+            f"lat range: [{lat_full.min():.1f}, {lat_full.max():.1f}])"
+        )
+    lat_r = lat_full[mask]
+    lon_r = lon_full_norm[mask]
+    point_size = max(2.5, 90_000.0 / mask.sum())
+    max_step = int(max(sampling_steps))
+
+    fig, axs = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * 4.2, n_rows * 3.4),
+    )
+    if n_rows == 1 and n_cols == 1:
+        axs = np.array([[axs]])
+    elif n_rows == 1:
+        axs = axs.reshape(1, -1)
+    elif n_cols == 1:
+        axs = axs.reshape(-1, 1)
+
+    def _style_ax(ax, region_box):
+        ax.set_xlim(region_box[2], region_box[3])
+        ax.set_ylim(region_box[0], region_box[1])
+        ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
+        ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
+        ax.tick_params(axis="both", which="major", labelsize=10)
+        coast.plot_continents(ax)
+        ax.set_aspect("auto")
+        ax.grid(False)
+        ax.patch.set_edgecolor("black")
+        ax.patch.set_linewidth(2)
+
+    def _add_cbar(sc, ax, unit_label: str):
+        cbar = plt.colorbar(sc, ax=ax, orientation="vertical", pad=0.025, fraction=0.046)
+        cbar.outline.set_edgecolor("black")
+        cbar.outline.set_linewidth(1.0)
+        cbar.ax.tick_params(labelsize=9)
+        if unit_label:
+            cbar.set_label(unit_label, fontsize=10)
+        return cbar
+
+    def _panel_vrange(values):
+        """Per-panel p1/p99 — noisy steps will show their true large range."""
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return 0.0, 1.0
+        vmin = float(np.percentile(finite, 1))
+        vmax = float(np.percentile(finite, 99))
+        if vmin == vmax:
+            vmax = vmin + 1.0
+        return vmin, vmax
+
+    for i_row, ws in enumerate(weather_states):
+        y_truth_r_raw = np.asarray(ds_sel["y"].sel(weather_state=ws).values)[mask]
+        _, unit_label = _to_display_units(ws, y_truth_r_raw)
+        y_truth_r, _ = _to_display_units(ws, y_truth_r_raw)
+
+        for i_col, step in enumerate(sampling_steps):
+            ax = axs[i_row, i_col]
+            field_raw = np.asarray(
+                ds_sel["inter_state"].sel(sampling_step=int(step), weather_state=ws).values
+            )[mask]
+            field, _ = _to_display_units(ws, field_raw)
+            vmin, vmax = _panel_vrange(field)
+            sc = ax.scatter(
+                lon_r, lat_r, c=field,
+                vmin=vmin, vmax=vmax, cmap="viridis",
+                s=point_size, alpha=1.0, rasterized=True,
+            )
+            _add_cbar(sc, ax, unit_label)
+            sigma = _approx_sigma(int(step), max_step)
+            sigma_part = f" σ≈{sigma:.2g}" if sigma is not None else ""
+            ax.set_title(f"step {int(step)}/{max_step}{sigma_part}", fontsize=11)
+            _style_ax(ax, region_box)
+            if i_col == 0:
+                ax.set_ylabel(f"{ws}\nLat (°)", fontsize=11, fontweight="bold")
+            if i_row == n_rows - 1:
+                ax.set_xlabel("Lon (°)", fontsize=10)
+
+        ax_y = axs[i_row, n_cols - 1]
+        vmin_y, vmax_y = _panel_vrange(y_truth_r)
+        sc_y = ax_y.scatter(
+            lon_r, lat_r, c=y_truth_r,
+            vmin=vmin_y, vmax=vmax_y, cmap="viridis",
+            s=point_size, alpha=1.0, rasterized=True,
+        )
+        _add_cbar(sc_y, ax_y, unit_label)
+        ax_y.set_title("truth (y)", fontsize=11, fontweight="bold")
+        _style_ax(ax_y, region_box)
+        if i_row == n_rows - 1:
+            ax_y.set_xlabel("Lon (°)", fontsize=10)
+
+    suptitle = (
+        f"Diffusion intermediate states  |  region={region_name}  "
+        f"(lat {region_box[0]:g}°..{region_box[1]:g}°,  lon {region_box[2]:g}°..{region_box[3]:g}°)"
+    )
+    if suptitle_extra:
+        suptitle += f"\n{suptitle_extra}"
+    fig.suptitle(suptitle, y=0.995, fontsize=13, fontweight="bold")
+    fig.subplots_adjust(left=0.045, right=0.985, bottom=0.04, top=0.93, wspace=0.3, hspace=0.32)
+    fig.set_dpi(dpi)
+    return fig
+
+
 def _load_dataset(args: argparse.Namespace) -> xr.Dataset:
     if args.cmd == "checkpoint":
         ds = _build_intermediate_dataset_from_checkpoint(args)
@@ -1259,6 +1492,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--include-init-state",
         action="store_true",
         help="Include pre-denoising initialization state as sampling_step=-1.",
+    )
+    p_ckpt.add_argument(
+        "--output-nc-only",
+        action="store_true",
+        help="Stop after writing --save-intermediate-nc; skip plotting (for split compute/plot hosts).",
     )
 
     p_ds = sub.add_parser("dataset", help="Plot intermediates from an existing dataset with inter_state.")
@@ -1341,7 +1579,7 @@ def _build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Show longitude/latitude ticks and labels (default hides them for readability).",
         )
-        p.add_argument("--out", required=True, help="Output image path (png/pdf).")
+        p.add_argument("--out", default="", help="Output image path (png/pdf). Required unless --output-nc-only.")
 
     return parser
 
@@ -1350,7 +1588,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    nc_only = bool(getattr(args, "output_nc_only", False))
+    if nc_only:
+        if args.cmd != "checkpoint":
+            parser.error("--output-nc-only is only valid for the 'checkpoint' subcommand.")
+        if not str(getattr(args, "save_intermediate_nc", "")).strip():
+            parser.error("--output-nc-only requires --save-intermediate-nc to be set.")
+    elif not str(getattr(args, "out", "")).strip():
+        parser.error("--out is required (or pass --output-nc-only in checkpoint mode).")
+
     ds = _load_dataset(args)
+    if nc_only:
+        return
     steps = _parse_steps_csv(args.steps)
 
     out = plot_intermediate_trajectory(

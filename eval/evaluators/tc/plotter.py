@@ -13,7 +13,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from eval._backends.tc.events import EVENTS
-from eval._backends.tc.pdf_plot import plot_pdf_ratios
+from eval._backends.tc.pdf_plot import plot_pdf_log, plot_pdf_ratios
+from dataclasses import replace
+
 from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
 
 LOG = logging.getLogger(__name__)
@@ -49,14 +51,21 @@ def plot(
         LOG.warning("No event data in %s", stats_path)
         return plots_dir
 
-    pdf_path = plots_dir / "tc_pdfs.pdf"
+    pdf_path = plots_dir / "all_tc_distributions.pdf"
     with PdfPages(pdf_path) as pdf:
-        for event_name, event_stats in events_data.items():
+        for event_key, event_stats in events_data.items():
             if event_stats.get("prediction_only"):
-                LOG.info("Skipping plot for prediction-only event=%s", event_name)
+                LOG.info("Skipping plot for prediction-only event=%s", event_key)
                 continue
 
-            plot_cfg = resolve_plot_config(event_name, eval_config)
+            # Use base event name for config lookup (strip __native etc.)
+            base_event = event_stats.get("event", event_key)
+            mode = event_stats.get("support_mode", "")
+            mode_suffix = f" [{mode}]" if mode else ""
+
+            plot_cfg = resolve_plot_config(base_event, eval_config)
+            # Override title with mode annotation
+            plot_cfg = replace(plot_cfg, plot_title=plot_cfg.plot_title + mode_suffix)
 
             fig = plot_pdf_ratios(
                 plot_cfg,
@@ -64,7 +73,14 @@ def plot(
             )
             pdf.savefig(fig, dpi=300)
             plt.close(fig)
-            LOG.info("Plotted TC PDF ratio for event=%s", event_name)
 
-    LOG.info("TC plots written to %s", plots_dir)
+            fig_log = plot_pdf_log(
+                plot_cfg,
+                event_stats=event_stats,
+            )
+            pdf.savefig(fig_log, dpi=300)
+            plt.close(fig_log)
+            LOG.info("Plotted TC ratio + log for event=%s mode=%s", base_event, mode)
+
+    LOG.info("TC plots written to %s", pdf_path)
     return plots_dir

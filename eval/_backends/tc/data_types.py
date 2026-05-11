@@ -6,7 +6,7 @@ from typing import Literal
 
 import numpy as np
 
-SupportMode = Literal["native", "regridded"]
+SupportMode = Literal["native", "regridded", "both"]
 FORECAST_STEP_COUNT = 5
 
 

@@ -23,6 +23,7 @@ def run(
     *,
     output_dir: str | Path | None = None,
     overwrite: bool = False,
+    checkpoint: str | None = None,
     **kwargs,
 ) -> Path:
     """Run region plotting by subprocessing into plot_regions."""
@@ -50,6 +51,8 @@ def run(
             lane_boxes.update(group)
     if lane_boxes:
         cmd += ["--region-boxes-json", json.dumps(lane_boxes)]
+    if checkpoint:
+        cmd += ["--checkpoint", str(checkpoint)]
 
     LOG.info("region_plot subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)

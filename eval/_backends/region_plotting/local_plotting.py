@@ -175,6 +175,9 @@ def plot_x_y(
             da = get_plot_data_array(ds_sample, model_var)
             lon_name = _coord_name_for_array(ds_sample, da, "lon")
             lat_name = _coord_name_for_array(ds_sample, da, "lat")
+            if len(ds_sample[lon_name].values) == 0:
+                axs[i_ax0, i_ax1].axis("off")
+                continue
             if "weather_state" in da.dims:
                 da = da.sel(weather_state=weather_state)
             scatter_params = dict(
@@ -228,9 +231,10 @@ def plot_x_y(
             axs[i_ax0, i_ax1].grid(False)
             axs[i_ax0, i_ax1].patch.set_edgecolor("black")
             axs[i_ax0, i_ax1].patch.set_linewidth(2)
-            cbars[(i_ax0, i_ax1)].outline.set_edgecolor("black")
-            cbars[(i_ax0, i_ax1)].outline.set_linewidth(1.0)
-            cbars[(i_ax0, i_ax1)].ax.tick_params(labelsize=10)
+            if (i_ax0, i_ax1) in cbars:
+                cbars[(i_ax0, i_ax1)].outline.set_edgecolor("black")
+                cbars[(i_ax0, i_ax1)].outline.set_linewidth(1.0)
+                cbars[(i_ax0, i_ax1)].ax.tick_params(labelsize=10)
 
     if title:
         fig.suptitle(title, fontsize=16, y=1.0)

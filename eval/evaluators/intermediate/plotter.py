@@ -1,28 +1,26 @@
-"""Intermediate evaluator — cascade rendering.
+"""Intermediate evaluator — plot-only re-entry from cached netCDF.
 
-Delegates to eval.plot_intermediate for the actual rendering.
-Uses eval.shared.plotting for coastline rendering.
+Used by `eval.cli evaluate --plot-only`. Reads the existing
+`inter_states_<ckpt>.nc` from results_dir and re-renders the consolidated
+multi-page PDF without invoking the GPU compute step.
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
+from .runner import render_only
+
 LOG = logging.getLogger(__name__)
 
 
 def plot(
-    results_dir: str | Path,
+    results_dir,
     lane_config: dict,
     eval_config: dict,
     *,
-    output_dir: str | Path | None = None,
+    output_dir=None,
 ) -> Path:
-    """Generate intermediate step visualizations."""
-    results_dir = Path(results_dir)
-    output_dir = Path(output_dir) if output_dir else results_dir
-    plots_dir = output_dir / "plots"
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    LOG.info("Intermediate plot: results_dir=%s, plots_dir=%s", results_dir, plots_dir)
-    return plots_dir
+    out = Path(output_dir) if output_dir else Path(results_dir)
+    LOG.info("Intermediate plot (re-render): results_dir=%s", out)
+    return render_only(out, lane_config, eval_config)

@@ -197,6 +197,7 @@ def _launch_prepml(
 def _wait_for_prepml(
     expver: str,
     timeout: int = 43200,
+    abort_grace_seconds: int = 90,
 ) -> None:
     """Wait for PrepML ecFlow suite to complete using the prepml Python API.
 
@@ -233,6 +234,16 @@ def _wait_for_prepml(
             LOG.info("PrepML suite completed for expver=%s", expver)
             return
         if state == "aborted":
+            if elapsed < abort_grace_seconds:
+                LOG.warning(
+                    "PrepML status is aborted for expver=%s at elapsed=%ds; "
+                    "continuing briefly in case this is stale state from a reused debug expver.",
+                    expver,
+                    elapsed,
+                )
+                _time.sleep(30)
+                elapsed += 30
+                continue
             raise RuntimeError(
                 f"PrepML suite aborted for expver={expver}. "
                 f"Check ecFlow logs at ~/prepml/{expver}/"

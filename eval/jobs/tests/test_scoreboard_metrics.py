@@ -133,6 +133,112 @@ def test_load_tc_extreme_scores_supports_custom_event_names(tmp_path):
     assert result == {"humberto": pytest.approx(1.0)}
 
 
+def _enfo_match_stats(model_keys: dict[str, float]) -> dict:
+    """Build a minimal TC stats JSON payload for the ENFO match tests."""
+    enfo_keys = {
+        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
+        "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
+    }
+    analysis_keys = {
+        "mslp_p1": 985.0, "mslp_p01": 980.0, "mslp_min": 975.0,
+        "wind_p99": 22.0, "wind_p999": 25.0, "wind_max": 28.0,
+    }
+    return {
+        "events": {
+            "idalia": {
+                "extreme_tail": {
+                    "rows": [
+                        {"exp": "OPER_O320_0001", **analysis_keys},
+                        {"exp": "ENFO_O320_0001", **enfo_keys},
+                        {"exp": "manual_abc12345_new_o96_o320", **model_keys},
+                    ]
+                }
+            },
+        }
+    }
+
+
+def test_enfo_match_perfect(tmp_path):
+    """Model row identical to ENFO row across all 6 keys → enfo_match == 1.0."""
+    enfo_keys = {
+        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
+        "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
+    }
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(json.dumps(_enfo_match_stats(enfo_keys)))
+
+    result = metrics.load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_abc12345_new_o96_o320",
+        extreme_reference_expid="ENFO_O320_0001",
+    )
+
+    assert result["idalia_enfo_match"] == pytest.approx(1.0)
+
+
+def test_enfo_match_undershoot(tmp_path):
+    """Model wind = 0.5x ENFO, MSLP equal → score = 0.75 (mean of group means)."""
+    # Wind ratios all 0.5; MSLP keys all match (depth ratio = 1.0).
+    model_keys = {
+        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
+        "wind_p99": 12.5, "wind_p999": 14.0, "wind_max": 16.0,
+    }
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(json.dumps(_enfo_match_stats(model_keys)))
+
+    result = metrics.load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_abc12345_new_o96_o320",
+        extreme_reference_expid="ENFO_O320_0001",
+    )
+
+    # Wind group: each ratio 0.5 → score 0.5; mean 0.5
+    # MSLP group: each ratio 1.0 → score 1.0; mean 1.0
+    # Combined: (0.5 + 1.0) / 2 = 0.75
+    assert result["idalia_enfo_match"] == pytest.approx(0.75)
+
+
+def test_enfo_match_overshoot_symmetric(tmp_path):
+    """Model wind = 1.5x ENFO, MSLP equal → score = 0.75 (symmetric to undershoot)."""
+    model_keys = {
+        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
+        "wind_p99": 37.5, "wind_p999": 42.0, "wind_max": 48.0,
+    }
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(json.dumps(_enfo_match_stats(model_keys)))
+
+    result = metrics.load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_abc12345_new_o96_o320",
+        extreme_reference_expid="ENFO_O320_0001",
+    )
+
+    # Wind group: each ratio 1.5 → score 0.5; mean 0.5
+    # MSLP group: each ratio 1.0 → score 1.0; mean 1.0
+    # Combined: (0.5 + 1.0) / 2 = 0.75 — same as undershoot case (symmetric)
+    assert result["idalia_enfo_match"] == pytest.approx(0.75)
+
+
+def test_enfo_match_absent_when_extreme_reference_expid_not_passed(tmp_path):
+    """When extreme_reference_expid is None, no enfo_match keys appear in the result."""
+    enfo_keys = {
+        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
+        "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
+    }
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(json.dumps(_enfo_match_stats(enfo_keys)))
+
+    result = metrics.load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_abc12345_new_o96_o320",
+    )
+
+    assert "idalia_enfo_match" not in result
+    # Existing scores still computed
+    assert "idalia" in result
+    assert "idalia_enfo_dev" in result
+
+
 def test_load_spectra_metrics_falls_back_to_raw_surface_fields(tmp_path):
     spectra_dir = tmp_path / "spectra_step120_5dates_m10_ecmwf"
     ref_root = tmp_path / "reference"
@@ -480,8 +586,8 @@ def test_generate_scoreboard_markdown_prefers_surface_nmse():
 
     markdown = scoreboard.generate_scoreboard_markdown(rows)
 
-    assert "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC Idalia | TC Franklin | ENFO dev | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |" in markdown
-    assert "| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 | 0.1000 | na | na | na | 0.900 | na | na | 0.2500 | 0.1700 | 0.2463 | 0.0082 | 0.0494 | 0.0264 |" in markdown
+    assert "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC Idalia | TC Franklin | ENFO dev | ENFO match | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |" in markdown
+    assert "| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 | 0.1000 | na | na | na | 0.900 | na | na | na | 0.2500 | 0.1700 | 0.2463 | 0.0082 | 0.0494 | 0.0264 |" in markdown
     assert "- **Sfc nMSE**: Area-weighted and variable-weighted surface MSE after per-variable truth-std normalization over the fixed Aug 26-30 evaluation contract" in markdown
     assert "- **10v / 2t / MSLP / SP nMSE**: Per-variable truth-std-normalized surface MSE for the named field, using the same fixed evaluation contract as the aggregate surface score" in markdown
 
@@ -568,6 +674,7 @@ def test_generate_scoreboard_markdown_appends_eefo_o96_context_row():
             "idalia_extreme": 0.0,
             "franklin_extreme": float("nan"),
             "enfo_deviation": float("nan"),
+            "enfo_match": float("nan"),
             "spectra_l2": float("nan"),
             "surface_loss": float("nan"),
             "surface_10v": float("nan"),
@@ -579,7 +686,7 @@ def test_generate_scoreboard_markdown_appends_eefo_o96_context_row():
 
     markdown = scoreboard.generate_scoreboard_markdown(experiment_rows)
 
-    assert "| x_interp | na | eefo_o96 | na | na | na | na | 0.000 | na | na | na | na | na | na | na | na |" in markdown
+    assert "| x_interp | na | eefo_o96 | na | na | na | na | 0.000 | na | na | na | na | na | na | na | na | na |" in markdown
     assert markdown.index("| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 |") < markdown.index("| x_interp | na | eefo_o96 |")
     assert "- **Context baseline rows**: Curated comparison rows appended after experiment runs; `x_interp` is sourced from the docs-side `eefo_o96` input baseline" in markdown
 

@@ -35,6 +35,7 @@ tc:
   tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
   grib_dir: "/home/ecm5702/perm/reference/o320_o1280/tc"
   analysis_expid: "OPER_O1280_0001"
+  extreme_reference_expid: "ENFO_O1280_0001"
   reference_expids: []
   support_mode: "regridded"
   input_label: "input O320"
@@ -51,18 +52,21 @@ tc:
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
-  nside: 512
-  lmax: 1279
+  nside: 742
+  lmax: 1484
   member_aggregation: "raw-members"
   steps: [120]
   truth_cache_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_proxy"
 
 spectra_ecmwf:
-  template_grib_root: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
   weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
   steps: [120]
   members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
 
 surface:
   weighting: "truth-std"

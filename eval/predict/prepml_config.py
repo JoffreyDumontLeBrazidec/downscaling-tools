@@ -33,6 +33,31 @@ def _steps_to_lead_time(steps: list[int]) -> str:
     return f"{max(int(step) for step in steps)}h"
 
 
+def _input_step_request(predict_steps: list[int], prepml_input: dict, time_step: str) -> str | None:
+    """Build an optional PrepML input step override.
+
+    Some downscaling checkpoints are trained from coarse forecast fields whose
+    first valid input is offset from the forecast base time, e.g. O48 ENFO +6h.
+    PrepML passes this as an `--extra step=...` override to anemoi-inference
+    retrieve.
+    """
+    offset = prepml_input.get("step_offset_hours")
+    if offset is None:
+        return None
+
+    if not predict_steps:
+        raise ValueError("predict.steps must contain at least one forecast step")
+
+    try:
+        step_hours = int(str(time_step).removesuffix("h"))
+    except ValueError as exc:
+        raise ValueError(f"prepml.time_step must be an hour duration, got {time_step!r}") from exc
+
+    first_step = int(offset)
+    last_step = max(int(step) for step in predict_steps) + first_step
+    return f"{first_step}/to/{last_step}/by/{step_hours}"
+
+
 def generate_prepml_config(
     *,
     lane_config: dict,
@@ -49,6 +74,7 @@ def generate_prepml_config(
 
     venv = runner_override or prepml["venv"]
     lead_time = _steps_to_lead_time(predict["steps"])
+    input_step = _input_step_request(predict["steps"], prepml["input"], prepml["time_step"])
 
     config: dict[str, Any] = {
         "description": description or f"Generated from eval.cli for {Path(checkpoint_path).stem}",
@@ -101,6 +127,8 @@ def generate_prepml_config(
         },
         "evaluation": False,
     }
+    if input_step is not None:
+        config["input"]["step"] = input_step
     return config
 
 

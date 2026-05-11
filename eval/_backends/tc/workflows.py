@@ -148,8 +148,8 @@ def load_curves_for_event(
     eff_steps = steps
     if eff_forecast_dates is None and days_from_preds:
         eff_forecast_dates = forecast_dates_for_event(event, days_from_preds)
-    if eff_analysis_dates is None and days_from_preds:
-        eff_analysis_dates = analysis_dates_for_event(event, days_from_preds)
+    if eff_analysis_dates is None:
+        eff_analysis_dates = list(event.analysis_dates)
     if eff_steps is None and steps_from_preds:
         eff_steps = steps_from_preds
 

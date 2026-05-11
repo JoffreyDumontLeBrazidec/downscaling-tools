@@ -29,6 +29,8 @@ def plot(
     reference_dir = eval_config.get("reference_dir", "")
     truth_amp_dir = Path(reference_dir) / "truth" / "spectra" if reference_dir else None
     input_amp_dir = Path(reference_dir) / "input" / "spectra" if reference_dir else None
+    truth_label = eval_config.get("truth_label", "truth")
+    input_label = eval_config.get("input_label", "input")
 
     out_pdf = output_dir / "spectra_ecmwf.pdf"
     try:
@@ -37,6 +39,8 @@ def plot(
             out_pdf,
             truth_amp_dir=truth_amp_dir,
             input_amp_dir=input_amp_dir,
+            truth_label=truth_label,
+            input_label=input_label,
         )
         LOG.info("spectra_ecmwf: wrote %d-page PDF: %s", n, out_pdf)
     except FileNotFoundError as exc:

@@ -25,6 +25,24 @@ sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 np.seterr(divide="ignore", invalid="ignore")
 
 
+def _shorten_run_label(label: str) -> str:
+    """Shorten a manual_<ckpt8>_..._<date>_<sampler> run label to '<ckpt6> <sampler>'.
+
+    Examples:
+        manual_cfec83a3_new_o96_o320_20260320_oldlike200k -> cfec83 oldlike200k
+        manual_59e40596_new_o96_o320_20260422_pw20_t10_h7_l13 -> 59e405 pw20_t10_h7_l13
+        anemoi_cfec83a3_new_o96_o320_20260323_karras40_direct -> cfec83 karras40_direct
+    """
+    import re
+    m = re.match(r"(?:manual|anemoi)_([0-9a-f]{8})_\w+_o\d+_o\d+_\d{8}_(.+)", label)
+    if m:
+        return f"{m.group(1)[:6]} {m.group(2)}"
+    # Fallback: if longer than 24 chars, take first 24
+    if len(label) > 24:
+        return label[:24]
+    return label
+
+
 def curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
     if curve_key in REFERENCE_STYLES:
         return REFERENCE_STYLES[curve_key]["label"]
@@ -32,7 +50,7 @@ def curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) ->
         return "OPER AN"
     if curve_key in exp_labels:
         return exp_labels[curve_key]
-    return curve_key.replace("ENFO_O320_", "")
+    return _shorten_run_label(curve_key)
 
 
 def curve_style(
@@ -133,5 +151,72 @@ def plot_pdf_ratios(
         ax.legend()
 
     fig.suptitle(plot_config.plot_title)
+    fig.tight_layout()
+    return fig
+
+
+def plot_pdf_log(
+    plot_config: TCPlotConfig,
+    *,
+    event_stats: dict,
+    exp_labels: dict[str, str] | None = None,
+) -> plt.Figure:
+    """Render raw PDFs (no analysis normalisation) with log y-axis."""
+    exp_labels = exp_labels or {}
+    oper_key = event_stats["analysis_key"]
+    curve_order = event_stats["curve_order"]
+    var_mslp = event_stats["variables"]["mslp_hpa"]
+    var_wind = event_stats["variables"]["wind10m_ms"]
+
+    oper_hist_msl = np.asarray(var_mslp["oper_histogram"])
+    oper_hist_wind = np.asarray(var_wind["oper_histogram"])
+    mids_msl = np.asarray(var_mslp["bin_mids"])
+    mids_wind = np.asarray(var_wind["bin_mids"])
+
+    ml_like_keys = [k for k in curve_order if k not in REFERENCE_STYLES]
+    ml_palette = cm.batlow(np.linspace(0, 1, max(1, len(ml_like_keys))))
+    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
+
+    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Plot operational analysis
+    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="green", label="OPER AN")
+    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="green", label="OPER AN")
+
+    for key in curve_order:
+        label = curve_label(key, exp_labels, oper_key=oper_key)
+        style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
+
+        hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
+        axs[0].plot(mids_msl, hist_msl, label=label,
+                    color=style["color"], linestyle=style["linestyle"],
+                    linewidth=style["linewidth"])
+
+        hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
+        axs[1].plot(mids_wind, hist_wind, label=label,
+                    color=style["color"], linestyle=style["linestyle"],
+                    linewidth=style["linewidth"])
+
+    # Auto-crop x-axis
+    xbins_msl = np.asarray(var_mslp["bin_edges"])
+    xbins_wind = np.asarray(var_wind["bin_edges"])
+    if "data_range_msl" in var_mslp:
+        lo, hi = var_mslp["data_range_msl"]
+        axs[0].set_xlim(max(xbins_msl[0], lo - 5), min(xbins_msl[-1], hi + 5))
+    if "data_range_wind" in var_wind:
+        lo, hi = var_wind["data_range_wind"]
+        axs[1].set_xlim(0, min(xbins_wind[-1], hi + 2))
+
+    for ax, xlabel, title in [
+        (axs[0], "Mean Sea Level Pressure (hPa)", "PDF MSLP (log scale)"),
+        (axs[1], "10m wind speed (m/s)", "PDF 10m Wind Speed (log scale)"),
+    ]:
+        ax.set_yscale("log")
+        ax.set_xlabel(xlabel, fontsize=14)
+        ax.set_ylabel("Probability Density", fontsize=14)
+        ax.set_title(title, fontsize=14)
+        ax.legend()
+
+    fig.suptitle(plot_config.plot_title.replace("normed pdfs", "raw PDFs (log)"))
     fig.tight_layout()
     return fig

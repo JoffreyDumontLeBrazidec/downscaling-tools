@@ -109,99 +109,124 @@ def run(
         LOG.warning("No TC events configured in lane_config['tc']['events']")
         return output_dir
 
+    # Cap pf-ensemble members for GRIB references so the ENFO/EEFO baselines are
+    # sampled at the same ensemble size as ML predictions (typically 10). Without
+    # this cap ENFO_O320 contributes 50 members, biasing tail percentiles deeper
+    # than ML purely from sample-size effects. Default 10 mirrors run_tc_pdf.
+    max_pf_members = eval_config.get("max_pf_members", 10)
+
     pred_files = _pred_files_as_tuples(predictions_dir)
     if not pred_files:
         raise FileNotFoundError(f"No prediction files found in {predictions_dir}")
 
     payload = {"events": {}}
 
-    for event_name in event_names:
-        event = _event_from_config(event_name)
-        event_pred_files = select_prediction_files_for_event(pred_files, event)
-        if not event_pred_files:
-            LOG.info("Skipping event=%s: no matching prediction files", event_name)
-            continue
+    # When support_mode is "both", run all events in regridded first, then native.
+    # Grouping by mode keeps metview operations together and avoids MARS state issues.
+    modes = ["regridded", "native"] if support_mode == "both" else [support_mode]
 
-        exp_cfg = None
-        if analysis_expid:
-            exp_cfg = TCExperimentConfig(
-                analysis_expid=analysis_expid,
-                base_tc_dir=grib_dir,
-                reference_expids=reference_expids,
-            )
+    for mode in modes:
+        for event_name in event_names:
+            event = _event_from_config(event_name)
+            event_pred_files = select_prediction_files_for_event(pred_files, event)
+            if not event_pred_files:
+                LOG.info("Skipping event=%s: no matching prediction files", event_name)
+                continue
 
-        curves = load_curves_for_event(
-            event,
-            prediction_dir=predictions_dir,
-            grib_dir=grib_dir,
-            experiment_config=exp_cfg,
-            extra_grib_references=extra_grib_references,
-            support_mode=support_mode,
-            run_label=run_label,
-            pred_files=event_pred_files,
-        )
+            event_key = event_name if mode == modes[0] else f"{event_name}__{mode}"
 
-        if not curves:
-            LOG.warning("No curves loaded for event=%s, skipping", event_name)
-            continue
-
-        # Load input (x_interp) and target (y) curves directly from NetCDF files
-        input_label = eval_config.get("input_label")
-        if input_label and event_pred_files:
-            try:
-                curves[input_label] = load_prediction_curves(
-                    event_pred_files,
-                    bbox=event.bbox,
-                    support_mode="native",
-                    prediction_var="x_interp",
+            exp_cfg = None
+            if analysis_expid:
+                exp_cfg = TCExperimentConfig(
+                    analysis_expid=analysis_expid,
+                    base_tc_dir=grib_dir,
+                    reference_expids=reference_expids,
                 )
-            except Exception:
-                LOG.warning("Failed to load x_interp curve for event=%s", event_name, exc_info=True)
 
-        target_nc_label = eval_config.get("target_nc_label")
-        if target_nc_label and event_pred_files:
-            try:
-                curves[target_nc_label] = load_prediction_curves(
-                    event_pred_files,
-                    bbox=event.bbox,
-                    support_mode="native",
-                    prediction_var="y",
+            curves = None
+            max_attempts = 2 if mode == "regridded" else 1
+            for attempt in range(max_attempts):
+                try:
+                    curves = load_curves_for_event(
+                        event,
+                        prediction_dir=predictions_dir,
+                        grib_dir=grib_dir,
+                        experiment_config=exp_cfg,
+                        extra_grib_references=extra_grib_references,
+                        support_mode=mode,
+                        run_label=run_label,
+                        pred_files=event_pred_files,
+                        max_pf_members=max_pf_members,
+                    )
+                    break
+                except Exception:
+                    if attempt < max_attempts - 1:
+                        LOG.warning("Attempt %d failed for event=%s mode=%s, retrying", attempt + 1, event_name, mode)
+                    else:
+                        LOG.error("Failed to load curves for event=%s mode=%s", event_name, mode, exc_info=True)
+            if curves is None:
+                continue
+
+            if not curves:
+                LOG.warning("No curves loaded for event=%s mode=%s, skipping", event_name, mode)
+                continue
+
+            # Load input (x_interp) and target (y) curves directly from NetCDF files
+            input_label = eval_config.get("input_label")
+            if input_label and event_pred_files:
+                try:
+                    curves[input_label] = load_prediction_curves(
+                        event_pred_files,
+                        bbox=event.bbox,
+                        support_mode="native",
+                        prediction_var="x_interp",
+                    )
+                except Exception:
+                    LOG.warning("Failed to load x_interp curve for event=%s", event_name, exc_info=True)
+
+            target_nc_label = eval_config.get("target_nc_label")
+            if target_nc_label and event_pred_files:
+                try:
+                    curves[target_nc_label] = load_prediction_curves(
+                        event_pred_files,
+                        bbox=event.bbox,
+                        support_mode="native",
+                        prediction_var="y",
+                    )
+                except Exception:
+                    LOG.warning("Failed to load y curve for event=%s", event_name, exc_info=True)
+
+            # Determine analysis key
+            oper_key = analysis_expid
+            if oper_key and oper_key not in curves:
+                LOG.warning("Analysis key %s not in curves for event=%s mode=%s", oper_key, event_name, mode)
+                oper_key = None
+
+            # Rename analysis key if a display label is configured
+            analysis_display_label = eval_config.get("analysis_display_label")
+            if analysis_display_label and oper_key and oper_key in curves:
+                curves[analysis_display_label] = curves.pop(oper_key)
+                oper_key = analysis_display_label
+
+            if oper_key:
+                plot_cfg = resolve_plot_config(event_name, eval_config)
+                event_stats = compute_event_stats(
+                    curves,
+                    analysis_key=oper_key,
+                    plot_config=plot_cfg,
                 )
-            except Exception:
-                LOG.warning("Failed to load y curve for event=%s", event_name, exc_info=True)
+            else:
+                days, steps = event_days_steps(event_pred_files)
+                event_stats = {
+                    "event": event_name,
+                    "selected_days": days,
+                    "steps_hours": steps,
+                    "prediction_only": True,
+                }
 
-        # Determine analysis key
-        oper_key = analysis_expid
-        if oper_key and oper_key not in curves:
-            LOG.warning("Analysis key %s not in curves for event=%s", oper_key, event_name)
-            # Fall back: if only prediction curves, skip stats that need analysis
-            oper_key = None
-
-        # Rename analysis key if a display label is configured
-        analysis_display_label = eval_config.get("analysis_display_label")
-        if analysis_display_label and oper_key and oper_key in curves:
-            curves[analysis_display_label] = curves.pop(oper_key)
-            oper_key = analysis_display_label
-
-        if oper_key:
-            plot_cfg = resolve_plot_config(event_name, eval_config)
-            event_stats = compute_event_stats(
-                curves,
-                analysis_key=oper_key,
-                plot_config=plot_cfg,
-            )
-        else:
-            # Prediction-only mode: store raw curve metadata without analysis-anchored stats
-            days, steps = event_days_steps(event_pred_files)
-            event_stats = {
-                "event": event_name,
-                "selected_days": days,
-                "steps_hours": steps,
-                "prediction_only": True,
-            }
-
-        event_stats["event"] = event_name
-        payload["events"][event_name] = event_stats
+            event_stats["event"] = event_name
+            event_stats["support_mode"] = mode
+            payload["events"][event_key] = event_stats
 
     stats_path = output_dir / "stats.json"
     with open(stats_path, "w", encoding="utf-8") as f:

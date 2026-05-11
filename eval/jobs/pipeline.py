@@ -145,6 +145,7 @@ def render_pipeline(
     scratch_root = host_config["scratch_root"]
 
     # Compute shared eval output directory
+    reusing_existing_run = eval_output_dir is not None
     if eval_output_dir is None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         ckpt_short = Path(checkpoint).name[:12]
@@ -184,6 +185,8 @@ def render_pipeline(
             cli_overrides = dict(overrides) if overrides else {}
             cli_overrides["--only"] = evaluator
             cli_overrides["--predictions-dir"] = predictions_dir
+            if reusing_existing_run:
+                cli_overrides["--overwrite"] = True
 
             eval_script = render_sbatch(
                 lane=lane, host=host, checkpoint=checkpoint,
@@ -206,6 +209,8 @@ def render_pipeline(
         eval_resources["job_name_suffix"] = "-eval"
         cli_overrides = dict(overrides) if overrides else {}
         cli_overrides["--predictions-dir"] = predictions_dir
+        if reusing_existing_run:
+            cli_overrides["--overwrite"] = True
         eval_script = render_sbatch(
             lane=lane, host=host, checkpoint=checkpoint,
             mode="evaluate", overrides=cli_overrides,
@@ -279,6 +284,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write scripts to this directory",
     )
     parser.add_argument(
+        "--eval-output-dir", default=None,
+        help=(
+            "Reuse an existing eval output directory (skip predict, point evaluate "            "scripts at <eval-output-dir>/predictions). Useful for debugging evaluators "            "against already-generated predictions."
+        ),
+    )
+    parser.add_argument(
         "--no-split", action="store_true",
         help="Generate a single evaluate job instead of one per evaluator",
     )
@@ -303,6 +314,7 @@ def main(argv: list[str] | None = None) -> None:
         checkpoint=args.checkpoint,
         split_evaluators=not args.no_split,
         output_dir=output_dir,
+        eval_output_dir=args.eval_output_dir or None,
     )
 
     print(f"Pipeline: {manifest.lane} on {manifest.host}")

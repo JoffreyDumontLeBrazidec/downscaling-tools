@@ -125,6 +125,7 @@ def render_region_suite_from_predictions_file(
     ensemble_member_index: int = 0,
     also_png: bool = True,
     suite_kind: str = "regions",
+    checkpoint_path: str = "",
 ) -> list[str]:
     predictions_path = Path(predictions_nc).expanduser().resolve()
     if not predictions_path.exists():
@@ -155,7 +156,7 @@ def render_region_suite_from_predictions_file(
                     f"{ensemble_member_index} outside 0..{int(ds_pred.sizes['ensemble_member']) - 1}"
                 )
             ds_pred = ds_pred.isel(ensemble_member=ensemble_member_index)
-        ds_pred = ensure_x_interp_for_plotting(ds_pred, predictions_path=predictions_path)
+        ds_pred = ensure_x_interp_for_plotting(ds_pred, predictions_path=predictions_path, checkpoint_path=checkpoint_path)
 
         selected_variables, selected_weather_states = _select_prediction_variables(
             ds_pred,
@@ -369,6 +370,7 @@ def main() -> None:
         default=",".join(DEFAULT_WEATHER_STATES),
         help="Comma-separated weather states for direct predictions rendering mode.",
     )
+    parser.add_argument("--checkpoint", default="", help="Path to model checkpoint for x_interp reconstruction.")
     parser.add_argument("--sample-index", type=int, default=0)
     parser.add_argument("--ensemble-member-index", type=int, default=0)
     parser.add_argument("--also-png", action="store_true")
@@ -393,6 +395,7 @@ def main() -> None:
             ensemble_member_index=args.ensemble_member_index,
             also_png=args.also_png,
             suite_kind=args.suite_kind,
+            checkpoint_path=args.checkpoint,
         )
         for path in generated:
             print(path)

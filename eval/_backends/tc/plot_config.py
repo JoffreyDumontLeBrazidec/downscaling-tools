@@ -6,8 +6,8 @@ from dataclasses import dataclass, replace
 
 @dataclass(frozen=True)
 class TCPlotConfig:
-    mslp_bin_range: tuple[float, float, float] = (980, 1021, 1)
-    wind_bin_range: tuple[float, float, float] = (0, 35.01, 1)
+    mslp_bin_range: tuple[float, float, float] = (980, 1022, 2)
+    wind_bin_range: tuple[float, float, float] = (0, 36.01, 2)
     mslp_ylim: tuple[float, float] = (0, 4)
     wind_ylim: tuple[float, float] = (0, 2)
     regrid_resolution: float = 0.25
@@ -17,28 +17,44 @@ class TCPlotConfig:
 
 
 PLOT_CONFIGS: dict[str, TCPlotConfig] = {
-    "franklin": TCPlotConfig(plot_title="Franklin normed pdfs"),
-    "idalia": TCPlotConfig(plot_title="Idalia normed pdfs"),
-    "franklin_idalia": TCPlotConfig(plot_title="Franklin + Idalia normed pdfs"),
+    "franklin": TCPlotConfig(
+        mslp_bin_range=(930, 1026, 2),
+        wind_bin_range=(0, 56.01, 2),
+        mslp_ylim=(0, 4),
+        wind_ylim=(0, 2),
+        plot_title="Franklin normed pdfs",
+    ),
+    "idalia": TCPlotConfig(
+        mslp_bin_range=(955, 1026, 2),
+        wind_bin_range=(0, 46.01, 2),
+        mslp_ylim=(0, 4),
+        wind_ylim=(0, 2),
+        plot_title="Idalia normed pdfs",
+    ),
+    "franklin_idalia": TCPlotConfig(
+        mslp_bin_range=(930, 1026, 2),
+        wind_bin_range=(0, 56.01, 2),
+        plot_title="Franklin + Idalia normed pdfs",
+    ),
     "hilary": TCPlotConfig(
-        mslp_bin_range=(960, 1021, 1),
-        wind_bin_range=(0, 30.01, 1),
+        mslp_bin_range=(960, 1022, 2),
+        wind_bin_range=(0, 30.01, 2),
         mslp_ylim=(0, 2),
         plot_title="Hilary normed pdfs",
     ),
     "dora": TCPlotConfig(
-        mslp_bin_range=(970, 1021, 1),
+        mslp_bin_range=(970, 1022, 2),
         plot_title="Dora normed pdfs",
     ),
     "fernanda": TCPlotConfig(
-        wind_bin_range=(0, 30.01, 1),
+        wind_bin_range=(0, 30.01, 2),
         mslp_ylim=(0, 10),
         wind_ylim=(0, 5),
         plot_title="Fernanda normed pdfs",
     ),
     "humberto": TCPlotConfig(
-        mslp_bin_range=(910, 1025, 1),
-        wind_bin_range=(0, 60.01, 1),
+        mslp_bin_range=(910, 1026, 2),
+        wind_bin_range=(0, 60.01, 2),
         plot_title="TC Humberto 2025-09 | norm. PDFs (MSLP & 10m Wind)",
         member_map_msl_range=(950, 1025),
         member_map_wind_range=(0, 45),

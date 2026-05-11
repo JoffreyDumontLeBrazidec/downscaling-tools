@@ -59,6 +59,8 @@ tc:
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   wavenumber_threshold: 100.0
+  nside: 58
+  lmax: 116
   steps: [120]
   truth_cache_dir: "/home/ecm5702/perm/reference/o48_o96/spectra_proxy"
 
@@ -68,6 +70,9 @@ spectra_ecmwf:
   reference_dir: "/home/ecm5702/perm/reference/o48_o96/spectra_ecmwf"
   steps: [120]
   members: [1]
+  truth_label: "IEKM"
+  input_label: "ENFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930"
 
 surface:
   weighting: "truth-std"
@@ -127,7 +132,7 @@ resource_profiles:
     cpus: 1
 
 prepml:
-  debug_expvers: ["TBD_CREATE_3", "TBD_CREATE_4"]
+  debug_expvers: ["j5d7", "j5d6"]
   runner: anemoi-dev
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
   input:
@@ -135,12 +140,13 @@ prepml:
     stream: enfo
     type: pf
     grid: O48
+    step_offset_hours: 6
   output:
     class: rd
     stream: enfo
     type: pf
   output_template: /home/ecm5702/hpcperm/data/o96-template.grib
-  forcings_npz: /home/ecm5702/hpcperm/data/o48-forcings.npz
+  forcings_npz: /home/ecm5702/hpcperm/data/o96-forcings.npz
   constant_high_res_forcings:
     - cos_latitude
     - cos_longitude

@@ -28,6 +28,11 @@ def _asymmetric_ratio_score(ratio: float) -> float:
     return max(0.0, 1.0 - _OVERSHOOT_BETA * (ratio - 1.0))
 
 
+def _symmetric_match_score(ratio: float) -> float:
+    """Score a model/reference ratio with symmetric penalty: 1.0 at ratio=1, linear falloff, clipped to [0, 1]."""
+    return max(0.0, 1.0 - abs(ratio - 1.0))
+
+
 
 def mslp_depth(value: float) -> float:
     """Convert MSLP (hPa) to depth below standard reference: deeper = more extreme."""
@@ -121,6 +126,57 @@ def multi_depth_enfo_deviation(
     return sum(devs) / len(devs)
 
 
+def multi_depth_enfo_match_score(
+    model: dict[str, Any],
+    enfo: dict[str, Any],
+) -> float | None:
+    """Compute ENFO-anchored symmetric tail-extreme match score.
+
+    Uses only the deepest tail keys per variable (mslp_p01, mslp_min, wind_p999,
+    wind_max). The shallower-tail keys (mslp_p1, wind_p99) are intentionally
+    excluded because at 10-member parity the ML/ENFO ratios there sit at ~0.95–
+    0.99 across the board and mask the real gap that shows up at min/max.
+
+    Returns 0–1 score: 1.0 = model tail extremes match ENFO exactly,
+    0.0 = ratio outside [0, 2] on every key. Penalizes undershoot and overshoot
+    equally. None if no usable tail keys.
+    """
+    mslp_keys = ("mslp_p01", "mslp_min")
+    wind_keys = ("wind_p999", "wind_max")
+
+    mslp_scores: list[float] = []
+    for key in mslp_keys:
+        m_val = _finite_float(model.get(key))
+        e_val = _finite_float(enfo.get(key))
+        if m_val is None or e_val is None:
+            continue
+        e_depth = mslp_depth(e_val)
+        if e_depth <= 0.0:
+            continue
+        m_depth = mslp_depth(m_val)
+        mslp_scores.append(_symmetric_match_score(m_depth / e_depth))
+
+    wind_scores: list[float] = []
+    for key in wind_keys:
+        m_val = _finite_float(model.get(key))
+        e_val = _finite_float(enfo.get(key))
+        if m_val is None or e_val is None:
+            continue
+        if e_val <= 0.0:
+            continue
+        wind_scores.append(_symmetric_match_score(m_val / e_val))
+
+    if not mslp_scores and not wind_scores:
+        return None
+
+    group_means: list[float] = []
+    if mslp_scores:
+        group_means.append(sum(mslp_scores) / len(mslp_scores))
+    if wind_scores:
+        group_means.append(sum(wind_scores) / len(wind_scores))
+    return sum(group_means) / len(group_means)
+
+
 def rescale_with_eefo_floor(raw_score: float, eefo_raw: float | None) -> float:
     """Rescale a raw TC score so EEFO maps to 0 and analysis maps to 1."""
     if eefo_raw is not None and eefo_raw < 1.0:
@@ -134,6 +190,7 @@ def normalize_tc_rows(
     canonical_analysis: dict[str, Any] | None = None,
     canonical_eefo: dict[str, Any] | None = None,
     event_name: str | None = None,
+    extreme_reference_expid: str | None = None,
 ) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
 
@@ -146,6 +203,11 @@ def normalize_tc_rows(
     event_name : str, optional
         Used only for backward compat with the old interface that looked up
         canonical values internally. Prefer passing canonical_analysis directly.
+    extreme_reference_expid : str, optional
+        Exact expid of the reference whose tail extremes we want to match (e.g.
+        "ENFO_O320_0001"). When provided and the row is found, populates
+        ``_enfo_match_value`` on each row via ``multi_depth_enfo_match_score``.
+        When absent or the row is not found, ``_enfo_match_value`` is None.
 
     Scores are rescaled so EEFO maps to 0 and analysis maps to 1.
     Falls back to legacy batch-relative normalization when analysis row or
@@ -165,6 +227,13 @@ def normalize_tc_rows(
 
     enfo_row = find_row_by_predicate(rows, is_reference_row)
 
+    extreme_ref_row: dict[str, Any] | None = None
+    if extreme_reference_expid:
+        extreme_ref_row = find_row_by_predicate(
+            rows,
+            lambda exp, _expid=extreme_reference_expid: exp == _expid,
+        )
+
     if analysis_row is not None and _finite_float(analysis_row.get("mslp_p1")) is not None:
         eefo_raw = None
         if canonical_eefo is not None:
@@ -179,6 +248,7 @@ def normalize_tc_rows(
             if is_analysis_row(exp):
                 row["_extreme_score_value"] = 1.0
                 row["_enfo_deviation_value"] = None
+                row["_enfo_match_value"] = None
                 continue
             raw_score = multi_depth_tc_score(row, analysis_row)
             if raw_score is not None:
@@ -189,6 +259,10 @@ def normalize_tc_rows(
                 row["_enfo_deviation_value"] = multi_depth_enfo_deviation(row, enfo_row, analysis_row)
             else:
                 row["_enfo_deviation_value"] = None
+            if extreme_ref_row is not None and row is not extreme_ref_row:
+                row["_enfo_match_value"] = multi_depth_enfo_match_score(row, extreme_ref_row)
+            else:
+                row["_enfo_match_value"] = None
         return
 
     # Legacy fallback: batch-relative normalization
@@ -204,6 +278,7 @@ def normalize_tc_rows(
         if score is not None:
             row["_extreme_score_value"] = score
             row["_enfo_deviation_value"] = None
+            row["_enfo_match_value"] = None
             continue
 
         m_val = _finite_float(row.get("mslp_980_990_fraction"))
@@ -211,12 +286,14 @@ def normalize_tc_rows(
         if m_val is None or w_val is None or m_min is None or m_max is None or w_min is None or w_max is None:
             row["_extreme_score_value"] = None
             row["_enfo_deviation_value"] = None
+            row["_enfo_match_value"] = None
             continue
 
         m_norm = 0.0 if m_max <= m_min else (m_val - m_min) / (m_max - m_min)
         w_norm = 0.0 if w_max <= w_min else (w_val - w_min) / (w_max - w_min)
         row["_extreme_score_value"] = 0.5 * (m_norm + w_norm)
         row["_enfo_deviation_value"] = None
+        row["_enfo_match_value"] = None
 
 
 def load_tc_extreme_scores_from_json(
@@ -226,6 +303,7 @@ def load_tc_extreme_scores_from_json(
     event_names: tuple[str, ...] | list[str] | None = None,
     canonical_analysis_by_event: dict[str, dict[str, Any]] | None = None,
     canonical_eefo_by_event: dict[str, dict[str, Any]] | None = None,
+    extreme_reference_expid: str | None = None,
 ) -> dict[str, float]:
     """Load TC extreme scores and ENFO deviation from a stats JSON.
 
@@ -239,11 +317,18 @@ def load_tc_extreme_scores_from_json(
         old behavior of looking up CANONICAL_OPER_O320_ANALYSIS by event name.
     canonical_eefo_by_event : dict mapping event name -> canonical EEFO dict.
         When provided, used as the EEFO floor instead of finding an EEFO row.
+    extreme_reference_expid : str, optional
+        Exact expid of the reference ensemble whose tail extremes we want to match
+        (e.g. "ENFO_O320_0001" for the o96_o320 lane). When provided and the row is
+        present in each event's stats, populates "<event>_enfo_match" keys in the
+        returned scores dict.
 
     Returns
     -------
-    dict with keys like "idalia", "franklin" (scores) and
-    "idalia_enfo_dev", "franklin_enfo_dev" (deviations, when available).
+    dict with keys like "idalia", "franklin" (scores),
+    "idalia_enfo_dev", "franklin_enfo_dev" (deviations, when available),
+    and "idalia_enfo_match", "franklin_enfo_match" (ENFO match scores, when
+    extreme_reference_expid is provided).
     """
     with stats_path.open() as f:
         data = json.load(f)
@@ -274,7 +359,13 @@ def load_tc_extreme_scores_from_json(
 
         canonical = canonical_analysis_by_event.get(event_name) if canonical_analysis_by_event else None
         eefo = canonical_eefo_by_event.get(event_name) if canonical_eefo_by_event else None
-        normalize_tc_rows(norm_rows, canonical_analysis=canonical, canonical_eefo=eefo, event_name=event_name)
+        normalize_tc_rows(
+            norm_rows,
+            canonical_analysis=canonical,
+            canonical_eefo=eefo,
+            event_name=event_name,
+            extreme_reference_expid=extreme_reference_expid,
+        )
 
         chosen = find_model_row(norm_rows, run_id)
         if chosen is None:
@@ -285,4 +376,7 @@ def load_tc_extreme_scores_from_json(
         enfo_dev = _finite_float(chosen.get("_enfo_deviation_value"))
         if enfo_dev is not None:
             scores[f"{event_name}_enfo_dev"] = enfo_dev
+        enfo_match = _finite_float(chosen.get("_enfo_match_value"))
+        if enfo_match is not None:
+            scores[f"{event_name}_enfo_match"] = enfo_match
     return scores

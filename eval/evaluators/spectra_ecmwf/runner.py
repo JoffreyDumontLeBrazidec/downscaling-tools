@@ -89,6 +89,39 @@ def run(
             if _has_amplitudes(var_amp_dir, weather_states):
                 LOG.info("spectra_ecmwf: %s reference cached at %s — skipping", var_label, var_amp_dir)
                 continue
+            if not _has_var_in_predictions(predictions_dir, var_name):
+                if var_label == "input":
+                    bundles_dir = eval_config.get("input_bundles_dir", "")
+                    template_grib = eval_config.get("input_template_grib", "")
+                    if not template_grib:
+                        grid = lane_config.get("prepml", {}).get("input", {}).get("grid", "").lower()
+                        if grid:
+                            candidate = Path(f"/home/ecm5702/hpcperm/data/{grid}-template.grib")
+                            if candidate.exists():
+                                template_grib = str(candidate)
+                            else:
+                                LOG.warning("spectra_ecmwf: no template GRIB for grid %s at %s — skipping input spectra", grid, candidate)
+                    if bundles_dir:
+                        if not template_grib:
+                            LOG.warning("spectra_ecmwf: input_bundles_dir set but no template_grib resolved — skipping input spectra")
+                        else:
+                            LOG.info("spectra_ecmwf: computing input reference from native bundles at %s", bundles_dir)
+                            _run_input_bundle_pipeline(
+                                bundles_dir=Path(bundles_dir).expanduser().resolve(),
+                                output_dir=ref_path / "input",
+                                template_grib=template_grib,
+                                weather_states=weather_states,
+                                weather_states_str=weather_states_str,
+                                date_list=date_list,
+                                step_list=step_list,
+                                member_list=member_list,
+                            )
+                            continue
+                LOG.warning(
+                    "spectra_ecmwf: variable '%s' not in predictions — skipping %s reference",
+                    var_name, var_label,
+                )
+                continue
             LOG.info("spectra_ecmwf: computing %s reference spectra → %s", var_label, ref_path / var_label)
             _run_pipeline(
                 label=var_label,
@@ -105,6 +138,17 @@ def run(
             )
 
     return output_dir
+
+
+
+def _has_var_in_predictions(predictions_dir: Path, var_name: str) -> bool:
+    """Return True if the first prediction file in predictions_dir contains var_name."""
+    pred_files = sorted(predictions_dir.glob("predictions_*.nc"))
+    if not pred_files:
+        return False
+    import xarray as xr
+    with xr.open_dataset(pred_files[0]) as ds:
+        return var_name in ds
 
 
 def _has_amplitudes(amp_dir: Path, weather_states: list[str]) -> bool:
@@ -157,6 +201,59 @@ def _run_pipeline(
     _run_gptosp(grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states)
 
     LOG.info("=== spectra_ecmwf [%s] 3/3: compute amplitudes ===", label)
+    _compute_amplitudes(
+        sh_dir=sh_dir,
+        amp_dir=amp_dir,
+        weather_states=weather_states_str,
+        summary_path=output_dir / "spectra_summary.json",
+    )
+
+
+
+def _run_input_bundle_pipeline(
+    *,
+    bundles_dir: Path,
+    output_dir: Path,
+    template_grib: str,
+    weather_states: list[str],
+    weather_states_str: str,
+    date_list: str,
+    step_list: str,
+    member_list: str = "1",
+) -> None:
+    """3-stage pipeline for O96 input bundles: stage GRIBs → gptosp → amplitudes."""
+    grb_dir = output_dir / "grb"
+    sh_dir  = output_dir / "spectral_harmonics"
+    amp_dir = output_dir / "spectra"
+    for d in (grb_dir, sh_dir, amp_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    LOG.info("=== spectra_ecmwf [input] 1/3: stage O96 GRIBs from bundles ===")
+    cmd = [
+        sys.executable, str(_HERE / "_input_bundle_stager.py"),
+        "--bundles-dir",    str(bundles_dir),
+        "--out-dir",        str(grb_dir),
+        "--weather-states", weather_states_str,
+        "--date-list",      date_list,
+        "--step-list",      step_list,
+        "--member-list",    member_list,
+        "--summary-path",   str(output_dir / "staging_summary.json"),
+    ]
+    if template_grib:
+        cmd += ["--template-grib", template_grib]
+    else:
+        # Fall back to default o96-template.grib location
+        default_tmpl = Path("/home/ecm5702/hpcperm/data/o96-template.grib")
+        if default_tmpl.exists():
+            cmd += ["--template-grib", str(default_tmpl)]
+        else:
+            raise FileNotFoundError("No input_template_grib specified and default o96-template.grib not found")
+    subprocess.run(cmd, check=True)
+
+    LOG.info("=== spectra_ecmwf [input] 2/3: gptosp transforms ===")
+    _run_gptosp(grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states)
+
+    LOG.info("=== spectra_ecmwf [input] 3/3: compute amplitudes ===")
     _compute_amplitudes(
         sh_dir=sh_dir,
         amp_dir=amp_dir,
@@ -254,12 +351,10 @@ def _compute_amplitudes(
         "module unload ifs         2>/dev/null || true",
         "module load ecmwf-toolbox 2>/dev/null || true",
         f'source "{venv_activate}"',
-        'METVIEW_BIN="$(command -v metview 2>/dev/null || true)"',
-        '[[ -n "$METVIEW_BIN" ]] && export PATH="$(dirname "$METVIEW_BIN"):$PATH"',
         f'python "{_HERE / "_amplitude_computer.py"}"'
         f' --spectral-harmonics-dir "{sh_dir}"'
         f' --out-dir "{amp_dir}"'
         f' --weather-states "{weather_states}"'
         f' --summary-path "{summary_path}"',
     ])
-    subprocess.run(["bash", "--login", "-c", script], check=True)
+    subprocess.run(["bash", "-c", script], check=True)
