@@ -513,8 +513,8 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
         "Standard evaluation protocol for o96→o320 downscaling runs.",
         "Lower is better for sigma, spectra, and surface loss; higher is better for TC extreme scores.",
         "",
-        "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC MSLP p0.01 | TC MSLP min | TC wind p99.99 | TC wind max | TC MSLP reach | TC wind reach | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |",
-        "|------|-----------|--------|----------|----------|-----------|------------|---------------|-------------|----------------|-------------|---------------|---------------|------------|----------|----------|----------|-----------|---------|",
+        "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC MSLP p0.01 | TC MSLP min | TC wind p99.99 | TC wind max | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |",
+        "|------|-----------|--------|----------|----------|-----------|------------|---------------|-------------|----------------|-------------|------------|----------|----------|----------|-----------|---------|",
     ]
 
     for row in rows:
@@ -527,8 +527,6 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
             f"{_fmt(row['mslp_min_ratio'], 3)} | "
             f"{_fmt(row['wind_p9999_ratio'], 3)} | "
             f"{_fmt(row['wind_max_ratio'], 3)} | "
-            f"{_fmt(row['mslp_reach'], 3)} | "
-            f"{_fmt(row['wind_reach'], 3)} | "
             f"{_fmt(row['spectra_l2'], 4)} | {surface_loss_text} | "
             f"{_fmt(row['surface_10v'], 4)} | {_fmt(row['surface_2t'], 4)} | "
             f"{_fmt(row['surface_msl'], 4)} | {_fmt(row['surface_sp'], 4)} |"
@@ -545,7 +543,6 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
         "- **Sigma loss**: Diffusion validation loss at fixed noise levels (σ=1,5,10,100)",
         "- **TC MSLP p0.01 / TC MSLP min**: AN-anchored tail extremes for MSLP (depth coords). `model / AN` ratio — AN=1.0; >1 means ML reaches deeper minima than AN; <1 means shallower. Mean across Idalia + Franklin.",
         "- **TC wind p99.99 / TC wind max**: AN-anchored tail extremes for 10m wind. `model / AN` ratio — AN=1.0; >1 means ML reaches stronger winds than AN; <1 means weaker. Mean across Idalia + Franklin.",
-        "- **TC MSLP reach / TC wind reach**: AN→ENFO position on the deepest tail keys (MSLP: p01+min; wind: p999+max), mean over Idalia + Franklin. Semantics: `0`=matches AN, `1`=matches ENFO_O320 (10 mbr), `<0`=less extreme than AN, `>1`=beyond ENFO. Keys with |ENFO−AN|<1 (hPa or m/s) are skipped.",
         "- **Spectra L2**: Fine-scale-weighted mean relative L2 across 6 weather variables (10u, 10v, 2t, msl, t_850, z_500)",
         "- **Sfc nMSE**: Area-weighted and variable-weighted surface MSE after per-variable truth-std normalization over the fixed Aug 26-30 evaluation contract",
         "- **10v / 2t / MSLP / SP nMSE**: Per-variable truth-std-normalized surface MSE for the named field, using the same fixed evaluation contract as the aggregate surface score",

@@ -879,8 +879,8 @@ def test_generate_scoreboard_markdown_prefers_surface_nmse():
 
     markdown = scoreboard.generate_scoreboard_markdown(rows)
 
-    assert "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC MSLP p0.01 | TC MSLP min | TC wind p99.99 | TC wind max | TC MSLP reach | TC wind reach | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |" in markdown
-    assert "| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 | 0.1000 | na | na | na | na | na | na | na | na | na | 0.2500 | 0.1700 | 0.2463 | 0.0082 | 0.0494 | 0.0264 |" in markdown
+    assert "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC MSLP p0.01 | TC MSLP min | TC wind p99.99 | TC wind max | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |" in markdown
+    assert "| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 | 0.1000 | na | na | na | na | na | na | na | 0.2500 | 0.1700 | 0.2463 | 0.0082 | 0.0494 | 0.0264 |" in markdown
     assert "- **Sfc nMSE**: Area-weighted and variable-weighted surface MSE after per-variable truth-std normalization over the fixed Aug 26-30 evaluation contract" in markdown
     assert "- **10v / 2t / MSLP / SP nMSE**: Per-variable truth-std-normalized surface MSE for the named field, using the same fixed evaluation contract as the aggregate surface score" in markdown
 
@@ -985,7 +985,7 @@ def test_generate_scoreboard_markdown_appends_eefo_o96_context_row():
 
     markdown = scoreboard.generate_scoreboard_markdown(experiment_rows)
 
-    assert "| x_interp | na | eefo_o96 | na | na | na | na | na | na | na | na | na | na | na | na | na | na | na | na |" in markdown
+    assert "| x_interp | na | eefo_o96 | na | na | na | na | na | na | na | na | na | na | na | na | na | na |" in markdown
     assert markdown.index("| 39991df8 | piecewise30 | manual_39991df_new_o96_o320_20260317_piecewise30_h10_l20_sigma100 |") < markdown.index("| x_interp | na | eefo_o96 |")
     assert "- **Context baseline rows**: Curated comparison rows appended after experiment runs; `x_interp` is sourced from the docs-side `eefo_o96` input baseline" in markdown
 
