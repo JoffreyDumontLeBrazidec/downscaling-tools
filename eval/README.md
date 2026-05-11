@@ -72,6 +72,38 @@ Each evaluator exports `EVALUATOR_SPEC`, `run()`, `score()`, and optionally `plo
 Lane configuration: `eval/config/lanes/<lane>.yaml`
 Host configuration: `eval/config/hosts/<host>.yaml`
 
+### TC tail-extreme ratios (AN-anchored)
+
+The TC evaluator emits four ratio metrics per event + four aggregates, all anchored
+to the **embedded** OPER analysis row in each stats JSON (not the canonical YAML, so
+support_mode / bbox / member-clip stay consistent with everything else in the run):
+
+| metric | meaning |
+|---|---|
+| `tc_<event>_mslp_p001_ratio` | depth(model.mslp_p001) / depth(AN.mslp_p001) |
+| `tc_<event>_mslp_min_ratio`  | depth(model.mslp_min)  / depth(AN.mslp_min)  |
+| `tc_<event>_wind_p9999_ratio`| model.wind_p9999 / AN.wind_p9999             |
+| `tc_<event>_wind_max_ratio`  | model.wind_max   / AN.wind_max               |
+| `tc_mean_<key>_ratio`        | mean of the per-event values                 |
+
+AN row = 1.0 by construction. `>1` means ML reaches deeper minima / stronger winds
+than the analysis; `<1` means weaker.
+
+The percentile fields `mslp_p001` (0.01 percentile) and `wind_p9999` (99.99 percentile)
+were added to `extreme_tail_table` alongside the existing `mslp_p1`/`p01`/`min` and
+`wind_p99`/`p999`/`max` — every TC eval run produces them by default. For stats JSONs
+generated before the change, run the one-shot backfill:
+
+```
+python -m eval.jobs.backfill_tc_extreme_percentiles --lane o96_o320
+# Use --check-only first to see what's missing.
+# Idempotent and atomic per file.
+```
+
+The scoreboard generators (`eval.cli scoreboard` generic CSV, and the custom
+`eval.jobs.generate_enfo_o320_scoreboard`) surface the new columns automatically once
+the underlying stats JSONs have the fields.
+
 ## Backends (`eval/_backends/`)
 
 Internal implementation details of the evaluator wrappers. **Never invoke directly.**

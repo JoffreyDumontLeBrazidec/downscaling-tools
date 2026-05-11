@@ -34,6 +34,9 @@ predict:
     S_max: 1000.0
     S_noise: 1.05
 
+# TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
+# AN-anchored ratio metrics emitted per event (mslp_p001, mslp_min, wind_p9999,
+# wind_max). Backfill old stats with `python -m eval.jobs.backfill_tc_extreme_percentiles`.
 tc:
   beta: 0.5
   mslp_ref: 1013.25
@@ -45,10 +48,6 @@ tc:
   target_grib: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930/iekm_o96_iekm_date*_time0000_step24to120_sfc_y.grib"
   target_label: "IEKM_O96"
   support_mode: "regridded"
-  plot_config:
-    humberto:
-      mslp_bin_range: [910, 1025, 4]
-      wind_bin_range: [0, 60.01, 3]
   member_maps:
     enabled: true
     event_dates:

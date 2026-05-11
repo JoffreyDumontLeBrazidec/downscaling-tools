@@ -207,10 +207,12 @@ def extreme_tail_table(
         if msl.size > 0:
             row["mslp_p1"] = float(np.percentile(msl, 1.0))
             row["mslp_p01"] = float(np.percentile(msl, 0.1))
+            row["mslp_p001"] = float(np.percentile(msl, 0.01))
             row["mslp_min"] = float(np.min(msl))
         if wind.size > 0:
             row["wind_p99"] = float(np.percentile(wind, 99.0))
             row["wind_p999"] = float(np.percentile(wind, 99.9))
+            row["wind_p9999"] = float(np.percentile(wind, 99.99))
             row["wind_max"] = float(np.max(wind))
         rows.append(row)
     rows.sort(

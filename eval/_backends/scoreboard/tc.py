@@ -177,6 +177,134 @@ def multi_depth_enfo_match_score(
     return sum(group_means) / len(group_means)
 
 
+_MIN_AN_EXTREME = 0.1  # hPa or m/s; floor below which AN's extreme value isn't meaningful for ratio normalization.
+
+
+def _safe_ratio(model_extreme: float, an_extreme: float) -> float | None:
+    if an_extreme is None or model_extreme is None:
+        return None
+    if an_extreme < _MIN_AN_EXTREME:
+        return None
+    return model_extreme / an_extreme
+
+
+def tail_extreme_ratios(
+    model: dict[str, Any],
+    analysis: dict[str, Any],
+) -> dict[str, float | None]:
+    """Compute per-key tail-extreme ratios vs OPER analysis.
+
+    Returns dict with keys mslp_p001_ratio, mslp_min_ratio, wind_p9999_ratio,
+    wind_max_ratio. Each is ``model_extreme / AN_extreme`` in 'extremeness' coords
+    (mslp_depth for MSLP keys; raw value for wind). AN row = 1.0 by construction.
+
+    Semantics:
+        1.0  -> model matches AN at this percentile
+        > 1  -> model more extreme than AN
+        < 1  -> model less extreme than AN
+        None -> AN value missing or too small to ratio against
+
+    Requires the input rows to have ``mslp_p001`` and ``wind_p9999`` keys
+    (added to extreme_tail_table for the 0.01 / 99.99 percentiles). Older stats
+    rows without those keys will return None for the corresponding ratios.
+    """
+    out: dict[str, float | None] = {}
+
+    # MSLP — depth coords
+    for key in ("mslp_p001", "mslp_min"):
+        m_val = _finite_float(model.get(key))
+        a_val = _finite_float(analysis.get(key))
+        if m_val is None or a_val is None:
+            out[f"{key}_ratio"] = None
+            continue
+        out[f"{key}_ratio"] = _safe_ratio(mslp_depth(m_val), mslp_depth(a_val))
+
+    # Wind — raw
+    for key in ("wind_p9999", "wind_max"):
+        m_val = _finite_float(model.get(key))
+        a_val = _finite_float(analysis.get(key))
+        if m_val is None or a_val is None:
+            out[f"{key}_ratio"] = None
+            continue
+        out[f"{key}_ratio"] = _safe_ratio(max(m_val, 0.0), max(a_val, 0.0))
+
+    return out
+
+
+_REACH_MIN_DENOMINATOR = 1.0  # hPa or m/s; below this the AN→ENFO range is too narrow to be meaningful.
+
+
+def _position(model_extreme: float, an_extreme: float, enfo_extreme: float) -> float | None:
+    """Locate model_extreme on the AN→ENFO axis. 0=AN, 1=ENFO; <0 below AN; >1 beyond ENFO.
+
+    Returns None when ENFO is not strictly more extreme than AN at this key, i.e.
+    when ``enfo_extreme - an_extreme < _REACH_MIN_DENOMINATOR``. That guard catches
+    two failure modes:
+      - degenerate denominator (AN ≈ ENFO),
+      - inverted axis where AN's small-sample tail exceeds ENFO's large-sample tail
+        (e.g. Idalia wind_p999 where AN n≈50k yields p999 above ENFO n≈3.5M p999).
+    Inverted-axis interpolation is semantically broken — position values flip sign.
+    """
+    denom = enfo_extreme - an_extreme
+    if denom < _REACH_MIN_DENOMINATOR:
+        return None
+    return (model_extreme - an_extreme) / denom
+
+
+def multi_depth_an_enfo_position(
+    model: dict[str, Any],
+    analysis: dict[str, Any],
+    enfo: dict[str, Any],
+) -> dict[str, float | None]:
+    """Compute AN→ENFO position scores for the deepest tail keys.
+
+    Returns {"mslp_position": float|None, "wind_position": float|None}.
+    Each is the mean (over the 2 keys per variable) of:
+
+        (extreme(model) - extreme(AN)) / (extreme(ENFO) - extreme(AN))
+
+    where extreme = mslp_depth for MSLP keys, raw value for wind keys.
+
+    Semantics:
+        < 0  -> model less extreme than AN
+        0    -> model matches AN
+        1    -> model matches ENFO
+        > 1  -> model beyond ENFO
+
+    Keys are skipped when |ENFO_extreme − AN_extreme| is below 1 hPa / 1 m/s
+    (degenerate denominator: AN and ENFO are too close to interpolate).
+    """
+    mslp_keys = ("mslp_p01", "mslp_min")
+    wind_keys = ("wind_p999", "wind_max")
+
+    mslp_positions: list[float] = []
+    for key in mslp_keys:
+        m_val = _finite_float(model.get(key))
+        a_val = _finite_float(analysis.get(key))
+        e_val = _finite_float(enfo.get(key))
+        if m_val is None or a_val is None or e_val is None:
+            continue
+        pos = _position(mslp_depth(m_val), mslp_depth(a_val), mslp_depth(e_val))
+        if pos is not None:
+            mslp_positions.append(pos)
+
+    wind_positions: list[float] = []
+    for key in wind_keys:
+        m_val = _finite_float(model.get(key))
+        a_val = _finite_float(analysis.get(key))
+        e_val = _finite_float(enfo.get(key))
+        if m_val is None or a_val is None or e_val is None:
+            continue
+        pos = _position(max(m_val, 0.0), max(a_val, 0.0), max(e_val, 0.0))
+        if pos is not None:
+            wind_positions.append(pos)
+
+    return {
+        "mslp_position": (sum(mslp_positions) / len(mslp_positions)) if mslp_positions else None,
+        "wind_position": (sum(wind_positions) / len(wind_positions)) if wind_positions else None,
+    }
+
+
 def rescale_with_eefo_floor(raw_score: float, eefo_raw: float | None) -> float:
     """Rescale a raw TC score so EEFO maps to 0 and analysis maps to 1."""
     if eefo_raw is not None and eefo_raw < 1.0:
@@ -249,6 +377,12 @@ def normalize_tc_rows(
                 row["_extreme_score_value"] = 1.0
                 row["_enfo_deviation_value"] = None
                 row["_enfo_match_value"] = None
+                row["_mslp_reach_value"] = None
+                row["_wind_reach_value"] = None
+                row["_mslp_p001_ratio_value"] = 1.0
+                row["_mslp_min_ratio_value"] = 1.0
+                row["_wind_p9999_ratio_value"] = 1.0
+                row["_wind_max_ratio_value"] = 1.0
                 continue
             raw_score = multi_depth_tc_score(row, analysis_row)
             if raw_score is not None:
@@ -261,8 +395,23 @@ def normalize_tc_rows(
                 row["_enfo_deviation_value"] = None
             if extreme_ref_row is not None and row is not extreme_ref_row:
                 row["_enfo_match_value"] = multi_depth_enfo_match_score(row, extreme_ref_row)
+                positions = multi_depth_an_enfo_position(row, analysis_row, extreme_ref_row)
+                row["_mslp_reach_value"] = positions["mslp_position"]
+                row["_wind_reach_value"] = positions["wind_position"]
             else:
                 row["_enfo_match_value"] = None
+                row["_mslp_reach_value"] = None
+                row["_wind_reach_value"] = None
+            # AN-anchored tail ratios use the **embedded** OPER row (same support_mode,
+            # bbox, member-clip as every other row in this stats JSON) rather than the
+            # canonical analysis (which may not carry mslp_p001 / wind_p9999 fields and
+            # was computed with different parameters).
+            ratios_ref = embedded_analysis if isinstance(embedded_analysis, dict) else analysis_row
+            ratios = tail_extreme_ratios(row, ratios_ref or {})
+            row["_mslp_p001_ratio_value"] = ratios["mslp_p001_ratio"]
+            row["_mslp_min_ratio_value"] = ratios["mslp_min_ratio"]
+            row["_wind_p9999_ratio_value"] = ratios["wind_p9999_ratio"]
+            row["_wind_max_ratio_value"] = ratios["wind_max_ratio"]
         return
 
     # Legacy fallback: batch-relative normalization
@@ -279,6 +428,12 @@ def normalize_tc_rows(
             row["_extreme_score_value"] = score
             row["_enfo_deviation_value"] = None
             row["_enfo_match_value"] = None
+            row["_mslp_reach_value"] = None
+            row["_wind_reach_value"] = None
+            row["_mslp_p001_ratio_value"] = None
+            row["_mslp_min_ratio_value"] = None
+            row["_wind_p9999_ratio_value"] = None
+            row["_wind_max_ratio_value"] = None
             continue
 
         m_val = _finite_float(row.get("mslp_980_990_fraction"))
@@ -287,6 +442,12 @@ def normalize_tc_rows(
             row["_extreme_score_value"] = None
             row["_enfo_deviation_value"] = None
             row["_enfo_match_value"] = None
+            row["_mslp_reach_value"] = None
+            row["_wind_reach_value"] = None
+            row["_mslp_p001_ratio_value"] = None
+            row["_mslp_min_ratio_value"] = None
+            row["_wind_p9999_ratio_value"] = None
+            row["_wind_max_ratio_value"] = None
             continue
 
         m_norm = 0.0 if m_max <= m_min else (m_val - m_min) / (m_max - m_min)
@@ -294,6 +455,12 @@ def normalize_tc_rows(
         row["_extreme_score_value"] = 0.5 * (m_norm + w_norm)
         row["_enfo_deviation_value"] = None
         row["_enfo_match_value"] = None
+        row["_mslp_reach_value"] = None
+        row["_wind_reach_value"] = None
+        row["_mslp_p001_ratio_value"] = None
+        row["_mslp_min_ratio_value"] = None
+        row["_wind_p9999_ratio_value"] = None
+        row["_wind_max_ratio_value"] = None
 
 
 def load_tc_extreme_scores_from_json(
@@ -379,4 +546,14 @@ def load_tc_extreme_scores_from_json(
         enfo_match = _finite_float(chosen.get("_enfo_match_value"))
         if enfo_match is not None:
             scores[f"{event_name}_enfo_match"] = enfo_match
+        mslp_reach = _finite_float(chosen.get("_mslp_reach_value"))
+        if mslp_reach is not None:
+            scores[f"{event_name}_mslp_reach"] = mslp_reach
+        wind_reach = _finite_float(chosen.get("_wind_reach_value"))
+        if wind_reach is not None:
+            scores[f"{event_name}_wind_reach"] = wind_reach
+        for ratio_key in ("mslp_p001_ratio", "mslp_min_ratio", "wind_p9999_ratio", "wind_max_ratio"):
+            val = _finite_float(chosen.get(f"_{ratio_key}_value"))
+            if val is not None:
+                scores[f"{event_name}_{ratio_key}"] = val
     return scores

@@ -28,6 +28,9 @@ predict:
     S_max: 1000.0
     S_noise: 1.05
 
+# TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
+# AN-anchored ratio metrics emitted per event (mslp_p001, mslp_min, wind_p9999,
+# wind_max). Backfill old stats with `python -m eval.jobs.backfill_tc_extreme_percentiles`.
 tc:
   beta: 0.5
   mslp_ref: 1013.25

@@ -86,6 +86,29 @@ def score(
                 "value": scores[enfo_match_key],
                 "unit": "score_0_1",
             })
+        mslp_reach_key = f"{event_name}_mslp_reach"
+        if mslp_reach_key in scores:
+            records.append({
+                "metric": f"tc_{event_name}_mslp_reach",
+                "value": scores[mslp_reach_key],
+                "unit": "position",
+            })
+        wind_reach_key = f"{event_name}_wind_reach"
+        if wind_reach_key in scores:
+            records.append({
+                "metric": f"tc_{event_name}_wind_reach",
+                "value": scores[wind_reach_key],
+                "unit": "position",
+            })
+        # AN-anchored tail-extreme ratios (1.0 = matches AN; >1 = more extreme; <1 = less)
+        for ratio_key in ("mslp_p001_ratio", "mslp_min_ratio", "wind_p9999_ratio", "wind_max_ratio"):
+            sk = f"{event_name}_{ratio_key}"
+            if sk in scores:
+                records.append({
+                    "metric": f"tc_{event_name}_{ratio_key}",
+                    "value": scores[sk],
+                    "unit": "ratio_vs_an",
+                })
 
     # Compute aggregate TC score (mean of per-event extreme scores)
     event_scores = [r["value"] for r in records if r["metric"].endswith("_extreme_score")]
@@ -107,5 +130,41 @@ def score(
             "value": sum(match_scores) / len(match_scores),
             "unit": "score_0_1",
         })
+
+    # Aggregate AN→ENFO reach positions per variable (mean across events).
+    mslp_reaches = [
+        r["value"] for r in records
+        if r["metric"].endswith("_mslp_reach") and r["metric"] != "tc_mean_mslp_reach"
+    ]
+    if mslp_reaches:
+        records.append({
+            "metric": "tc_mean_mslp_reach",
+            "value": sum(mslp_reaches) / len(mslp_reaches),
+            "unit": "position",
+        })
+    wind_reaches = [
+        r["value"] for r in records
+        if r["metric"].endswith("_wind_reach") and r["metric"] != "tc_mean_wind_reach"
+    ]
+    if wind_reaches:
+        records.append({
+            "metric": "tc_mean_wind_reach",
+            "value": sum(wind_reaches) / len(wind_reaches),
+            "unit": "position",
+        })
+
+    # Aggregate AN-anchored tail-extreme ratios across events (mean per ratio key).
+    for ratio_key in ("mslp_p001_ratio", "mslp_min_ratio", "wind_p9999_ratio", "wind_max_ratio"):
+        agg_metric = f"tc_mean_{ratio_key}"
+        per_event = [
+            r["value"] for r in records
+            if r["metric"].endswith(f"_{ratio_key}") and r["metric"] != agg_metric
+        ]
+        if per_event:
+            records.append({
+                "metric": agg_metric,
+                "value": sum(per_event) / len(per_event),
+                "unit": "ratio_vs_an",
+            })
 
     return records

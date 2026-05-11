@@ -97,7 +97,16 @@ def load_tc_results(eval_root: Path) -> dict[str, dict[str, Any]]:
             results[run_root.name] = {
                 (
                     f"{k}_extreme"
-                    if not (k.endswith("_enfo_dev") or k.endswith("_enfo_match"))
+                    if not (
+                        k.endswith("_enfo_dev")
+                        or k.endswith("_enfo_match")
+                        or k.endswith("_mslp_reach")
+                        or k.endswith("_wind_reach")
+                        or k.endswith("_mslp_p001_ratio")
+                        or k.endswith("_mslp_min_ratio")
+                        or k.endswith("_wind_p9999_ratio")
+                        or k.endswith("_wind_max_ratio")
+                    )
                     else k
                 ): v
                 for k, v in tc_scores.items()
@@ -300,6 +309,12 @@ def load_context_baseline_rows(
                     "franklin_extreme": _csv_metric(raw_row, "franklin_tc_extreme_score"),
                     "enfo_deviation": _csv_metric(raw_row, "enfo_deviation"),
                     "enfo_match": _csv_metric(raw_row, "enfo_match"),
+                    "mslp_reach": _csv_metric(raw_row, "mslp_reach"),
+                    "wind_reach": _csv_metric(raw_row, "wind_reach"),
+                    "mslp_p001_ratio": _csv_metric(raw_row, "mslp_p001_ratio"),
+                    "mslp_min_ratio": _csv_metric(raw_row, "mslp_min_ratio"),
+                    "wind_p9999_ratio": _csv_metric(raw_row, "wind_p9999_ratio"),
+                    "wind_max_ratio": _csv_metric(raw_row, "wind_max_ratio"),
                     "spectra_l2": _csv_metric(raw_row, "spectra_mean_distance"),
                     "surface_loss": surface_loss,
                     "surface_loss_text": surface_loss_text,
@@ -383,6 +398,12 @@ def build_scoreboard_rows(
                 "franklin_extreme": _nan(),
                 "enfo_deviation": _nan(),
                 "enfo_match": _nan(),
+                "mslp_reach": _nan(),
+                "wind_reach": _nan(),
+                "mslp_p001_ratio": _nan(),
+                "mslp_min_ratio": _nan(),
+                "wind_p9999_ratio": _nan(),
+                "wind_max_ratio": _nan(),
                 "spectra_l2": _nan(),
                 "surface_loss": _nan(),
                 "surface_loss_text": "",
@@ -419,6 +440,27 @@ def build_scoreboard_rows(
         ]
         if enfo_matches:
             row["enfo_match"] = sum(enfo_matches) / len(enfo_matches)
+        # Aggregate AN→ENFO reach positions across events (per variable).
+        mslp_reaches = [
+            v for k, v in tc.items()
+            if k.endswith("_mslp_reach") and v is not None and math.isfinite(v)
+        ]
+        if mslp_reaches:
+            row["mslp_reach"] = sum(mslp_reaches) / len(mslp_reaches)
+        wind_reaches = [
+            v for k, v in tc.items()
+            if k.endswith("_wind_reach") and v is not None and math.isfinite(v)
+        ]
+        if wind_reaches:
+            row["wind_reach"] = sum(wind_reaches) / len(wind_reaches)
+        # AN-anchored tail-extreme ratios — mean across events.
+        for ratio_key in ("mslp_p001_ratio", "mslp_min_ratio", "wind_p9999_ratio", "wind_max_ratio"):
+            vals = [
+                v for k, v in tc.items()
+                if k.endswith(f"_{ratio_key}") and v is not None and math.isfinite(v)
+            ]
+            if vals:
+                row[ratio_key] = sum(vals) / len(vals)
 
     for run_id, spectra_l2 in spectra_data.items():
         row = ensure_row(run_id)
@@ -471,8 +513,8 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
         "Standard evaluation protocol for o96→o320 downscaling runs.",
         "Lower is better for sigma, spectra, and surface loss; higher is better for TC extreme scores.",
         "",
-        "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC Idalia | TC Franklin | ENFO dev | ENFO match | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |",
-        "|------|-----------|--------|----------|----------|-----------|------------|----------|-------------|----------|------------|------------|----------|----------|----------|-----------|---------|",
+        "| Ckpt | Inference | Run ID | σ=1 loss | σ=5 loss | σ=10 loss | σ=100 loss | TC MSLP p0.01 | TC MSLP min | TC wind p99.99 | TC wind max | TC MSLP reach | TC wind reach | Spectra L2 | Sfc nMSE | 10v nMSE | 2t nMSE | MSLP nMSE | SP nMSE |",
+        "|------|-----------|--------|----------|----------|-----------|------------|---------------|-------------|----------------|-------------|---------------|---------------|------------|----------|----------|----------|-----------|---------|",
     ]
 
     for row in rows:
@@ -481,9 +523,12 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
             f"| {row['short_id']} | {row.get('inference', 'na')} | {row['display_run_id']} | "
             f"{_fmt(row['sigma_1'])} | {_fmt(row['sigma_5'])} | "
             f"{_fmt(row['sigma_10'])} | {_fmt(row['sigma_100'])} | "
-            f"{_fmt(row['idalia_extreme'], 3)} | {_fmt(row['franklin_extreme'], 3)} | "
-            f"{_fmt(row['enfo_deviation'], 3)} | "
-            f"{_fmt(row['enfo_match'], 3)} | "
+            f"{_fmt(row['mslp_p001_ratio'], 3)} | "
+            f"{_fmt(row['mslp_min_ratio'], 3)} | "
+            f"{_fmt(row['wind_p9999_ratio'], 3)} | "
+            f"{_fmt(row['wind_max_ratio'], 3)} | "
+            f"{_fmt(row['mslp_reach'], 3)} | "
+            f"{_fmt(row['wind_reach'], 3)} | "
             f"{_fmt(row['spectra_l2'], 4)} | {surface_loss_text} | "
             f"{_fmt(row['surface_10v'], 4)} | {_fmt(row['surface_2t'], 4)} | "
             f"{_fmt(row['surface_msl'], 4)} | {_fmt(row['surface_sp'], 4)} |"
@@ -498,9 +543,9 @@ def generate_scoreboard_markdown(rows: list[dict[str, Any]]) -> str:
         "- **Context baseline rows**: Curated comparison rows appended after experiment runs; `x_interp` is sourced from the docs-side `eefo_o96` input baseline",
         "- **Inference**: Schedule-plus-step label inferred from run metadata or prediction logs (for example `piecewise30`, `karras40`)",
         "- **Sigma loss**: Diffusion validation loss at fixed noise levels (σ=1,5,10,100)",
-        "- **TC Idalia/Franklin**: Analysis-anchored TC extreme score (0-1, higher=closer to analysis truth)",
-        "- **ENFO dev**: ENFO deviation — distance from ENFO baseline (context metric, not a penalty)",
-        "- **ENFO match**: ENFO-anchored symmetric tail-extreme match score (0-1, 1=matches ENFO ensemble; penalizes undershoot and overshoot equally)",
+        "- **TC MSLP p0.01 / TC MSLP min**: AN-anchored tail extremes for MSLP (depth coords). `model / AN` ratio — AN=1.0; >1 means ML reaches deeper minima than AN; <1 means shallower. Mean across Idalia + Franklin.",
+        "- **TC wind p99.99 / TC wind max**: AN-anchored tail extremes for 10m wind. `model / AN` ratio — AN=1.0; >1 means ML reaches stronger winds than AN; <1 means weaker. Mean across Idalia + Franklin.",
+        "- **TC MSLP reach / TC wind reach**: AN→ENFO position on the deepest tail keys (MSLP: p01+min; wind: p999+max), mean over Idalia + Franklin. Semantics: `0`=matches AN, `1`=matches ENFO_O320 (10 mbr), `<0`=less extreme than AN, `>1`=beyond ENFO. Keys with |ENFO−AN|<1 (hPa or m/s) are skipped.",
         "- **Spectra L2**: Fine-scale-weighted mean relative L2 across 6 weather variables (10u, 10v, 2t, msl, t_850, z_500)",
         "- **Sfc nMSE**: Area-weighted and variable-weighted surface MSE after per-variable truth-std normalization over the fixed Aug 26-30 evaluation contract",
         "- **10v / 2t / MSLP / SP nMSE**: Per-variable truth-std-normalized surface MSE for the named field, using the same fixed evaluation contract as the aggregate surface score",
