@@ -73,3 +73,101 @@ def test_build_mars_prediction_request_sfc_only():
     )
     assert len(request) == 1
     assert request[0]["levtype"] == "sfc"
+
+
+def _write_bundle(path, *, surface_params, pl_bases=(), pl_levels=()):
+    """Helper: write a minimal netCDF bundle exposing target_hres_* variables."""
+    import netCDF4 as nc
+
+    ds = nc.Dataset(str(path), "w")
+    try:
+        ds.createDimension("point_hres", 4)
+        for p in surface_params:
+            v = ds.createVariable(f"target_hres_{p}", "f4", ("point_hres",))
+            v[:] = 0
+        if pl_bases and pl_levels:
+            ds.createDimension("target_level", len(pl_levels))
+            tl = ds.createVariable("target_level", "i4", ("target_level",))
+            tl[:] = pl_levels
+            for base in pl_bases:
+                v = ds.createVariable(
+                    f"target_hres_{base}", "f4", ("target_level", "point_hres"),
+                )
+                v[:] = 0
+    finally:
+        ds.close()
+
+
+def test_discover_weather_states_surface_only(tmp_path):
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    bundle = tmp_path / "minimal.nc"
+    _write_bundle(bundle, surface_params=("10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw"))
+
+    states = discover_weather_states_from_bundle(bundle, mode="all-surface-only")
+    assert set(states) == {"10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw"}
+
+
+def test_discover_weather_states_surface_plus_core_pl(tmp_path):
+    """surface-plus-core-pl includes t_850 and z_500 when bundle PL stack supports it."""
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    bundle = tmp_path / "with_pl.nc"
+    _write_bundle(
+        bundle,
+        surface_params=("10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw"),
+        pl_bases=("t", "z", "q", "u", "v", "w"),
+        pl_levels=(1000, 925, 850, 700, 500, 400, 300, 200, 100, 50),
+    )
+
+    states = discover_weather_states_from_bundle(bundle)
+    assert set(states) == {
+        "10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw",
+        "t_850", "z_500",
+    }
+
+
+def test_discover_weather_states_skips_unknown_surface_params(tmp_path):
+    """Surface params not in the canonical _SURFACE_PARAMS list are silently dropped."""
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    bundle = tmp_path / "with_unknown.nc"
+    _write_bundle(bundle, surface_params=("10u", "fancy_param", "2t"))
+
+    states = discover_weather_states_from_bundle(bundle, mode="all-surface-only")
+    assert set(states) == {"10u", "2t"}
+
+
+def test_discover_weather_states_pl_excluded_when_level_missing(tmp_path):
+    """If target_level doesn't contain 500/850, the PL states are excluded."""
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    bundle = tmp_path / "pl_levels_partial.nc"
+    _write_bundle(
+        bundle,
+        surface_params=("10u", "2t"),
+        pl_bases=("z", "t"),
+        pl_levels=(1000, 925),  # no 500 or 850
+    )
+
+    states = discover_weather_states_from_bundle(bundle)
+    assert set(states) == {"10u", "2t"}
+
+
+def test_discover_weather_states_unsupported_mode_raises(tmp_path):
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    bundle = tmp_path / "x.nc"
+    _write_bundle(bundle, surface_params=("2t",))
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="Unsupported weather_states discovery mode"):
+        discover_weather_states_from_bundle(bundle, mode="silly")
+
+
+def test_discover_weather_states_missing_bundle_raises(tmp_path):
+    from eval.predict.mars_retrieve import discover_weather_states_from_bundle
+
+    import pytest as _pytest
+    with _pytest.raises(FileNotFoundError):
+        discover_weather_states_from_bundle(tmp_path / "nope.nc")

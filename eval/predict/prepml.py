@@ -93,6 +93,105 @@ def resolve_expver(expver: str | None, lane_config: dict) -> str:
     return debug_pool[0]
 
 
+def _resolve_prepml_weather_states(
+    *,
+    checkpoint: str,
+    lane_config: dict,
+) -> list[str]:
+    """Resolve the canonical weather_states list for a PrepML run.
+
+    Priority chain (first non-empty wins):
+      1. explicit `predict.weather_states` in lane YAML
+      2. bundle `target_hres_*` discovery — matches manual's evaluation surface
+      3. checkpoint `hyper_parameters.config.data` (forcing + diagnostic)
+      4. lane `spectra.fields` — legacy last-resort fallback
+
+    Results from (2)+(3)+(4) are validated against `weather_state_to_mars` so
+    PrepML never tries to retrieve params it doesn't understand.
+    """
+    from eval.predict.mars_retrieve import (
+        discover_weather_states_from_bundle,
+        weather_state_to_mars,
+    )
+
+    def _validate(states: list[str], source: str) -> list[str]:
+        kept: list[str] = []
+        invalid: list[str] = []
+        for state in states:
+            try:
+                weather_state_to_mars(state)
+            except ValueError:
+                invalid.append(state)
+                continue
+            kept.append(state)
+        if invalid:
+            LOG.warning(
+                "%s yielded non-MARS weather states %s; dropping them.",
+                source, invalid,
+            )
+        return kept
+
+    # (1) explicit lane override
+    explicit = list(lane_config.get("predict", {}).get("weather_states") or [])
+    if explicit:
+        kept = _validate(explicit, "lane predict.weather_states override")
+        if kept:
+            LOG.info("Using explicit predict.weather_states from lane YAML: %s", kept)
+            return kept
+
+    # (2) bundle discovery (canonical: same surface manual evaluates against)
+    bundle_dir = lane_config.get("predict", {}).get("input_root", "") or ""
+    if bundle_dir:
+        bundle_path = _first_bundle_in_dir(Path(bundle_dir))
+        if bundle_path is not None:
+            try:
+                states = discover_weather_states_from_bundle(bundle_path)
+            except Exception:
+                LOG.warning("Bundle weather_states discovery failed for %s", bundle_path, exc_info=True)
+                states = []
+            kept = _validate(states, f"bundle {bundle_path.name}")
+            if kept:
+                LOG.info("Using weather_states discovered from bundle %s: %s", bundle_path.name, kept)
+                return kept
+
+    # (3) checkpoint metadata
+    ckpt_states = _extract_weather_states_from_checkpoint(checkpoint)
+    if ckpt_states:
+        kept = _validate(ckpt_states, "checkpoint metadata")
+        if kept:
+            LOG.info("Using weather_states from checkpoint metadata: %s", kept)
+            return kept
+
+    # (4) spectra.fields legacy fallback
+    spectra_fields = list(lane_config.get("spectra", {}).get("fields") or [])
+    if spectra_fields:
+        kept = _validate(spectra_fields, "lane spectra.fields fallback")
+        if kept:
+            LOG.warning(
+                "Falling back to lane spectra.fields for weather_states (%s). "
+                "Consider setting predict.weather_states explicitly or rebuilding "
+                "bundles so target_hres_* coverage is discoverable.",
+                kept,
+            )
+            return kept
+
+    raise ValueError(
+        "Cannot determine output weather states. "
+        "None of predict.weather_states / bundle target_hres_* / checkpoint metadata / "
+        "spectra.fields yielded a usable list."
+    )
+
+
+def _first_bundle_in_dir(bundle_dir: Path) -> Path | None:
+    """Return the first `*_input_bundle.nc` file in `bundle_dir`, or None."""
+    if not bundle_dir.exists() or not bundle_dir.is_dir():
+        return None
+    for f in sorted(bundle_dir.glob("*_input_bundle.nc")):
+        if f.is_file():
+            return f
+    return None
+
+
 def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:
     """Extract output weather states from checkpoint metadata.
 
@@ -343,6 +442,7 @@ def run_retrieval(retrieve_config_path: str) -> None:
     bundle_filename_tpl = config["bundle_filename_tpl"]
     predictions_dir = Path(config["predictions_dir"])
     predictions_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_id = config.get("checkpoint_id") or expver
 
     manifest_rows: list[tuple[str, int, int, str]] = []
     total = len(dates) * len(steps)
@@ -360,6 +460,7 @@ def run_retrieval(retrieve_config_path: str) -> None:
                 bundle_dir=bundle_dir,
                 bundle_filename_tpl=bundle_filename_tpl,
                 output_dir=predictions_dir,
+                checkpoint_id=checkpoint_id,
             )
             done += 1
             LOG.info("[%d/%d] %s", done, total, out_path)
@@ -395,34 +496,15 @@ def prepml_predict(
     resolved_expver = resolve_expver(expver, lane_config)
     LOG.info("Using expver: %s", resolved_expver)
 
-    # 2. Extract weather states from checkpoint
-    weather_states = _extract_weather_states_from_checkpoint(checkpoint)
-    if weather_states:
-        from eval.predict.mars_retrieve import weather_state_to_mars
-
-        invalid_states: list[str] = []
-        for state in weather_states:
-            try:
-                weather_state_to_mars(state)
-            except ValueError:
-                invalid_states.append(state)
-        if invalid_states:
-            LOG.warning(
-                "Checkpoint metadata yielded non-MARS weather states %s. "
-                "Will use lane config weather states.",
-                invalid_states,
-            )
-            weather_states = []
-    if not weather_states:
-        weather_states = lane_config.get("spectra", {}).get("fields", [])
-        if not weather_states:
-            raise ValueError(
-                "Cannot determine output weather states. "
-                "Neither checkpoint config nor lane spectra.fields provided them."
-            )
-        LOG.info("Using weather states from lane spectra config: %s", weather_states)
-    else:
-        LOG.info("Extracted weather states from checkpoint: %s", weather_states)
+    # 2. Resolve weather states. Priority:
+    #    (a) explicit predict.weather_states in lane YAML — operator override
+    #    (b) bundle target_hres_* discovery — same evaluation surface manual sees
+    #    (c) checkpoint metadata — only when bundles aren't reachable
+    #    (d) lane spectra.fields — last-resort fallback for legacy lanes
+    weather_states = _resolve_prepml_weather_states(
+        checkpoint=checkpoint,
+        lane_config=lane_config,
+    )
 
     # 3. Generate PrepML config
     prepml_config = generate_prepml_config(
@@ -464,6 +546,7 @@ def prepml_predict(
         "bundle_dir": str(bundle_dir),
         "bundle_filename_tpl": bundle_filename_tpl,
         "predictions_dir": str(predictions_dir),
+        "checkpoint_id": Path(checkpoint).stem,
     }
     retrieve_config_path = output_dir / "retrieve_config.json"
     retrieve_config_path.write_text(json.dumps(retrieve_config, indent=2) + "\n")

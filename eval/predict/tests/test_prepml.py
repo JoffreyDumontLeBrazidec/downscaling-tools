@@ -56,3 +56,105 @@ def test_resolve_expver_no_prepml_section_raises():
     config = {"predict": {}, "evaluator_groups": {"default": []}}
     with pytest.raises(ValueError, match="No 'prepml' section"):
         resolve_expver(None, config)
+
+
+# --- _resolve_prepml_weather_states priority chain ---
+
+
+def _write_bundle(path, *, surface_params, pl_bases=(), pl_levels=()):
+    import netCDF4 as nc
+
+    ds = nc.Dataset(str(path), "w")
+    try:
+        ds.createDimension("point_hres", 4)
+        for p in surface_params:
+            v = ds.createVariable(f"target_hres_{p}", "f4", ("point_hres",))
+            v[:] = 0
+        if pl_bases and pl_levels:
+            ds.createDimension("target_level", len(pl_levels))
+            tl = ds.createVariable("target_level", "i4", ("target_level",))
+            tl[:] = pl_levels
+            for base in pl_bases:
+                v = ds.createVariable(
+                    f"target_hres_{base}", "f4", ("target_level", "point_hres"),
+                )
+                v[:] = 0
+    finally:
+        ds.close()
+
+
+def _bundle_dir_with_one_bundle(tmp_path):
+    bundle = tmp_path / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
+    _write_bundle(
+        bundle,
+        surface_params=("10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw"),
+        pl_bases=("t", "z", "q"),
+        pl_levels=(1000, 850, 500),
+    )
+    return tmp_path
+
+
+def test_resolve_weather_states_explicit_predict_field_wins(tmp_path):
+    """Explicit predict.weather_states overrides all other sources."""
+    from eval.predict.prepml import _resolve_prepml_weather_states
+
+    lane_config = _lane_config_with_prepml()
+    bundle_dir = _bundle_dir_with_one_bundle(tmp_path)
+    lane_config["predict"]["input_root"] = str(bundle_dir)
+    lane_config["predict"]["weather_states"] = ["10u", "2t", "z_500"]
+
+    states = _resolve_prepml_weather_states(checkpoint="nonexistent.ckpt", lane_config=lane_config)
+    assert states == ["10u", "2t", "z_500"]
+
+
+def test_resolve_weather_states_bundle_discovery_used_when_no_explicit(tmp_path):
+    """Bundle discovery gives the canonical surface-plus-core-pl coverage."""
+    from eval.predict.prepml import _resolve_prepml_weather_states
+
+    lane_config = _lane_config_with_prepml()
+    bundle_dir = _bundle_dir_with_one_bundle(tmp_path)
+    lane_config["predict"]["input_root"] = str(bundle_dir)
+    # No predict.weather_states; spectra.fields would only emit 6, ensuring bundle wins.
+    lane_config["spectra"] = {"fields": ["10u", "10v", "2t", "msl", "t_850", "z_500"]}
+
+    states = _resolve_prepml_weather_states(checkpoint="nonexistent.ckpt", lane_config=lane_config)
+    assert set(states) == {
+        "10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw",
+        "t_850", "z_500",
+    }
+
+
+def test_resolve_weather_states_drops_invalid(tmp_path):
+    """Invalid weather_states (non-MARS-mappable) are dropped with a warning."""
+    from eval.predict.prepml import _resolve_prepml_weather_states
+
+    lane_config = _lane_config_with_prepml()
+    lane_config["predict"]["input_root"] = str(tmp_path)
+    lane_config["predict"]["weather_states"] = ["10u", "fancy_param_no_level", "2t"]
+
+    states = _resolve_prepml_weather_states(checkpoint="x", lane_config=lane_config)
+    assert states == ["10u", "2t"]
+
+
+def test_resolve_weather_states_falls_back_to_spectra_fields(tmp_path):
+    """When bundle and checkpoint are unavailable, spectra.fields is the last resort."""
+    from eval.predict.prepml import _resolve_prepml_weather_states
+
+    lane_config = _lane_config_with_prepml()
+    # input_root points to an empty dir → no bundles
+    lane_config["predict"]["input_root"] = str(tmp_path)
+    lane_config["spectra"] = {"fields": ["10u", "10v", "2t", "msl", "t_850", "z_500"]}
+
+    states = _resolve_prepml_weather_states(checkpoint="nonexistent.ckpt", lane_config=lane_config)
+    assert states == ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+
+
+def test_resolve_weather_states_no_sources_raises(tmp_path):
+    """If every source is empty, raise rather than silently choose nothing."""
+    from eval.predict.prepml import _resolve_prepml_weather_states
+
+    lane_config = _lane_config_with_prepml()
+    lane_config["predict"]["input_root"] = str(tmp_path)
+    # No spectra section, no explicit override, no usable bundle, no checkpoint.
+    with pytest.raises(ValueError, match="Cannot determine output weather states"):
+        _resolve_prepml_weather_states(checkpoint="nonexistent.ckpt", lane_config=lane_config)

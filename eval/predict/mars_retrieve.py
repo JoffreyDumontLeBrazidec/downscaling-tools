@@ -20,6 +20,11 @@ _SURFACE_PARAMS = {
     "msl", "skt", "sp", "ssrd", "strd", "tcc", "tcw", "tp",
 }
 
+# The "core" pressure-level outputs that the surface-plus-core-pl mode
+# keeps alongside all surface params. Matches manual_inference's
+# dataset.resolve_output_weather_states("surface-plus-core-pl").
+_CORE_PL_STATES = ("t_850", "z_500")
+
 _PL_RE = re.compile(r"^([a-z]+)_(\d+)$")
 
 
@@ -206,6 +211,186 @@ def _reshape_to_prediction_format(
     return ds_pred
 
 
+def discover_weather_states_from_bundle(
+    bundle_path: str | Path,
+    *,
+    mode: str = "surface-plus-core-pl",
+) -> list[str]:
+    """Enumerate the canonical weather_states that a bundle file can supply.
+
+    Manual inference's bundle-prediction path reads `name_to_idx_out` from the
+    model and filters via `resolve_output_weather_states("surface-plus-core-pl")`.
+    PrepML doesn't load the model, so the parallel canonical source is the
+    bundle's own `target_hres_*` variables — which is what manual ultimately
+    compares predictions against. Returning the bundle's available weather_states
+    keeps both backends pointing at the same evaluation surface.
+
+    `mode`:
+      - "surface-plus-core-pl" (default): all surface params present in the
+        bundle plus z_500/t_850 if the bundle's PL stack contains them.
+      - "all-surface-only": surface params only (no PL).
+
+    Surface params come from `_SURFACE_PARAMS`. Pressure-level inclusion
+    requires the bundle to expose a `target_level` array containing the
+    requested level and the base PL variable (e.g. `target_hres_z` for `z_500`).
+    """
+    bundle_path = Path(bundle_path)
+    if not bundle_path.exists():
+        raise FileNotFoundError(f"Bundle file does not exist: {bundle_path}")
+
+    import netCDF4 as nc
+
+    with nc.Dataset(str(bundle_path), "r") as ds:
+        target_vars = [v for v in ds.variables if v.startswith("target_hres_")]
+        sfc_params: list[str] = []
+        for v in sorted(target_vars):
+            param = v[len("target_hres_"):]
+            if param in _SURFACE_PARAMS:
+                sfc_params.append(param)
+
+        pl_states: list[str] = []
+        if mode == "surface-plus-core-pl":
+            target_levels = (
+                set(int(x) for x in ds["target_level"][:])
+                if "target_level" in ds.variables else set()
+            )
+            for state in _CORE_PL_STATES:
+                m = _PL_RE.match(state)
+                if not m:
+                    continue
+                base, level = m.group(1), int(m.group(2))
+                if f"target_hres_{base}" in ds.variables and level in target_levels:
+                    pl_states.append(state)
+
+    if mode not in ("surface-plus-core-pl", "all-surface-only"):
+        raise ValueError(
+            f"Unsupported weather_states discovery mode {mode!r}. "
+            f"Expected 'surface-plus-core-pl' or 'all-surface-only'."
+        )
+
+    return sfc_params + pl_states
+
+
+def canonicalize_prepml_predictions(
+    *,
+    ds_pred: "xr.Dataset",
+    ds_bundle: "xr.Dataset | None",
+    date: str,
+    step: int,
+    members: list[int],
+    weather_states: list[str],
+    checkpoint_id: str,
+) -> "xr.Dataset":
+    """Project raw-PrepML predictions into the canonical manual NC schema.
+
+    `ds_pred` is the output of `_reshape_to_prediction_format`:
+        y_pred dims: (weather_state, ensemble_member, forecast_reference_time, step, grid_point_hres)
+    `ds_bundle` is the output of `_load_bundle_truth_and_input`:
+        y dims: (weather_state, grid_point_hres)
+        x dims: (weather_state, grid_point_lres)
+        plus lat_hres/lon_hres/lat_lres/lon_lres coord arrays.
+
+    The returned dataset matches `validate_predictions_dataset()` from
+    `eval/predict/dataset_builder.py` exactly:
+        y_pred / y / x dims: (sample, ensemble_member, grid_point_*, weather_state)
+        + date / init_date / lead_step_hours / valid_time as sample-dim vars
+        + lat/lon coord arrays
+        + init_date / lead_step_hours / checkpoint_id ds attrs.
+
+    The downstream evaluators read this canonical layout; manual_inference
+    already produces it. This function bridges the gap so PrepML output is
+    interchangeable for every downstream stage.
+    """
+    from eval.predict.dataset_builder import build_prediction_dataset
+
+    init_date = np.datetime64(
+        f"{date[:4]}-{date[4:6]}-{date[6:]}T00:00:00",
+        "ns",
+    )
+
+    # y_pred raw shape: (ws, ens, fcst=1, step=1, grid_hres) — transpose to (sample, ens, grid_hres, ws)
+    y_pred_raw = ds_pred["y_pred"].values
+    if y_pred_raw.ndim != 5:
+        raise ValueError(
+            f"Expected ds_pred['y_pred'] to be 5D (ws, ens, fcst, step, grid); got shape {y_pred_raw.shape}"
+        )
+    # (ws, ens, fcst, step, grid) -> (fcst*step, ens, grid, ws)
+    n_ws, n_ens, n_fcst, n_step, n_grid_hres = y_pred_raw.shape
+    if n_fcst != 1 or n_step != 1:
+        raise ValueError(
+            f"Canonicalizer assumes one (fcst, step) per file; got fcst={n_fcst} step={n_step}"
+        )
+    # (ws, ens, 1, 1, grid) -> (sample=1, ens, grid, ws)
+    y_pred = np.transpose(y_pred_raw[:, :, 0, 0, :], (1, 2, 0))[None, :, :, :]
+
+    if ds_bundle is not None and "y" in ds_bundle:
+        y_bundle = ds_bundle["y"].values  # (ws, grid_hres)
+        if y_bundle.shape != (n_ws, n_grid_hres):
+            raise ValueError(
+                f"Bundle y shape {y_bundle.shape} does not match predictions ({n_ws}, {n_grid_hres})"
+            )
+        y_single = y_bundle.T  # (grid_hres, ws)
+        y = np.broadcast_to(y_single[None, None, :, :], (1, n_ens, n_grid_hres, n_ws)).copy()
+    else:
+        y = np.full((1, n_ens, n_grid_hres, n_ws), np.nan, dtype=y_pred.dtype)
+
+    if ds_bundle is not None and "x" in ds_bundle:
+        x_bundle = ds_bundle["x"].values  # (ws, grid_lres)
+        n_grid_lres = x_bundle.shape[1]
+        x_single = x_bundle.T  # (grid_lres, ws)
+        x = np.broadcast_to(x_single[None, None, :, :], (1, n_ens, n_grid_lres, n_ws)).copy()
+    else:
+        x = np.zeros((1, n_ens, 0, n_ws), dtype=y_pred.dtype)
+        n_grid_lres = 0
+
+    def _coord(name: str) -> np.ndarray | None:
+        for source in (ds_bundle, ds_pred):
+            if source is not None and name in source:
+                return np.asarray(source[name].values)
+        return None
+
+    lon_hres = _coord("lon_hres")
+    lat_hres = _coord("lat_hres")
+    lon_lres = _coord("lon_lres")
+    lat_lres = _coord("lat_lres")
+
+    if lon_hres is None or lat_hres is None:
+        raise ValueError("Cannot canonicalize: lon_hres/lat_hres missing from both ds_pred and ds_bundle")
+
+    # build_prediction_dataset requires lon_lres/lat_lres arrays whose length
+    # matches x's grid_point_lres dim. If the bundle didn't provide real coord
+    # arrays, fall back to placeholder arrays of the right length so dataset
+    # construction succeeds; we drop them after build so the canonical schema
+    # validator surfaces the missing-coord error rather than silently lying.
+    lon_lres_arr = np.arange(n_grid_lres, dtype="float32") if lon_lres is None else lon_lres
+    lat_lres_arr = np.arange(n_grid_lres, dtype="float32") if lat_lres is None else lat_lres
+
+    ds_canonical = build_prediction_dataset(
+        x=x,
+        y=y,
+        y_pred=y_pred,
+        lon_lres=lon_lres_arr,
+        lat_lres=lat_lres_arr,
+        lon_hres=lon_hres,
+        lat_hres=lat_hres,
+        weather_states=list(weather_states),
+        init_date=init_date,
+        lead_step_hours=int(step),
+        member_ids=list(members),
+        include_member_views=False,
+    )
+    ds_canonical.attrs["checkpoint_id"] = str(checkpoint_id)
+
+    # Drop the lat_lres/lon_lres coords if the bundle did not provide them —
+    # leaving zero-length arrays would mislead downstream consumers.
+    if lon_lres is None and "lon_lres" in ds_canonical:
+        ds_canonical = ds_canonical.drop_vars("lon_lres")
+    if lat_lres is None and "lat_lres" in ds_canonical:
+        ds_canonical = ds_canonical.drop_vars("lat_lres")
+
+    return ds_canonical
+
+
 def assemble_predictions_file(
     *,
     expver: str,
@@ -217,16 +402,21 @@ def assemble_predictions_file(
     bundle_dir: str | Path,
     bundle_filename_tpl: str,
     output_dir: Path,
+    checkpoint_id: str | None = None,
 ) -> Path:
     """Retrieve predictions from MARS, load truth+input from bundles, write predictions_*.nc.
+
+    Output matches the canonical manual_inference schema enforced by
+    `eval.predict.dataset_builder.validate_predictions_dataset`. Downstream
+    evaluators read this layout uniformly regardless of backend.
 
     Args:
         bundle_dir: directory containing input bundle .nc files (predict.input_root)
         bundle_filename_tpl: bundle filename template with {date}, {member:02d}, {step:03d} placeholders
+        checkpoint_id: identifier written to ds.attrs['checkpoint_id'] (defaults to expver)
 
     Returns path to written file.
     """
-    import pandas as pd
     import xarray as xr
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -249,16 +439,16 @@ def assemble_predictions_file(
         bundle_dir, bundle_filename_tpl, date, step, weather_states,
     )
 
-    # 3. Merge y_pred + y + x + coords
-    # Keep y_pred's coords (lon_hres, lat_hres already wrapped to -180..180)
-    # and drop duplicate coords from bundle to avoid merge conflicts.
-    if ds_bundle is not None:
-        bundle_vars = {k: ds_bundle[k] for k in ds_bundle.data_vars
-                       if k not in y_pred_ds and k not in y_pred_ds.coords}
-        ds_out = y_pred_ds.assign(bundle_vars)
-    else:
-        ds_out = y_pred_ds
-        LOG.warning("No bundle truth found for date=%s step=%d — writing y_pred only", date, step)
+    # 3. Project into canonical (manual_inference) schema
+    ds_out = canonicalize_prepml_predictions(
+        ds_pred=y_pred_ds,
+        ds_bundle=ds_bundle,
+        date=date,
+        step=int(step),
+        members=members,
+        weather_states=list(weather_states),
+        checkpoint_id=checkpoint_id or expver,
+    )
 
     # 4. Write
     if out_path.exists():
