@@ -182,12 +182,14 @@ def _cli_command(
     checkpoint: str,
     lane: str,
     overrides: dict[str, Any] | None = None,
+    ntasks_per_node: int = 1,
 ) -> str:
     """Render the ``python -m eval.cli`` invocation."""
+    launcher = "srun " if ntasks_per_node > 1 else ""
     parts = [
         "",
         "# Run evaluation",
-        f"python -m eval.cli {mode} \\",
+        f"{launcher}python -m eval.cli {mode} \\",
     ]
 
     # --checkpoint is valid for run, predict, evaluate (optional) but not scoreboard
@@ -279,7 +281,7 @@ def render_sbatch(
         ),
         _comment_block(lane, host, checkpoint, mode),
         _environment_block(host_cfg["environment_setup"], host_cfg["code_root"]),
-        _cli_command(mode, checkpoint, lane, overrides),
+        _cli_command(mode, checkpoint, lane, overrides, ntasks_per_node=ntasks_per_node),
     ]
 
     # Append post-eval canonical placement for single-evaluator evaluate scripts

@@ -158,7 +158,6 @@ prepml:
     - cos_latitude
     - cos_local_time
     - cos_longitude
-    - insolation
     - lsm
     - sin_julian_day
     - sin_latitude

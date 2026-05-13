@@ -1,3 +1,5 @@
+default_host: atos_ag
+
 prepare:
   bundle_filename_tpl: "eefo_o320_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
   args:

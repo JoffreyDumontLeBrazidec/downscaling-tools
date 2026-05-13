@@ -14,6 +14,7 @@ import argparse
 import importlib
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -80,6 +81,14 @@ def _add_lane_override_args(parser: argparse.ArgumentParser) -> None:
         "--dates", default=None,
         help="Comma-separated dates YYYYMMDD (e.g. 20230826,20230827). Overrides lane YAML predict.dates.",
     )
+    parser.add_argument(
+        "--weather-states", default=None,
+        help=(
+            "Comma-separated weather_state names (e.g. 10u,2t,z_500). Overrides lane YAML "
+            "predict.weather_states. Honored by --mode prepml's resolver as the highest-priority "
+            "source; manual mode still resolves from checkpoint output via surface-plus-core-pl."
+        ),
+    )
 
 
 def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
@@ -90,7 +99,15 @@ def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--bundle-dir", default=None,
-        help="Output directory for built bundles (default: <output-dir>/bundles).",
+        help=(
+            "Bundle directory. With --source-grib-root: output for newly built bundles. "
+            "Without --source-grib-root: existing bundle directory used as input_root "
+            "(rebuild is skipped). Default: <output-dir>/bundles."
+        ),
+    )
+    parser.add_argument(
+        "--num-gpus-per-model", type=int, default=None,
+        help="GPUs per model replica. Overrides lane YAML predict.num_gpus_per_model.",
     )
 
 
@@ -138,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lane_override_args(p_predict)
     _add_prepare_args(p_predict)
     _add_prepml_args(p_predict)
+    p_predict.add_argument(
+        "--output-dir", default=None,
+        help="Override output directory (defaults to <scratch>/eval/<lane>/run_<TS>). "
+             "Predictions go to <output-dir>/predictions.",
+    )
 
     # --- prepare ---
     p_prepare = subparsers.add_parser("prepare", help="Build truth-aware bundles only (no prediction).")
@@ -194,6 +216,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_evaluator_filter_args(p_sb)
 
+    # --- report ---
+    p_report = subparsers.add_parser("report", help="Generate HTML report for an evaluation run.")
+    p_report.add_argument("--run-dir", required=True, help="Root directory of the evaluation run.")
+    p_report.add_argument("--output", default=None, help="Output HTML path (default: <run-dir>/report.html).")
+
+    # --- videogen ---
+    # Backend: eval._backends.videogen (modular MP4 generator).
+    # Scenes aren't enumerated here so eval.cli's import stays cheap; the
+    # videogen entrypoint validates --scene against its own SCENES registry.
+    p_videogen = subparsers.add_parser(
+        "videogen", help="Render MP4 videos of downscaling predictions.",
+    )
+    p_videogen.add_argument("--scene", required=True,
+                            help="Scene name (see eval._backends.videogen.scenes.SCENES).")
+    p_videogen.add_argument("--mode", choices=("preview", "all"), default="preview")
+    p_videogen.add_argument("--preview-valid", default=None,
+                            help="Valid time YYYY-MM-DD for preview mode.")
+    p_videogen.add_argument("--predictions-dir", default=None,
+                            help="Override scene's predictions_dir.")
+    p_videogen.add_argument("--output-dir", default=None,
+                            help="Override scene's output_dir.")
+    p_videogen.add_argument("--ckpt-label", default=None,
+                            help="Override scene's ckpt_label (cosmetic).")
+
     return parser
 
 
@@ -220,6 +266,10 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
         predict_overrides["steps"] = _parse_int_csv(args.steps)
     if getattr(args, "dates", None) is not None:
         predict_overrides["dates"] = _parse_str_csv(args.dates)
+    if getattr(args, "weather_states", None) is not None:
+        predict_overrides["weather_states"] = _parse_str_csv(args.weather_states)
+    if getattr(args, "num_gpus_per_model", None) is not None:
+        predict_overrides["num_gpus_per_model"] = int(args.num_gpus_per_model)
     if predict_overrides:
         return {"predict": predict_overrides}
     return {}
@@ -365,11 +415,11 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     checkpoint = args.checkpoint
 
     source_grib_root = getattr(args, "source_grib_root", None) or ""
+    bundle_dir_arg = getattr(args, "bundle_dir", None)
 
     # --- Prepare: build truth-aware bundles if lane has prepare: section ---
     if lane_config.get("prepare") and source_grib_root:
         from eval.prepare.builder import build_bundles
-        bundle_dir_arg = getattr(args, "bundle_dir", None)
         bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
         bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
         if isinstance(bundle_pairs_raw, str):
@@ -386,6 +436,9 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
             verification_path=output_dir / "bundle_build_verification.json",
         )
         input_root = str(bundle_dir)
+    elif bundle_dir_arg:
+        # Use pre-built bundles as input_root; skip rebuild.
+        input_root = str(bundle_dir_arg)
     else:
         # Resolve input_root: lane config takes precedence over host DATA_DIR
         input_root = predict_cfg.get("input_root", "")
@@ -419,10 +472,22 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     if bundle_pairs:
         cmd += ["--bundle-pairs", str(bundle_pairs)]
 
+    num_gpus_per_model = predict_cfg.get("num_gpus_per_model")
+    if num_gpus_per_model is not None:
+        cmd += ["--num-gpus-per-model", str(int(num_gpus_per_model))]
+
     # Pass sampler config from lane YAML if present, overriding predict.main defaults
     sampler_cfg = predict_cfg.get("sampler")
     if sampler_cfg:
         cmd += ["--extra-args-json", json.dumps(sampler_cfg)]
+
+    # Wrap in srun for multi-GPU model parallelism. Requires an outer sbatch
+    # allocation; falls back to single-process when not in SLURM.
+    # No --gpus-per-task: each rank needs all node GPUs visible so the model
+    # loader can do torch.cuda.set_device(cuda:<local_rank>) without binding.
+    if num_gpus_per_model and int(num_gpus_per_model) > 1 and os.environ.get("SLURM_JOB_ID"):
+        n = str(int(num_gpus_per_model))
+        cmd = ["srun", "--ntasks", n, "--ntasks-per-node", n] + cmd
 
     LOG.info("Running predictions: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
@@ -685,9 +750,32 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
 
+    # --- Report subcommand (no config needed) ---
+    if args.subcommand == "report":
+        from eval.report import generate_report
+        run_dir = Path(args.run_dir)
+        output = Path(args.output) if args.output else None
+        report_path = generate_report(run_dir, output)
+        LOG.info("Report written to %s", report_path)
+        return
+
+    # --- Videogen subcommand (no lane/host config needed) ---
+    if args.subcommand == "videogen":
+        from eval._backends.videogen.__main__ import main as videogen_main
+        forwarded = ["--scene", args.scene, "--mode", args.mode]
+        if args.preview_valid:
+            forwarded += ["--preview-valid", args.preview_valid]
+        if args.predictions_dir:
+            forwarded += ["--predictions-dir", str(args.predictions_dir)]
+        if args.output_dir:
+            forwarded += ["--output-dir", str(args.output_dir)]
+        if args.ckpt_label:
+            forwarded += ["--ckpt-label", args.ckpt_label]
+        videogen_main(forwarded)
+        return
+
     # --- Resolve config ---
     lane_name = args.lane
-    host_name = args.host or DEFAULT_HOST
 
     lane_overrides = _build_lane_overrides(args)
 
@@ -701,6 +789,8 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         raise SystemExit(f"Failed to load lane config '{lane_name}': {exc}") from exc
 
+    host_name = args.host or lane_config.get("default_host") or DEFAULT_HOST
+
     try:
         host_config = load_host(host_name)
     except FileNotFoundError as exc:
@@ -710,6 +800,15 @@ def main(argv: list[str] | None = None) -> None:
         ) from exc
     except Exception as exc:
         raise SystemExit(f"Failed to load host config '{host_name}': {exc}") from exc
+
+    # --- Export host-declared env vars so subprocesses (predict.main, evaluators) see them ---
+    # The host YAML's environment_setup.exports lists vars like DATA_DIR, GRID_DIR,
+    # RESIDUAL_STATISTICS_DIR that OmegaConf interpolations and model loaders depend on.
+    # Existing values in os.environ take precedence (so user overrides still work).
+    host_exports = host_config.get("environment_setup", {}).get("exports", {}) or {}
+    for key, value in host_exports.items():
+        if key not in os.environ:
+            os.environ[key] = str(value)
 
     # --- Propagate --steps to evaluator sections ---
     # When --steps is passed, override not just predict.steps but also any
@@ -734,6 +833,8 @@ def main(argv: list[str] | None = None) -> None:
         # Place evaluator outputs alongside predictions, unless --output-dir overrides
         explicit_out = getattr(args, "output_dir", None)
         output_dir = Path(explicit_out) if explicit_out else Path(args.predictions_dir).parent
+    elif args.subcommand == "predict" and getattr(args, "output_dir", None):
+        output_dir = Path(args.output_dir)
     elif args.subcommand == "prepare":
         bundle_dir_arg = getattr(args, "bundle_dir", None)
         output_dir = Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)

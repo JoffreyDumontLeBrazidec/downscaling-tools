@@ -14,6 +14,7 @@ _LANE_ALLOWED_KEYS = {
     "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
     "evaluator_groups", "sigma", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
+    "default_host",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
