@@ -1,0 +1,1 @@
+archive/spectra_proxy_from_predictions.sbatch

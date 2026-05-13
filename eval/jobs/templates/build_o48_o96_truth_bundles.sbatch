@@ -1,0 +1,1 @@
+archive/build_o48_o96_truth_bundles.sbatch

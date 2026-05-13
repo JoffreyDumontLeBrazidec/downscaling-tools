@@ -1,0 +1,1 @@
+archive/strict_manual_predict_x_bundle.sbatch
