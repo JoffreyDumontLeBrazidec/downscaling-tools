@@ -256,7 +256,7 @@ def main() -> None:
         with open(args.proxy_json, encoding="utf-8") as f:
             proxy_data = json.load(f)
     else:
-        from eval.jobs.diagnose_per_bundle_tc_extremes import diagnose_per_bundle
+        from eval.archive.jobs.diagnose_per_bundle_tc_extremes import diagnose_per_bundle
 
         LOG.info("Running per-bundle diagnostic on proxy predictions...")
         proxy_data = diagnose_per_bundle(

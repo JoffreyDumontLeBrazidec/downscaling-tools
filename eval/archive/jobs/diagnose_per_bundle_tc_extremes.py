@@ -31,7 +31,7 @@ import numpy as np
 
 from eval.paths import reference_tc_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '_backends'))
 
 from tc.events import EVENTS, TCEvent
 from tc.data_types import CurveVectors, SupportMode
