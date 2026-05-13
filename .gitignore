@@ -3,5 +3,15 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 
+# Editor / backup files
+*.bak
+*.swp
+*~
+
+# Job submission logs (created by ecsbatch wrapper when sbatch is run from repo root)
+ecsbatch.log.*
+*.out
+core.*
+
 # Legacy generated eval scripts (new flow writes under /home/ecm5702/perm/eval/<run>/jobs)
 eval/jobs/generated/
