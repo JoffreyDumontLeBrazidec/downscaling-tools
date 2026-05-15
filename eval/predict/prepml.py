@@ -139,7 +139,10 @@ def _resolve_prepml_weather_states(
             LOG.info("Using explicit predict.weather_states from lane YAML: %s", kept)
             return kept
 
-    # (2) bundle discovery (canonical: same surface manual evaluates against)
+    # (2) bundle discovery, intersected with what the model actually emits.
+    # Bundle target_hres_* lists the truth/analysis vars (which the model may not all
+    # produce — e.g., the o48_o96 26d63c37 ckpt omits `sp`). Asking PrepML for a var
+    # the model never produced makes the MARS retrieve fail with "Expected N, got N-k".
     bundle_dir = lane_config.get("predict", {}).get("input_root", "") or ""
     if bundle_dir:
         bundle_path = _first_bundle_in_dir(Path(bundle_dir))
@@ -151,8 +154,20 @@ def _resolve_prepml_weather_states(
                 states = []
             kept = _validate(states, f"bundle {bundle_path.name}")
             if kept:
-                LOG.info("Using weather_states discovered from bundle %s: %s", bundle_path.name, kept)
-                return kept
+                model_outputs = _model_output_states_from_checkpoint(checkpoint)
+                if model_outputs:
+                    model_set = set(model_outputs)
+                    intersected = [s for s in kept if s in model_set]
+                    dropped = sorted(set(kept) - model_set)
+                    if dropped:
+                        LOG.info(
+                            "Dropping bundle weather_states not produced by checkpoint: %s",
+                            dropped,
+                        )
+                    kept = intersected
+                if kept:
+                    LOG.info("Using weather_states discovered from bundle %s: %s", bundle_path.name, kept)
+                    return kept
 
     # (3) checkpoint metadata
     ckpt_states = _extract_weather_states_from_checkpoint(checkpoint)
@@ -190,6 +205,46 @@ def _first_bundle_in_dir(bundle_dir: Path) -> Path | None:
         if f.is_file():
             return f
     return None
+
+
+def _model_output_states_from_checkpoint(checkpoint_path: str) -> list[str]:
+    """Read `data_indices.model.output.name_to_index` from the checkpoint.
+
+    Returns the actual list of weather_state names the model emits, or an empty
+    list if it can't be read (e.g. inference-* checkpoint with no companion base,
+    older checkpoints without data_indices, etc.). Caller intersects this with
+    bundle-discovery to drop truth-only vars the model never produces.
+
+    CPU-only; loads weights_only=False to access pickled IndexCollection.
+    """
+    import torch
+
+    ckpt_path = Path(checkpoint_path)
+    if ckpt_path.name.startswith("inference-"):
+        base_path = ckpt_path.parent / ckpt_path.name.replace("inference-", "", 1)
+        if base_path.exists():
+            ckpt_path = base_path
+        else:
+            return []
+
+    if not ckpt_path.exists():
+        return []
+
+    try:
+        ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+    except Exception:
+        LOG.warning("Failed to load checkpoint for model-output index: %s", ckpt_path, exc_info=True)
+        return []
+
+    if not isinstance(ckpt, dict):
+        return []
+    di = ckpt.get("hyper_parameters", {}).get("data_indices")
+    if di is None:
+        return []
+    try:
+        return list(di.model.output.name_to_index.keys())
+    except AttributeError:
+        return []
 
 
 def _extract_weather_states_from_checkpoint(checkpoint_path: str) -> list[str]:

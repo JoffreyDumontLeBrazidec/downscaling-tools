@@ -158,3 +158,65 @@ def test_resolve_weather_states_no_sources_raises(tmp_path):
     # No spectra section, no explicit override, no usable bundle, no checkpoint.
     with pytest.raises(ValueError, match="Cannot determine output weather states"):
         _resolve_prepml_weather_states(checkpoint="nonexistent.ckpt", lane_config=lane_config)
+
+
+def test_resolve_weather_states_bundle_intersected_with_model_outputs(tmp_path, monkeypatch):
+    """Bundle discovery is intersected with what the model actually emits.
+
+    Reproduces the o48_o96 bug discovered 2026-05-14: the bundle has 10 surface
+    target_hres_* vars (incl `sp` because truth/analysis has it), but the model
+    checkpoint's data_indices.model.output.name_to_index does not contain `sp` — so
+    asking MARS for sp via PrepML yields "Expected 80, got 70" because the prepml
+    suite never archives a var the model didn't produce. The intersection drops sp.
+    """
+    from eval.predict import prepml as prepml_mod
+
+    lane_config = _lane_config_with_prepml()
+    bundle_dir = _bundle_dir_with_one_bundle(tmp_path)
+    lane_config["predict"]["input_root"] = str(bundle_dir)
+
+    # Model emits 9 of the 10 bundle surface vars (no `sp`), plus the two core PL.
+    model_outputs = [
+        "10u", "10v", "2d", "2t", "msl", "skt", "tcw",
+        "t_850", "z_500",
+        # plus other PL the model trains on but we don't ask for
+        "q_850", "u_500", "v_500",
+    ]
+    monkeypatch.setattr(
+        prepml_mod, "_model_output_states_from_checkpoint",
+        lambda ckpt: model_outputs,
+    )
+
+    states = prepml_mod._resolve_prepml_weather_states(
+        checkpoint="any.ckpt", lane_config=lane_config,
+    )
+    # Bundle had 10 surface; model has 9 of them (no sp); core PL stays.
+    assert "sp" not in states, f"sp leaked through: {states}"
+    assert set(states) == {
+        "10u", "10v", "2d", "2t", "msl", "skt", "tcw",
+        "t_850", "z_500",
+    }
+
+
+def test_resolve_weather_states_no_intersection_when_model_outputs_unknown(tmp_path, monkeypatch):
+    """If the checkpoint can't be read, bundle-discovery is used as-is (no regression)."""
+    from eval.predict import prepml as prepml_mod
+
+    lane_config = _lane_config_with_prepml()
+    bundle_dir = _bundle_dir_with_one_bundle(tmp_path)
+    lane_config["predict"]["input_root"] = str(bundle_dir)
+
+    # Model output reader returns empty list (e.g. inference-* checkpoint with no companion base)
+    monkeypatch.setattr(
+        prepml_mod, "_model_output_states_from_checkpoint",
+        lambda ckpt: [],
+    )
+
+    states = prepml_mod._resolve_prepml_weather_states(
+        checkpoint="any.ckpt", lane_config=lane_config,
+    )
+    # All 10 surface + 2 core PL — same behavior as before the intersection patch.
+    assert set(states) == {
+        "10u", "10v", "2t", "msl", "2d", "skt", "sp", "tcw",
+        "t_850", "z_500",
+    }
