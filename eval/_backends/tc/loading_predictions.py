@@ -261,11 +261,6 @@ def _prediction_values_by_point(ds: xr.Dataset, *, prediction_var: str = "y_pred
     if "sample" in y_pred.dims:
         y_pred = y_pred.isel(sample=0, drop=True)
     spatial_dims = _prediction_spatial_dims(ds, y_pred)
-    # Squeeze size-1 dims that are not spatial or weather_state (e.g. forecast_reference_time, step
-    # added by PrepML bundle format).
-    for dim in list(y_pred.dims):
-        if dim not in (*spatial_dims, "weather_state") and y_pred.sizes[dim] == 1:
-            y_pred = y_pred.squeeze(dim, drop=True)
     member_dims = [dim for dim in y_pred.dims if dim not in (*spatial_dims, "weather_state")]
     if len(member_dims) > 1:
         raise ValueError(f"Unsupported prediction dimensions: {y_pred.dims}")

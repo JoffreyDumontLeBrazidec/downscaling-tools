@@ -329,10 +329,6 @@ def select_member_array(da: xr.DataArray, member_idx: int) -> np.ndarray:
     member_da = da.isel(sample=0) if "sample" in da.dims else da
     if "ensemble_member" in member_da.dims:
         member_da = member_da.isel(ensemble_member=member_idx)
-    if "forecast_reference_time" in member_da.dims:
-        member_da = member_da.isel(forecast_reference_time=0)
-    if "step" in member_da.dims:
-        member_da = member_da.isel(step=0)
     arr = member_da.values.astype(np.float64)
     # PrepML format stores as (weather_state, grid_point); spectra expects
     # (grid_point, weather_state) — transpose if needed.
@@ -707,6 +703,7 @@ def _build_spectra_artifact_summaries(
             )
             pred_mean = mean_curve(pred_curves)
             truth_mean = mean_curve(truth_curves)
+            input_mean = mean_curve(input_curves) if input_curves else None
             wavenumbers = np.arange(pred_mean.shape[0], dtype=np.float64)
             scope_summaries[scope_name] = {
                 "status": "ok",
@@ -721,6 +718,7 @@ def _build_spectra_artifact_summaries(
                 "wavenumbers": wavenumbers.tolist(),
                 "prediction_mean": pred_mean.tolist(),
                 "truth_mean": truth_mean.tolist(),
+                "input_mean": input_mean.tolist() if input_mean is not None else None,
                 "pdf": str(out_pdf),
                 "relative_l2_mean_curve": metrics["relative_l2_mean_curve"],
             }
