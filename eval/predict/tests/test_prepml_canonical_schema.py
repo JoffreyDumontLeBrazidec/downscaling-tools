@@ -215,6 +215,96 @@ def test_canonicalize_lead_time_and_valid_time():
     assert canonical.attrs["checkpoint_id"] == "fake_ckpt_for_test"
 
 
+def _fake_per_member_bundle_dataset(n_members: int) -> xr.Dataset:
+    """Bundle dataset with a leading `member` dim for y/x.
+
+    Mirrors the per-member loader output: each member's bundle contributes a
+    distinct y/x slice (because `target_hres_*` and `in_lres_*` come from
+    per-member GRIB sources like `enfo_o320_..._mem1to10_..._sfc_y.grib`).
+    """
+    rng = np.random.default_rng(42)
+    n_ws = len(_WEATHER_STATES)
+    y = rng.standard_normal((n_members, n_ws, _N_HRES)).astype("float32")
+    x = rng.standard_normal((n_members, n_ws, _N_LRES)).astype("float32")
+    ds = xr.Dataset(
+        {
+            "y": xr.DataArray(
+                y,
+                dims=("member", "weather_state", "grid_point_hres"),
+                coords={
+                    "member": np.arange(1, n_members + 1),
+                    "weather_state": pd.Index(_WEATHER_STATES, name="weather_state"),
+                },
+                attrs={"lon": "lon_hres", "lat": "lat_hres"},
+            ),
+            "x": xr.DataArray(
+                x,
+                dims=("member", "weather_state", "grid_point_lres"),
+                coords={
+                    "member": np.arange(1, n_members + 1),
+                    "weather_state": pd.Index(_WEATHER_STATES, name="weather_state"),
+                },
+                attrs={"lon": "lon_lres", "lat": "lat_lres"},
+            ),
+            "lat_hres": xr.DataArray(rng.uniform(-90, 90, _N_HRES).astype("float32"), dims=("grid_point_hres",)),
+            "lon_hres": xr.DataArray(rng.uniform(-180, 180, _N_HRES).astype("float32"), dims=("grid_point_hres",)),
+            "lat_lres": xr.DataArray(rng.uniform(-90, 90, _N_LRES).astype("float32"), dims=("grid_point_lres",)),
+            "lon_lres": xr.DataArray(rng.uniform(-180, 180, _N_LRES).astype("float32"), dims=("grid_point_lres",)),
+        }
+    )
+    return ds
+
+
+def test_canonicalize_uses_per_member_truth_when_bundle_has_member_dim():
+    """When ds_bundle.y has a member dim, canonical y[ens=k] == ds_bundle.y[member=k].
+
+    Reproduces the bug found 2026-05-15 on o96_o320 cfec83a3 / Idalia: the bundles'
+    target_hres_* are per-member ENS-HRES references (sourced from
+    enfo_o320_..._mem1to10_..._sfc_y.grib), not a shared analysis. The old prepml
+    flow loaded only mem01's bundle and broadcast it across all 10 members,
+    producing a systematic ~7-11% NMSE bias and ~10x noise-band TC-reach divergence
+    vs manual_inference, which loads each member's bundle separately.
+    """
+    from eval.predict.mars_retrieve import canonicalize_prepml_predictions
+
+    ds_pred = _fake_mars_y_pred()
+    ds_bundle = _fake_per_member_bundle_dataset(_N_ENS)
+
+    canonical = canonicalize_prepml_predictions(
+        ds_pred=ds_pred,
+        ds_bundle=ds_bundle,
+        date="20250926",
+        step=24,
+        members=list(range(1, _N_ENS + 1)),
+        weather_states=_WEATHER_STATES,
+        checkpoint_id="fake_ckpt_for_test",
+    )
+
+    y = canonical["y"].values  # (sample, ens, grid_hres, ws)
+    x = canonical["x"].values  # (sample, ens, grid_lres, ws)
+    for ens_idx in range(_N_ENS):
+        # Per-member truth: y[ens=k] == ds_bundle.y[member=k] (transposed (ws, grid) -> (grid, ws))
+        expected_y = ds_bundle["y"].values[ens_idx].T
+        np.testing.assert_array_equal(
+            y[0, ens_idx], expected_y,
+            err_msg=f"y at ens_idx={ens_idx} does not match per-member bundle y[member={ens_idx + 1}]",
+        )
+        expected_x = ds_bundle["x"].values[ens_idx].T
+        np.testing.assert_array_equal(
+            x[0, ens_idx], expected_x,
+            err_msg=f"x at ens_idx={ens_idx} does not match per-member bundle x[member={ens_idx + 1}]",
+        )
+
+    # Sanity: the per-member bundle was constructed with distinct values per member,
+    # so the canonical y must vary across the ensemble dim (else broadcast bug returned).
+    assert y[0, 0].std() > 0
+    member_pair_diff_max = float(np.abs(y[0, 0] - y[0, 1]).max())
+    assert member_pair_diff_max > 0, (
+        "Per-member truth was discarded: y[ens=0] == y[ens=1] which means the canonicalizer "
+        "broadcasted a single member's truth instead of using each member's slice."
+    )
+
+
 @pytest.mark.parametrize(
     "skip_var",
     ["lat_hres", "lon_hres", "lat_lres", "lon_lres"],

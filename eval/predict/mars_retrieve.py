@@ -7,6 +7,7 @@ same predictions_YYYYMMDD_stepNNN.nc format as manual inference.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,40 @@ def build_prediction_request(
     return requests
 
 
+def _deaccumulate_tp_xarray(ds: "xr.Dataset", *, window_hours: int = 6) -> "xr.Dataset":
+    """Replace tp(step=N) with tp(N) - tp(N-window_hours) for N > window_hours.
+
+    Step == window_hours is left unchanged. Other variables are untouched.
+    Defensive against unsorted step coords.
+    """
+    if "tp" not in ds.variables or "step" not in ds["tp"].dims:
+        return ds
+    steps = ds["step"].values
+    if str(steps.dtype).startswith("timedelta"):
+        steps_h = steps.astype("timedelta64[h]").astype(int)
+    else:
+        steps_h = np.asarray(steps).astype(int)
+
+    tp = ds["tp"].values
+    new = tp.copy()
+    step_axis = ds["tp"].dims.index("step")
+    for i, end in enumerate(steps_h):
+        end_i = int(end)
+        if end_i == window_hours:
+            continue
+        start_i = end_i - window_hours
+        prev = np.where(steps_h == start_i)[0]
+        if prev.size == 0:
+            continue
+        prev_idx = int(prev[0])
+        sl_cur = [slice(None)] * tp.ndim
+        sl_prev = [slice(None)] * tp.ndim
+        sl_cur[step_axis] = i
+        sl_prev[step_axis] = prev_idx
+        new[tuple(sl_cur)] = tp[tuple(sl_cur)] - tp[tuple(sl_prev)]
+    return ds.assign(tp=(ds["tp"].dims, new))
+
+
 def retrieve_predictions_from_mars(
     *,
     expver: str,
@@ -155,7 +190,10 @@ def retrieve_predictions_from_mars(
             ds = ds.squeeze(dim="level_type", drop=True)
         datasets.append(ds)
 
-    return xr.merge(datasets)
+    merged = xr.merge(datasets)
+    if os.environ.get("PREPML_TP_DEACCUM", "1") == "1":
+        merged = _deaccumulate_tp_xarray(merged, window_hours=6)
+    return merged
 
 
 def _reshape_to_prediction_format(
@@ -324,21 +362,47 @@ def canonicalize_prepml_predictions(
     y_pred = np.transpose(y_pred_raw[:, :, 0, 0, :], (1, 2, 0))[None, :, :, :]
 
     if ds_bundle is not None and "y" in ds_bundle:
-        y_bundle = ds_bundle["y"].values  # (ws, grid_hres)
-        if y_bundle.shape != (n_ws, n_grid_hres):
+        y_bundle = ds_bundle["y"].values
+        # Per-member bundle (member, ws, grid_hres) — use directly without broadcast.
+        # Single-member bundle (ws, grid_hres) — broadcast the one truth across all members.
+        # The per-member shape is the correct one for ENS lanes whose bundles' target_hres_*
+        # come from per-member ENS-HRES references (e.g. enfo_o320_..._mem1to10_..._sfc_y.grib).
+        if y_bundle.ndim == 3:
+            if y_bundle.shape != (n_ens, n_ws, n_grid_hres):
+                raise ValueError(
+                    f"Per-member bundle y shape {y_bundle.shape} does not match predictions "
+                    f"({n_ens}, {n_ws}, {n_grid_hres})"
+                )
+            # (member, ws, grid) -> (sample=1, member, grid, ws)
+            y = np.transpose(y_bundle, (0, 2, 1))[None, :, :, :]
+        elif y_bundle.shape == (n_ws, n_grid_hres):
+            y_single = y_bundle.T  # (grid_hres, ws)
+            y = np.broadcast_to(y_single[None, None, :, :], (1, n_ens, n_grid_hres, n_ws)).copy()
+        else:
             raise ValueError(
-                f"Bundle y shape {y_bundle.shape} does not match predictions ({n_ws}, {n_grid_hres})"
+                f"Bundle y shape {y_bundle.shape} does not match predictions: "
+                f"expected ({n_ws}, {n_grid_hres}) for shared truth or "
+                f"({n_ens}, {n_ws}, {n_grid_hres}) for per-member truth"
             )
-        y_single = y_bundle.T  # (grid_hres, ws)
-        y = np.broadcast_to(y_single[None, None, :, :], (1, n_ens, n_grid_hres, n_ws)).copy()
     else:
         y = np.full((1, n_ens, n_grid_hres, n_ws), np.nan, dtype=y_pred.dtype)
 
     if ds_bundle is not None and "x" in ds_bundle:
-        x_bundle = ds_bundle["x"].values  # (ws, grid_lres)
-        n_grid_lres = x_bundle.shape[1]
-        x_single = x_bundle.T  # (grid_lres, ws)
-        x = np.broadcast_to(x_single[None, None, :, :], (1, n_ens, n_grid_lres, n_ws)).copy()
+        x_bundle = ds_bundle["x"].values
+        # Same per-member vs single-member dispatch as for y.
+        if x_bundle.ndim == 3:
+            if x_bundle.shape[0] != n_ens or x_bundle.shape[1] != n_ws:
+                raise ValueError(
+                    f"Per-member bundle x shape {x_bundle.shape} does not match expected "
+                    f"({n_ens}, {n_ws}, n_grid_lres)"
+                )
+            n_grid_lres = x_bundle.shape[2]
+            # (member, ws, grid) -> (sample=1, member, grid, ws)
+            x = np.transpose(x_bundle, (0, 2, 1))[None, :, :, :]
+        else:
+            n_grid_lres = x_bundle.shape[1]
+            x_single = x_bundle.T  # (grid_lres, ws)
+            x = np.broadcast_to(x_single[None, None, :, :], (1, n_ens, n_grid_lres, n_ws)).copy()
     else:
         x = np.zeros((1, n_ens, 0, n_ws), dtype=y_pred.dtype)
         n_grid_lres = 0
@@ -433,10 +497,12 @@ def assemble_predictions_file(
     y_pred_ds = ds_pred[["y_pred", "lon_hres", "lat_hres"]].load()
     del ds_raw, ds_pred
 
-    # 2. Load truth (y) and input (x) from bundle
+    # 2. Load per-member truth (y) and input (x) from bundles. Each bundle's
+    # target_hres_* / in_lres_* is per-member (sourced from enfo_o320_..._mem1to10_..._
+    # ref grib), so the loader stacks across members rather than broadcasting member=1.
     bundle_dir = Path(bundle_dir)
-    ds_bundle = _load_bundle_truth_and_input(
-        bundle_dir, bundle_filename_tpl, date, step, weather_states,
+    ds_bundle = _load_bundle_truth_and_input_per_member(
+        bundle_dir, bundle_filename_tpl, date, step, weather_states, members,
     )
 
     # 3. Project into canonical (manual_inference) schema
@@ -617,3 +683,62 @@ def _load_bundle_truth_and_input(
         result_vars[coord_name] = xr.DataArray(coord_arr, dims=[dim])
 
     return xr.Dataset(result_vars)
+
+
+def _load_bundle_truth_and_input_per_member(
+    bundle_dir: Path,
+    bundle_filename_tpl: str,
+    date: str,
+    step: int,
+    weather_states: list[str],
+    members: list[int],
+) -> "xr.Dataset | None":
+    """Load truth (y) and input (x) per-member, stacked along a leading `member` dim.
+
+    The bundles' `target_hres_*` and `in_lres_*` are per-member fields (sourced from
+    enfo_o320_..._mem1to10_..._sfc_y.grib and similar), so each ensemble member must
+    be evaluated against its own reference field. The legacy single-member loader
+    (`_load_bundle_truth_and_input`) used `member=1` only and broadcast the result —
+    that introduced a systematic NMSE bias and TC-reach divergence vs manual_inference,
+    which loads each member's bundle separately.
+
+    Returns a dataset with:
+      - y: dims (member, weather_state, grid_point_hres)
+      - x: dims (member, weather_state, grid_point_lres)
+      - lat_hres/lon_hres/lat_lres/lon_lres coord arrays (taken from member 1)
+    or None if the first member's bundle is unavailable.
+    """
+    import xarray as xr
+
+    per_member: list[xr.Dataset] = []
+    for m in members:
+        ds_m = _load_bundle_truth_and_input(
+            bundle_dir, bundle_filename_tpl, date, step, weather_states, member=m,
+        )
+        if ds_m is None:
+            LOG.warning(
+                "Per-member bundle missing for member=%d (date=%s step=%d); aborting per-member load.",
+                m, date, step,
+            )
+            return None
+        per_member.append(ds_m)
+
+    # Stack along a new `member` dim. Coord arrays are identical across members
+    # (same grid), so take from member 1.
+    coord_vars = {
+        name: per_member[0][name]
+        for name in ("lat_hres", "lon_hres", "lat_lres", "lon_lres")
+        if name in per_member[0]
+    }
+
+    result: dict = {}
+    if all("y" in ds for ds in per_member):
+        result["y"] = xr.concat(
+            [ds["y"] for ds in per_member], dim="member",
+        ).assign_coords(member=("member", list(members)))
+    if all("x" in ds for ds in per_member):
+        result["x"] = xr.concat(
+            [ds["x"] for ds in per_member], dim="member",
+        ).assign_coords(member=("member", list(members)))
+
+    return xr.Dataset({**result, **coord_vars})
