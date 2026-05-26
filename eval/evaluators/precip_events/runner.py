@@ -52,8 +52,8 @@ def run(
     plots_dir.mkdir(parents=True, exist_ok=True)
 
     n_events = int(eval_config.get("n_events", 8))
-    dlat = float(eval_config.get("dlat", 30))
-    dlon = float(eval_config.get("dlon", 40))
+    dlat = float(eval_config.get("dlat", 50))
+    dlon = float(eval_config.get("dlon", 60))
     rank_by = eval_config.get("rank_by", "truth")
 
     events = find_precip_events(
