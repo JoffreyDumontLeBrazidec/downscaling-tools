@@ -52,10 +52,20 @@ def get_minmax_weather_states(
         if not fields:
             continue
         fields_val = np.concatenate(fields)
-        minmax_weather_states[weather_state] = [
-            float(np.nanmin(fields_val)),
-            float(np.nanmax(fields_val)),
-        ]
+        finite = fields_val[np.isfinite(fields_val)]
+        if finite.size == 0:
+            continue
+        # Cap the shared colorbar at the 99.5th percentile rather than the
+        # absolute max. Heavy-tailed fields (tp) otherwise scale the whole
+        # colorbar to a single extreme pixel, rendering widespread moderate
+        # precip invisible. For near-Gaussian fields p99.5 ~ max, so this is a
+        # no-op there; for precip it makes the bulk field visible while the
+        # rarest cells saturate at the top colour.
+        vmax = float(np.nanpercentile(finite, 99.5))
+        vmin = float(np.nanmin(finite))
+        if vmax <= vmin:  # degenerate / near-constant field
+            vmax = float(np.nanmax(finite)) or (vmin + 1.0)
+        minmax_weather_states[weather_state] = [vmin, vmax]
     return minmax_weather_states
 
 
@@ -227,6 +237,11 @@ def plot_x_y(
                 axs[i_ax0, i_ax1].set_xlim(ds_sample.attrs["region"][2], ds_sample.attrs["region"][3])
                 axs[i_ax0, i_ax1].set_ylim(ds_sample.attrs["region"][0], ds_sample.attrs["region"][1])
             continents.plot_continents(axs[i_ax0, i_ax1])
+            # Make coastlines visible above dense scatter
+            for child in axs[i_ax0, i_ax1].get_children():
+                if hasattr(child, "get_segments") and callable(child.get_segments):
+                    child.set_linewidth(1.5)
+                    child.set_zorder(10)
             axs[i_ax0, i_ax1].set_aspect("auto", adjustable=None)
             axs[i_ax0, i_ax1].grid(False)
             axs[i_ax0, i_ax1].patch.set_edgecolor("black")

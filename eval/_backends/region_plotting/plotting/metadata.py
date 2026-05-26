@@ -21,16 +21,15 @@ class PlotMetadata:
     sample_position: int = 0
     ensemble_member: int = 0
 
-    def to_title(self, sep: str = " | ") -> str:
+    def to_title(self, sep: str = " — ") -> str:
         """Build a standard title string."""
-        parts = [self.region]
-        if self.date:
-            parts.append(f"date={self.date}")
+        parts = [self.region.replace("_", " ").title()]
         if self.init_date:
-            parts.append(f"init={self.init_date}")
+            parts.append(f"Init: {self.init_date}")
+        if self.date and self.date != self.init_date:
+            parts.append(f"Valid: {self.date}")
         if self.lead_hours is not None:
-            parts.append(f"step={self.lead_hours}h")
-        parts.append(f"sample_pos={self.sample_position}")
+            parts.append(f"T+{self.lead_hours}h")
         return sep.join(parts)
 
 
@@ -57,6 +56,24 @@ def _scalar_value(ds: xr.Dataset, name: str, sample_idx: int = 0) -> Any | None:
     return raw
 
 
+def _lead_hours_from_value(raw_value) -> int | None:
+    """Convert lead_step_hours to integer hours.
+
+    The NC field may store hours directly (small int) or nanoseconds
+    (large int, e.g. from timedelta64 encoding).  Values above 1e9 are
+    treated as nanoseconds.
+    """
+    if raw_value is None:
+        return None
+    try:
+        v = int(raw_value)
+    except Exception:
+        return None
+    if v > 1_000_000_000:  # nanoseconds
+        return v // 3_600_000_000_000
+    return v
+
+
 def extract_plot_metadata(
     ds: xr.Dataset,
     region_name: str,
@@ -64,17 +81,14 @@ def extract_plot_metadata(
     ensemble_member_idx: int = 0,
 ) -> PlotMetadata:
     """Extract standard plotting metadata from a dataset."""
-    lead_hours: int | None = None
-    lead_value = _scalar_value(ds, "lead_step_hours", sample_idx)
-    if lead_value is not None:
-        try:
-            lead_hours = int(lead_value)
-        except Exception:
-            lead_hours = None
+    lead_hours = _lead_hours_from_value(_scalar_value(ds, "lead_step_hours", sample_idx))
+
+    # Prefer valid_time over date (date often equals init_date)
+    valid_time_str = safe_datetime_str(_scalar_value(ds, "valid_time", sample_idx))
 
     return PlotMetadata(
         region=region_name,
-        date=safe_datetime_str(_scalar_value(ds, "date", sample_idx)),
+        date=valid_time_str or safe_datetime_str(_scalar_value(ds, "date", sample_idx)),
         init_date=safe_datetime_str(_scalar_value(ds, "init_date", sample_idx)),
         lead_hours=lead_hours,
         sample_position=sample_idx,
@@ -83,22 +97,19 @@ def extract_plot_metadata(
 
 
 def sample_meta_title(ds_region: xr.Dataset, region_name: str, sample_idx: int = 0) -> str:
-    """Build the batch-plot title used by ``plot_regions.py``."""
+    """Build the batch-plot title used by ``plot_regions.py``.
+
+    Format: ``Region — Init: YYYY-MM-DD — Valid: YYYY-MM-DD HH:MM — T+Xh``
+    """
     metadata = extract_plot_metadata(ds_region, region_name, sample_idx=sample_idx)
-    parts = [region_name, f"sample_pos={sample_idx}"]
-    sample_value = _scalar_value(ds_region, "sample", sample_idx)
-    if sample_value is not None:
-        try:
-            parts.append(f"sample_id={int(sample_value)}")
-        except Exception:
-            pass
-    if metadata.date:
-        parts.append(f"date={metadata.date}")
+    parts = [region_name.replace("_", " ").title()]
     if metadata.init_date:
-        parts.append(f"init={metadata.init_date}")
+        parts.append(f"Init: {metadata.init_date}")
+    if metadata.date and metadata.date != metadata.init_date:
+        parts.append(f"Valid: {metadata.date}")
     if metadata.lead_hours is not None:
-        parts.append(f"lead_h={metadata.lead_hours}")
-    return " | ".join(parts)
+        parts.append(f"T+{metadata.lead_hours}h")
+    return " — ".join(parts)
 
 
 def step_meta_title(region_name: str, step: Any, forecast_ref_time: Any) -> str:
