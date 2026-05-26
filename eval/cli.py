@@ -20,7 +20,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from eval.config.loader import load_host, load_lane
+from eval.config.loader import (
+    default_host_for_stage,
+    load_host,
+    load_lane,
+    validate_lane_host_compatible,
+)
 from eval.paths import resolve_eval_root
 
 LOG = logging.getLogger(__name__)
@@ -29,6 +34,7 @@ ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
     "sigma", "mechanistic", "intermediate",
     "spectra_ecmwf", "mlflow",
+    "precip_dist", "precip_events",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -108,6 +114,14 @@ def _add_prepare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--num-gpus-per-model", type=int, default=None,
         help="GPUs per model replica. Overrides lane YAML predict.num_gpus_per_model.",
+    )
+    parser.add_argument(
+        "--num-chunks", type=int, default=None,
+        help=(
+            "Override ANEMOI_INFERENCE_NUM_CHUNKS and its _PROCESSOR/_MAPPER "
+            "variants in the inference env. Chunks attention in block/mapper "
+            "layers to fit on fewer GPUs. Falls back to lane YAML predict.env."
+        ),
     )
 
 
@@ -270,6 +284,10 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
         predict_overrides["weather_states"] = _parse_str_csv(args.weather_states)
     if getattr(args, "num_gpus_per_model", None) is not None:
         predict_overrides["num_gpus_per_model"] = int(args.num_gpus_per_model)
+    # Note: --num-chunks is NOT propagated here. The loader's _deep_merge is only
+    # shallow at the second level, so injecting {"env": {...}} here would clobber
+    # the lane YAML's full predict.env block. Instead, --num-chunks is applied
+    # directly to lane_config["predict"]["env"] after load_lane returns.
     if predict_overrides:
         return {"predict": predict_overrides}
     return {}
@@ -392,6 +410,112 @@ def _update_effective_config_completion(
     path.write_text(json.dumps(config, indent=2, default=str) + "\n")
 
 
+def _predict_bundle_pairs(predict_cfg: dict) -> list:
+    """Return bundle_pairs from predict config as a list."""
+    bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
+    if isinstance(bundle_pairs_raw, str):
+        return [bp.strip() for bp in bundle_pairs_raw.split(",") if bp.strip()]
+    return list(bundle_pairs_raw)
+
+
+SERIAL_PREPARE_RANK_ENV_VARS = (
+    "SLURM_PROCID",
+    "PMI_RANK",
+    "PMIX_RANK",
+    "OMPI_COMM_WORLD_RANK",
+    "MV2_COMM_WORLD_RANK",
+    "RANK",
+    "LOCAL_RANK",
+)
+
+
+def _distributed_rank_context_vars() -> dict[str, str]:
+    return {
+        key: value
+        for key in SERIAL_PREPARE_RANK_ENV_VARS
+        if (value := os.environ.get(key)) not in (None, "")
+    }
+
+
+def _assert_serial_prepare_context() -> None:
+    rank_vars = _distributed_rank_context_vars()
+    if not rank_vars:
+        return
+    rendered = ", ".join(f"{key}={value}" for key, value in sorted(rank_vars.items()))
+    raise SystemExit(
+        "Refusing serial bundle preparation inside a distributed rank context "
+        f"({rendered}). Run `python -m eval.cli prepare` once outside `srun`, "
+        "then run prediction with `--bundle-dir <prepared-bundles>`."
+    )
+
+
+def _verify_predict_input_bundles(lane_config: dict, input_root: str) -> None:
+    """Fail before prediction when a prepare lane is pointed at bad bundles."""
+    if not lane_config.get("prepare"):
+        return
+    from eval.prepare.builder import verify_bundles
+
+    predict_cfg = lane_config["predict"]
+    verify_bundles(
+        lane_config,
+        Path(input_root),
+        dates=list(predict_cfg.get("dates", [])),
+        steps=[int(s) for s in predict_cfg.get("steps", [])],
+        members=[int(m) for m in predict_cfg.get("members", [])],
+        bundle_pairs=_predict_bundle_pairs(predict_cfg),
+    )
+
+
+def _resolve_predict_input_root(
+    args: argparse.Namespace,
+    lane_config: dict,
+    host_config: dict,
+    output_dir: Path,
+    *,
+    prepare_bundles: bool,
+    allow_host_fallback: bool = True,
+) -> str:
+    """Resolve the prediction input_root and optionally build truth-aware bundles."""
+    predict_cfg = lane_config["predict"]
+    source_grib_root = getattr(args, "source_grib_root", None) or ""
+    bundle_dir_arg = getattr(args, "bundle_dir", None)
+
+    if lane_config.get("prepare") and source_grib_root:
+        bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
+        if prepare_bundles:
+            _assert_serial_prepare_context()
+            from eval.prepare.builder import build_bundles
+
+            LOG.info("=== Phase 0: Bundle preparation ===")
+            build_bundles(
+                lane_config=lane_config,
+                bundle_dir=bundle_dir,
+                source_grib_root=source_grib_root,
+                dates=list(predict_cfg.get("dates", [])),
+                steps=[int(s) for s in predict_cfg.get("steps", [])],
+                members=[int(m) for m in predict_cfg.get("members", [])],
+                bundle_pairs=_predict_bundle_pairs(predict_cfg),
+                verification_path=output_dir / "bundle_build_verification.json",
+            )
+        return str(bundle_dir)
+
+    if bundle_dir_arg:
+        # Use pre-built bundles as input_root; skip rebuild.
+        return str(bundle_dir_arg)
+
+    # Resolve input_root: lane config takes precedence over host DATA_DIR.
+    input_root = predict_cfg.get("input_root", "")
+    if input_root:
+        return str(input_root)
+
+    if not allow_host_fallback:
+        return ""
+
+    env_setup = host_config.get("environment_setup", {})
+    exports = env_setup.get("exports", {})
+    return str(exports.get("DATA_DIR", ""))
+
+
 # ---------------------------------------------------------------------------
 # Subcommand implementations
 # ---------------------------------------------------------------------------
@@ -401,6 +525,19 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     mode = getattr(args, "mode", "manual")
     if mode == "prepml":
         from eval.predict.prepml import prepml_predict
+        input_root = _resolve_predict_input_root(
+            args, lane_config, host_config, output_dir,
+            prepare_bundles=True,
+            allow_host_fallback=False,
+        )
+        if not input_root:
+            raise SystemExit(
+                "PrepML predict requires truth-aware bundles for prediction assembly. "
+                "Pass --source-grib-root to build them, --bundle-dir to reuse them, "
+                "or set predict.input_root in the lane config."
+            )
+        if input_root:
+            lane_config.setdefault("predict", {})["input_root"] = input_root
         prepml_predict(
             checkpoint=args.checkpoint,
             lane_config=lane_config,
@@ -414,38 +551,28 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     predict_cfg = lane_config["predict"]
     checkpoint = args.checkpoint
 
-    source_grib_root = getattr(args, "source_grib_root", None) or ""
-    bundle_dir_arg = getattr(args, "bundle_dir", None)
+    # Auto-resolve inference-* companion to base checkpoint for manual mode.
+    # PrepML mode uses the inference checkpoint directly (handled above).
+    ckpt_path = Path(checkpoint)
+    if ckpt_path.name.startswith("inference-") and ckpt_path.name.endswith(".ckpt"):
+        base_name = ckpt_path.name.replace("inference-", "", 1)
+        base_path = ckpt_path.parent / base_name
+        if base_path.exists():
+            LOG.warning(
+                "Auto-resolved inference companion to base checkpoint: %s -> %s",
+                ckpt_path.name, base_name,
+            )
+            checkpoint = str(base_path)
+        else:
+            raise FileNotFoundError(
+                f"Inference companion checkpoint passed but base checkpoint not found: "
+                f"{base_path}. Manual predict requires the base (non-inference) checkpoint."
+            )
 
-    # --- Prepare: build truth-aware bundles if lane has prepare: section ---
-    if lane_config.get("prepare") and source_grib_root:
-        from eval.prepare.builder import build_bundles
-        bundle_dir = Path(bundle_dir_arg) if bundle_dir_arg else output_dir / "bundles"
-        bundle_pairs_raw = predict_cfg.get("bundle_pairs", [])
-        if isinstance(bundle_pairs_raw, str):
-            bundle_pairs_raw = [bp.strip() for bp in bundle_pairs_raw.split(",") if bp.strip()]
-        LOG.info("=== Phase 0: Bundle preparation ===")
-        build_bundles(
-            lane_config=lane_config,
-            bundle_dir=bundle_dir,
-            source_grib_root=source_grib_root,
-            dates=list(predict_cfg.get("dates", [])),
-            steps=[int(s) for s in predict_cfg.get("steps", [])],
-            members=[int(m) for m in predict_cfg.get("members", [])],
-            bundle_pairs=list(bundle_pairs_raw),
-            verification_path=output_dir / "bundle_build_verification.json",
-        )
-        input_root = str(bundle_dir)
-    elif bundle_dir_arg:
-        # Use pre-built bundles as input_root; skip rebuild.
-        input_root = str(bundle_dir_arg)
-    else:
-        # Resolve input_root: lane config takes precedence over host DATA_DIR
-        input_root = predict_cfg.get("input_root", "")
-        if not input_root:
-            env_setup = host_config.get("environment_setup", {})
-            exports = env_setup.get("exports", {})
-            input_root = exports.get("DATA_DIR", "")
+    input_root = _resolve_predict_input_root(
+        args, lane_config, host_config, output_dir, prepare_bundles=True,
+    )
+    _verify_predict_input_bundles(lane_config, input_root)
 
     members_str = ",".join(str(m) for m in predict_cfg["members"])
     steps_str = ",".join(str(s) for s in predict_cfg["steps"])
@@ -680,6 +807,7 @@ def _run_scoreboard(
 
 def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
     """Build truth-aware bundles only (no prediction)."""
+    _assert_serial_prepare_context()
     from eval.prepare.builder import build_bundles
 
     prepare_cfg = lane_config.get("prepare")
@@ -789,7 +917,11 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         raise SystemExit(f"Failed to load lane config '{lane_name}': {exc}") from exc
 
-    host_name = args.host or lane_config.get("default_host") or DEFAULT_HOST
+    host_name = args.host or default_host_for_stage(lane_config, args.subcommand) or DEFAULT_HOST
+    try:
+        validate_lane_host_compatible(lane_name, lane_config, host_name, stage=args.subcommand)
+    except Exception as exc:
+        raise SystemExit(str(exc)) from exc
 
     try:
         host_config = load_host(host_name)
@@ -808,6 +940,21 @@ def main(argv: list[str] | None = None) -> None:
     host_exports = host_config.get("environment_setup", {}).get("exports", {}) or {}
     for key, value in host_exports.items():
         if key not in os.environ:
+            os.environ[key] = str(value)
+
+    # --- Export lane-declared inference env vars (e.g. ANEMOI_INFERENCE_NUM_CHUNKS) ---
+    # Apply the CLI --num-chunks override on top of lane predict.env so the
+    # dry-run output and downstream subprocesses see the same merged value.
+    predict_section = lane_config.get("predict")
+    if isinstance(predict_section, dict):
+        predict_env = dict(predict_section.get("env") or {})
+        if getattr(args, "num_chunks", None) is not None:
+            chunk_value = str(int(args.num_chunks))
+            predict_env["ANEMOI_INFERENCE_NUM_CHUNKS"] = chunk_value
+            predict_env["ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR"] = chunk_value
+            predict_env["ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER"] = chunk_value
+            predict_section["env"] = predict_env
+        for key, value in predict_env.items():
             os.environ[key] = str(value)
 
     # --- Propagate --steps to evaluator sections ---
@@ -840,6 +987,15 @@ def main(argv: list[str] | None = None) -> None:
         output_dir = Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)
     else:
         output_dir = _resolve_output_dir(host_config, lane_name)
+
+    if args.subcommand in ("run", "predict") and "predict" in lane_config:
+        input_root = _resolve_predict_input_root(
+            args, lane_config, host_config, output_dir,
+            prepare_bundles=False,
+            allow_host_fallback=getattr(args, "mode", "manual") != "prepml",
+        )
+        if input_root:
+            lane_config.setdefault("predict", {})["input_root"] = input_root
 
     # --- Build effective config ---
     effective = _build_effective_config(
