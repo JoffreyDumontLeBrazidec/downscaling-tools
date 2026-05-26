@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import warnings
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Union
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
@@ -236,12 +238,17 @@ def plot_x_y(
             if "region" in ds_sample.attrs:
                 axs[i_ax0, i_ax1].set_xlim(ds_sample.attrs["region"][2], ds_sample.attrs["region"][3])
                 axs[i_ax0, i_ax1].set_ylim(ds_sample.attrs["region"][0], ds_sample.attrs["region"][1])
-            continents.plot_continents(axs[i_ax0, i_ax1])
-            # Make coastlines visible above dense scatter
-            for child in axs[i_ax0, i_ax1].get_children():
-                if hasattr(child, "get_segments") and callable(child.get_segments):
-                    child.set_linewidth(1.5)
-                    child.set_zorder(10)
+            # Draw coastlines on top of scatter: convert from radians to degrees
+            coast_segs_rad = continents.lines.get_segments()
+            coast_segs_deg = [np.degrees(seg) for seg in coast_segs_rad]
+            coast_outline = LineCollection(
+                coast_segs_deg, linewidths=3.0, colors="white", zorder=10, rasterized=False,
+            )
+            coast_fill = LineCollection(
+                coast_segs_deg, linewidths=1.2, colors="black", zorder=11, rasterized=False,
+            )
+            axs[i_ax0, i_ax1].add_collection(coast_outline)
+            axs[i_ax0, i_ax1].add_collection(coast_fill)
             axs[i_ax0, i_ax1].set_aspect("auto", adjustable=None)
             axs[i_ax0, i_ax1].grid(False)
             axs[i_ax0, i_ax1].patch.set_edgecolor("black")
