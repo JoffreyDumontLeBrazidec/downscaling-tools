@@ -98,7 +98,7 @@ def _apply_functional(out, t_idx, tname, spec):
 
 
 def build_functional_specs(args, bundle, target_indices, y, lat_hres, lon_hres,
-                           msl_field, functionals, box_specs):
+                           probe_field, functionals, box_specs):
     """Resolve every requested functional into {fkey: spec dict}.
 
     spec = {"kind": "mean"|"spectral", "mask": Tensor|dict|None,
@@ -114,7 +114,8 @@ def build_functional_specs(args, bundle, target_indices, y, lat_hres, lon_hres,
     if "box" in functionals:
         if not box_specs:
             raise SystemExit("--functionals includes 'box' but no --boxes given")
-        boxes = parse_boxes(box_specs, lat_hres, lon_hres, msl_field, args_window(args))
+        boxes = parse_boxes(box_specs, lat_hres, lon_hres, probe_field,
+                            args_window(args))
         for bname, b in boxes.items():
             specs[f"box:{bname}"] = {
                 "kind": "mean",
@@ -124,9 +125,10 @@ def build_functional_specs(args, bundle, target_indices, y, lat_hres, lon_hres,
             boxes_meta[bname] = {k: v for k, v in b.items() if k != "mask"}
 
     if "eye" in functionals:
-        if msl_field is None:
-            raise SystemExit("'eye' functional needs the bundle target msl field")
-        eye_lat, eye_lon = detect_min_center(msl_field, lat_hres, lon_hres,
+        if probe_field is None:
+            raise SystemExit(f"'eye' functional needs the bundle target "
+                             f"{args.probe_field} field")
+        eye_lat, eye_lon = detect_min_center(probe_field, lat_hres, lon_hres,
                                              args_window(args))
         eye_mask = box_mask_km(lat_hres, lon_hres, eye_lat, eye_lon, args.eye_radius_km)
         specs["eye"] = {"kind": "mean",
@@ -358,13 +360,21 @@ def run_integrated_gradients(args):
     lat_xi, lon_xi = _coords_for(xi_grid)
     _coords_for(xh_grid)
 
-    # Target msl on the hres grid (for storm-center auto-detection).
-    msl_out_idx = target_indices.get("msl")
-    msl_field = (y[0, 0, 0, :, msl_out_idx].cpu().numpy()
-                 if (msl_out_idx is not None and y.shape[-2] == len(lat_hres)) else None)
+    # Probe field for box/eye auto-detection on the hres grid. The detector
+    # finds the MINIMUM, so msl is used as-is (cyclone center) and tp is
+    # negated (heaviest-precip center).
+    probe_field = None
+    if y.shape[-2] == len(lat_hres):
+        p_idx = target_indices.get(args.probe_field)
+        if p_idx is not None:
+            f = y[0, 0, 0, :, p_idx].cpu().numpy()
+            probe_field = f if args.probe_field == "msl" else -f
+        else:
+            LOGGER.warning("probe field %r not in this checkpoint's targets %s",
+                           args.probe_field, list(target_indices))
 
     specs, boxes_meta = build_functional_specs(
-        args, bundle, target_indices, y, lat_hres, lon_hres, msl_field,
+        args, bundle, target_indices, y, lat_hres, lon_hres, probe_field,
         functionals, args.boxes)
 
     # Baselines for the IG path integral.
@@ -496,6 +506,9 @@ def main(argv=None):
                    help="per-variable zoom maps for the top-K input vars")
     p.add_argument("--auto-window", default=None,
                    help="lat0,lat1,lon0,lon1 (deg, lon 0..360) for storm auto-detect")
+    p.add_argument("--probe-field", default="msl", choices=["msl", "tp"],
+                   help="field whose extremum centers box:auto/eye probes: "
+                        "msl minimum (cyclone) or tp maximum (intense precip)")
     p.add_argument("--tail-percentile", type=float, default=99.0,
                    help="[tail] percentile of y_target selecting extreme cells")
     p.add_argument("--tail-region", default="global",
