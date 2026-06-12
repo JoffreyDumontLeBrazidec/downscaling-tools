@@ -54,12 +54,14 @@ EXTRA=()
 for kv in "$@"; do
   if [[ "$kv" == *=* ]]; then
     k="${kv%%=*}"; v="${kv#*=}"
-    EXTRA+=("--$k")
     if [[ "$NARGS_KEYS" == *" $k "* ]]; then
+      EXTRA+=("--$k")
       IFS=, read -ra parts <<< "$v"
       EXTRA+=("${parts[@]}")
     else
-      EXTRA+=("$v")
+      # --key=value as ONE token so values with a leading dash
+      # (auto-window=-10,...) survive argparse.
+      EXTRA+=("--$k=$v")
     fi
   else
     EXTRA+=("--$kv")
