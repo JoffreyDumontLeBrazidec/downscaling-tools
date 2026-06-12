@@ -55,8 +55,9 @@ def ensure_x_interp_for_plotting(
         if ws_first:
             x_np = x_np.T  # (weather_state, grid_point_lres) → (grid_point_lres, weather_state)
         interpolated = interpolator.interpolate(x_np)  # → (grid_point_hres, weather_state)
-        if ws_first:
-            interpolated = interpolated.T  # → (weather_state, grid_point_hres)
+        # interpolate() returns (grid_point_hres, weather_state) regardless of the
+        # input ordering, so always transpose to match the dims declared below.
+        interpolated = interpolated.T  # → (weather_state, grid_point_hres)
         ws_coord = x_da.coords.get("weather_state", ds.coords.get("weather_state"))
         x_interp = xr.DataArray(
             interpolated.astype(np.float32),

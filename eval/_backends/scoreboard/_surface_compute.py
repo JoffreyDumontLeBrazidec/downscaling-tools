@@ -93,15 +93,23 @@ def _to_member_point_weather(da: xr.DataArray, ds: xr.Dataset, *, label: str) ->
 
 
 def _area_weights(ds: xr.Dataset, n_points: int) -> np.ndarray:
+    def grid_point_values(da: xr.DataArray) -> np.ndarray | None:
+        if da.size == n_points:
+            return np.asarray(da.values, dtype=np.float64).reshape(-1)
+        if "grid_point_hres" in da.dims and int(da.sizes["grid_point_hres"]) == n_points:
+            indexers = {dim: 0 for dim in da.dims if dim != "grid_point_hres"}
+            return np.asarray(da.isel(**indexers).values, dtype=np.float64).reshape(-1)
+        return None
+
     if "area_weight" in ds.variables:
-        candidate = np.asarray(ds["area_weight"].values, dtype=np.float64).reshape(-1)
-        if candidate.size == n_points:
+        candidate = grid_point_values(ds["area_weight"])
+        if candidate is not None:
             return _normalize_weights(candidate)
 
     if "lat_hres" in ds.variables:
         lat_da = ds["lat_hres"]
-        lat_vals = np.asarray(lat_da.values, dtype=np.float64).reshape(-1)
-        if lat_vals.size == n_points:
+        lat_vals = grid_point_values(lat_da)
+        if lat_vals is not None:
             return _normalize_weights(np.cos(np.deg2rad(lat_vals)))
         if lat_da.ndim == 1 and "lon_hres" in ds.variables and ds["lon_hres"].ndim == 1:
             lat_grid, _ = xr.broadcast(lat_da, ds["lon_hres"])

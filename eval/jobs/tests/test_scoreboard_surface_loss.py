@@ -104,6 +104,49 @@ def test_process_predictions_dir_uses_area_weight_when_available(tmp_path):
     assert result["n_member_samples_per_variable"] == 1
 
 
+def test_process_predictions_dir_squeezes_repeated_member_latitude(tmp_path):
+    predictions_dir = tmp_path / "predictions"
+    predictions_dir.mkdir()
+    pred_file = predictions_dir / "predictions_20230827_step048.nc"
+
+    y_pred = np.zeros((1, 2, 2, len(SURFACE_VARS)), dtype=np.float64)
+    y_true = np.zeros((1, 2, 2, len(SURFACE_VARS)), dtype=np.float64)
+    y_pred[:, :, 0, :] = 1.0
+    y_pred[:, :, 1, :] = 3.0
+
+    lat_hres = np.tile(np.array([0.0, 60.0], dtype=np.float64), (2, 1))
+    ds = xr.Dataset(
+        data_vars={
+            "y_pred": (
+                ("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+                y_pred,
+            ),
+            "y": (
+                ("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+                y_true,
+            ),
+            "lat_hres": (("ensemble_member", "grid_point_hres"), lat_hres),
+            "lon_hres": (
+                ("ensemble_member", "grid_point_hres"),
+                np.tile(np.array([0.0, 1.0], dtype=np.float64), (2, 1)),
+            ),
+        },
+        coords={
+            "sample": [0],
+            "ensemble_member": [0, 1],
+            "grid_point_hres": [0, 1],
+            "weather_state": SURFACE_VARS,
+        },
+    )
+    ds.to_netcdf(pred_file)
+
+    result = mod.process_predictions_dir(predictions_dir)
+
+    expected = (1.0 + 9.0 * 0.5) / 1.5
+    assert result["weighted_surface_mse"] == pytest.approx(expected)
+    assert result["n_member_samples_per_variable"] == 2
+
+
 def test_process_predictions_dir_reports_truth_std_normalized_nmse(tmp_path):
     predictions_dir = tmp_path / "predictions"
     predictions_dir.mkdir()

@@ -82,8 +82,15 @@ def _comment_block(lane: str, host: str, checkpoint: str, mode: str) -> str:
 def _environment_block(
     environment_setup: dict[str, Any],
     code_root: str,
+    predict_env: dict[str, Any] | None = None,
 ) -> str:
-    """Render module loads, exports, PYTHONPATH, venv activation, and cd."""
+    """Render module loads, exports, PYTHONPATH, venv activation, and cd.
+
+    ``predict_env`` is the lane YAML's ``predict.env`` block (e.g.
+    ``ANEMOI_INFERENCE_NUM_CHUNKS``, ``PYTORCH_CUDA_ALLOC_CONF``). Its values
+    are emitted as ``export`` lines after host-config exports so they end up
+    in the env that ``python -m eval.cli`` and any subprocess it spawns see.
+    """
     lines: list[str] = [""]
 
     # Module loads
@@ -92,9 +99,14 @@ def _environment_block(
 
     lines.append("")
 
-    # Exports from config
+    # Exports from host config
     for key, value in environment_setup.get("exports", {}).items():
         lines.append(f'export {key}="{value}"')
+
+    # Lane-declared inference env (e.g. ANEMOI_INFERENCE_NUM_CHUNKS)
+    if predict_env:
+        for key, value in predict_env.items():
+            lines.append(f'export {key}="{value}"')
 
     # PYTHONPATH must include code_root
     lines.append(f'export PYTHONPATH="{code_root}:${{PYTHONPATH:-}}"')
@@ -185,7 +197,11 @@ def _cli_command(
     ntasks_per_node: int = 1,
 ) -> str:
     """Render the ``python -m eval.cli`` invocation."""
-    launcher = "srun " if ntasks_per_node > 1 else ""
+    source_grib_prepare = bool(overrides and overrides.get("--source-grib-root"))
+    wrap_with_srun = ntasks_per_node > 1 and not (
+        mode == "predict" and source_grib_prepare
+    )
+    launcher = "srun " if wrap_with_srun else ""
     parts = [
         "",
         "# Run evaluation",
@@ -254,9 +270,18 @@ def render_sbatch(
         The complete sbatch script content.
     """
     # Import here to keep module importable even if config is missing
-    from eval.config.loader import load_host
+    from eval.config.loader import load_host, load_lane, validate_lane_host_compatible
 
     host_cfg = load_host(host)
+    # Lane is optional only for early-stage callers — load best-effort so we can
+    # forward predict.env into the rendered sbatch alongside host exports.
+    try:
+        lane_cfg = load_lane(lane)
+    except Exception:
+        lane_cfg = {}
+    if lane_cfg:
+        validate_lane_host_compatible(lane, lane_cfg, host, stage=mode)
+    predict_env = (lane_cfg.get("predict") or {}).get("env") or {}
 
     if resource_overrides:
         scheduler = dict(host_cfg["scheduler"])
@@ -280,7 +305,7 @@ def render_sbatch(
             job_name_suffix=job_name_suffix,
         ),
         _comment_block(lane, host, checkpoint, mode),
-        _environment_block(host_cfg["environment_setup"], host_cfg["code_root"]),
+        _environment_block(host_cfg["environment_setup"], host_cfg["code_root"], predict_env=predict_env),
         _cli_command(mode, checkpoint, lane, overrides, ntasks_per_node=ntasks_per_node),
     ]
 

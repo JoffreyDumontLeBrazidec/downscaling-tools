@@ -14,6 +14,14 @@ predict:
   steps: [24, 48, 72, 96, 120]
   dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
   num_gpus_per_model: 4
+  # Conservative 4-GPU model-parallel inference posture for o2560 PrepML/manual
+  # runs. Keep the block/processor/mapper chunk knobs aligned so CLI overrides
+  # and dry-runs show the same effective environment.
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   sampler:
     schedule_type: "experimental_piecewise"
     num_steps: 30
@@ -44,6 +52,12 @@ tc:
   reference_expids: ["ENFO_O1280_0001"]
   target_grib: "/home/ecm5702/hpcperm/data/input_data/destine_iekm_o2560_targets_humberto_20250926_20250930/iekm_o2560_iekm_date*_time0000_step24to120_sfc_y.grib"
   target_label: "IEKM"
+  member_maps:
+    enabled: true
+    event_dates:
+      humberto: "20250928"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 spectra:
   fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
@@ -59,6 +73,9 @@ spectra_ecmwf:
   reference_dir: "/home/ecm5702/perm/reference/o1280_o2560/spectra_ecmwf"
   steps: [120]
   members: [1]
+  truth_label: "IEKM"
+  input_label: "x_interp"
+  input_bundles_dir: "/home/ecm5702/scratch/eval/manual_811960e6_new_o1280_o2560_20260512_ep130_100k/bundles_with_y"
 
 surface:
   weighting: "truth-std"
@@ -81,7 +98,7 @@ sigma:
   residual_statistics_fallback: "o2560_dict_6_72.npy"
 
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, mlflow]
 
 resource_profiles:
@@ -117,7 +134,7 @@ resource_profiles:
     cpus: 1
 
 prepml:
-  debug_expvers: ["TBD_CREATE_7", "TBD_CREATE_8"]
+  debug_expvers: ["j5yb"]
   runner: anemoi-dev
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
   input:
@@ -125,6 +142,7 @@ prepml:
     stream: enfo
     type: pf
     grid: O1280
+    step_offset_hours: 6
   output:
     class: rd
     stream: enfo

@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 
 CODE_ROOT = "/home/ecm5702/dev/downscaling-tools"
 
@@ -14,6 +16,16 @@ def _cli_env():
     env = os.environ.copy()
     env["PYTHONPATH"] = CODE_ROOT + ":" + env.get("PYTHONPATH", "")
     return env
+
+
+def _write_truth_bundle(path):
+    import xarray as xr
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    xr.Dataset(
+        {"target_hres_10u": ("point_hres", [1.0])},
+        attrs={"has_target_hres_fields": "yes"},
+    ).to_netcdf(path)
 
 
 def test_cli_evaluate_dry_run(tmp_path):
@@ -160,6 +172,115 @@ def test_cli_predict_num_gpus_per_model_lane_default():
     assert '"num_gpus_per_model": 4' in result.stdout
 
 
+def test_cli_prepml_o320_o1280_dry_run_uses_four_gpu_parallel_config():
+    """o320_o1280 PrepML preview must preserve the lane's 4-GPU model posture."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "predict",
+            "--dry-run",
+            "--mode", "prepml",
+            "--lane", "o320_o1280",
+            "--checkpoint", "/tmp/test.ckpt",
+            "--expver", "test",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert '"num_gpus_per_model": 4' in result.stdout
+    assert "base_runner: downscaling" in result.stdout
+    assert "world_size: 4" in result.stdout
+    assert "gpus_per_node: 4" in result.stdout
+    assert "'#SBATCH --gres=gpu:4'" in result.stdout
+
+
+def test_cli_num_chunks_override_sets_all_inference_chunk_envs():
+    """--num-chunks overrides block, processor, and mapper env knobs together."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "predict",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--checkpoint", "/tmp/test.ckpt",
+            "--num-chunks", "64",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert '"ANEMOI_INFERENCE_NUM_CHUNKS": "64"' in result.stdout
+    assert '"ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR": "64"' in result.stdout
+    assert '"ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER": "64"' in result.stdout
+
+
+def test_cli_o320_o1280_predict_rejects_ac_host():
+    """o320->o1280 prediction is AG-only; explicit AC host selection is a hard error."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "predict",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--host", "atos_ac",
+            "--checkpoint", "/tmp/test.ckpt",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode != 0
+    assert (
+        "Lane 'o320_o1280' stage 'predict' must be run on host(s) ['atos_ag']; "
+        "got 'atos_ac'"
+    ) in result.stderr
+
+
+def test_cli_o320_o1280_evaluate_defaults_to_ac(tmp_path):
+    """o320->o1280 downstream evaluation defaults to AC, not the prediction host."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "evaluate",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--predictions-dir", str(tmp_path),
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert '"host": "atos_ac"' in result.stdout
+
+
+def test_cli_o320_o1280_evaluate_rejects_ag_host(tmp_path):
+    """o320->o1280 downstream evaluation is AC-only."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "evaluate",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--host", "atos_ag",
+            "--predictions-dir", str(tmp_path),
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode != 0
+    assert (
+        "Lane 'o320_o1280' stage 'evaluate' must be run on host(s) ['atos_ac']; "
+        "got 'atos_ag'"
+    ) in result.stderr
+
+
+def test_cli_o320_o1280_run_is_rejected_for_split_hosts():
+    """The single-host run pipeline is invalid for split AG-predict/AC-evaluate lanes."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "run",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--checkpoint", "/tmp/test.ckpt",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode != 0
+    assert (
+        "Lane 'o320_o1280' stage 'run' cannot be run as a single-host stage"
+    ) in result.stderr
+
+
 def test_cli_predict_bundle_dir_without_source_grib_root(tmp_path, monkeypatch):
     """--bundle-dir without --source-grib-root is used as input_root (no rebuild)."""
     from unittest.mock import patch
@@ -168,6 +289,7 @@ def test_cli_predict_bundle_dir_without_source_grib_root(tmp_path, monkeypatch):
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     bundles = tmp_path / "bundles_with_y"
     bundles.mkdir()
+    _write_truth_bundle(bundles / "bundle_date20250926_mem01_step024.nc")
     captured = {}
 
     def fake_run(cmd, check):
@@ -181,7 +303,10 @@ def test_cli_predict_bundle_dir_without_source_grib_root(tmp_path, monkeypatch):
             "dates": ["20250926"],
             "num_gpus_per_model": 4,
         },
-        "prepare": {"foo": "bar"},
+        "prepare": {
+            "bundle_filename_tpl": "bundle_date{date}_mem{member:02d}_step{step:03d}.nc",
+            "args": {},
+        },
     }
     host_config = {"environment_setup": {"exports": {}}}
 
@@ -214,6 +339,7 @@ def test_cli_predict_wraps_in_srun_under_slurm(tmp_path, monkeypatch):
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
     bundles = tmp_path / "bundles_with_y"
     bundles.mkdir()
+    _write_truth_bundle(bundles / "bundle_date20250926_mem01_step024.nc")
     captured = {}
 
     def fake_run(cmd, check):
@@ -227,7 +353,10 @@ def test_cli_predict_wraps_in_srun_under_slurm(tmp_path, monkeypatch):
             "dates": ["20250926"],
             "num_gpus_per_model": 4,
         },
-        "prepare": {"foo": "bar"},
+        "prepare": {
+            "bundle_filename_tpl": "bundle_date{date}_mem{member:02d}_step{step:03d}.nc",
+            "args": {},
+        },
     }
     host_config = {"environment_setup": {"exports": {}}}
 
@@ -252,3 +381,109 @@ def test_cli_predict_wraps_in_srun_under_slurm(tmp_path, monkeypatch):
     assert "--num-gpus-per-model" in cmd
     ng_idx = cmd.index("--num-gpus-per-model")
     assert cmd[ng_idx + 1] == "4"
+
+
+def test_cli_predict_source_grib_root_rejects_srun_rank_context(tmp_path, monkeypatch):
+    """Serial prepare must fail before build_bundles when eval.cli is launched under srun."""
+    from unittest.mock import patch
+    from eval import cli as eval_cli
+
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("SLURM_PROCID", "0")
+
+    lane_config = {
+        "predict": {"members": [1], "steps": [24], "dates": ["20230826"]},
+        "prepare": {"bundle_filename_tpl": "unused", "args": {}},
+    }
+    host_config = {"environment_setup": {"exports": {}}}
+
+    args = type("Args", (), {})()
+    args.checkpoint = "/tmp/fake.ckpt"
+    args.source_grib_root = "/tmp/source"
+    args.bundle_dir = str(tmp_path / "bundles")
+    args.mode = "manual"
+
+    with patch("eval.prepare.builder.build_bundles") as build_bundles:
+        with pytest.raises(SystemExit, match="serial bundle preparation"):
+            eval_cli.cmd_predict(args, lane_config, host_config, tmp_path)
+
+    build_bundles.assert_not_called()
+
+
+def test_cli_predict_source_grib_root_allowed_in_plain_sbatch(tmp_path, monkeypatch):
+    """An sbatch allocation alone is fine; only an actual rank context is rejected."""
+    from unittest.mock import patch
+    from eval import cli as eval_cli
+
+    monkeypatch.setenv("SLURM_JOB_ID", "12345")
+    monkeypatch.setenv("SLURM_NTASKS", "4")
+    monkeypatch.delenv("SLURM_PROCID", raising=False)
+    monkeypatch.delenv("PMI_RANK", raising=False)
+    monkeypatch.delenv("RANK", raising=False)
+
+    captured = {}
+
+    def fake_run(cmd, check):
+        captured["cmd"] = cmd
+        return None
+
+    lane_config = {
+        "predict": {
+            "members": [1],
+            "steps": [24],
+            "dates": ["20230826"],
+            "num_gpus_per_model": 4,
+        },
+        "prepare": {
+            "bundle_filename_tpl": "bundle_date{date}_mem{member:02d}_step{step:03d}.nc",
+            "args": {},
+        },
+    }
+    host_config = {"environment_setup": {"exports": {}}}
+
+    args = type("Args", (), {})()
+    args.checkpoint = "/tmp/fake.ckpt"
+    args.source_grib_root = "/tmp/source"
+    args.bundle_dir = str(tmp_path / "bundles")
+    args.mode = "manual"
+
+    with patch("eval.prepare.builder.build_bundles") as build_bundles:
+        with patch("eval.prepare.builder.verify_bundles") as verify_bundles:
+            with patch.object(eval_cli.subprocess, "run", side_effect=fake_run):
+                eval_cli.cmd_predict(args, lane_config, host_config, tmp_path)
+
+    build_bundles.assert_called_once()
+    verify_bundles.assert_called_once()
+    assert captured["cmd"][0] == "srun"
+
+
+def test_cli_predict_bundle_dir_rejects_truthless_prepare_lane(tmp_path, monkeypatch):
+    """eval.cli must not treat existing truthless bundles as prediction-ready."""
+    import xarray as xr
+    from eval import cli as eval_cli
+
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+    bundle_dir = tmp_path / "bundles"
+    bundle_dir.mkdir()
+    xr.Dataset({"in_lres_10u": ("point_lres", [1.0])}).to_netcdf(
+        bundle_dir / "bundle_date20230826_mem01_step024.nc"
+    )
+
+    lane_config = {
+        "predict": {"members": [1], "steps": [24], "dates": ["20230826"]},
+        "prepare": {
+            "bundle_filename_tpl": "bundle_date{date}_mem{member:02d}_step{step:03d}.nc",
+            "args": {},
+        },
+    }
+    host_config = {"environment_setup": {"exports": {}}}
+
+    args = type("Args", (), {})()
+    args.checkpoint = "/tmp/fake.ckpt"
+    args.source_grib_root = None
+    args.bundle_dir = str(bundle_dir)
+    args.mode = "manual"
+
+    with pytest.raises(RuntimeError, match="target_hres"):
+        eval_cli.cmd_predict(args, lane_config, host_config, tmp_path)

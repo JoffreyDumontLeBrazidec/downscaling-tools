@@ -153,13 +153,18 @@ def predict_ensemble_members(
             device=device,
             model_comm_group=model_comm_group,
         )
-    except RuntimeError as exc:
-        if "cannot export x_interp" not in str(exc):
+    except (RuntimeError, ValueError) as exc:
+        msg = str(exc)
+        recognized = (
+            "cannot export x_interp" in msg
+            or "expects one ensemble" in msg
+        )
+        if not recognized:
             raise
         x_interp_stack = None
         print(
             f"WARNING date={date} step={step}: skipping x_interp export because the "
-            f"inference model does not expose interpolation hooks ({exc})."
+            f"inference model rejected ensemble interpolation ({exc})."
         )
 
     y_pred_stack = np.stack(y_pred_members, axis=0)[None, ...]

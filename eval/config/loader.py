@@ -14,7 +14,8 @@ _LANE_ALLOWED_KEYS = {
     "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
     "evaluator_groups", "sigma", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
-    "default_host",
+    "default_host", "allowed_hosts",
+    "precip_dist", "precip_events",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
@@ -93,6 +94,25 @@ def _validate_lane(config: dict[str, Any], path: Path) -> None:
             f"{path}: 'evaluator_groups.default' must be a list of str, got {evaluator_groups['default']!r}"
         )
 
+    allowed_hosts = config.get("allowed_hosts")
+    if allowed_hosts is not None:
+        if isinstance(allowed_hosts, list):
+            valid_allowed_hosts = all(isinstance(item, str) for item in allowed_hosts)
+        elif isinstance(allowed_hosts, dict):
+            valid_allowed_hosts = all(
+                isinstance(stage, str)
+                and isinstance(hosts, list)
+                and all(isinstance(item, str) for item in hosts)
+                for stage, hosts in allowed_hosts.items()
+            )
+        else:
+            valid_allowed_hosts = False
+        if not valid_allowed_hosts:
+            raise ConfigValidationError(
+                f"{path}: 'allowed_hosts' must be a list of str or a mapping "
+                f"of CLI stage to list of str, got {allowed_hosts!r}"
+            )
+
 
 def _validate_host(config: dict[str, Any], path: Path) -> None:
     for key in _HOST_REQUIRED_KEYS:
@@ -168,6 +188,54 @@ def load_host(name: str, overrides: dict | None = None) -> dict:
         config = _deep_merge(config, overrides)
     _validate_host(config, path)
     return config
+
+
+def allowed_hosts_for_stage(lane_config: dict[str, Any], stage: str | None = None) -> list[str] | None:
+    """Return allowed hosts for a lane, optionally scoped to a CLI stage."""
+
+    allowed_hosts = lane_config.get("allowed_hosts")
+    if allowed_hosts is None or isinstance(allowed_hosts, list):
+        return allowed_hosts
+    if not isinstance(allowed_hosts, dict):
+        return None
+    if stage and stage in allowed_hosts:
+        return allowed_hosts[stage]
+    return allowed_hosts.get("default")
+
+
+def default_host_for_stage(lane_config: dict[str, Any], stage: str | None = None) -> str | None:
+    """Return the stage-specific default host when a lane declares one."""
+
+    allowed_hosts = allowed_hosts_for_stage(lane_config, stage)
+    if allowed_hosts:
+        return allowed_hosts[0]
+    return lane_config.get("default_host")
+
+
+def validate_lane_host_compatible(
+    lane_name: str,
+    lane_config: dict[str, Any],
+    host_name: str,
+    stage: str | None = None,
+) -> None:
+    """Fail fast when a lane/stage is rendered or run on a forbidden host."""
+
+    allowed_hosts = allowed_hosts_for_stage(lane_config, stage)
+    if allowed_hosts is None:
+        return
+    stage_text = f" stage '{stage}'" if stage else ""
+    if not allowed_hosts:
+        raise ConfigValidationError(
+            f"Lane '{lane_name}'{stage_text} cannot be run as a single-host stage. "
+            "Run prepare/predict and evaluate/scoreboard on their stage-specific hosts."
+        )
+    if host_name not in allowed_hosts:
+        default_host = default_host_for_stage(lane_config, stage)
+        suffix = f" Default host: {default_host}." if default_host else ""
+        raise ConfigValidationError(
+            f"Lane '{lane_name}'{stage_text} must be run on host(s) "
+            f"{allowed_hosts}; got '{host_name}'.{suffix}"
+        )
 
 
 def load_event(name: str) -> dict:

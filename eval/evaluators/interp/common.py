@@ -28,10 +28,9 @@ def resolve_ckpt_id(checkpoint_path: str | os.PathLike, eval_config: dict | None
     step_part = f"{int(m.group(1)) // 1000}k" if m else "unknown"
 
     if re.fullmatch(r"[0-9a-fA-F]{8,}", parent):
-        prefix = parent[: 8] if len(parent) >= 8 else parent
-        # Trim to 4 chars when long ids look hex-uuid-y (mirrors `59e4` style)
-        short = prefix[:4]
-        return f"{short}_{step_part}"
+        # 8-char prefix matches the dominant dir convention
+        # (85884ee7_189k, cfec83a3_200k, fb21124e_75k).
+        return f"{parent[:8]}_{step_part}"
     return f"{parent}_{step_part}"
 
 
@@ -41,5 +40,14 @@ def perm_run_dir(ckpt_id: str) -> Path:
 
 def perm_run_dirs(ckpt_id: str) -> list[Path]:
     """All run dirs for this checkpoint: the base <ckpt_id> dir plus any
-    case-study dirs (<ckpt_id>_humberto, <ckpt_id>_amazon_precip, ...)."""
-    return sorted(p for p in PERM_INTERP_ROOT.glob(f"{ckpt_id}*") if p.is_dir())
+    case-study dirs (<ckpt_id>_humberto, <ckpt_id>_amazon_precip, ...).
+
+    Also matches the legacy 4-char-prefix naming (59e4_300k) when the id
+    carries an 8-char hash prefix.
+    """
+    patterns = {f"{ckpt_id}*"}
+    m = re.match(r"([0-9a-fA-F]{8})_(.+)", ckpt_id)
+    if m:
+        patterns.add(f"{m.group(1)[:4]}_{m.group(2)}*")
+    dirs = {p for pat in patterns for p in PERM_INTERP_ROOT.glob(pat) if p.is_dir()}
+    return sorted(dirs)

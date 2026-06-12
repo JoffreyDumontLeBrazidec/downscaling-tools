@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from eval.jobs.renderer import render_sbatch
 
 
@@ -67,3 +69,66 @@ def test_render_sbatch_cli_overrides():
     )
     assert "--only" in script
     assert "tc" in script
+
+
+def test_render_predict_with_source_grib_root_does_not_outer_srun_eval_cli():
+    script = render_sbatch(
+        lane="o320_o1280_sigma10k",
+        host="atos_ag",
+        checkpoint="/tmp/test.ckpt",
+        mode="predict",
+        overrides={
+            "--source-grib-root": "/home/ecm5702/perm/reference/o320_o1280/grib/idalia",
+            "--bundle-dir": "/tmp/bundles",
+        },
+        resource_overrides={"gpus": 4, "ntasks_per_node": 4},
+    )
+
+    assert "#SBATCH --ntasks-per-node=4" in script
+    assert "#SBATCH --gpus-per-node=4" in script
+    assert "# Host: atos_ag" in script
+    assert "source /home/ecm5702/dev/.ds-ag/bin/activate" in script
+    assert "srun python -m eval.cli predict" not in script
+    assert "python -m eval.cli predict" in script
+    assert "--source-grib-root /home/ecm5702/perm/reference/o320_o1280/grib/idalia" in script
+
+
+def test_render_o320_o1280_predict_rejects_ac_host():
+    with pytest.raises(Exception, match="stage 'predict' must be run on host"):
+        render_sbatch(
+            lane="o320_o1280_sigma10k",
+            host="atos_ac",
+            checkpoint="/tmp/test.ckpt",
+            mode="predict",
+            resource_overrides={"gpus": 4, "ntasks_per_node": 4},
+        )
+
+
+def test_render_o320_o1280_evaluate_accepts_ac_host():
+    script = render_sbatch(
+        lane="o320_o1280_sigma10k",
+        host="atos_ac",
+        checkpoint="/tmp/test.ckpt",
+        mode="evaluate",
+        overrides={
+            "--predictions-dir": "/tmp/predictions",
+            "--only": "tc",
+        },
+    )
+    assert "# Host: atos_ac" in script
+    assert "source /home/ecm5702/dev/.ds-dyn/bin/activate" in script
+    assert "python -m eval.cli evaluate" in script
+
+
+def test_render_o320_o1280_evaluate_rejects_ag_host():
+    with pytest.raises(Exception, match="stage 'evaluate' must be run on host"):
+        render_sbatch(
+            lane="o320_o1280_sigma10k",
+            host="atos_ag",
+            checkpoint="/tmp/test.ckpt",
+            mode="evaluate",
+            overrides={
+                "--predictions-dir": "/tmp/predictions",
+                "--only": "tc",
+            },
+        )

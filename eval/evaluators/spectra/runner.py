@@ -29,6 +29,8 @@ def run(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     weather_states = eval_config.get("weather_states", "10u,10v,2t,msl,t_850,z_500")
+    if isinstance(weather_states, list):
+        weather_states = ",".join(weather_states)
     nside = str(eval_config.get("nside", 64))
     lmax = str(eval_config.get("lmax", 319))
     member_aggregation = eval_config.get("member_aggregation", "per-file-mean")

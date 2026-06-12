@@ -14,6 +14,29 @@ from .stats import safe_ratio
 
 logger = logging.getLogger(__name__)
 
+NAMED_DISTRIBUTION_STYLES: dict[str, dict[str, object]] = {
+    "ENFO_O1280_0001": {
+        "label": "ENFO O1280",
+        "color": "#E69F00",
+        "linestyle": "--",
+        "linewidth": 2.3,
+    },
+    "IEKM": {
+        "label": "IEKM",
+        "color": "#009E73",
+        "linestyle": "-.",
+        "linewidth": 2.3,
+    },
+}
+
+MODEL_DISTRIBUTION_COLORS = [
+    "#8E24AA",
+    "#0072B2",
+    "#D55E00",
+    "#CC79A7",
+    "#56B4E9",
+]
+
 warnings.filterwarnings(
     "ignore",
     message=".*decode_timedelta will default to False.*",
@@ -44,6 +67,8 @@ def _shorten_run_label(label: str) -> str:
 
 
 def curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
+    if curve_key in NAMED_DISTRIBUTION_STYLES:
+        return str(NAMED_DISTRIBUTION_STYLES[curve_key]["label"])
     if curve_key in REFERENCE_STYLES:
         return REFERENCE_STYLES[curve_key]["label"]
     if curve_key == oper_key:
@@ -59,13 +84,155 @@ def curve_style(
     ml_palette: np.ndarray,
     ml_index: int,
 ) -> dict[str, object]:
+    if curve_key == "OPER_O1280_0001":
+        return {"color": "#111827", "linestyle": "-", "linewidth": 2.3}
+    if curve_key in NAMED_DISTRIBUTION_STYLES:
+        return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
     if curve_key in REFERENCE_STYLES:
         return dict(REFERENCE_STYLES[curve_key])
     return {
-        "color": ml_palette[ml_index],
+        "color": MODEL_DISTRIBUTION_COLORS[ml_index % len(MODEL_DISTRIBUTION_COLORS)],
         "linestyle": "-",
         "linewidth": 3,
     }
+
+
+def _clean_distribution_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
+    if curve_key == oper_key:
+        return "OPER O320" if "O320" in curve_key else "OPER AN"
+    if curve_key in NAMED_DISTRIBUTION_STYLES:
+        return str(NAMED_DISTRIBUTION_STYLES[curve_key]["label"])
+    if curve_key == "ENFO_O320_0001":
+        return "ENFO O320"
+    if curve_key == "EEFO_O96_0001":
+        return "EEFO O96"
+    if curve_key in REFERENCE_STYLES:
+        return str(REFERENCE_STYLES[curve_key]["label"]).replace("_", " ").upper()
+    if curve_key in exp_labels:
+        return exp_labels[curve_key]
+    return _shorten_run_label(curve_key)
+
+
+def _distribution_ml_palette(count: int) -> np.ndarray:
+    color_cycle = np.asarray(MODEL_DISTRIBUTION_COLORS, dtype=object)
+    if count <= len(color_cycle):
+        return color_cycle[:count]
+    repeats = int(np.ceil(count / len(color_cycle)))
+    return np.tile(color_cycle, repeats)[:count]
+
+
+def _distribution_style(curve_key: str, *, oper_key: str, ml_palette: np.ndarray, ml_index: int) -> dict[str, object]:
+    if curve_key == oper_key:
+        return {"color": "#111827", "linestyle": "-", "linewidth": 2.3}
+    if curve_key in NAMED_DISTRIBUTION_STYLES:
+        return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
+    if curve_key == "ENFO_O320_0001":
+        return {"color": cm.batlow(0.68), "linestyle": "--", "linewidth": 2.0}
+    if curve_key in REFERENCE_STYLES:
+        base = dict(REFERENCE_STYLES[curve_key])
+        if curve_key.startswith("EEFO"):
+            base.update({"color": cm.lajolla(0.42), "linestyle": "--", "linewidth": 2.0})
+        return base
+    return {"color": ml_palette[ml_index], "linestyle": "-", "linewidth": 2.8}
+
+
+def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
+    xbins = np.asarray(var_data["bin_edges"])
+    if variable == "mslp_hpa" and "data_range_msl" in var_data:
+        lo, hi = var_data["data_range_msl"]
+        pad = max((hi - lo) * 0.08, 1.0)
+        ax.set_xlim(min(xbins[-1], hi + pad), max(xbins[0], lo - pad))
+    elif variable == "wind10m_ms" and "data_range_wind" in var_data:
+        _lo, hi = var_data["data_range_wind"]
+        pad = max(hi * 0.05, 1.0)
+        ax.set_xlim(0, min(xbins[-1], hi + pad))
+
+
+def _positive_for_log(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64)
+    return np.where(arr > 0.0, arr, np.nan)
+
+
+def plot_pdf_distribution_overview(
+    plot_config: TCPlotConfig,
+    *,
+    event_stats: dict,
+    exp_labels: dict[str, str] | None = None,
+) -> plt.Figure:
+    """Render raw TC distributions with log-density styling for quick visual comparison."""
+    exp_labels = exp_labels or {}
+    oper_key = event_stats["analysis_key"]
+    curve_order = event_stats["curve_order"]
+    var_mslp = event_stats["variables"]["mslp_hpa"]
+    var_wind = event_stats["variables"]["wind10m_ms"]
+
+    mids_msl = np.asarray(var_mslp["bin_mids"])
+    mids_wind = np.asarray(var_wind["bin_mids"])
+
+    ml_like_keys = [
+        k for k in curve_order
+        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES and k != oper_key
+    ]
+    ml_palette = _distribution_ml_palette(len(ml_like_keys))
+    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
+
+    fig, axs = plt.subplots(1, 2, figsize=(13.6, 5.2), constrained_layout=True)
+
+    series = [oper_key, *curve_order]
+    seen: set[str] = set()
+    for key in series:
+        if key in seen:
+            continue
+        seen.add(key)
+        label = _clean_distribution_label(key, exp_labels, oper_key=oper_key)
+        style = _distribution_style(
+            key,
+            oper_key=oper_key,
+            ml_palette=ml_palette,
+            ml_index=ml_indices.get(key, 0),
+        )
+
+        if key == oper_key:
+            hist_msl = np.asarray(var_mslp["oper_histogram"])
+            hist_wind = np.asarray(var_wind["oper_histogram"])
+        else:
+            hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
+            hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
+
+        axs[0].plot(
+            mids_msl,
+            _positive_for_log(hist_msl),
+            label=label,
+            color=style["color"],
+            linestyle=style["linestyle"],
+            linewidth=style["linewidth"],
+            alpha=0.96,
+        )
+        axs[1].plot(
+            mids_wind,
+            _positive_for_log(hist_wind),
+            label=label,
+            color=style["color"],
+            linestyle=style["linestyle"],
+            linewidth=style["linewidth"],
+            alpha=0.96,
+        )
+
+    for ax, var_data, variable, xlabel, title in [
+        (axs[0], var_mslp, "mslp_hpa", "hPa", "Mean sea-level pressure"),
+        (axs[1], var_wind, "wind10m_ms", "m/s", "10 m wind speed"),
+    ]:
+        ax.set_yscale("log")
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel("density", fontsize=12)
+        ax.set_title(title, fontsize=14)
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="best", fontsize=9)
+        _apply_distribution_xlim(ax, var_data, variable=variable)
+
+    title = plot_config.plot_title.replace("normed pdfs", "TC distributions")
+    fig.suptitle(title, fontsize=16)
+    return fig
 
 
 def plot_pdf_ratios(
@@ -89,8 +256,11 @@ def plot_pdf_ratios(
     mids_msl = np.asarray(var_mslp["bin_mids"])
     mids_wind = np.asarray(var_wind["bin_mids"])
 
-    ml_like_keys = [k for k in curve_order if k not in REFERENCE_STYLES]
-    ml_palette = cm.batlow(np.linspace(0, 1, max(1, len(ml_like_keys))))
+    ml_like_keys = [
+        k for k in curve_order
+        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
+    ]
+    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
     ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
@@ -135,7 +305,7 @@ def plot_pdf_ratios(
         (axs[1], mids_wind, plot_config.wind_ylim,
          "10m wind speed (m/s)", "Normalized (by analysis) Distribution 10m Wind Speed"),
     ]:
-        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="green", label="OPER AN")
+        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="#111827", label="OPER AN")
         ydata_max = max(
             (np.nanmax(line.get_ydata()) for line in ax.get_lines() if line.get_ydata().size),
             default=0.0,
@@ -173,15 +343,18 @@ def plot_pdf_log(
     mids_msl = np.asarray(var_mslp["bin_mids"])
     mids_wind = np.asarray(var_wind["bin_mids"])
 
-    ml_like_keys = [k for k in curve_order if k not in REFERENCE_STYLES]
-    ml_palette = cm.batlow(np.linspace(0, 1, max(1, len(ml_like_keys))))
+    ml_like_keys = [
+        k for k in curve_order
+        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
+    ]
+    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
     ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
     # Plot operational analysis
-    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="green", label="OPER AN")
-    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="green", label="OPER AN")
+    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="#111827", label="OPER AN")
+    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="#111827", label="OPER AN")
 
     for key in curve_order:
         label = curve_label(key, exp_labels, oper_key=oper_key)

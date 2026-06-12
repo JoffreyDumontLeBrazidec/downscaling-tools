@@ -7,20 +7,27 @@ import pytest
 import yaml
 
 
-def _sample_lane_config() -> dict:
-    return {
-        "predict": {
-            "dates": ["20230826", "20230827", "20230828", "20230829", "20230830"],
-            "members": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            "steps": [24, 48, 72, 96, 120],
-            "sampler": {
-                "schedule_type": "experimental_piecewise",
-                "num_steps": 30,
-                "sigma_max": 1000.0,
-                "sigma_min": 0.03,
-                "sampler": "heun",
-            },
+def _sample_lane_config(
+    *,
+    members: list[int] | None = None,
+    num_gpus_per_model: int | None = None,
+) -> dict:
+    predict = {
+        "dates": ["20230826", "20230827", "20230828", "20230829", "20230830"],
+        "members": members or [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        "steps": [24, 48, 72, 96, 120],
+        "sampler": {
+            "schedule_type": "experimental_piecewise",
+            "num_steps": 30,
+            "sigma_max": 1000.0,
+            "sigma_min": 0.03,
+            "sampler": "heun",
         },
+    }
+    if num_gpus_per_model is not None:
+        predict["num_gpus_per_model"] = num_gpus_per_model
+    return {
+        "predict": predict,
         "prepml": {
             "runner": "anemoi-dev",
             "venv": "/home/ecm5702/dev/.ds-dyn-wrap",
@@ -85,6 +92,15 @@ def test_generate_prepml_yaml_members():
     assert config["ensemble"]["loop"]["number"] == "1/to/10"
 
 
+def test_generate_prepml_yaml_single_member_loop():
+    from eval.predict.prepml_config import generate_prepml_config
+    config = generate_prepml_config(
+        lane_config=_sample_lane_config(members=[1]),
+        checkpoint_path="/path/to/checkpoint.ckpt",
+    )
+    assert config["ensemble"]["loop"]["number"] == "1"
+
+
 def test_write_prepml_yaml(tmp_path):
     from eval.predict.prepml_config import generate_prepml_config, write_prepml_config
     config = generate_prepml_config(
@@ -105,3 +121,16 @@ def test_runner_override():
         runner_override="/custom/venv/path",
     )
     assert config["runner"]["venv"] == "/custom/venv/path"
+
+
+def test_generate_prepml_yaml_multi_gpu_model_parallel_runner():
+    from eval.predict.prepml_config import generate_prepml_config
+    config = generate_prepml_config(
+        lane_config=_sample_lane_config(num_gpus_per_model=4),
+        checkpoint_path="/path/to/checkpoint.ckpt",
+    )
+    assert config["model"]["runner"] == {"parallel": {"base_runner": "downscaling"}}
+    assert config["model"]["world_size"] == 4
+    submit_args = config["platform"]["flavours"]["gpu"]["submit_arguments"]
+    assert submit_args["gpus_per_node"] == 4
+    assert "#SBATCH --gres=gpu:4" in submit_args["RAW_PRAGMA"]

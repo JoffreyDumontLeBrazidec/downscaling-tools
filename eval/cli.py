@@ -35,6 +35,7 @@ ALL_EVALUATORS = [
     "sigma", "mechanistic", "intermediate",
     "spectra_ecmwf", "mlflow",
     "precip_dist", "precip_events",
+    "interp",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -234,6 +235,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_report = subparsers.add_parser("report", help="Generate HTML report for an evaluation run.")
     p_report.add_argument("--run-dir", required=True, help="Root directory of the evaluation run.")
     p_report.add_argument("--output", default=None, help="Output HTML path (default: <run-dir>/report.html).")
+
+    # --- prepml-cleanup ---
+    # List tracked prepml experiments and force-run their ecFlow `run/delete/*`
+    # tasks. Bypasses lane/host config loading — operates purely on the ledger
+    # and ecFlow.
+    p_pcleanup = subparsers.add_parser(
+        "prepml-cleanup",
+        help="List and clean tracked prepml experiments via ecFlow.",
+    )
+    p_pcleanup.add_argument(
+        "--list", action="store_true",
+        help="Print the ledger (with ecFlow state) and exit.",
+    )
+    p_pcleanup.add_argument(
+        "--expver", action="append", default=[],
+        help="Clean a specific expver. Repeat for multiple.",
+    )
+    p_pcleanup.add_argument(
+        "--scope", choices=("fdb", "all"), default="fdb",
+        help="Which run/delete tasks to force-run. fdb (default) matches the announcement; "
+             "all = fdb + mars + s3 + quaver + workdir (catalogue is always preserved).",
+    )
+    p_pcleanup.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the ecflow_client commands that would fire; do not execute.",
+    )
+    p_pcleanup.add_argument(
+        "--yes", action="store_true",
+        help="Skip the final confirmation prompt.",
+    )
+    p_pcleanup.add_argument(
+        "--no-ecflow", action="store_true",
+        help="Skip the ecFlow state probe when listing (faster, offline-safe).",
+    )
 
     # --- videogen ---
     # Backend: eval._backends.videogen (modular MP4 generator).
@@ -545,6 +580,7 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
             output_dir=output_dir,
             expver=getattr(args, "expver", None),
             runner_override=getattr(args, "prepml_runner", None),
+            lane=getattr(args, "lane", ""),
         )
         return
 
@@ -886,6 +922,23 @@ def main(argv: list[str] | None = None) -> None:
         report_path = generate_report(run_dir, output)
         LOG.info("Report written to %s", report_path)
         return
+
+    # --- prepml-cleanup subcommand (no lane/host config needed) ---
+    if args.subcommand == "prepml-cleanup":
+        from eval.predict.prepml_cleanup import main as prepml_cleanup_main
+        forwarded: list[str] = []
+        if args.list:
+            forwarded.append("--list")
+        for ev in args.expver:
+            forwarded += ["--expver", ev]
+        forwarded += ["--scope", args.scope]
+        if args.dry_run:
+            forwarded.append("--dry-run")
+        if args.yes:
+            forwarded.append("--yes")
+        if args.no_ecflow:
+            forwarded.append("--no-ecflow")
+        raise SystemExit(prepml_cleanup_main(forwarded))
 
     # --- Videogen subcommand (no lane/host config needed) ---
     if args.subcommand == "videogen":

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from eval._backends.tc.events import EVENTS
-from eval._backends.tc.pdf_plot import plot_pdf_log, plot_pdf_ratios
+from eval._backends.tc.pdf_plot import plot_pdf_distribution_overview, plot_pdf_log, plot_pdf_ratios
 from dataclasses import replace
 
 from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
@@ -53,6 +53,24 @@ def plot(
 
     pdf_path = plots_dir / "all_tc_distributions.pdf"
     with PdfPages(pdf_path) as pdf:
+        for event_key, event_stats in events_data.items():
+            if event_stats.get("prediction_only"):
+                continue
+
+            base_event = event_stats.get("event", event_key)
+            mode = event_stats.get("support_mode", "")
+            mode_suffix = f" [{mode}]" if mode else ""
+            plot_cfg = resolve_plot_config(base_event, eval_config)
+            plot_cfg = replace(plot_cfg, plot_title=plot_cfg.plot_title + mode_suffix)
+
+            fig_overview = plot_pdf_distribution_overview(
+                plot_cfg,
+                event_stats=event_stats,
+            )
+            pdf.savefig(fig_overview, dpi=300)
+            plt.close(fig_overview)
+            LOG.info("Plotted TC distribution overview for event=%s mode=%s", base_event, mode)
+
         for event_key, event_stats in events_data.items():
             if event_stats.get("prediction_only"):
                 LOG.info("Skipping plot for prediction-only event=%s", event_key)

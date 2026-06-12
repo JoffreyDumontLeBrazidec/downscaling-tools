@@ -55,6 +55,12 @@ DEVICE="cuda"
 PRECISION="fp32"
 VALIDATION_FREQUENCY="50h"  # used by new stack only
 NUM_GPUS_PER_MODEL=1        # used by new stack only; o320_o1280 should use 4
+# ANEMOI_INFERENCE_NUM_CHUNKS chunks block/mapper attention to fit on fewer GPUs.
+# Leave empty to keep upstream default; "32" is Jan Polster's recipe for o1280.
+NUM_CHUNKS=""
+# Set to 1 to bypass the o320_o1280 NUM_GPUS_PER_MODEL>=4 guard (smoke-test sweep
+# below the production floor only — never for canonical proxy/full25 runs).
+ALLOW_LOW_GPU_COUNT=0
 OUTPUT_WEATHER_STATE_MODE="surface-plus-core-pl"
 OUTPUT_WEATHER_STATES=""
 SLIM_OUTPUT=1
@@ -194,12 +200,12 @@ fi
 
 BUNDLE_PAIRS="$(normalize_bundle_pairs "${BUNDLE_PAIRS}")"
 
-if [[ "${LANE}" == "o320_o1280" && "${NUM_GPUS_PER_MODEL}" -lt 4 ]]; then
-  die "LANE=o320_o1280 requires NUM_GPUS_PER_MODEL>=4. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o320_o1280_manual_eval_flow.sh or submit this template with matching 4-GPU scheduler overrides."
+if [[ "${LANE}" == "o320_o1280" && "${NUM_GPUS_PER_MODEL}" -lt 4 && "${ALLOW_LOW_GPU_COUNT}" -ne 1 ]]; then
+  die "LANE=o320_o1280 requires NUM_GPUS_PER_MODEL>=4. Set ALLOW_LOW_GPU_COUNT=1 only for explicit num-chunks smoke tests, or submit this template with matching 4-GPU scheduler overrides."
 fi
 if [[ "${LANE}" == "o1280_o2560" ]]; then
-  if [[ "${NUM_GPUS_PER_MODEL}" -lt 4 ]]; then
-    die "LANE=o1280_o2560 requires NUM_GPUS_PER_MODEL>=4. Use /etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/submit_o1280_o2560_manual_eval_flow.sh or submit this template with matching 4-GPU scheduler overrides."
+  if [[ "${NUM_GPUS_PER_MODEL}" -lt 4 && "${ALLOW_LOW_GPU_COUNT}" -ne 1 ]]; then
+    die "LANE=o1280_o2560 requires NUM_GPUS_PER_MODEL>=4. Set ALLOW_LOW_GPU_COUNT=1 only for explicit num-chunks smoke tests, or submit this template with matching 4-GPU scheduler overrides."
   fi
   if [[ -z "${OUTPUT_WEATHER_STATES}" ]]; then
     die "LANE=o1280_o2560 requires explicit OUTPUT_WEATHER_STATES (current contract: 10u,10v,2t,msl)."
@@ -265,6 +271,9 @@ else
   export PYTHONPATH="${CODE_ROOT}"
 fi
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+if [[ -n "${NUM_CHUNKS}" ]]; then
+  export ANEMOI_INFERENCE_NUM_CHUNKS="${NUM_CHUNKS}"
+fi
 export DATA_DIR=/home/mlx/ai-ml/datasets/
 export DATA_STABLE_DIR=/home/mlx/ai-ml/datasets/stable/
 export OUTPUT=/ec/res4/scratch/ecm5702/aifs
@@ -317,6 +326,8 @@ python -m eval.jobs.checkpoint_profile \
   echo "precision=${PRECISION}"
   echo "validation_frequency=${VALIDATION_FREQUENCY}"
   echo "num_gpus_per_model=${NUM_GPUS_PER_MODEL}"
+  echo "num_chunks=${NUM_CHUNKS:-default}"
+  echo "allow_low_gpu_count=${ALLOW_LOW_GPU_COUNT}"
   echo "output_weather_state_mode=${OUTPUT_WEATHER_STATE_MODE}"
   echo "output_weather_states=${OUTPUT_WEATHER_STATES}"
   echo "slim_output=${SLIM_OUTPUT}"

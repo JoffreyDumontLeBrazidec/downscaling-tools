@@ -40,7 +40,7 @@ preflight_venv() {
   local cluster="${PREFLIGHT_CLUSTER:-unknown}"
 
   # Canonical venv map (matches README design invariants)
-  local venv_ac_new="/home/ecm5702/dev/.ds-dyn/bin/activate"
+  local venv_ac_new="/home/ecm5702/dev/.ds-multi/bin/activate"  # 2026-06-12 runtime cleanup: .ds-dyn is gutted; .ds-multi is the operational AC venv (multi-ds runtime)
   local venv_ag_new="/home/ecm5702/dev/.ds-ag/bin/activate"
   local venv_ac_old="/home/ecm5702/dev/.ds-old/bin/activate"
   local venv_ag_old="/home/ecm5702/dev/.ds-ag-old/bin/activate"
@@ -61,6 +61,20 @@ preflight_venv() {
   else
     PREFLIGHT_ERRORS+=("Venv not found: ${venv_path}")
     return 1
+  fi
+
+  if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    local expected_activate="${venv_path}"
+    local active_activate="${VIRTUAL_ENV}/bin/activate"
+    local expected_real active_real
+    expected_real="$(readlink -f "${expected_activate}" 2>/dev/null || printf '%s' "${expected_activate}")"
+    active_real="$(readlink -f "${active_activate}" 2>/dev/null || printf '%s' "${active_activate}")"
+    if [[ "${active_real}" != "${expected_real}" ]]; then
+      PREFLIGHT_ERRORS+=(
+        "Active venv '${active_activate}' does not match cluster=${cluster} stack=${stack} expected '${venv_path}'"
+      )
+      return 1
+    fi
   fi
 
   # Export for downstream use

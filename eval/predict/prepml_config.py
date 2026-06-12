@@ -21,6 +21,8 @@ def _dates_to_range(dates: list[str]) -> dict[str, Any]:
 def _members_to_loop(members: list[int]) -> str:
     """Convert member list to PrepML loop syntax (e.g. '1/to/10')."""
     members_sorted = sorted(members)
+    if len(members_sorted) == 1:
+        return str(members_sorted[0])
     if members_sorted == list(range(members_sorted[0], members_sorted[-1] + 1)):
         return f"{members_sorted[0]}/to/{members_sorted[-1]}"
     return "/".join(str(m) for m in members_sorted)
@@ -31,6 +33,49 @@ def _steps_to_lead_time(steps: list[int]) -> str:
     if not steps:
         raise ValueError("predict.steps must contain at least one forecast step")
     return f"{max(int(step) for step in steps)}h"
+
+
+def _num_gpus_per_model(predict: dict) -> int:
+    """Return validated GPUs per model for PrepML model-parallel inference."""
+    value = predict.get("num_gpus_per_model", 1)
+    try:
+        num_gpus = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"predict.num_gpus_per_model must be an integer, got {value!r}") from exc
+    if num_gpus < 1:
+        raise ValueError(f"predict.num_gpus_per_model must be >= 1, got {num_gpus}")
+    return num_gpus
+
+
+def _model_runner_config(num_gpus_per_model: int) -> str | dict[str, dict[str, str]]:
+    """Build the PrepML/anemoi-inference runner stanza."""
+    if num_gpus_per_model == 1:
+        return "downscaling"
+    return {"parallel": {"base_runner": "downscaling"}}
+
+
+def _gpu_submit_arguments(prepml: dict, num_gpus_per_model: int) -> dict[str, Any]:
+    """Build GPU submit arguments, preserving lane overrides."""
+    gpu_cfg = prepml["platform"]["gpu"]
+    submit_arguments = dict(gpu_cfg.get("submit_arguments") or {})
+    submit_arguments["time"] = gpu_cfg["time"]
+
+    if num_gpus_per_model > 1:
+        submit_arguments.setdefault("gpus_per_node", num_gpus_per_model)
+        raw_pragma = submit_arguments.get("RAW_PRAGMA")
+        if raw_pragma is None:
+            raw_pragmas: list[str] = []
+        elif isinstance(raw_pragma, str):
+            raw_pragmas = [raw_pragma]
+        else:
+            raw_pragmas = list(raw_pragma)
+        if not any("gres=gpu" in pragma or "gpus-per-node" in pragma for pragma in raw_pragmas):
+            raw_pragmas.insert(0, f"#SBATCH --gres=gpu:{num_gpus_per_model}")
+        if not any("--nice" in pragma for pragma in raw_pragmas):
+            raw_pragmas.append("#SBATCH --nice=100")
+        submit_arguments["RAW_PRAGMA"] = raw_pragmas
+
+    return submit_arguments
 
 
 def _input_step_request(predict_steps: list[int], prepml_input: dict, time_step: str) -> str | None:
@@ -73,6 +118,7 @@ def generate_prepml_config(
     prepml = lane_config["prepml"]
 
     venv = runner_override or prepml["venv"]
+    num_gpus_per_model = _num_gpus_per_model(predict)
     lead_time = _steps_to_lead_time(predict["steps"])
     input_step = _input_step_request(predict["steps"], prepml["input"], prepml["time_step"])
 
@@ -103,7 +149,7 @@ def generate_prepml_config(
         },
         "model": {
             "name": "anemoi",
-            "runner": "downscaling",
+            "runner": _model_runner_config(num_gpus_per_model),
             "checkpoint": str(checkpoint_path),
             "lead_time": lead_time,
             "development_hacks": {
@@ -118,15 +164,18 @@ def generate_prepml_config(
         "platform": {
             "flavours": {
                 "gpu": {
-                    "submit_arguments": {
-                        "time": prepml["platform"]["gpu"]["time"],
-                    },
+                    "submit_arguments": _gpu_submit_arguments(prepml, num_gpus_per_model),
                     "late": f"-c +{prepml['platform']['gpu']['time'].split('-', 1)[-1]}",
                 },
             },
         },
         "evaluation": False,
     }
+    predict_env = dict(predict.get("env") or {})
+    if predict_env:
+        config["model"]["env"] = predict_env
+    if num_gpus_per_model > 1:
+        config["model"]["world_size"] = num_gpus_per_model
     if input_step is not None:
         config["input"]["step"] = input_step
     return config

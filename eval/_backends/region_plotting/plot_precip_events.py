@@ -6,7 +6,7 @@ Handles two input layouts:
   --predictions-dir DIR   directory of predictions_*.nc files (from-bundle output)
 
 Outputs a PDF with one page per top event:
-  row: x_interp (LR→HR) | y truth | y_pred,  zoomed ±(dlat/dlon) around event centre.
+  truth | prediction | prediction - truth, zoomed tightly around the event centre.
 """
 from __future__ import annotations
 
@@ -14,15 +14,25 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
 import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.collections import LineCollection
 
 from .plotting.datetime_utils import safe_datetime_str
 
 PRECIP_VARS = ("tp", "cp")
-DEFAULT_DLAT = 18
-DEFAULT_DLON = 22
+DEFAULT_DLAT = 2.0
+DEFAULT_DLON = 2.5
+DEFAULT_N_TOP = 3
+
+try:
+    from anemoi.training.diagnostics.maps import Coastlines
+
+    COASTLINES = Coastlines()
+except Exception:  # pragma: no cover - coastlines are a presentation garnish
+    COASTLINES = None
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +76,17 @@ def _find_precip_var(ws_values) -> str | None:
 # Event selection
 # ---------------------------------------------------------------------------
 
-def _collect_events(src: Path, var: str, n_top: int) -> list[tuple[float, str, xr.Dataset, int]]:
+def _collect_events(src: Path, var: str, n_top: int, *, rank_by: str = "pred") -> list[tuple[float, str, xr.Dataset, int]]:
     """Return top n_top (max_val, label, ds_sample, max_hr_idx) sorted by -max_val."""
+    field = "y" if rank_by == "truth" else "y_pred"
     events: list[tuple[float, str, xr.Dataset, int]] = []
     for label, ds in _iter_samples(src):
         ws = list(ds["weather_state"].values)
         if var not in ws:
             continue
-        pred = ds["y_pred"].sel(weather_state=var).values.ravel()
-        max_val = float(np.nanmax(pred))
-        max_idx = int(np.nanargmax(pred))
+        values = ds[field].sel(weather_state=var).values.ravel()
+        max_val = float(np.nanmax(values))
+        max_idx = int(np.nanargmax(values))
         events.append((max_val, label, ds, max_idx))
     events.sort(key=lambda e: -e[0])
     return events[:n_top]
@@ -93,8 +104,41 @@ def _zoom_mask(lat: np.ndarray, lon: np.ndarray, clat: float, clon: float,
     )
 
 
+def _add_coastlines(ax) -> None:
+    if COASTLINES is None:
+        return
+    coast_segs_deg = [np.degrees(s) for s in COASTLINES.lines.get_segments()]
+    ax.add_collection(LineCollection(coast_segs_deg, linewidths=0.7, colors="black", zorder=10))
+
+
+def _format_map(ax, *, clat: float, clon: float, dlat: float, dlon: float) -> None:
+    ax.set_xlim(clon - dlon, clon + dlon)
+    ax.set_ylim(clat - dlat, clat + dlat)
+    ax.set_xlabel("lon")
+    ax.set_ylabel("lat")
+    ax.set_aspect("auto", adjustable=None)
+    ax.patch.set_edgecolor("black")
+    ax.patch.set_linewidth(1.4)
+    _add_coastlines(ax)
+
+
+def _robust_limits(*arrays: np.ndarray) -> tuple[float, float]:
+    vals = np.concatenate([a[np.isfinite(a)] for a in arrays if a.size])
+    vals = vals[vals >= 0]
+    if vals.size == 0:
+        return 0.0, 1.0
+    return 0.0, max(float(np.nanpercentile(vals, 99.7)), 1.0)
+
+
+def _error_limit(error: np.ndarray) -> float:
+    vals = np.abs(error[np.isfinite(error)])
+    if vals.size == 0:
+        return 1.0
+    return max(float(np.nanpercentile(vals, 99.0)), 1.0)
+
+
 def _make_event_figure(
-    label: str,
+    event_label: str,
     ds: xr.Dataset,
     var: str,
     max_hr_idx: int,
@@ -109,61 +153,68 @@ def _make_event_figure(
 
     hr_mask = _zoom_mask(lat_hr, lon_hr, clat, clon, dlat, dlon)
 
-    y_pred_full = ds["y_pred"].sel(weather_state=var).values.ravel()
+    y_pred_full = ds["y_pred"].sel(weather_state=var).values.ravel() * 1000.0
     y_pred_z = y_pred_full[hr_mask]
 
     has_truth = "y" in ds
-    has_interp = "x_interp" in ds
-    n_panels = 1 + int(has_interp) + int(has_truth)
+    n_panels = 3 if has_truth else 1
 
     if has_truth:
-        y_full = ds["y"].sel(weather_state=var).values.ravel()
+        y_full = ds["y"].sel(weather_state=var).values.ravel() * 1000.0
         y_z = y_full[hr_mask]
-        vmax = max(float(np.nanmax(y_pred_z)), float(np.nanmax(y_z)))
+        vmin, vmax = _robust_limits(y_z, y_pred_z)
+        error_z = y_pred_z - y_z
+        err_vmax = _error_limit(error_z)
+        peak_summary = f"peak truth={float(np.nanmax(y_z)):.1f} mm | peak pred={float(np.nanmax(y_pred_z)):.1f} mm"
     else:
         y_z = None
-        vmax = float(np.nanmax(y_pred_z))
+        error_z = None
+        err_vmax = 1.0
+        vmin, vmax = _robust_limits(y_pred_z)
+        peak_summary = f"peak pred={float(np.nanmax(y_pred_z)):.1f} mm"
 
-    if has_interp:
-        xi_full = ds["x_interp"].sel(weather_state=var).values.ravel()
-        xi_z = xi_full[hr_mask]
-        vmax = max(vmax, float(np.nanmax(xi_z)))
-    else:
-        xi_z = None
-
-    vmax = max(vmax, 1e-6)
     lat_z = lat_hr[hr_mask]
     lon_z = lon_hr[hr_mask]
+    finite = np.isfinite(lat_z) & np.isfinite(lon_z) & np.isfinite(y_pred_z)
+    if y_z is not None:
+        finite &= np.isfinite(y_z)
+    lat_z = lat_z[finite]
+    lon_z = lon_z[finite]
+    y_pred_z = y_pred_z[finite]
+    if y_z is not None:
+        y_z = y_z[finite]
+        error_z = error_z[finite]
+    triangulation = mtri.Triangulation(lon_z, lat_z)
 
-    fig, axes = plt.subplots(1, n_panels, figsize=(6 * n_panels, 5))
+    fig, axes = plt.subplots(1, n_panels, figsize=(6.4 * n_panels, 6.6), constrained_layout=True)
     if n_panels == 1:
         axes = [axes]
 
-    panels: list[tuple[np.ndarray, str]] = []
-    if xi_z is not None:
-        panels.append((xi_z, f"x_interp ({var}, LR→HR)"))
     if y_z is not None:
-        panels.append((y_z, f"y truth ({var})"))
-    panels.append((y_pred_z, f"y_pred ({var})"))
+        panels = [
+            (y_z, f"Truth: {var}", "viridis", vmin, vmax, f"{var} (mm / 6h)"),
+            (y_pred_z, f"Prediction: {var}", "viridis", vmin, vmax, f"{var} (mm / 6h)"),
+            (error_z, "Prediction - truth", "RdBu_r", -err_vmax, err_vmax, "Error (mm / 6h)"),
+        ]
+    else:
+        panels = [(y_pred_z, f"Prediction: {var}", "viridis", vmin, vmax, f"{var} (mm / 6h)")]
 
-    for ax, (data, title) in zip(axes, panels):
-        sc = ax.scatter(lon_z, lat_z, c=data, s=2, cmap="Blues", vmin=0, vmax=vmax)
-        plt.colorbar(sc, ax=ax, label=f"{var} (m)")
-        ax.set_xlim(clon - dlon, clon + dlon)
-        ax.set_ylim(clat - dlat, clat + dlat)
-        ax.axhline(clat, color="r", lw=0.5, alpha=0.6)
-        ax.axvline(clon, color="r", lw=0.5, alpha=0.6)
-        ax.set_xlabel("lon")
-        ax.set_ylabel("lat")
+    for ax, (data, title, cmap, lo, hi, colorbar_label) in zip(axes, panels):
+        sc = ax.tripcolor(
+            triangulation, data, cmap=cmap, vmin=lo, vmax=hi,
+            shading="gouraud", rasterized=True,
+        )
+        ax.plot(clon, clat, marker="+", color="white", markersize=12, markeredgewidth=2.1)
+        ax.plot(clon, clat, marker="+", color="black", markersize=9, markeredgewidth=1.2)
+        plt.colorbar(sc, ax=ax, label=colorbar_label, pad=0.025, shrink=0.82)
+        _format_map(ax, clat=clat, clon=clon, dlat=dlat, dlon=dlon)
         ax.set_title(title, fontsize=9)
 
-    max_pred_mm = y_pred_full[max_hr_idx] * 1000
     fig.suptitle(
-        f"{run_label} | {label} | event ({clat:.1f}°N, {clon:.1f}°E)"
-        f" | max y_pred={max_pred_mm:.1f} mm",
+        f"{run_label} | {event_label} | event ({clat:.2f}°N, {clon:.2f}°E)"
+        f" | zoom ±{dlat:g}° x ±{dlon:g}° | {peak_summary}",
         fontsize=10,
     )
-    fig.tight_layout(rect=[0, 0, 1, 0.93])
     return fig
 
 
@@ -171,6 +222,7 @@ def _make_overview_figure(
     events: list[tuple[float, str, xr.Dataset, int]],
     var: str,
     run_label: str,
+    rank_by: str,
 ) -> plt.Figure:
     """Global scatter showing event locations coloured by max tp."""
     fig, ax = plt.subplots(figsize=(12, 5))
@@ -189,7 +241,7 @@ def _make_overview_figure(
     ax.axhline(0, color="gray", lw=0.5)
     ax.set_xlabel("lon")
     ax.set_ylabel("lat")
-    ax.set_title(f"{run_label} — top-{len(events)} {var} event locations (max y_pred)")
+    ax.set_title(f"{run_label} — top-{len(events)} {var} event locations (max {rank_by})")
     ax.legend(fontsize=7, loc="lower left")
     fig.tight_layout()
     return fig
@@ -206,10 +258,11 @@ def main() -> None:
     src.add_argument("--predictions-dir", default="", help="Directory of predictions_*.nc files.")
     parser.add_argument("--out", required=True, help="Output PDF path.")
     parser.add_argument("--var", default="", help="Precipitation variable (default: auto-detect tp/cp).")
-    parser.add_argument("--n-top", type=int, default=6, help="Number of top events to plot.")
+    parser.add_argument("--n-top", type=int, default=DEFAULT_N_TOP, help="Number of top events to plot.")
     parser.add_argument("--run-label", default="", help="Label shown in plot titles.")
     parser.add_argument("--dlat", type=float, default=DEFAULT_DLAT)
     parser.add_argument("--dlon", type=float, default=DEFAULT_DLON)
+    parser.add_argument("--rank-by", choices=("pred", "truth"), default="pred")
     args = parser.parse_args()
 
     src_path = Path(args.predictions_nc or args.predictions_dir)
@@ -227,10 +280,10 @@ def main() -> None:
             raise SystemExit(f"No precipitation variable ({PRECIP_VARS}) found in predictions.")
     print(f"Precipitation variable: {var}")
 
-    events = _collect_events(src_path, var, args.n_top)
+    events = _collect_events(src_path, var, args.n_top, rank_by=args.rank_by)
     if not events:
         raise SystemExit(f"No samples with variable '{var}' found.")
-    print(f"Top {len(events)} events by max {var} (m):")
+    print(f"Top {len(events)} events by max {args.rank_by} {var} (m):")
     for mv, lbl, _, _ in events:
         print(f"  {lbl}: {mv:.6f} m = {mv * 1000:.2f} mm")
 
@@ -238,9 +291,6 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with PdfPages(out_path) as pdf:
-        fig_ov = _make_overview_figure(events, var, run_label)
-        pdf.savefig(fig_ov, bbox_inches="tight")
-        plt.close(fig_ov)
         for max_val, label, ds, max_hr_idx in events:
             fig = _make_event_figure(label, ds, var, max_hr_idx, run_label, args.dlat, args.dlon)
             pdf.savefig(fig, bbox_inches="tight")

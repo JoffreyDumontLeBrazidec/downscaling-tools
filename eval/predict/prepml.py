@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ from typing import Any
 LOG = logging.getLogger(__name__)
 
 PREPML_BIN = "/usr/local/apps/prepml/0.99/bin/prepml"
+ECFLOW_BIN = "/usr/local/apps/ecflow/5.13.0/bin/ecflow_client"
+ECFLOW_ENV = {"ECF_HOST": "ecflow-gen-mlx-001", "ECF_PORT": "3141"}
+LEDGER_PATH = Path.home() / ".config" / "eval" / "prepml_consumed.jsonl"
 
 # Regex to parse bundle filenames and extract the template pattern
 _BUNDLE_RE = re.compile(
@@ -91,6 +95,157 @@ def resolve_expver(expver: str | None, lane_config: dict) -> str:
         )
 
     return debug_pool[0]
+
+
+def ecflow_client(args: list[str], *, check: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
+    """Run an ecflow_client invocation against the prepml ecFlow server."""
+    return subprocess.run(
+        [ECFLOW_BIN, *args],
+        env={**os.environ, **ECFLOW_ENV},
+        capture_output=True, text=True, check=check, timeout=timeout,
+    )
+
+
+def discover_owner(user: str | None = None) -> str:
+    """Resolve the ecFlow owner string for this user (e.g. ecm5702_joffrey_dumont_le_brazidec).
+
+    Uses `ecflow_client --suites` to list all top-level suite names and picks
+    the one starting with `<user>_` (or equal to `<user>`). Falls back to the
+    raw user id if discovery fails.
+    """
+    if user is None:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
+    try:
+        result = ecflow_client(["--suites"], check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return user
+    if result.returncode != 0:
+        return user
+    candidates = result.stdout.split()
+    for name in candidates:
+        if name.startswith(f"{user}_"):
+            return name
+    for name in candidates:
+        if name == user:
+            return name
+    return user
+
+
+_HEX_HASH_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _short_checkpoint_id(checkpoint: str | Path) -> str:
+    """Extract an 8-char id from an MLflow-style checkpoint path.
+
+    For .../checkpoint/<32-hex>/<file>.ckpt return the first 8 hex chars.
+    Falls back to the parent dir's first 8 chars, then the file stem's first 8.
+    """
+    p = Path(str(checkpoint))
+    parent = p.parent.name
+    if _HEX_HASH_RE.match(parent):
+        return parent[:8]
+    if parent:
+        return parent[:8]
+    return p.stem[:8]
+
+
+def _ledger_path() -> Path:
+    """Return the configured ledger path, creating its parent dir if needed."""
+    path = LEDGER_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def read_ledger(path: Path | None = None) -> list[dict[str, Any]]:
+    """Return every record in the prepml-consumed JSONL ledger (oldest first)."""
+    target = path or _ledger_path()
+    if not target.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in target.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            LOG.warning("Skipping malformed ledger line: %s", line[:120])
+    return records
+
+
+def record_consumed(
+    *,
+    expver: str,
+    lane: str,
+    checkpoint: str,
+    run_dir: Path | str,
+    dates: list[str],
+    steps: list[int],
+    members: list[int],
+    owner: str | None = None,
+    path: Path | None = None,
+) -> dict[str, Any]:
+    """Append a record to the prepml-consumed ledger and return it.
+
+    Failures to write are logged at WARNING and swallowed — never abort the
+    surrounding prepml run because the ledger could not be updated.
+    """
+    record = {
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+        "expver": expver,
+        "owner": owner or discover_owner(),
+        "lane": lane,
+        "checkpoint": str(checkpoint),
+        "checkpoint_short": _short_checkpoint_id(checkpoint),
+        "run_dir": str(run_dir),
+        "dates": list(dates),
+        "steps": list(steps),
+        "members": list(members),
+        "cleaned_ts_utc": None,
+    }
+    target = path or _ledger_path()
+    try:
+        with target.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+        LOG.info("Recorded prepml expver %s in ledger %s", expver, target)
+    except OSError as exc:
+        LOG.warning("Could not append to prepml ledger %s: %s", target, exc)
+    return record
+
+
+def mark_cleaned(
+    expver: str,
+    *,
+    owner: str | None = None,
+    ts_utc: str | None = None,
+    path: Path | None = None,
+) -> int:
+    """Set cleaned_ts_utc on every ledger record matching (expver, owner).
+
+    Returns the number of records updated. Rewrites the file in place.
+    """
+    target = path or _ledger_path()
+    if not target.exists():
+        return 0
+    records = read_ledger(target)
+    stamp = ts_utc or datetime.now(timezone.utc).isoformat()
+    updated = 0
+    for rec in records:
+        if rec.get("expver") != expver:
+            continue
+        if owner is not None and rec.get("owner") != owner:
+            continue
+        if rec.get("cleaned_ts_utc"):
+            continue
+        rec["cleaned_ts_utc"] = stamp
+        updated += 1
+    if updated:
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        tmp.replace(target)
+    return updated
 
 
 def _resolve_prepml_weather_states(
@@ -536,6 +691,7 @@ def prepml_predict(
     output_dir: Path,
     expver: str | None = None,
     runner_override: str | None = None,
+    lane: str = "",
 ) -> None:
     """Run PrepML prediction: generate config, launch, retrieve, assemble.
 
@@ -574,6 +730,21 @@ def prepml_predict(
 
     # 4. Launch PrepML (pushes to ecFlow) and wait for completion
     _launch_prepml(prepml_config_path, resolved_expver)
+    # Record the consumed expver in the local ledger so `eval.cli prepml-cleanup`
+    # can find it later. Record before waiting so a hung/aborted suite is still
+    # tracked and cleanable.
+    try:
+        record_consumed(
+            expver=resolved_expver,
+            lane=lane or lane_config.get("name") or lane_config.get("lane") or "",
+            checkpoint=checkpoint,
+            run_dir=output_dir,
+            dates=list(predict_cfg.get("dates", [])),
+            steps=list(predict_cfg.get("steps", [])),
+            members=list(predict_cfg.get("members", [])),
+        )
+    except Exception:
+        LOG.warning("Failed to record prepml expver in ledger", exc_info=True)
     LOG.info("Waiting for PrepML ecFlow suite to complete...")
     _wait_for_prepml(resolved_expver)
 

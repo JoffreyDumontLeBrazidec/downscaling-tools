@@ -248,24 +248,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout_seconds=config.rank0_write_wait_seconds,
         )
         for date, step in date_step_pairs:
-            ensemble = predict_ensemble_members(
-                inference_model,
-                datamodule,
-                device,
-                bundle_map,
-                date,
-                step,
-                config.members,
-                extra_args=extra_args,
-                precision=config.precision,
-                model_comm_group=model_comm_group,
-                allow_missing_target_unsafe=config.allow_missing_target_unsafe,
-                output_weather_state_mode=config.output_weather_state_mode,
-                output_weather_states=config.output_weather_states,
-                keep_outputs=(global_rank == 0),
-            )
             out_path = prediction_output_path(config.output_dir, date, step)
-            write_predictions_file(ensemble, out_path, config, writer)
+            try:
+                ensemble = predict_ensemble_members(
+                    inference_model,
+                    datamodule,
+                    device,
+                    bundle_map,
+                    date,
+                    step,
+                    config.members,
+                    extra_args=extra_args,
+                    precision=config.precision,
+                    model_comm_group=model_comm_group,
+                    allow_missing_target_unsafe=config.allow_missing_target_unsafe,
+                    output_weather_state_mode=config.output_weather_state_mode,
+                    output_weather_states=config.output_weather_states,
+                    keep_outputs=(global_rank == 0),
+                )
+                write_predictions_file(ensemble, out_path, config, writer)
+            except BaseException as exc:
+                # Publish a failure marker so peer ranks waiting in write_or_wait()
+                # see a real error instead of timing out 7200s after rank 0 dies.
+                if global_rank == 0:
+                    writer._mark_failed(out_path, exc)
+                raise
             if global_rank == 0:
                 done_files += 1
                 for member, bundle_path in zip(config.members, ensemble.source_bundle_paths):

@@ -125,7 +125,9 @@ resource_profiles:
     cpus: 1
 
 prepml:
-  debug_expvers: ["j5d7"]
+  # Head expver per lane is distinct so concurrent prepml launches across lanes
+  # don't collide on the same ecFlow tree. o96_o320 owns j5d7, o48_o96 owns j5d6.
+  debug_expvers: ["j5d7", "j5d6"]
   runner: anemoi-dev
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
   input:
