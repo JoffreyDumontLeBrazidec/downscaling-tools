@@ -357,6 +357,10 @@ def render_ig(data: dict, ckpt_id: str) -> list:
     # 1) per-target signed driver maps at disp_sigma (eye preferred)
     fkey = spatial[0] if spatial else None
     if fkey:
+        # Inner dashed ring = the probe's actual radius; outer = 500 km context.
+        probe_key = fkey.split(":", 1)[1] if fkey.startswith("box:") else fkey
+        probe_r = (data.get("boxes", {}).get(probe_key, {}) or {}).get("radius_km")
+        rings = (probe_r, 500.0) if probe_r and probe_r != 500.0 else (200.0, 500.0)
         for t in targets:
             e = idx.get((fkey, t, disp_sigma))
             if e is None or "zoom" not in e:
@@ -368,11 +372,13 @@ def render_ig(data: dict, ckpt_id: str) -> list:
             fig = plt.figure(figsize=(4.8 * len(varmaps), 4.8))
             for j, (vname, vals) in enumerate(varmaps):
                 geo_panel(fig, 1, len(varmaps), 1 + j, lat, lon, np.asarray(vals),
-                          title=f"{vname}  (signed)", diverging=True, center=center)
+                          title=f"{vname}  (signed)", diverging=True, center=center,
+                          rings=rings)
             loc = e.get("coherence", {}).get("frac_within_500km")
             locstr = (f"{loc*100:.0f}% of influence within 500 km" if loc is not None
                       else "")
-            fig.suptitle(_title(ckpt_id, f"{fkey} — what drives the {t} extreme",
+            fig.suptitle(_title(ckpt_id,
+                                f"integrated gradients · {fkey} — what drives the {t} extreme",
                                 f"σ={disp_sigma:g}", locstr), fontsize=11)
             fig.tight_layout(rect=(0, 0, 1, 0.92))
             figs.append(fig)
@@ -385,7 +391,8 @@ def render_ig(data: dict, ckpt_id: str) -> list:
         loglog(ax, sigmas, series, logy=False, ylim=(0.0, 1.02),
                ylabel="fraction of input influence within 500 km",
                title=f"Locality of the receptive field on the {fkey}, vs σ")
-        fig.suptitle(_title(ckpt_id, f"{fkey} · locality vs sigma"), fontsize=12)
+        fig.suptitle(_title(ckpt_id, f"integrated gradients · {fkey} · locality vs sigma"),
+                     fontsize=12)
         fig.tight_layout(rect=(0, 0, 1, 0.95))
         figs.append(fig)
 
@@ -414,11 +421,153 @@ def render_ig(data: dict, ckpt_id: str) -> list:
         if not drew:
             plt.close(fig)
             continue
-        fig.suptitle(_title(ckpt_id, f"top driver variables · {rank_f} · σ={disp_sigma:g}",
+        fig.suptitle(_title(ckpt_id,
+                            f"integrated gradients · top drivers · {rank_f} · σ={disp_sigma:g}",
                             "red=+ / blue=− · hres edged"), fontsize=11)
         fig.tight_layout(rect=(0, 0, 1, 0.95))
         figs.append(fig)
     return figs
+
+
+# ---------------------------------------------------------------------------
+# method description pages (one short text page before each method's figures)
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+
+def _text_page(title: str, body: str):
+    fig = plt.figure(figsize=(11.5, 4.6))
+    fig.text(0.04, 0.93, title, fontsize=13, fontweight="bold", va="top")
+    wrapped = "\n".join(
+        textwrap.fill(par, width=125) if par.strip() else ""
+        for par in body.strip().split("\n"))
+    fig.text(0.04, 0.82, wrapped, fontsize=9, va="top", linespacing=1.45)
+    return fig
+
+
+def _fmt_sigmas(data):
+    sigs = data.get("sigmas") or [r["sigma"] for r in data.get("sigma_results", [])]
+    return ", ".join(f"{s:g}" for s in sigs)
+
+
+def _meta_args(meta):
+    return (meta or {}).get("args", {})
+
+
+def describe_ig(data, meta):
+    a = _meta_args(meta)
+    boxes = data.get("boxes", {})
+    lines = [
+        "Integrated Gradients attributes a SCALAR functional of the model output back to every input cell and "
+        "variable (lres conditioning + hres forcings), by integrating input-gradients along the path from a "
+        f"baseline ({data.get('baseline', 'zeros')}) to the true input ({data.get('ig_steps')} Riemann steps, "
+        "diffusion noise held fixed). Positive attribution = the input pushes the functional up. Computed at "
+        f"sigmas {_fmt_sigmas(data)}; per-cell maps stored at sigma={data.get('map_sigma')}.",
+        "",
+        "Functionals in this run: " + ", ".join(data.get("functionals", [])) + ".",
+    ]
+    if any(f == "eye" or f.startswith("box:") for f in data.get("functionals", [])):
+        probes = "; ".join(f"{n}: ({b.get('lat', 0):.1f}, {b.get('lon', 0):.1f}) R={b.get('radius_km', '?')} km, "
+                           f"{b.get('n_cells', '?')} cells" for n, b in boxes.items())
+        lines.append(f"eye/box = mean of the target field over a storm-centered disk ({probes}). On the maps, the "
+                     "inner dashed ring is the probe radius itself, the outer ring is 500 km context; the star is "
+                     "the auto-detected msl minimum.")
+    if "tail" in data.get("functionals", []):
+        side = a.get("tail_side", "abs")
+        lines.append(f"tail = mean of the target field over the cells where the OBSERVED target is in its "
+                     f"p{data.get('tail_percentile', 99):g} tail (side={side}; auto = low tail for msl i.e. "
+                     f"cyclones, |.| tail otherwise) within region "
+                     f"'{a.get('tail_region', 'global')}' — 'which inputs matter exactly where the field is "
+                     "extreme'.")
+    spectral = [f for f in data.get("functionals", []) if f.startswith("spectral")]
+    if spectral:
+        lines.append(f"{spectral[0]} = high-wavenumber power (top {100 * (1 - float(a.get('spectral_cutoff', 0.5))):g}% "
+                     f"of radial k after regridding the region to a {a.get('spectral_ngrid', 64)}x"
+                     f"{a.get('spectral_ngrid', 64)} raster) of the target field over that region — 'which inputs "
+                     "create the small scales'. NOTE: with the zeros baseline, attribution scales with the raw "
+                     "input value, which inflates large constant fields (cos_latitude etc.); cross-check rankings "
+                     "with --baseline mean.")
+    lines.append("")
+    lines.append(f"Event bundle(s): {', '.join(Path(p).name for p in data.get('bundle_paths', []))}.")
+    return "\n".join(lines)
+
+
+def describe_patching(data, meta):
+    st = data.get("storm", {})
+    return "\n".join([
+        f"Causal activation patching: corrupt the model ({data.get('corruption')}), then splice CLEAN reference "
+        "activations back in and measure per-target RECOVERY (1 = output fully restored, 0 = no effect) at sigmas "
+        f"{_fmt_sigmas(data)}. Same diffusion noise for reference / corrupted / patched runs.",
+        "",
+        "residual    — per-block localizer: pseudo-random corruption is injected into EVERY processor block's "
+        f"output (scale {data.get('residual_noise_scale')}x norm); patching block L clean shows how much of the "
+        "field block L commits. Sanity: NONE=0, ALL=1.",
+        "grid_region — patch only the storm-region hidden nodes "
+        f"({st.get('n_hidden_region', '?')} nodes within {st.get('radius_deg', '?')} deg of "
+        f"({st.get('center_lat', 0):.1f}, {st.get('center_lon', 0):.1f})); recovery measured over the storm region "
+        "on the output grid. patch-all < 1 is expected (the corrupted conditioning also feeds the decoder skip "
+        "path).",
+        "stage       — patch at network cut points (enc_data / enc_hidden / enc_both / proc_out); enc_both must "
+        "recover ~1.0 (the corruption only enters through the encoder).",
+    ])
+
+
+def describe_permutation(data, meta):
+    a = _meta_args(meta)
+    ext = data.get("extreme_percentile")
+    txt = [
+        f"Feature permutation importance (single denoiser step): each input variable is shuffled across the batch "
+        f"(batch = {data.get('batch_size', '?')} event-bundle members), the denoiser is re-run at each sigma with "
+        "the SAME noise, and the importance is the paired MSE between permuted and unpermuted outputs (shared "
+        f"noise cancels). Repeats: {a.get('n_repeats', '?')}. Heatmaps show the top-15 variables (rows, lres + "
+        "hres) vs sigma (columns), one panel row per surface target; columns are area-weighted region "
+        f"restrictions ({', '.join(data.get('regions', []))}). Log color scale.",
+    ]
+    if ext:
+        txt.append(f"'tail' columns restrict the paired MSE further to the p{ext:g} extreme cells of the observed "
+                   "target within the region — importance specifically for the extremes.")
+    if data.get("mode") == "sampling" or "result" in data:
+        txt.append("The full-sampling variant permutes inputs around the ENTIRE Heun sampling trajectory "
+                   "(end-to-end importance for the final output) and is shown as bar charts instead.")
+    return "\n".join(txt)
+
+
+def describe_ablation(data, meta):
+    return "\n".join([
+        "Conditioning ablation: at each sigma, the denoiser is run with one conditioning pathway zeroed — lres "
+        "(coarse atmospheric state), hres (static/time forcings), or the noisy target itself — and compared to the "
+        "fully-conditioned output. Curves: MSE(ablated, full) per surface target, area-weighted per region "
+        f"({', '.join(data.get('regions') or ['global'])}); summary panel: correlation(ablated, full) over all "
+        "channels (corr ~1 = pathway unused, corr ~0 = pathway essential at that noise level). Sigmas: "
+        f"{_fmt_sigmas(data)}.",
+    ])
+
+
+def describe_norms(data, meta):
+    return ("Activation norms: forward hooks record the magnitude (L2 / std / max) of the encoder, processor and "
+            f"decoder outputs while denoising at sigmas {_fmt_sigmas(data)} — which parts of the network are "
+            "active at which noise regime. The per-block heatmap (when present) breaks the processor into its "
+            "16 blocks.")
+
+
+def describe_cka(data, meta):
+    return ("CKA layer similarity: linear Centered Kernel Alignment between the activations of every pair of "
+            f"processor blocks, per sigma ({_fmt_sigmas(data)}). CKA ~1 = two blocks compute near-identical "
+            "representations. Block clusters reveal processing stages; the chunk-summary panel tracks "
+            "within-chunk vs cross-chunk similarity vs sigma (the 16 blocks are chained as 2 chunks of 8).")
+
+
+DESCRIBERS = {
+    "integrated_gradients": ("Integrated gradients — what drives each target", describe_ig),
+    "activation_patching": ("Activation patching — which stage commits each field", describe_patching),
+    "feature_permutation": ("Feature permutation — which inputs matter", describe_permutation),
+    "feature_permutation_full_sampling": (
+        "Feature permutation (full sampling) — end-to-end input importance", describe_permutation),
+    "conditioning_ablation": ("Conditioning ablation — what each pathway carries", describe_ablation),
+    "activation_profiling": ("Activation norms — where the network is active", describe_norms),
+    "cka": ("CKA — how processor representations are organized", describe_cka),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -485,10 +634,19 @@ def main(argv=None):
             continue
         LOGGER.info("[%s] rendering from %s", tool, json_path.relative_to(run_dir))
         try:
-            figs = renderer(json.loads(json_path.read_text()), ckpt_id)
+            data = json.loads(json_path.read_text())
+            figs = renderer(data, ckpt_id)
         except Exception:
             LOGGER.exception("[%s] renderer failed — skipping", tool)
             continue
+        if figs and tool in DESCRIBERS:
+            meta_path = json_path.parent / "run_meta.json"
+            meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+            title, describe = DESCRIBERS[tool]
+            try:
+                figs.insert(0, _text_page(f"{ckpt_id} · {title}", describe(data, meta)))
+            except Exception:
+                LOGGER.exception("[%s] description page failed — skipping it", tool)
         if args.per_tool:
             out_pdf = plots_dir / f"{tool}.pdf"
             if not (out_pdf.exists() and args.no_overwrite):

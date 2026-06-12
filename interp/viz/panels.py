@@ -140,6 +140,12 @@ def geo_panel(fig, nrows, ncols, pos, lat, lon, vals, *, title, diverging,
                                               radius=rk * 1000.0, n_samples=120))
                 ax.plot(circ[:, 0], circ[:, 1], "k--", lw=0.7,
                         transform=ccrs.PlateCarree())
+                # label each ring at its northernmost point
+                top = circ[np.argmax(circ[:, 1])]
+                ax.text(top[0], top[1], f"{rk:g} km", fontsize=6, ha="center",
+                        va="bottom", transform=ccrs.PlateCarree(),
+                        bbox=dict(boxstyle="round,pad=0.1", fc="white",
+                                  ec="none", alpha=0.7))
     ax.set_title(title, fontsize=8)
     fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02, label=cbl)
     return ax

@@ -65,12 +65,19 @@ LOGGER = logging.getLogger(__name__)
 # masks + scoring
 # ---------------------------------------------------------------------------
 
-def setup_masks(bundle, regions, extreme_percentile, y):
+def resolve_tail_side(side: str, tname: str) -> str:
+    """'auto' = low tail for msl (cyclones; |msl| would select anticyclones),
+    abs tail for everything else (winds, tp, temperature)."""
+    if side != "auto":
+        return side
+    return "low" if tname == "msl" else "abs"
+
+
+def setup_masks(bundle, regions, extreme_percentile, y, extreme_side="auto"):
     """Resolve region masks, area weights and (optional) per-target tail masks.
 
-    Tail masks select the cells where |y_target| is above the percentile,
-    computed within each region — fixed once from the OBSERVED target field, so
-    every permutation is scored on the same extreme cells.
+    Tail masks select the extreme cells of the OBSERVED target field within
+    each region — fixed once, so every permutation is scored on the same cells.
     """
     target_indices = get_surface_target_indices(bundle)
     lat, lon = get_hres_lat_lon(bundle)
@@ -87,11 +94,13 @@ def setup_masks(bundle, regions, extreme_percentile, y):
         for rname, rmask in region_masks.items():
             extreme_masks[rname] = {}
             for tname, tidx in target_indices.items():
-                field = y[..., tidx].reshape(-1, y.shape[-2]).abs().mean(dim=0)  # (G,)
-                m = build_extreme_mask(field, extreme_percentile, region_mask=rmask)
+                side = resolve_tail_side(extreme_side, tname)
+                field = y[..., tidx].reshape(-1, y.shape[-2]).mean(dim=0)  # (G,)
+                m = build_extreme_mask(field, extreme_percentile, region_mask=rmask,
+                                       side=side)
                 extreme_masks[rname][tname] = m
-                LOGGER.info("tail mask %s/%s: p%g -> %d cells",
-                            rname, tname, extreme_percentile, int(m.sum()))
+                LOGGER.info("tail mask %s/%s: p%g (%s tail) -> %d cells",
+                            rname, tname, extreme_percentile, side, int(m.sum()))
     return target_indices, region_masks, area_weights, extreme_masks
 
 
@@ -342,8 +351,11 @@ def main(argv=None):
                    help="Region spec; repeatable. 'global', 'amazon', 'tropics', "
                         "or 'bbox:latmin,latmax,lonmin,lonmax'. Default: amazon_rainforest.")
     p.add_argument("--extreme-percentile", type=float, default=None,
-                   help="Also score over tail cells (|y_target| above this percentile, "
-                        "per region) -> extreme_paired_mse_per_target.")
+                   help="Also score over tail cells of y_target (per region) "
+                        "-> extreme_paired_mse_per_target.")
+    p.add_argument("--extreme-side", default="auto",
+                   choices=["auto", "abs", "high", "low"],
+                   help="Which tail; auto = low for msl (cyclones), abs otherwise.")
     args = p.parse_args(argv)
     setup_logging()
 
@@ -360,7 +372,8 @@ def main(argv=None):
 
     regions = args.region or ["amazon_rainforest"]
     target_indices, region_masks, area_weights, extreme_masks = setup_masks(
-        bundle, regions, args.extreme_percentile, batch.y.to(bundle.device))
+        bundle, regions, args.extreme_percentile, batch.y.to(bundle.device),
+        extreme_side=args.extreme_side)
 
     common = {
         "checkpoint": args.checkpoint,

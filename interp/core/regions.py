@@ -197,26 +197,39 @@ def parse_box_spec(spec: str) -> tuple[str, float, float, float]:
 
 
 def build_extreme_mask(
-    field_1d, percentile: float, region_mask: torch.Tensor | None = None
+    field_1d, percentile: float, region_mask: torch.Tensor | None = None,
+    side: str = "abs",
 ) -> torch.Tensor:
-    """Mask cells whose ``|field|`` is above the Nth percentile.
+    """Mask the extreme-tail cells of ``field``.
 
     Parameters
     ----------
     field_1d : array-like (n_cells,)
         The field whose extremes to select (e.g. one surface target).
     percentile : float
-        In ``[0, 100)``. ``95`` selects the top 5% of ``|field|``.
+        In ``[0, 100)``. ``95`` selects the top 5%.
     region_mask : optional BoolTensor (n_cells,)
         If given, the percentile is computed over (and the result restricted to)
         only the cells inside ``region_mask``.
+    side : {"abs", "high", "low"}
+        Which tail: ``abs`` = top of ``|field|`` (right for winds/tp);
+        ``high`` = top of the signed field; ``low`` = bottom of the signed
+        field (right for msl cyclones — ``abs`` on raw msl selects
+        ANTICYCLONES, the highest absolute pressures).
 
     Returns
     -------
     BoolTensor (n_cells,).
     """
     field = _to_tensor(field_1d).reshape(-1)
-    mag = field.abs()
+    if side == "abs":
+        mag = field.abs()
+    elif side == "high":
+        mag = field
+    elif side == "low":
+        mag = -field
+    else:
+        raise ValueError(f"side must be abs|high|low, got {side!r}")
     n = field.shape[0]
     out = torch.zeros(n, dtype=torch.bool, device=field.device)
     if region_mask is not None:

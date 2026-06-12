@@ -130,6 +130,9 @@ def main(argv=None):
                    help="Region spec; repeatable. Default: amazon_rainforest.")
     p.add_argument("--extreme-percentile", type=float, default=None,
                    help="Also score over tail cells of each target field.")
+    p.add_argument("--extreme-side", default="auto",
+                   choices=["auto", "abs", "high", "low"],
+                   help="Which tail; auto = low for msl (cyclones), abs otherwise.")
     args = p.parse_args(argv)
     setup_logging()
 
@@ -145,7 +148,8 @@ def main(argv=None):
 
     regions = args.region or ["amazon_rainforest"]
     target_indices, region_masks, area_weights, extreme_masks = setup_masks(
-        bundle, regions, args.extreme_percentile, batch.y.to(bundle.device))
+        bundle, regions, args.extreme_percentile, batch.y.to(bundle.device),
+        extreme_side=args.extreme_side)
 
     all_results = {
         "checkpoint": args.checkpoint,

@@ -143,15 +143,19 @@ def build_functional_specs(args, bundle, target_indices, y, lat_hres, lon_hres,
 
     if "tail" in functionals:
         region_mask = build_region_mask(lat_t, lon_t, args.tail_region)
-        masks = {}
+        masks, sides = {}, {}
         for tname, tidx in target_indices.items():
-            field = y[..., tidx].reshape(-1, y.shape[-2]).abs().mean(dim=0)  # (G,)
-            m = build_extreme_mask(field, args.tail_percentile, region_mask=region_mask)
+            side = resolve_tail_side(args.tail_side, tname)
+            field = y[..., tidx].reshape(-1, y.shape[-2]).mean(dim=0)  # (G,)
+            m = build_extreme_mask(field, args.tail_percentile,
+                                   region_mask=region_mask, side=side)
             masks[tname] = m.to(dev)
-            LOGGER.info("tail mask %s: p%g in %s -> %d cells",
-                        tname, args.tail_percentile, args.tail_region, int(m.sum()))
+            sides[tname] = side
+            LOGGER.info("tail mask %s: p%g (%s tail) in %s -> %d cells",
+                        tname, args.tail_percentile, side, args.tail_region, int(m.sum()))
         specs["tail"] = {"kind": "mean", "mask": masks, "center": None,
-                         "percentile": args.tail_percentile, "region": args.tail_region}
+                         "percentile": args.tail_percentile, "region": args.tail_region,
+                         "sides": sides}
 
     if "spectral" in functionals:
         smask = build_region_mask(lat_t, lon_t, args.spectral_region).to(dev)
@@ -177,6 +181,14 @@ def args_window(args):
     if args.auto_window:
         return tuple(float(x) for x in args.auto_window.split(","))
     return DEFAULT_AUTO_WINDOW
+
+
+def resolve_tail_side(side: str, tname: str) -> str:
+    """'auto' = low tail for msl (cyclones; |msl| would select anticyclones),
+    abs tail for everything else (winds, tp, temperature)."""
+    if side != "auto":
+        return side
+    return "low" if tname == "msl" else "abs"
 
 
 # ---------------------------------------------------------------------------
@@ -485,9 +497,11 @@ def main(argv=None):
     p.add_argument("--auto-window", default=None,
                    help="lat0,lat1,lon0,lon1 (deg, lon 0..360) for storm auto-detect")
     p.add_argument("--tail-percentile", type=float, default=99.0,
-                   help="[tail] percentile of |y_target| selecting extreme cells")
+                   help="[tail] percentile of y_target selecting extreme cells")
     p.add_argument("--tail-region", default="global",
                    help="[tail] region within which the percentile is taken")
+    p.add_argument("--tail-side", default="auto", choices=["auto", "abs", "high", "low"],
+                   help="[tail] which tail; auto = low for msl (cyclones), abs otherwise")
     p.add_argument("--spectral-region", default="amazon_rainforest",
                    help="[spectral] region whose high-k power is the functional")
     p.add_argument("--spectral-cutoff", type=float, default=0.5)
