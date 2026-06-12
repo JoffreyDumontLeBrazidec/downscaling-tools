@@ -7,10 +7,14 @@
 #
 #   TOOL: tier1 | permutation | ablation | activations | patching | ig | report
 #     tier1 = permutation + ablation + activations in sequence.
-#   Extra tool args: ECMWF's ecsbatch swallows --flags after the script, so
-#   pass them via INTERP_ARGS instead:
-#     sbatch --export=ALL,INTERP_ARGS="--functionals global_mean,eye,tail" \
-#         interp/slurm/run.sbatch ig <CKPT> <ID>
+#   Extra tool args: ECMWF's ecsbatch swallows --flags after the script, and
+#   sbatch --export comma-splits values, so extras are passed as DASH-LESS
+#   key[=value] positionals, converted to --key value here:
+#     sbatch interp/slurm/run.sbatch ig <CKPT> <ID> \
+#         functionals=global_mean,eye,tail,spectral tail-percentile=99
+#   Keys taking a space-separated list (sigmas, modes, dates, members, steps,
+#   run-dirs) accept comma-separated values: sigmas=0.1,5.0,80.0.
+#   Repeatable single-value flags repeat the key: region=amazon region=tropics.
 #
 # Output convention: /home/ecm5702/perm/interp/<CKPT_ID>/<tool_subdir>/
 #
@@ -43,8 +47,25 @@ TOOL="${1:?Usage: run.sbatch <TOOL> <CKPT_PATH> <CKPT_ID> [extra...]}"
 CKPT_PATH="${2:?CKPT_PATH}"
 CKPT_ID="${3:?CKPT_ID}"
 shift 3
-# Tool extras: positional leftovers plus INTERP_ARGS (word-split deliberately).
-set -- "$@" ${INTERP_ARGS:-}
+# Convert dash-less key[=value] extras into --key value tool flags.
+# Comma-split values only for keys that argparse declares as nargs lists.
+NARGS_KEYS=" sigmas modes dates members steps run-dirs "
+EXTRA=()
+for kv in "$@"; do
+  if [[ "$kv" == *=* ]]; then
+    k="${kv%%=*}"; v="${kv#*=}"
+    EXTRA+=("--$k")
+    if [[ "$NARGS_KEYS" == *" $k "* ]]; then
+      IFS=, read -ra parts <<< "$v"
+      EXTRA+=("${parts[@]}")
+    else
+      EXTRA+=("$v")
+    fi
+  else
+    EXTRA+=("--$kv")
+  fi
+done
+set -- ${EXTRA[@]+"${EXTRA[@]}"}
 
 OUT_ROOT="/home/ecm5702/perm/interp/${CKPT_ID}"
 EVENT="${INTERP_EVENT:-franklin_o96_o320_m4}"
