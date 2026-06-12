@@ -1,0 +1,248 @@
+"""Sigma-sweep conditioning ablation for AIFSDD.
+
+At each sigma level, compare the model's output with:
+  1. Full conditioning (normal)
+  2. Zeroed lres conditioning (ablated)
+  3. Zeroed hres forcing (ablated)
+
+Measures how much the model relies on each conditioning pathway
+at each denoising stage.
+
+Usage
+-----
+    cd ~/dev/downscaling-tools
+    python -m interp.conditioning_ablation \
+        --checkpoint /path/to/checkpoint.ckpt \
+        --output-dir /path/to/results/
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+
+import numpy as np
+import torch
+
+_DT_ROOT = Path(__file__).resolve().parent.parent
+if str(_DT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_DT_ROOT))
+
+from interp.model_utils import (
+    load_model,
+    get_variable_names,
+    prepare_batch,
+    denoise_at_sigma,
+    get_surface_target_indices,
+)
+from interp.regions import (
+    build_region_mask,
+    get_hres_lat_lon,
+    get_area_weights,
+    masked_area_mean,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+def compute_conditioning_ablation(
+    bundle,
+    prepared: dict,
+    sigma: float,
+    region_masks: dict | None = None,
+    target_indices: dict | None = None,
+    area_weights=None,
+) -> dict:
+    """Measure conditioning reliance at a given sigma.
+
+    Returns MSE and correlation metrics for full vs ablated conditioning.
+    """
+    x_interp = prepared["x_interp"]
+    x_hres = prepared["x_hres"]
+    y_residual = prepared["y_residual"]
+
+    # Fixed noise
+    noise = torch.randn_like(y_residual)
+
+    # 1. Full conditioning baseline (lres + hres + noisy target)
+    out_full = denoise_at_sigma(bundle, x_interp, x_hres, y_residual, sigma, noise=noise)
+
+    # 2. Zero in_lres (coarse atmospheric state)
+    x_interp_zero = torch.zeros_like(x_interp)
+    out_no_lres = denoise_at_sigma(bundle, x_interp_zero, x_hres, y_residual, sigma, noise=noise)
+
+    # 3. Zero in_hres (high-res static/time forcings)
+    x_hres_zero = torch.zeros_like(x_hres)
+    out_no_hres = denoise_at_sigma(bundle, x_interp, x_hres_zero, y_residual, sigma, noise=noise)
+
+    # 4. Zero noisy_hres (the noisy target field itself)
+    # denoise_at_sigma forms y_noised = y_residual + sigma*noise; zero both
+    # so the denoiser receives y_noised = 0 (no target signal of any kind).
+    y_residual_zero = torch.zeros_like(y_residual)
+    noise_zero = torch.zeros_like(noise)
+    out_no_ytgt = denoise_at_sigma(bundle, x_interp, x_hres, y_residual_zero, sigma, noise=noise_zero)
+
+    # Metrics
+    def _metrics(out_ablated, out_full):
+        diff = (out_ablated - out_full).float()
+        mse = (diff ** 2).mean().item()
+        # Correlation between full and ablated outputs
+        f = out_full.float().flatten()
+        a = out_ablated.float().flatten()
+        corr = torch.corrcoef(torch.stack([f, a]))[0, 1].item()
+        # Per-variable (per output channel) MSE — full grid (kept for back-compat)
+        var_mse = (diff ** 2).mean(dim=(0, 1, 2, 3)).cpu().numpy().tolist()
+        # Region-restricted, per-surface-target MSE (area-weighted over region cells)
+        region_pt = {}
+        if region_masks and target_indices:
+            sq = diff ** 2  # (B, T, E, G, V)
+            for tgt, idx in target_indices.items():
+                per_cell = sq[..., idx]                      # (B, T, E, G)
+                grid = per_cell.reshape(-1, per_cell.shape[-1]).mean(dim=0)  # (G,)
+                for rname, rmask in region_masks.items():
+                    region_pt.setdefault(rname, {})[tgt] = float(
+                        masked_area_mean(grid, rmask, area_weights)
+                    )
+        return {"mse_vs_full": mse, "correlation_with_full": corr,
+                "per_var_mse": var_mse, "region_per_target_mse": region_pt}
+
+    baseline_mse = ((out_full.float() - y_residual[..., :out_full.shape[-1]].float()) ** 2).mean().item()
+
+    return {
+        "sigma": sigma,
+        "baseline_denoising_mse": baseline_mse,
+        "ablate_lres": _metrics(out_no_lres, out_full),
+        "ablate_hres": _metrics(out_no_hres, out_full),
+        "ablate_noisy_hres": _metrics(out_no_ytgt, out_full),
+    }
+
+
+def run_conditioning_ablation(
+    checkpoint_path: str,
+    output_dir: str,
+    sigmas: list[float] | None = None,
+    n_batches: int = 4,
+    device: str = "cuda",
+    precision: str = "bf16",
+    regions: list[str] | None = None,
+):
+    """Run conditioning ablation across sigma levels."""
+    if sigmas is None:
+        sigmas = [0.1, 0.5, 1.0, 5.0, 20.0, 80.0]
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    LOGGER.info("Loading model from %s", checkpoint_path)
+    bundle = load_model(checkpoint_path, device=device, precision=precision)
+
+    LOGGER.info("Getting validation data...")
+    bundle.datamodule.setup(stage="predict")
+    dl = bundle.datamodule.val_dataloader()
+
+    batches = []
+    for i, batch in enumerate(dl):
+        if i >= n_batches:
+            break
+        batches.append(batch)
+    LOGGER.info("Collected %d batches", len(batches))
+
+    x_lres_all = torch.cat([b[0] for b in batches], dim=0)
+    x_hres_all = torch.cat([b[1] for b in batches], dim=0)
+    y_all = torch.cat([b[2] for b in batches], dim=0)
+
+    prepared = prepare_batch(bundle, x_lres_all, x_hres_all, y_all)
+
+    # Resolve region masks + surface-target indices + area weights once.
+    if regions is None:
+        regions = ["amazon_rainforest"]
+    target_indices = get_surface_target_indices(bundle)
+    lat, lon = get_hres_lat_lon(bundle)
+    lat_t = torch.as_tensor(lat)
+    lon_t = torch.as_tensor(lon)
+    region_masks = {r: build_region_mask(lat_t, lon_t, r) for r in regions}
+    area_weights = get_area_weights(lat_t, bundle)
+    LOGGER.info("Regions: %s | surface targets: %s",
+                {r: int(m.sum()) for r, m in region_masks.items()}, list(target_indices))
+
+    all_results = {
+        "checkpoint": checkpoint_path,
+        "n_batches": len(batches),
+        "batch_size": x_lres_all.shape[0],
+        "regions": regions,
+        "surface_targets": list(target_indices),
+        "sigma_results": [],
+    }
+
+    for sigma in sigmas:
+        LOGGER.info("Conditioning ablation at sigma=%.2f", sigma)
+        result = compute_conditioning_ablation(
+            bundle, prepared, sigma,
+            region_masks=region_masks,
+            target_indices=target_indices,
+            area_weights=area_weights,
+        )
+        all_results["sigma_results"].append(result)
+
+    results_file = output_path / "conditioning_ablation.json"
+    with open(results_file, "w") as f:
+        json.dump(all_results, f, indent=2)
+    LOGGER.info("Results saved to %s", results_file)
+
+    _print_summary(all_results)
+    return all_results
+
+
+def _print_summary(all_results: dict):
+    print("\n" + "=" * 70)
+    print("CONDITIONING ABLATION SUMMARY")
+    print("=" * 70)
+    print(f"{'Sigma':>8s}  {'Baseline MSE':>14s}  {'No LRES corr':>14s}  {'No HRES corr':>14s}  {'No Both corr':>14s}")
+    print("-" * 70)
+    for res in all_results["sigma_results"]:
+        sigma = res["sigma"]
+        bm = res["baseline_denoising_mse"]
+        cl = res["ablate_lres"]["correlation_with_full"]
+        ch = res["ablate_hres"]["correlation_with_full"]
+        cb = res.get("ablate_noisy_hres", res.get("ablate_both"))["correlation_with_full"]
+        print(f"{sigma:8.2f}  {bm:14.6f}  {cl:14.4f}  {ch:14.4f}  {cb:14.4f}")
+
+    print("\nInterpretation:")
+    print("  corr ~ 1.0 → ablation has little effect (model doesn't use this input)")
+    print("  corr ~ 0.0 → ablation destroys output (model heavily relies on this input)")
+    print("  High sigma: expect high lres reliance (coarse structure from conditioning)")
+    print("  Low sigma:  expect low lres reliance (fine detail generated freely)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Conditioning ablation for AIFSDD")
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--sigmas", nargs="+", type=float,
+                        default=[0.1, 0.5, 1.0, 5.0, 20.0, 80.0])
+    parser.add_argument("--n-batches", type=int, default=4)
+    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    parser.add_argument("--precision", default="bf16", choices=["fp32", "fp16", "bf16"])
+    parser.add_argument("--region", action="append", default=None,
+                        help="Region spec; repeatable. 'global', 'amazon', 'tropics', "
+                             "or 'bbox:latmin,latmax,lonmin,lonmax'. Default: global,amazon,tropics.")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    run_conditioning_ablation(
+        checkpoint_path=args.checkpoint,
+        output_dir=args.output_dir,
+        sigmas=args.sigmas,
+        n_batches=args.n_batches,
+        device=args.device,
+        precision=args.precision,
+        regions=args.region,
+    )
+
+
+if __name__ == "__main__":
+    main()
