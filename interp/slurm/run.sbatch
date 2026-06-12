@@ -7,7 +7,10 @@
 #
 #   TOOL: tier1 | permutation | ablation | activations | patching | ig | report
 #     tier1 = permutation + ablation + activations in sequence.
-#   Extra args are passed through to the tool (e.g. --extreme-percentile 99).
+#   Extra tool args: ECMWF's ecsbatch swallows --flags after the script, so
+#   pass them via INTERP_ARGS instead:
+#     sbatch --export=ALL,INTERP_ARGS="--functionals global_mean,eye,tail" \
+#         interp/slurm/run.sbatch ig <CKPT> <ID>
 #
 # Output convention: /home/ecm5702/perm/interp/<CKPT_ID>/<tool_subdir>/
 #
@@ -40,6 +43,8 @@ TOOL="${1:?Usage: run.sbatch <TOOL> <CKPT_PATH> <CKPT_ID> [extra...]}"
 CKPT_PATH="${2:?CKPT_PATH}"
 CKPT_ID="${3:?CKPT_ID}"
 shift 3
+# Tool extras: positional leftovers plus INTERP_ARGS (word-split deliberately).
+set -- "$@" ${INTERP_ARGS:-}
 
 OUT_ROOT="/home/ecm5702/perm/interp/${CKPT_ID}"
 EVENT="${INTERP_EVENT:-franklin_o96_o320_m4}"
