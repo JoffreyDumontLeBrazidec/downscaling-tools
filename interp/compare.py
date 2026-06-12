@@ -85,7 +85,10 @@ def summarize_run(run_dir: Path) -> dict:
 
     ig = _load(run_dir, "integrated_gradients")
     if ig:
-        spatial = [f for f in ig["functionals"] if f == "eye" or f.startswith("box:")]
+        # Prefer "eye" so the locality scalar compares the same probe across runs.
+        spatial = sorted((f for f in ig["functionals"]
+                          if f == "eye" or f.startswith("box:")),
+                         key=lambda f: f != "eye")
         if spatial:
             fkey = spatial[0]
             map_sigma = ig.get("map_sigma")
@@ -129,7 +132,9 @@ def overlay_curves(run_dirs: list[Path], out_pdf: Path):
             ax1.plot(sigmas, corrs, marker="o", label=rd.name)
         ig = _load(rd, "integrated_gradients")
         if ig:
-            spatial = [f for f in ig["functionals"] if f == "eye" or f.startswith("box:")]
+            spatial = sorted((f for f in ig["functionals"]
+                              if f == "eye" or f.startswith("box:")),
+                             key=lambda f: f != "eye")
             if spatial:
                 by_sig = {}
                 for e in ig["results"]:
