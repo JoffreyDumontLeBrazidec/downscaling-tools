@@ -184,12 +184,17 @@ def args_window(args):
 # ---------------------------------------------------------------------------
 
 def integrated_gradients(bundle, prepared, sigma, noise, target_indices,
-                         specs, n_steps, baseline_li, baseline_h):
+                         specs, n_steps, baseline_li, baseline_h,
+                         pairs_per_pass=8):
     """Return {(functional, target): (attr_li, attr_h)} for one sigma.
 
-    A single forward per path-step is shared across all (functional, target)
+    One forward per path-step is shared across a CHUNK of (functional, target)
     scalars; one backward per scalar (retain_graph) reuses that forward graph.
-    Riemann midpoint rule: alpha = (k + 0.5) / n_steps.
+    Chunking bounds GPU memory: each retained backward through an
+    activation-checkpointed segment keeps its recomputed activations alive, so
+    too many backwards on one graph OOMs (observed at 20 pairs on a 40 GB
+    GA100). Extra forwards are cheap by comparison. Riemann midpoint rule:
+    alpha = (k + 0.5) / n_steps.
     """
     x_interp = prepared["x_interp"]
     x_hres = prepared["x_hres"]
@@ -199,21 +204,23 @@ def integrated_gradients(bundle, prepared, sigma, noise, target_indices,
     diff_h = x_hres - baseline_h
 
     pairs = [(f, t) for f in specs for t in target_indices]
+    chunks = [pairs[i:i + pairs_per_pass] for i in range(0, len(pairs), pairs_per_pass)]
     grads_li = {key: torch.zeros_like(x_interp) for key in pairs}
     grads_h = {key: torch.zeros_like(x_hres) for key in pairs}
 
     for k in range(n_steps):
         alpha = (k + 0.5) / n_steps
-        xi = (baseline_li + alpha * diff_li).detach().requires_grad_(True)
-        xh = (baseline_h + alpha * diff_h).detach().requires_grad_(True)
-        out = denoise_at_sigma_grad(bundle, xi, xh, y_res, sigma, noise)
-        for i, (fkey, tname) in enumerate(pairs):
-            scalar = _apply_functional(out, target_indices[tname], tname, specs[fkey])
-            gi, gh = torch.autograd.grad(
-                scalar, [xi, xh], retain_graph=(i < len(pairs) - 1))
-            grads_li[fkey, tname] += gi.detach()
-            grads_h[fkey, tname] += gh.detach()
-        del out
+        for chunk in chunks:
+            xi = (baseline_li + alpha * diff_li).detach().requires_grad_(True)
+            xh = (baseline_h + alpha * diff_h).detach().requires_grad_(True)
+            out = denoise_at_sigma_grad(bundle, xi, xh, y_res, sigma, noise)
+            for i, (fkey, tname) in enumerate(chunk):
+                scalar = _apply_functional(out, target_indices[tname], tname, specs[fkey])
+                gi, gh = torch.autograd.grad(
+                    scalar, [xi, xh], retain_graph=(i < len(chunk) - 1))
+                grads_li[fkey, tname] += gi.detach()
+                grads_h[fkey, tname] += gh.detach()
+            del out, xi, xh
 
     attrs = {}
     for key in pairs:
@@ -390,7 +397,7 @@ def run_integrated_gradients(args):
         noise = torch.randn_like(prepared["y_residual"])
         attrs = integrated_gradients(
             bundle, prepared, sigma, noise, target_indices, specs,
-            args.ig_steps, base_li, base_h)
+            args.ig_steps, base_li, base_h, pairs_per_pass=args.pairs_per_pass)
         fvals = _functional_values(bundle, prepared, sigma, noise,
                                    target_indices, specs)
         store_maps = (args.map_sigma is not None and abs(sigma - args.map_sigma) < 1e-9)
@@ -462,6 +469,9 @@ def main(argv=None):
     p.add_argument("--boxes", nargs="*", default=["franklin:auto"],
                    help="name:lat,lon,radiuskm  or  name:auto[,radiuskm]")
     p.add_argument("--ig-steps", type=int, default=32)
+    p.add_argument("--pairs-per-pass", type=int, default=8,
+                   help="(functional,target) backwards sharing one forward graph; "
+                        "lower if CUDA OOM (memory grows with retained backwards)")
     p.add_argument("--baseline", default="zeros", choices=["zeros", "mean"],
                    help="IG baseline: zeros (default) or per-variable climatology mean")
     p.add_argument("--map-sigma", type=float, default=5.0,
