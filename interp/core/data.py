@@ -46,6 +46,22 @@ EVENTS: dict[str, dict] = {
         "steps": ["048"],
         "label": "franklin",
     },
+    # Hurricane Humberto near its 2025-09-28 peak (init 20250926 + 48h),
+    # o48->o96 lane (the one with tp in the output schema).
+    "humberto_o48_o96": {
+        "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930",
+        "dates": ["20250926"],
+        "members": ["01"],
+        "steps": ["048"],
+        "label": "humberto",
+    },
+    "humberto_o48_o96_m4": {
+        "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930",
+        "dates": ["20250926"],
+        "members": ["01", "02", "03", "04"],
+        "steps": ["048"],
+        "label": "humberto",
+    },
 }
 
 
