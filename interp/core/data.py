@@ -83,6 +83,23 @@ EVENTS: dict[str, dict] = {
         "steps": ["024"],
         "label": "humberto",
     },
+    # 6h-accumulated tp bundles, full 2025-09-26..30 window, 6-hourly steps
+    # (1072 bundles). THE canonical tp source for o48->o96 case studies;
+    # override dates/steps per case (e.g. steps 024 = valid 0927 00z).
+    "window6h_o48_o96": {
+        "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930_6h",
+        "dates": ["20250926"],
+        "members": ["01"],
+        "steps": ["024"],
+        "label": "sep2025_6h",
+    },
+    "window6h_o48_o96_m4": {
+        "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930_6h",
+        "dates": ["20250926"],
+        "members": ["01", "02", "03", "04"],
+        "steps": ["024"],
+        "label": "sep2025_6h",
+    },
 }
 
 
