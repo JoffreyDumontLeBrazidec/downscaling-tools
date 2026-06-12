@@ -1,23 +1,26 @@
-"""Model loading and data utilities for interpretability experiments.
+"""Model loading and forward helpers for interpretability experiments.
 
 Thin wrapper around manual_inference model loading. Provides a clean
-InterpModelBundle for all interpretability tools.
+InterpModelBundle plus the three forward entry points every tool uses:
+
+  - denoise_at_sigma       : single denoiser call at fixed sigma (no grad)
+  - denoise_at_sigma_grad  : same, grad-enabled, for Integrated Gradients
+  - sample_full            : full Heun sampling trajectory (end-to-end output)
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 
-_DT_ROOT = Path(__file__).resolve().parent.parent
+_DT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_DT_ROOT) not in sys.path:
     sys.path.insert(0, str(_DT_ROOT))
-
-import os
 
 # Environment variables required by the Hydra/OmegaConf config resolution.
 _ENV_DEFAULTS = {
@@ -35,6 +38,8 @@ for k, v in _ENV_DEFAULTS.items():
 from manual_inference.prediction.predict import load_objects as _load_objects
 
 LOGGER = logging.getLogger(__name__)
+
+SURFACE_TARGETS = ["10u", "10v", "2t", "msl", "tp"]
 
 
 @dataclass
@@ -85,10 +90,6 @@ def load_model(
         'fp32', 'fp16', or 'bf16'.
     validation_frequency : str
         Validation frequency for datamodule (controls date sampling).
-
-    Returns
-    -------
-    InterpModelBundle
     """
     inference_model, datamodule, _, _ = _load_objects(
         ckpt_path=str(checkpoint_path),
@@ -99,11 +100,9 @@ def load_model(
     )
     # Disable torch.compile on the interpolation function — it caches shapes
     # and breaks with dynamic batch sizes in interpretability experiments.
-    # Get the original uncompiled function
     orig_func = inference_model.model._interpolate_to_high_res
     while hasattr(orig_func, "__wrapped__"):
         orig_func = orig_func.__wrapped__
-    # Rebind as an instance method
     import types
     inference_model.model._interpolate_to_high_res = types.MethodType(
         orig_func, inference_model.model
@@ -132,6 +131,20 @@ def get_variable_names(bundle: InterpModelBundle) -> dict[str, dict[int, str]]:
     if hasattr(di, "name_to_index_output"):
         result["output"] = {v: k for k, v in di.name_to_index_output.items()}
     return result
+
+
+def get_surface_target_indices(bundle) -> dict:
+    """Return ordered dict of surface target name -> output channel index,
+    for the surface targets that exist in this checkpoint's output schema.
+
+    `tp` is only in the o48->o96 checkpoint; o96->o320 has 10u/10v/2t/msl only.
+    """
+    di = bundle.data_indices
+    out_idx = getattr(di, "name_to_index_output", None)
+    if out_idx is None:
+        # Fallback for other index collection layouts
+        out_idx = di.model.output.name_to_index
+    return {name: out_idx[name] for name in SURFACE_TARGETS if name in out_idx}
 
 
 def prepare_batch(
@@ -194,7 +207,7 @@ def denoise_at_sigma(
     sigma: float,
     noise: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run the denoiser at a fixed sigma level.
+    """Run the denoiser at a fixed sigma level (no grad).
 
     Returns the denoised output D(x; sigma).
     """
@@ -213,8 +226,8 @@ def denoise_at_sigma(
     # Per-sample (batch-1) forwards. The anemoi-core-ref downscaler mis-assembles
     # the encoder input for batch_size > 1 (the batch dim leaks into the (time vars)
     # feature group, giving 151 + (B-1)*68 features), so a single batched forward
-    # crashes emb_nodes_src. The model is correct at batch 1, and the Tier-1 tools
-    # apply the denoiser independently per sample, so looping batch-1 is exact.
+    # crashes emb_nodes_src. The model is correct at batch 1, and the tools apply
+    # the denoiser independently per sample, so looping batch-1 is exact.
     sigma_1 = sigma_t.view(1, 1, 1, 1).expand(1, ensemble_size, 1, 1)
     device_type = "cuda" if "cuda" in str(device) else "cpu"
     outs = []
@@ -227,31 +240,48 @@ def denoise_at_sigma(
     return torch.cat(outs, dim=0)
 
 
-# === surface target helpers ===
-SURFACE_TARGETS = ["10u", "10v", "2t", "msl", "tp"]
+def denoise_at_sigma_grad(bundle, x_interp, x_hres, y_residual, sigma, noise):
+    """Grad-enabled denoise at fixed sigma (for Integrated Gradients).
 
-
-def get_surface_target_indices(bundle) -> dict:
-    """Return ordered dict of surface target name -> output channel index,
-    for the surface targets that exist in this checkpoint's output schema.
-
-    `tp` is only in the o48->o96 checkpoint; o96->o320 has 10u/10v/2t/msl only.
+    Copies denoise_at_sigma's exact calling pattern but WITHOUT torch.no_grad /
+    autocast so IG can backprop into x_interp / x_hres. NOTE: uses a single
+    batched forward, so it inherits the encoder batch>1 assembly bug — run IG
+    with batch_size 1 (one bundle).
     """
-    di = bundle.data_indices
-    out_idx = getattr(di, "name_to_index_output", None)
-    if out_idx is None:
-        # Fallback for other index collection layouts
-        out_idx = di.model.output.name_to_index
-    return {name: out_idx[name] for name in SURFACE_TARGETS if name in out_idx}
+    inner = bundle.inner_model
+    device = bundle.device
+    b, e = x_interp.shape[0], x_interp.shape[2]
+    sigma_t = torch.tensor(sigma, device=device, dtype=x_interp.dtype)
+    sigma_4d = sigma_t.view(1, 1, 1, 1).expand(b, e, 1, 1)
+    y_noised = y_residual.to(x_interp.dtype) + sigma_t * noise.to(x_interp.dtype)
+    return inner.fwd_with_preconditioning(x_interp, x_hres, y_noised, sigma_4d)
+
+
+def sample_full(bundle, x_interp, x_hres, num_steps: int, seed: int) -> torch.Tensor:
+    """Run the full Heun sampling trajectory on (x_interp, x_hres).
+
+    Uses the model's own sample() entry point with a fixed seed so baseline
+    and permuted runs share the same y_init noise.
+    """
+    inner = bundle.inner_model
+    with torch.no_grad():
+        out = inner.sample(
+            x_interp,
+            x_hres,
+            model_comm_group=None,
+            grid_shard_shapes=None,
+            noise_scheduler_params={"num_steps": num_steps},
+            sampler_params=None,
+            seed=seed,
+        )
+    return out
 
 
 def per_target_mse(pred, target, target_indices: dict) -> dict:
     """Per-surface-target MSE between two tensors with shape (..., V_out).
 
-    Both tensors must already be 4D-or-5D with V as the last axis. Returns a
-    plain Python dict mapping surface var name -> float MSE.
+    Returns a plain Python dict mapping surface var name -> float MSE.
     """
-    import torch as _torch
     out = {}
     p = pred.float()
     t = target.float()
@@ -259,50 +289,3 @@ def per_target_mse(pred, target, target_indices: dict) -> dict:
         diff = (p[..., idx] - t[..., idx]) ** 2
         out[name] = float(diff.mean().item())
     return out
-
-
-def collect_event_bundles(bundle, bundle_dir, dates, members, steps):
-    """Build (x_lres, x_hres, y) from real event .nc bundles.
-
-    This is the same input path the IG/patching tools use. It replaces
-    ``datamodule.val_dataloader()`` for the Tier-1 tools: after the 2026-06-11
-    env reorg the o96->o320 val dataloader yields lres on the O320 (hres) grid,
-    which makes the assembled encoder input 219-wide vs the trained 151 and
-    crashes ``emb_nodes_src``. Real bundles carry O96 lres, so prepare_batch
-    interpolates O96->O320 correctly. Each (date, member, step) becomes one
-    batch element, so pass several to get batch_size > 1.
-    """
-    import glob as _glob
-    from manual_inference.input_data_construction.bundle import (
-        load_inputs_from_bundle_numpy as _load_bundle_np,
-        extract_target_from_bundle as _extract_target,
-    )
-
-    vn = get_variable_names(bundle)
-    n2i_lres = {name: idx for idx, name in vn["input_lres"].items()}
-    n2i_hres = {name: idx for idx, name in vn["input_hres"].items()}
-    out_states = [vn["output"][i] for i in sorted(vn["output"])]
-
-    paths = []
-    for d in dates:
-        for m in members:
-            for s in steps:
-                pat = f"*date{d}*mem{m}*step{s}h*input_bundle.nc"
-                hits = sorted(_glob.glob(str(Path(bundle_dir) / pat)))
-                if not hits:
-                    raise FileNotFoundError(f"No bundle matching {pat} in {bundle_dir}")
-                paths.append(hits[0])
-
-    xl, xh, ys = [], [], []
-    for p in paths:
-        x_lres_np, x_hres_np, *_ = _load_bundle_np(p, n2i_lres, n2i_hres)
-        target_np, _found = _extract_target(p, out_states)
-        if target_np is None:
-            raise SystemExit(f"Could not extract target from bundle {p}")
-        xl.append(torch.from_numpy(x_lres_np)[None, None, None, ...])
-        xh.append(torch.from_numpy(x_hres_np)[None, None, None, ...])
-        ys.append(torch.from_numpy(target_np)[None, None, None, ...])
-    x_lres, x_hres, y = torch.cat(xl), torch.cat(xh), torch.cat(ys)
-    LOGGER.info("collect_event_bundles: %d bundle(s) from %s x_lres=%s x_hres=%s y=%s",
-                len(paths), bundle_dir, tuple(x_lres.shape), tuple(x_hres.shape), tuple(y.shape))
-    return x_lres, x_hres, y

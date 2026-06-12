@@ -7,9 +7,9 @@ pass and measuring per-surface-target recovery.
 Background: why naive per-block patching is degenerate here
 -----------------------------------------------------------
 The model is encoder -> processor -> decoder. The conditioning corruption
-(`zero_lres`: x_interp := 0, mirroring conditioning_ablation.ablate_lres)
-enters ONLY through the encoder. The processor is a `GraphTransformerProcessor`
-whose 16 blocks are chained as pure functions `x, edge_attr = block(x, edge_attr,
+(`zero_lres`: x_interp := 0, mirroring ablation.ablate_lres) enters ONLY
+through the encoder. The processor is a `GraphTransformerProcessor` whose 16
+blocks are chained as pure functions `x, edge_attr = block(x, edge_attr,
 geometry, cond=c_hidden)` where geometry and `c_hidden` (sigma-only) are
 corruption-independent. Therefore splicing the clean activation into the FULL
 hidden state of ANY single block forces every downstream block to recompute the
@@ -37,9 +37,7 @@ Three non-degenerate modes (all implemented)
    the effect becomes block-dependent. Recovery is measured over the storm region
    on the output (data) grid. NOTE: because the conditioning corruption also feeds
    the decoder directly, patch_all here CANNOT reach 1.0 (skip-path ceiling); use
-   `residual` for the clean per-block localization signal. (Storm = deepest N.
-   Atlantic low in the validation set; for the 59e4_300k o96->o320 ckpt this is
-   Hurricane Franklin near Bermuda, ~30N 64W, ~957 hPa.)
+   `residual` for the clean per-block localization signal.
 
 3. stage        -- patch reference activations at network CUT POINTS:
      enc_data  : encoder output #0 (data-grid latent feeding the decoder)
@@ -57,162 +55,57 @@ corruption and (b) the spliced activation.
 Usage
 -----
     cd ~/dev/downscaling-tools
-    python -m interp.activation_patching \
+    python -m interp patching \
         --checkpoint /path/to/checkpoint.ckpt \
-        --output-dir ~/perm/interp/59e4_300k/activation_patching \
-        --sigmas 0.1 1.0 5.0 20.0 80.0 \
-        --modes residual grid_region stage \
-        --corruption zero_lres --region-radius-deg 8.0 \
-        --residual-noise-scale 0.15 \
-        --device cuda --precision fp32
+        --output-dir ~/perm/interp/<ckpt_id>/activation_patching \
+        --modes residual grid_region stage --corruption zero_lres
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
-_DT_ROOT = Path(__file__).resolve().parent.parent
+_DT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_DT_ROOT) not in sys.path:
     sys.path.insert(0, str(_DT_ROOT))
 
-from interp.model_utils import (
-    load_model,
-    prepare_batch,
+from interp.cli import add_model_args, add_sigma_args, setup_logging
+from interp.core.data import EVENTS, load_single_bundle
+from interp.core.geometry import (
+    ATLANTIC_WINDOW,
+    detect_min_center,
+    great_circle_mask_deg,
+    node_latlon_deg,
+    norm_lon,
+)
+from interp.core.hooks import iter_processor_blocks
+from interp.core.model import (
     denoise_at_sigma,
     get_surface_target_indices,
+    load_model,
+    prepare_batch,
 )
-from manual_inference.input_data_construction.bundle import (
-    open_bundle_dataset,
-    load_inputs_from_bundle_numpy,
-    extract_target_from_bundle,
-)
+from interp.core.runmeta import write_run_meta
 
 LOGGER = logging.getLogger(__name__)
 
 STAGE_NAMES = ["enc_data", "enc_hidden", "enc_both", "proc_out"]
 
 # Real TC event bundle (Franklin window; valid 2023-08-29 = peak near Bermuda).
-# Storm-centered interp MUST feed real bundles, never val_dataloader
-# (feedback memory: interp-use-bundles-not-dataloader).
-_DEFAULT_BUNDLE = (
-    "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia/"
-    "eefo_o96_0001_date20230826_time0000_mem01_step072h_input_bundle.nc"
-)
-
-
-# ---------------------------------------------------------------------------
-# Processor block discovery (mirrors cka_analysis.LayerActivationCollector)
-# ---------------------------------------------------------------------------
-
-def iter_processor_blocks(inner) -> list[tuple[int, object]]:
-    """Return [(global_idx, block_module), ...] for every processor block.
-
-    proc.proc[chunk].blocks[block]; for o96->o320 = 2 chunks * 8 blocks = L0..L15.
-    """
-    proc = inner.processor
-    items: list[tuple[int, object]] = []
-    if hasattr(proc, "proc") and len(proc.proc) > 0:
-        gi = 0
-        for chunk in proc.proc:
-            blocks = getattr(chunk, "blocks", None)
-            if blocks is None:
-                LOGGER.warning("Chunk %s has no .blocks", type(chunk).__name__)
-                continue
-            for block in blocks:
-                items.append((gi, block))
-                gi += 1
-    elif hasattr(proc, "blocks"):
-        items = list(enumerate(proc.blocks))
-    elif hasattr(proc, "layers"):
-        items = list(enumerate(proc.layers))
-    else:
-        raise RuntimeError(f"Cannot find processor sub-layers (type={type(proc).__name__})")
-    return items
-
-
-# ---------------------------------------------------------------------------
-# Geometry: node lat/lon and storm-region masks
-# ---------------------------------------------------------------------------
-
-def node_latlon_deg(graph_data, name: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return (lat_deg, lon_deg in [-180,180]) for a graph node set.
-
-    Anemoi stores node coords in graph[name].x as radians [lat, lon].
-    """
-    xy = graph_data[name].x.detach().cpu().numpy()
-    lat = np.degrees(xy[:, 0])
-    lon = ((np.degrees(xy[:, 1]) + 180.0) % 360.0) - 180.0
-    return lat, lon
-
-
-def great_circle_mask(lat: np.ndarray, lon: np.ndarray,
-                      clat: float, clon: float, radius_deg: float) -> np.ndarray:
-    """Boolean mask of nodes within `radius_deg` great-circle degrees of center."""
-    la1, lo1 = np.radians(lat), np.radians(lon)
-    la2, lo2 = np.radians(clat), np.radians(clon)
-    cosd = np.sin(la1) * np.sin(la2) + np.cos(la1) * np.cos(la2) * np.cos(lo1 - lo2)
-    ang = np.degrees(np.arccos(np.clip(cosd, -1.0, 1.0)))
-    return ang <= radius_deg
-
-
-# N. Atlantic tropical-cyclone box for storm detection
-_ATL_BOX = dict(lat_min=8.0, lat_max=45.0, lon_min=-90.0, lon_max=-10.0)
-
-
-def load_bundle_batch(bundle, bundle_path: str):
-    """Load (x_lres, x_hres, y) from a REAL TC event bundle (never val_dataloader).
-
-    Mirrors predict.predict_from_bundle's input construction: model-ordered lres/hres
-    arrays via load_inputs_from_bundle_numpy, target y from the bundle's target
-    channels (NaN -> 0). See feedback memory interp-use-bundles-not-dataloader.
-    """
-    di = bundle.datamodule.data_indices
-    n2i_lres = di.data.input[0].name_to_index
-    n2i_hres = di.data.input[1].name_to_index
-    weather_states = list(di.model.output.name_to_index.keys())
-
-    ds = open_bundle_dataset(bundle_path)
-    try:
-        x_lres_np, x_hres_np, _lon_l, _lat_l, _lon_h, _lat_h = load_inputs_from_bundle_numpy(
-            ds, n2i_lres, n2i_hres)
-        target_np, found = extract_target_from_bundle(ds, weather_states)
-    finally:
-        try:
-            ds.close()
-        except Exception:
-            pass
-    if target_np is None:
-        raise RuntimeError(f"bundle has no target channels: {bundle_path}")
-    dev = bundle.device
-    x_lres = torch.from_numpy(x_lres_np)[None, None, None, ...].to(dev)
-    x_hres = torch.from_numpy(x_hres_np)[None, None, None, ...].to(dev)
-    y = torch.from_numpy(np.nan_to_num(target_np, nan=0.0))[None, None, None, ...].to(dev)
-    return x_lres, x_hres, y, int(found), len(weather_states)
-
-
-def detect_atlantic_low(y, lat_d, lon_d, msl_ch: int) -> dict:
-    """Deepest N. Atlantic low in the real-bundle target field -> storm center."""
-    y5 = y if y.dim() == 5 else y[:, None]
-    msl = y5[0, 0, 0, :, msl_ch].float().cpu().numpy()
-    box = ((lat_d > _ATL_BOX["lat_min"]) & (lat_d < _ATL_BOX["lat_max"]) &
-           (lon_d > _ATL_BOX["lon_min"]) & (lon_d < _ATL_BOX["lon_max"]))
-    idx_box = np.where(box)[0]
-    j = idx_box[int(np.argmin(msl[idx_box]))]
-    return {"lat": float(lat_d[j]), "lon": float(lon_d[j]), "msl": float(msl[j])}
+# Storm-centered interp MUST feed real bundles, never val_dataloader.
+_DEFAULT_BUNDLE = EVENTS["franklin_o96_o320"]["peak_bundle"]
 
 
 # ---------------------------------------------------------------------------
 # Corruption
 # ---------------------------------------------------------------------------
 
-def corrupt_conditioning(prepared: dict, mode: str) -> tuple[torch.Tensor, torch.Tensor]:
+def corrupt_conditioning(prepared: dict, mode: str):
     x_interp = prepared["x_interp"]
     x_hres = prepared["x_hres"]
     if mode == "zero_lres":
@@ -304,7 +197,7 @@ class ReferenceCapture:
 class BlockRegionPatch:
     """Replace only storm-region rows of selected blocks' output[0] with reference."""
 
-    def __init__(self, blocks, ref_acts: dict, patch_names: set[str], node_mask_t):
+    def __init__(self, blocks, ref_acts: dict, patch_names, node_mask_t):
         self.blocks = blocks
         self.ref_acts = ref_acts
         self.patch_names = set(patch_names)
@@ -382,21 +275,10 @@ class ResidualStreamPatch:
     so it is identical across the reference / corrupted / patched calls) is added
     to output[0], scaled to `noise_scale` * ||output||. Blocks whose name is in
     `patch_names` instead have their output[0] REPLACED by the captured clean
-    reference activation (no perturbation). Thus:
-
-      * patch_names == {}            -> every block corrupted   (patch_none, rec~0)
-      * patch_names == all 16 blocks -> every block clean        (patch_all,  rec~1)
-      * patch_names == {L}           -> only block L clean; 0..L-1 corrupted,
-                                        L+1..15 re-corrupted -> monotone recovery.
-
-    The reference run passes patch_names = all blocks (clean), so the captured
-    reference activations and the clean baseline are perturbation-free by
-    construction; the conditioning is never corrupted, so there is no decoder
-    skip-path ceiling and patch_all reaches recovery == 1.0 exactly.
+    reference activation (no perturbation).
     """
 
-    def __init__(self, blocks, ref_acts: dict, patch_names: set[str],
-                 noise_scale: float, seed: int):
+    def __init__(self, blocks, ref_acts: dict, patch_names, noise_scale: float, seed: int):
         self.blocks = blocks
         self.ref_acts = ref_acts
         self.patch_names = set(patch_names)
@@ -474,9 +356,6 @@ def compute_at_sigma(bundle, prepared, blocks, ti, sigma, noise, corruption, mod
     res = {"sigma": float(sigma)}
 
     # ---- residual mode (primary per-block localizer) ----------------------
-    # Corruption lives in the processor residual stream; conditioning is CLEAN,
-    # so the reference for this mode is the clean ref_out captured above and
-    # there is no decoder skip-path ceiling.
     if "residual" in modes:
         def residual_patched(patch_names):
             with ResidualStreamPatch(blocks, ref_blocks, patch_names,
@@ -531,7 +410,6 @@ def compute_at_sigma(bundle, prepared, blocks, ti, sigma, noise, corruption, mod
         rec_all = _recovery(region_patched(block_names), mse_corr_region, ti)
         rec_none = _recovery(per_target_mse_region(corr_out, ref_out, ti, data_mask_t),
                              mse_corr_region, ti)
-
         res["grid_region"] = {
             "mse_corrupted_region_per_target": mse_corr_region,
             "ref_meansq_region_per_target": ref_energy,
@@ -566,29 +444,22 @@ def compute_at_sigma(bundle, prepared, blocks, ti, sigma, noise, corruption, mod
 # Driver
 # ---------------------------------------------------------------------------
 
-def run_activation_patching(
-    checkpoint_path: str,
-    output_dir: str,
-    sigmas=None,
-    modes=("residual", "grid_region", "stage"),
-    corruption: str = "zero_lres",
-    region_radius_deg: float = 8.0,
-    residual_noise_scale: float = 0.15,
-    storm_label: str = "franklin",
-    storm_center=None,          # (lat, lon) override, else auto-detect
-    bundle_path: str = _DEFAULT_BUNDLE,
-    device: str = "cuda",
-    precision: str = "fp32",
-    seed: int = 0,
-):
-    if sigmas is None:
-        sigmas = [0.1, 1.0, 5.0, 20.0, 80.0]
-    modes = list(modes)
-    output_path = Path(output_dir)
+def detect_atlantic_low(y, lat_d, lon_d, msl_ch: int) -> dict:
+    """Deepest N. Atlantic low in the real-bundle target field -> storm center."""
+    y5 = y if y.dim() == 5 else y[:, None]
+    msl = y5[0, 0, 0, :, msl_ch].float().cpu().numpy()
+    lat0, lon0 = detect_min_center(msl, lat_d, lon_d, window=ATLANTIC_WINDOW)
+    return {"lat": lat0, "lon": float(norm_lon(lon0)), "msl": float(msl.min())}
+
+
+def run_activation_patching(args):
+    sigmas = args.sigmas
+    modes = list(args.modes)
+    output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    LOGGER.info("Loading model from %s", checkpoint_path)
-    bundle = load_model(checkpoint_path, device=device, precision=precision)
+    LOGGER.info("Loading model from %s", args.checkpoint)
+    bundle = load_model(args.checkpoint, device=args.device, precision=args.precision)
 
     inner = bundle.inner_model
     blocks = iter_processor_blocks(inner)
@@ -596,49 +467,52 @@ def run_activation_patching(
     ti = get_surface_target_indices(bundle)
     LOGGER.info("Processor blocks: %s ; surface targets: %s", block_names, ti)
 
-    # ── REAL event bundle (never val_dataloader) + storm-centered region masks ──
-    LOGGER.info("Loading input from real bundle: %s", bundle_path)
-    x_lres, x_hres, y, tgt_found, n_out = load_bundle_batch(bundle, bundle_path)
+    # REAL event bundle (never val_dataloader) + storm-centered region masks
+    LOGGER.info("Loading input from real bundle: %s", args.bundle)
+    eb = load_single_bundle(bundle, args.bundle)
+    x_lres, x_hres = eb.x_lres.to(args.device), eb.x_hres.to(args.device)
+    y = eb.y.to(args.device)
 
     lat_h, lon_h = node_latlon_deg(bundle.graph_data, inner._graph_name_hidden)
     lat_d, lon_d = node_latlon_deg(bundle.graph_data, inner._graph_name_data)
-    if storm_center is not None:
-        storm = {"lat": float(storm_center[0]), "lon": float(storm_center[1]),
+    if args.storm_center is not None:
+        storm = {"lat": float(args.storm_center[0]), "lon": float(args.storm_center[1]),
                  "msl": None, "override": True}
     else:
         storm = detect_atlantic_low(y, lat_d, lon_d, ti["msl"])
-    LOGGER.info("Storm scene: %s  (target coverage %d/%d)", storm, tgt_found, n_out)
+    LOGGER.info("Storm scene: %s", storm)
 
-    hidden_mask = great_circle_mask(lat_h, lon_h, storm["lat"], storm["lon"], region_radius_deg)
-    data_mask = great_circle_mask(lat_d, lon_d, storm["lat"], storm["lon"], region_radius_deg)
+    hidden_mask = great_circle_mask_deg(lat_h, lon_h, storm["lat"], storm["lon"],
+                                        args.region_radius_deg)
+    data_mask = great_circle_mask_deg(lat_d, lon_d, storm["lat"], storm["lon"],
+                                      args.region_radius_deg)
     LOGGER.info("region radius=%.1f deg -> hidden nodes=%d/%d  data nodes=%d/%d",
-                region_radius_deg, int(hidden_mask.sum()), len(lat_h),
+                args.region_radius_deg, int(hidden_mask.sum()), len(lat_h),
                 int(data_mask.sum()), len(lat_d))
-    hidden_mask_t = torch.as_tensor(hidden_mask, device=device)
-    data_mask_t = torch.as_tensor(data_mask, device=device)
+    hidden_mask_t = torch.as_tensor(hidden_mask, device=args.device)
+    data_mask_t = torch.as_tensor(data_mask, device=args.device)
 
     prepared = prepare_batch(bundle, x_lres, x_hres, y)
-    torch.manual_seed(seed)
+    torch.manual_seed(args.seed)
     noise = torch.randn_like(prepared["y_residual"])
 
     results = {
-        "checkpoint": checkpoint_path,
-        "corruption": corruption,
+        "checkpoint": args.checkpoint,
+        "corruption": args.corruption,
         "modes": modes,
         "surface_targets": list(ti.keys()),
         "block_names": block_names,
         "chunk_boundary": len(block_names) // 2,
         "stage_names": STAGE_NAMES,
-        "residual_noise_scale": residual_noise_scale,
-        "seed": seed,
+        "residual_noise_scale": args.residual_noise_scale,
+        "seed": args.seed,
         "storm": {
-            "label": storm_label,
-            "bundle": bundle_path,
+            "label": args.storm_label,
+            "bundle": args.bundle,
             "center_lat": storm["lat"],
             "center_lon": storm["lon"],
             "msl_pa": storm.get("msl"),
-            "target_coverage": f"{tgt_found}/{n_out}",
-            "radius_deg": region_radius_deg,
+            "radius_deg": args.region_radius_deg,
             "n_hidden_region": int(hidden_mask.sum()),
             "n_data_region": int(data_mask.sum()),
         },
@@ -648,16 +522,15 @@ def run_activation_patching(
     for sigma in sigmas:
         LOGGER.info("Patching at sigma=%.4g", sigma)
         results["sigma_results"].append(
-            compute_at_sigma(bundle, prepared, blocks, ti, sigma, noise, corruption,
-                             modes, hidden_mask_t, data_mask_t,
-                             residual_noise_scale=residual_noise_scale)
-        )
+            compute_at_sigma(bundle, prepared, blocks, ti, sigma, noise,
+                             args.corruption, modes, hidden_mask_t, data_mask_t,
+                             residual_noise_scale=args.residual_noise_scale))
 
     out_file = output_path / "activation_patching.json"
     with open(out_file, "w") as f:
         json.dump(results, f, indent=2)
     LOGGER.info("Results saved to %s", out_file)
-
+    write_run_meta(output_path, "patching", args)
     _print_summary(results)
     return results
 
@@ -669,16 +542,16 @@ def _print_summary(results: dict):
     print("ACTIVATION PATCHING  corruption=%s  storm=%s @ (%.2f,%.2f) %sPa  region r=%.1f deg"
           % (results["corruption"], st["label"], st["center_lat"], st["center_lon"],
              ("%.0f" % st["msl_pa"]) if st.get("msl_pa") else "?", st["radius_deg"]))
-    print("  hidden region nodes=%d  data region nodes=%d  (bundle target %s)"
-          % (st["n_hidden_region"], st["n_data_region"], st.get("target_coverage", "?")))
     print("=" * 84)
     for res in results["sigma_results"]:
         print(f"\nSigma = {res['sigma']:g}")
-        if "residual" in res:
-            rr = res["residual"]
-            print("  [residual] per-block recovery (residual-stream corruption, "
-                  "noise_scale=%.3g; denom MSE_corr: " % rr["noise_scale"]
-                  + " ".join(f"{t}={rr['mse_corrupted_per_target'][t]:.3e}" for t in ti) + ")")
+        for mode, denom_key in (("residual", "mse_corrupted_per_target"),
+                                ("grid_region", "mse_corrupted_region_per_target")):
+            if mode not in res:
+                continue
+            rr = res[mode]
+            print(f"  [{mode}] per-block recovery (denom MSE_corr: "
+                  + " ".join(f"{t}={rr[denom_key][t]:.3e}" for t in ti) + ")")
             print(f"  {'block':>8s} " + " ".join(f"{t:>8s}" for t in ti))
             for name in results["block_names"]:
                 r = rr["recovery_per_block"][name]
@@ -687,20 +560,6 @@ def _print_summary(results: dict):
                 r = rr["recovery_per_chunk"][label]
                 print(f"  {'chunk-' + label:>8s} " + " ".join(f"{r[t]:8.3f}" for t in ti))
             ra, rn = rr["sanity"]["patch_all"], rr["sanity"]["patch_none"]
-            print(f"  {'ALL':>8s} " + " ".join(f"{ra[t]:8.3f}" for t in ti) + "   (sanity ~1.0)")
-            print(f"  {'NONE':>8s} " + " ".join(f"{rn[t]:8.3f}" for t in ti) + "   (sanity ~0.0)")
-        if "grid_region" in res:
-            gr = res["grid_region"]
-            print("  [grid_region] recovery over storm region (denom MSE_corr: "
-                  + " ".join(f"{t}={gr['mse_corrupted_region_per_target'][t]:.3e}" for t in ti) + ")")
-            print(f"  {'block':>8s} " + " ".join(f"{t:>8s}" for t in ti))
-            for name in results["block_names"]:
-                r = gr["recovery_per_block"][name]
-                print(f"  {name:>8s} " + " ".join(f"{r[t]:8.3f}" for t in ti))
-            for label in ("A", "B"):
-                r = gr["recovery_per_chunk"][label]
-                print(f"  {'chunk-' + label:>8s} " + " ".join(f"{r[t]:8.3f}" for t in ti))
-            ra, rn = gr["sanity"]["patch_all"], gr["sanity"]["patch_none"]
             print(f"  {'ALL':>8s} " + " ".join(f"{ra[t]:8.3f}" for t in ti))
             print(f"  {'NONE':>8s} " + " ".join(f"{rn[t]:8.3f}" for t in ti))
         if "stage" in res:
@@ -710,18 +569,17 @@ def _print_summary(results: dict):
             for which in results["stage_names"]:
                 r = sg["recovery_per_stage"][which]
                 print(f"  {which:>10s} " + " ".join(f"{r[t]:8.3f}" for t in ti))
-    print("\nNotes: residual NONE~0 / ALL~1.0; per-block recovery rises toward the decoder")
-    print("  (later blocks commit more of the surface field at this sigma);")
+    print("\nNotes: residual NONE~0 / ALL~1.0; per-block recovery rises toward the decoder;")
     print("  grid_region recovery ~1 => that block carries the storm field;")
     print("  stage enc_both must be ~1.0 (corruption only enters the encoder);")
     print("  stage proc_out == full patch-all (decoder still sees corrupted data latent + skip).")
 
 
-def main():
+def main(argv=None):
+    import argparse
     p = argparse.ArgumentParser(description="Causal activation patching for AIFSDD")
-    p.add_argument("--checkpoint", required=True)
-    p.add_argument("--output-dir", required=True)
-    p.add_argument("--sigmas", nargs="+", type=float, default=[0.1, 1.0, 5.0, 20.0, 80.0])
+    add_model_args(p)
+    add_sigma_args(p)
     p.add_argument("--modes", nargs="+", default=["residual", "grid_region", "stage"],
                    choices=["residual", "grid_region", "stage"])
     p.add_argument("--corruption", default="zero_lres",
@@ -732,31 +590,14 @@ def main():
                         "block output's norm (residual mode)")
     p.add_argument("--storm-label", default="franklin")
     p.add_argument("--storm-center", nargs=2, type=float, default=None,
-                   metavar=("LAT", "LON"), help="override storm center; else auto-detect deepest Atlantic low in the bundle target")
+                   metavar=("LAT", "LON"),
+                   help="override storm center; else auto-detect deepest Atlantic low")
     p.add_argument("--bundle", default=_DEFAULT_BUNDLE,
                    help="real TC event input bundle (.nc); never val_dataloader")
-    p.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
-    p.add_argument("--precision", default="fp32", choices=["fp32", "fp16", "bf16"])
     p.add_argument("--seed", type=int, default=0)
-    args = p.parse_args()
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    run_activation_patching(
-        checkpoint_path=args.checkpoint,
-        output_dir=args.output_dir,
-        sigmas=args.sigmas,
-        modes=args.modes,
-        corruption=args.corruption,
-        region_radius_deg=args.region_radius_deg,
-        residual_noise_scale=args.residual_noise_scale,
-        storm_label=args.storm_label,
-        storm_center=args.storm_center,
-        bundle_path=args.bundle,
-        device=args.device,
-        precision=args.precision,
-        seed=args.seed,
-    )
+    args = p.parse_args(argv)
+    setup_logging()
+    return run_activation_patching(args)
 
 
 if __name__ == "__main__":
