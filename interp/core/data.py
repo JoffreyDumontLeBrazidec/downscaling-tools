@@ -62,6 +62,27 @@ EVENTS: dict[str, dict] = {
         "steps": ["048"],
         "label": "humberto",
     },
+    # Humberto window with OBSERVED tp targets (the plain o48_o96 input bundles
+    # carry no target_hres_tp). Built for the 15739d23 dp_2ttp eval; also loads
+    # under fb21124e (tp-only output). step024h = valid 2025-09-27.
+    "humberto_tp_o48_o96": {
+        "bundle_dir": ("/ec/res4/scratch/ecm5702/eval/"
+                       "manual_15739d23_new_o48_o96_20260501_s100000_dp_2ttp_m10_full_eval/"
+                       "bundles_with_y"),
+        "dates": ["20250926"],
+        "members": ["01"],
+        "steps": ["024"],
+        "label": "humberto",
+    },
+    "humberto_tp_o48_o96_m4": {
+        "bundle_dir": ("/ec/res4/scratch/ecm5702/eval/"
+                       "manual_15739d23_new_o48_o96_20260501_s100000_dp_2ttp_m10_full_eval/"
+                       "bundles_with_y"),
+        "dates": ["20250926"],
+        "members": ["01", "02", "03", "04"],
+        "steps": ["024"],
+        "label": "humberto",
+    },
 }
 
 
