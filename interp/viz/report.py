@@ -1,15 +1,19 @@
 """Per-checkpoint interp report — ONE PDF from the run dir's JSONs.
 
-Reads  <run_dir>/<tool_subdir>/<tool>.json  (old and new schemas)
-Writes <run_dir>/plots/report.pdf          (default; --per-tool for one PDF
-                                            per tool under the legacy names)
+Layout: ONE folder per checkpoint. Tool JSONs live either directly under the
+run dir (<run_dir>/<tool_subdir>/<tool>.json — scene-agnostic diagnostics) or
+inside CASE-STUDY subdirs (<run_dir>/<case>/<tool_subdir>/<tool>.json, e.g.
+humberto/, amazon/, png_precip/). The report puts the case studies SIDE BY
+SIDE within each method when that makes sense (permutation heatmap columns,
+IG driver-bar columns, one shared locality panel); geographic map pages stay
+per case (different domains).
 
-Page order follows the headline-first convention: storm-centered attribution
-maps (what drives the extreme) lead; ranking bars and profile curves follow.
+Writes <run_dir>/plots/report.pdf (default; --per-tool also writes one PDF
+per tool under the legacy names).
 
 Usage
 -----
-    python -m interp.viz --run-dir ~/perm/interp/59e4_300k
+    python -m interp.viz --run-dir ~/perm/interp/85884ee7_189k
     python -m interp.viz --run-dir ... --tools cka,activation_patching --per-tool
 """
 
@@ -343,7 +347,8 @@ def render_patching(data: dict, ckpt_id: str) -> list:
 # integrated gradients: extreme-centered driver maps lead, then locality + bars
 # ---------------------------------------------------------------------------
 
-def render_ig(data: dict, ckpt_id: str) -> list:
+def _ig_index(data: dict):
+    """(targets, functionals, sigmas, disp_sigma, idx, spatial) for one IG JSON."""
     targets = data["surface_targets"]
     functionals = data["functionals"]
     sigmas = sorted({e["sigma"] for e in data["results"]})
@@ -352,6 +357,25 @@ def render_ig(data: dict, ckpt_id: str) -> list:
     idx = {(e["functional"], e["target"], e["sigma"]): e for e in data["results"]}
     spatial = [f for f in ("eye", *[f for f in functionals if f.startswith("box:")])
                if f in functionals]
+    return targets, functionals, sigmas, disp_sigma, idx, spatial
+
+
+def _ig_bars_ax(ax, e, topk=10):
+    """One top-drivers bar panel for one IG result entry."""
+    items = ([(v["name"], "lres", v["mean_abs"], v["signed_mean"])
+              for v in e["lres"].values()]
+             + [(v["name"], "hres", v["mean_abs"], v["signed_mean"])
+                for v in e["hres"].values()])
+    items.sort(key=lambda x: x[2], reverse=True)
+    top = items[:topk]
+    ranked_barh(ax, [x[0] for x in top], [x[2] for x in top],
+                colors=["#d62728" if x[3] >= 0 else "#1f77b4" for x in top],
+                edgecolors=["black" if x[1] == "hres" else "none" for x in top],
+                xlabel="mean |attr|")
+
+
+def render_ig(data: dict, ckpt_id: str) -> list:
+    targets, functionals, sigmas, disp_sigma, idx, spatial = _ig_index(data)
     figs = []
 
     # 1) per-target signed driver maps at disp_sigma (eye preferred)
@@ -427,6 +451,178 @@ def render_ig(data: dict, ckpt_id: str) -> list:
         fig.tight_layout(rect=(0, 0, 1, 0.95))
         figs.append(fig)
     return figs
+
+
+# ---------------------------------------------------------------------------
+# case-study side-by-side renderers (one column per case within each method)
+# ---------------------------------------------------------------------------
+
+def render_permutation_cases(datas: dict, ckpt_id: str) -> list:
+    """One heatmap grid: rows = union of surface targets, columns = case
+    studies (each scored over its own region)."""
+    cases = list(datas)
+    all_targets = [t for t in SURFACE_TARGETS
+                   if any(t in d["sigma_results"][0].get("surface_targets", [])
+                          for d in datas.values())]
+    top_k = 15
+    fig, axes = plt.subplots(len(all_targets), len(cases),
+                             figsize=(5.5 * len(cases), 3.8 * len(all_targets)),
+                             squeeze=False)
+    for col, case in enumerate(cases):
+        d = datas[case]
+        first = d["sigma_results"][0]
+        sigmas = [r["sigma"] for r in d["sigma_results"]]
+        region = (d.get("regions") or ["global"])[0]
+        lres_names = [i["name"] for _, i in sorted(first["lres_importance"].items(),
+                                                   key=lambda kv: int(kv[0]))]
+        hres_names = [i["name"] for _, i in sorted(first["hres_importance"].items(),
+                                                   key=lambda kv: int(kv[0]))]
+        all_names = lres_names + hres_names
+        n_lres = len(lres_names)
+        for row, target in enumerate(all_targets):
+            ax = axes[row][col]
+            if target not in first.get("surface_targets", []):
+                ax.axis("off")
+                continue
+            M = np.zeros((len(all_names), len(sigmas)))
+            for j, res in enumerate(d["sigma_results"]):
+                for off, src in [(0, res["lres_importance"]),
+                                 (n_lres, res["hres_importance"])]:
+                    for idx_str, info in src.items():
+                        M[off + int(idx_str), j] = (
+                            info.get("region_paired_mse_per_target", {})
+                                .get(region, {}).get(target)
+                            or info["paired_mse_per_target"].get(target, 0.0))
+            order = np.argsort(-M.max(axis=1))[:top_k]
+            Mt = M[order]
+            pos = Mt[Mt > 0]
+            vmin = max(pos.min() if pos.size else 1e-10, 1e-10)
+            vmax = max(float(Mt.max()), vmin * 10)
+            heatmap(ax, Mt, [f"{s:g}" for s in sigmas],
+                    [all_names[i] for i in order],
+                    title=f"{case} · {region} · {target}", cmap="viridis",
+                    norm=LogNorm(vmin=vmin, vmax=vmax),
+                    cbar_label="paired MSE (log)", fig=fig)
+            ax.set_xlabel("sigma")
+    fig.suptitle(_title(ckpt_id, "feature permutation — case studies side by side "
+                                 "(paired MSE, top-15)"), fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.985))
+    return [fig]
+
+
+def render_ig_cases(datas: dict, ckpt_id: str) -> list:
+    """Maps per case (different domains), then ONE locality panel and ONE
+    driver-bars grid with the cases as columns."""
+    figs = []
+
+    # 1) per-case map pages (headline)
+    for case, d in datas.items():
+        _, _, _, disp_sigma, idx, spatial = _ig_index(d)
+        if not spatial:
+            continue
+        fkey = spatial[0]
+        probe_key = fkey.split(":", 1)[1] if fkey.startswith("box:") else fkey
+        probe_r = (d.get("boxes", {}).get(probe_key, {}) or {}).get("radius_km")
+        rings = (probe_r, 500.0) if probe_r and probe_r != 500.0 else (200.0, 500.0)
+        for t in d["surface_targets"]:
+            e = idx.get((fkey, t, disp_sigma))
+            if e is None or "zoom" not in e:
+                continue
+            z = e["zoom"]
+            center = (z["center_lat"], z["center_lon"])
+            lat, lon = np.asarray(z["lat"]), np.asarray(z["lon"])
+            varmaps = list(z["vars"].items())[:4]
+            fig = plt.figure(figsize=(4.8 * len(varmaps), 4.8))
+            for j, (vname, vals) in enumerate(varmaps):
+                geo_panel(fig, 1, len(varmaps), 1 + j, lat, lon, np.asarray(vals),
+                          title=f"{vname}  (signed)", diverging=True, center=center,
+                          rings=rings)
+            loc = e.get("coherence", {}).get("frac_within_500km")
+            locstr = (f"{loc*100:.0f}% of influence within 500 km" if loc is not None
+                      else "")
+            fig.suptitle(_title(ckpt_id, f"IG · {case} · {fkey} — drives the {t}",
+                                f"σ={disp_sigma:g}", locstr), fontsize=11)
+            fig.tight_layout(rect=(0, 0, 1, 0.92))
+            figs.append(fig)
+
+    # 2) one locality panel across cases
+    fig, ax = plt.subplots(1, 1, figsize=(9, 5))
+    drew = False
+    for case, d in datas.items():
+        _, _, sigmas, _, idx, spatial = _ig_index(d)
+        if not spatial:
+            continue
+        fkey = spatial[0]
+        for t in d["surface_targets"]:
+            ys = [(idx.get((fkey, t, s), {}) or {}).get("coherence", {})
+                  .get("frac_within_500km", np.nan) for s in sigmas]
+            if not np.all(np.isnan(ys)):
+                ax.plot(sigmas, ys, marker="o", label=f"{case} · {t}")
+                drew = True
+    if drew:
+        ax.set_xscale("log")
+        ax.set_ylim(0.0, 1.02)
+        ax.set_xlabel("sigma")
+        ax.set_ylabel("fraction of input influence within 500 km")
+        ax.set_title("Locality of the receptive field on each case's probe, vs σ",
+                     fontsize=10)
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize=8)
+        fig.suptitle(_title(ckpt_id, "IG · locality vs sigma — all cases"), fontsize=12)
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        figs.append(fig)
+    else:
+        plt.close(fig)
+
+    # 3) driver bars: rows = union targets, columns = cases (primary functional);
+    #    spectral functionals get their own row block when present.
+    cases = list(datas)
+    panels = []  # (case, label, entry)
+    all_targets = [t for t in SURFACE_TARGETS
+                   if any(t in d["surface_targets"] for d in datas.values())]
+    fig, axes = plt.subplots(len(all_targets), len(cases),
+                             figsize=(7 * len(cases), 3.4 * len(all_targets)),
+                             squeeze=False)
+    drew = False
+    for col, case in enumerate(cases):
+        d = datas[case]
+        _, functionals, _, disp_sigma, idx, spatial = _ig_index(d)
+        rank_fs = ([spatial[0]] if spatial else []) + \
+                  [f for f in functionals if f.startswith("spectral")]
+        for row, t in enumerate(all_targets):
+            ax = axes[row][col]
+            e = next((idx.get((f, t, disp_sigma)) for f in rank_fs
+                      if idx.get((f, t, disp_sigma))), None)
+            if e is None:
+                ax.axis("off")
+                continue
+            drew = True
+            _ig_bars_ax(ax, e)
+            ax.set_title(f"{case} · {e['functional']} · {t}", fontsize=9)
+    if drew:
+        fig.suptitle(_title(ckpt_id, "IG · top drivers — case studies side by side",
+                            "red=+ / blue=− · hres edged"), fontsize=11)
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        figs.append(fig)
+    else:
+        plt.close(fig)
+    return figs
+
+
+def _cases_addendum(tool: str, datas: dict) -> str:
+    lines = ["", "Cases (side by side):"]
+    for c, d in datas.items():
+        if tool == "feature_permutation":
+            lines.append(f"  {c}: regions={d.get('regions')}, "
+                         f"batch={d.get('batch_size')}, "
+                         f"bundles={[Path(p).name for p in d.get('bundle_paths', [])][:1]}")
+        elif tool == "integrated_gradients":
+            bx = {n: (round(b.get("lat", 0), 1), round(b.get("lon", 0), 1),
+                      b.get("radius_km")) for n, b in d.get("boxes", {}).items()}
+            lines.append(f"  {c}: functionals={d.get('functionals')}, probes={bx}")
+        else:
+            lines.append(f"  {c}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +799,24 @@ def find_json(run_dir: Path, tool: str) -> Path | None:
     return None
 
 
+TOOL_SUBDIR_NAMES = {sd for sds, _, _ in TOOL_REGISTRY.values() for sd in sds} | {"plots"}
+
+
+def discover_cases(run_dir: Path) -> dict:
+    """Case-study subdirs: <run_dir>/<case>/<tool_subdir>/<tool>.json.
+
+    A case dir is any non-tool subdir that contains at least one tool JSON.
+    Dirs starting with '_' (e.g. _archive) are ignored.
+    """
+    cases = {}
+    for sub in sorted(p for p in run_dir.iterdir() if p.is_dir()):
+        if sub.name in TOOL_SUBDIR_NAMES or sub.name.startswith("_"):
+            continue
+        if any(find_json(sub, t) for t in TOOL_REGISTRY):
+            cases[sub.name] = sub
+    return cases
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Interp report renderer")
     parser.add_argument("--run-dir", required=True,
@@ -624,27 +838,51 @@ def main(argv=None):
     plots_dir.mkdir(parents=True, exist_ok=True)
     only = set(args.tools.split(",")) if args.tools else None
 
+    cases = discover_cases(run_dir)
+    if cases:
+        LOGGER.info("case-study dirs: %s", list(cases))
+
     report_figs = []
     for tool, (_, _, renderer) in TOOL_REGISTRY.items():
         if only is not None and tool not in only:
             continue
-        json_path = find_json(run_dir, tool)
-        if json_path is None:
+        base_path = find_json(run_dir, tool)
+        case_paths = {c: p for c, p in ((c, find_json(d, tool))
+                                        for c, d in cases.items()) if p}
+        if base_path is None and not case_paths:
             LOGGER.info("[%s] no JSON found — skip", tool)
             continue
-        LOGGER.info("[%s] rendering from %s", tool, json_path.relative_to(run_dir))
+        LOGGER.info("[%s] rendering (base=%s, cases=%s)", tool,
+                    bool(base_path), list(case_paths))
+        figs = []
+        datas = {}
         try:
-            data = json.loads(json_path.read_text())
-            figs = renderer(data, ckpt_id)
+            if base_path is not None:
+                figs += renderer(json.loads(base_path.read_text()), ckpt_id)
+            if case_paths:
+                datas = {c: json.loads(p.read_text()) for c, p in case_paths.items()}
+                if tool == "feature_permutation" and len(datas) > 1:
+                    figs += render_permutation_cases(datas, ckpt_id)
+                elif tool == "integrated_gradients" and len(datas) > 1:
+                    figs += render_ig_cases(datas, ckpt_id)
+                else:
+                    for c, d in datas.items():
+                        figs += renderer(d, f"{ckpt_id} · {c}")
         except Exception:
             LOGGER.exception("[%s] renderer failed — skipping", tool)
             continue
         if figs and tool in DESCRIBERS:
-            meta_path = json_path.parent / "run_meta.json"
+            meta_src = base_path or next(iter(case_paths.values()))
+            meta_path = meta_src.parent / "run_meta.json"
             meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+            desc_data = (json.loads(base_path.read_text()) if base_path is not None
+                         else next(iter(datas.values())))
             title, describe = DESCRIBERS[tool]
             try:
-                figs.insert(0, _text_page(f"{ckpt_id} · {title}", describe(data, meta)))
+                body = describe(desc_data, meta)
+                if len(datas) > 1:
+                    body += "\n" + _cases_addendum(tool, datas)
+                figs.insert(0, _text_page(f"{ckpt_id} · {title}", body))
             except Exception:
                 LOGGER.exception("[%s] description page failed — skipping it", tool)
         if args.per_tool:

@@ -17,6 +17,10 @@
 #   Repeatable single-value flags repeat the key: region=amazon region=tropics.
 #
 # Output convention: /home/ecm5702/perm/interp/<CKPT_ID>/<tool_subdir>/
+#   ONE folder per checkpoint. For case studies, append the case to CKPT_ID:
+#     sbatch ... run.sbatch ig <CKPT> 85884ee7_189k/humberto ...
+#   -> .../85884ee7_189k/humberto/integrated_gradients/. The report renders
+#   all cases side by side: python -m interp.viz --run-dir .../85884ee7_189k
 #
 # Environment: defaults to GA100 + env_ref.sh (.ds-dyn-dev + overlays).
 # For GH200 (aarch64, .ds-ag):
@@ -49,7 +53,7 @@ CKPT_ID="${3:?CKPT_ID}"
 shift 3
 # Convert dash-less key[=value] extras into --key value tool flags.
 # Comma-split values only for keys that argparse declares as nargs lists.
-NARGS_KEYS=" sigmas modes dates members steps run-dirs "
+NARGS_KEYS=" sigmas modes dates members steps run-dirs storm-center "
 EXTRA=()
 for kv in "$@"; do
   if [[ "$kv" == *=* ]]; then
