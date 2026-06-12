@@ -98,9 +98,19 @@ def _to180(x):
 
 
 def geo_panel(fig, nrows, ncols, pos, lat, lon, vals, *, title, diverging,
-              center=None, rings=(200, 500)):
-    """One geographic scatter panel; coastlines best-effort (offline-safe)."""
-    lon = _to180(lon)
+              center=None, probe_radius_km=None, obs=None):
+    """One geographic attribution panel.
+
+    Renders an INTERPOLATED surface (Delaunay tripcolor) rather than sparse
+    scatter dots — essential on coarse grids like O96 (~1 deg spacing).
+    Overlays: black contours of the OBSERVED target field (`obs`) so the
+    weather structure (TC, rainband) is visible under the attribution; a solid
+    ring at the probe's own radius; a dashed 500 km reference ring only when
+    the probe is smaller than that.
+    """
+    lon = _to180(np.asarray(lon, dtype=float))
+    lat = np.asarray(lat, dtype=float)
+    vals = np.asarray(vals, dtype=float)
     if HAS_CARTOPY:
         ax = fig.add_subplot(nrows, ncols, pos, projection=ccrs.PlateCarree())
         tr = {"transform": ccrs.PlateCarree()}
@@ -115,7 +125,20 @@ def geo_panel(fig, nrows, ncols, pos, lat, lon, vals, *, title, diverging,
         vmax = float(np.percentile(vals, 99)) or 1e-12
         kw = dict(cmap="magma", vmin=0.0, vmax=vmax)
         cbl = "|attribution|"
-    sc = ax.scatter(lon, lat, c=vals, s=5, **kw, **tr)
+    if len(vals) >= 16:
+        import matplotlib.tri as mtri
+        tri = mtri.Triangulation(lon, lat)
+        sc = ax.tripcolor(tri, vals, shading="gouraud", **kw, **tr)
+        if obs is not None:
+            try:
+                cs = ax.tricontour(tri, np.asarray(obs, dtype=float), levels=7,
+                                   colors="k", linewidths=0.6, **tr)
+                ax.clabel(cs, fontsize=5, fmt="%g")
+            except Exception:
+                pass
+    else:
+        sc = ax.scatter(lon, lat, c=vals, s=60, edgecolors="k", linewidths=0.2,
+                        **kw, **tr)
     if HAS_CARTOPY:
         try:
             ax.coastlines(resolution="110m", linewidth=0.5)
@@ -135,14 +158,20 @@ def geo_panel(fig, nrows, ncols, pos, lat, lon, vals, *, title, diverging,
         ax.plot([clon], [clat], marker="*", color="cyan", ms=15, mec="k", **tr)
         if HAS_CARTOPY:
             geod = Geodesic()
-            for rk in rings:
+            ring_specs = []
+            if probe_radius_km:
+                ring_specs.append((probe_radius_km, "-", f"probe {probe_radius_km:g} km"))
+                if probe_radius_km < 400.0:
+                    ring_specs.append((500.0, "--", "500 km"))
+            else:
+                ring_specs.append((500.0, "--", "500 km"))
+            for rk, ls, lbl in ring_specs:
                 circ = np.asarray(geod.circle(lon=float(clon), lat=float(clat),
                                               radius=rk * 1000.0, n_samples=120))
-                ax.plot(circ[:, 0], circ[:, 1], "k--", lw=0.7,
+                ax.plot(circ[:, 0], circ[:, 1], color="k", linestyle=ls, lw=0.9,
                         transform=ccrs.PlateCarree())
-                # label each ring at its northernmost point
                 top = circ[np.argmax(circ[:, 1])]
-                ax.text(top[0], top[1], f"{rk:g} km", fontsize=6, ha="center",
+                ax.text(top[0], top[1], lbl, fontsize=6, ha="center",
                         va="bottom", transform=ccrs.PlateCarree(),
                         bbox=dict(boxstyle="round,pad=0.1", fc="white",
                                   ec="none", alpha=0.7))

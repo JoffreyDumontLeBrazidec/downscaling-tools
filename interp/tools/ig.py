@@ -300,14 +300,25 @@ def _coherence(agg, lat, lon, eye_lat, eye_lon):
     }
 
 
-def _zoom_maps(per_cell, names, lat, lon, center, zoom_deg, topk):
-    """Full-resolution windowed attribution maps around the storm center."""
+def _zoom_maps(per_cell, names, lat, lon, center, zoom_deg, topk,
+               obs=None, must_include=None):
+    """Full-resolution windowed attribution maps around the probe center.
+
+    `obs`: the OBSERVED target field (n_cells,) — stored so the renderer can
+    overlay its contours (you see the storm, not just dots). `must_include`:
+    input-variable index always kept among the maps (the target's own field),
+    even when it is not in the top-k by |attr|.
+    """
     dlon = (np.asarray(lon) - center[1] + 180.0) % 360.0 - 180.0
     win = (np.abs(lat - center[0]) <= zoom_deg) & (np.abs(dlon) <= zoom_deg)
     agg_full = np.abs(per_cell).sum(axis=1)
     win_abs = np.abs(per_cell[win]).mean(axis=0)
-    order = np.argsort(-win_abs)[:topk]
-    return {
+    order = list(np.argsort(-win_abs))
+    if must_include is not None and must_include in order:
+        order.remove(must_include)
+        order.insert(0, must_include)
+    order = order[:topk]
+    out = {
         "center_lat": float(center[0]),
         "center_lon": float(center[1] % 360.0),
         "zoom_deg": zoom_deg,
@@ -318,6 +329,9 @@ def _zoom_maps(per_cell, names, lat, lon, center, zoom_deg, topk):
         "vars": {names.get(int(v), f"var_{v}"): per_cell[win, int(v)].astype(float).tolist()
                  for v in order},
     }
+    if obs is not None:
+        out["obs"] = np.asarray(obs)[win].astype(float).tolist()
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -445,9 +459,15 @@ def run_integrated_gradients(args):
                     # Per-cell maps only for storm-centered probes at map_sigma
                     # (full-res zoom of WHERE the input drivers live).
                     if store_maps:
+                        t_idx = target_indices[tname]
+                        obs = (y[0, 0, 0, :, t_idx].cpu().numpy()
+                               if y.shape[-2] == len(lat_xi) else None)
+                        self_idx = next((i for i, n in lres_names.items()
+                                         if n == tname), None)
                         entry["zoom"] = _zoom_maps(lres_cell, lres_names, lat_xi,
                                                    lon_xi, center, args.zoom_deg,
-                                                   args.topk_zoom)
+                                                   args.topk_zoom, obs=obs,
+                                                   must_include=self_idx)
                 all_results["results"].append(entry)
 
     results_file = output_path / "integrated_gradients.json"

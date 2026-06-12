@@ -152,6 +152,8 @@ def render_full_sampling(data: dict, ckpt_id: str) -> list:
 # ---------------------------------------------------------------------------
 
 def render_ablation(data: dict, ckpt_id: str) -> list:
+    """Grid: rows = targets, columns = REGIONS (one panel per region, 3 curves
+    each — readable, no 6-line overlays), plus a global correlation summary."""
     sigmas = [r["sigma"] for r in data["sigma_results"]]
     first = data["sigma_results"][0]
     regions = data.get("regions")
@@ -164,52 +166,44 @@ def render_ablation(data: dict, ckpt_id: str) -> list:
         targets = [t for t, i in name_to_idx.items() if i < per_var_len]
     third = "ablate_noisy_hres" if "ablate_noisy_hres" in first else "ablate_both"
     third_lbl = "zero noisy_hres" if third == "ablate_noisy_hres" else "zero both"
-    region_styles = {"global": "-", "amazon": "--", "amazon_rainforest": "--",
-                     "tropics": ":"}
+    plot_regions = list(regions)[:3] if has_region else ["global"]
 
-    fig, axes = fig_grid(len(targets) + 1, cols=3, panel_w=6, panel_h=4.5)
-    for ax, target in zip(axes[:-1], targets):
-        series, styles = {}, {}
-        if has_region:
-            preferred = ("amazon_rainforest", "amazon", "tc_franklin", "tc_humberto",
-                         "tropics", "global")
-            plot_regions = [r for r in preferred if r in regions] or list(regions)
-            for rname in plot_regions[:3]:
-                ls = region_styles.get(rname, "-")
-                for label, key, color, marker in (
-                        (f"zero in_lres · {rname}", "ablate_lres", LRES_C, "o"),
-                        (f"zero in_hres · {rname}", "ablate_hres", HRES_C, "s"),
-                        (f"{third_lbl} · {rname}", third, BOTH_C, "^")):
-                    if key not in first:
-                        continue
+    cols = len(plot_regions)
+    rows = len(targets) + 1  # +1 row for the correlation summary
+    fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 4.3 * rows),
+                             squeeze=False)
+    pathways = ((f"zero in_lres", "ablate_lres", LRES_C, "o"),
+                (f"zero in_hres", "ablate_hres", HRES_C, "s"),
+                (third_lbl, third, BOTH_C, "^"))
+    for row, target in enumerate(targets):
+        for col, rname in enumerate(plot_regions):
+            ax = axes[row][col]
+            series, styles = {}, {}
+            for label, key, color, marker in pathways:
+                if key not in first:
+                    continue
+                if has_region:
                     series[label] = [r[key]["region_per_target_mse"][rname][target]
                                      for r in data["sigma_results"]]
-                    styles[label] = dict(color=color, marker=marker, linestyle=ls)
-            title = f"target = {target} ({', '.join(plot_regions[:3])})"
-        else:
-            name_to_idx = {"10u": 0, "10v": 1, "2t": 3, "msl": 4}
-            idx = name_to_idx[target]
-            for label, key, color, marker in (("zero in_lres", "ablate_lres", LRES_C, "o"),
-                                              ("zero in_hres", "ablate_hres", HRES_C, "s"),
-                                              (third_lbl, third, BOTH_C, "^")):
-                series[label] = [r[key]["per_var_mse"][idx] for r in data["sigma_results"]]
+                else:
+                    name_to_idx = {"10u": 0, "10v": 1, "2t": 3, "msl": 4}
+                    series[label] = [r[key]["per_var_mse"][name_to_idx[target]]
+                                     for r in data["sigma_results"]]
                 styles[label] = dict(color=color, marker=marker)
-            title = f"target = {target}"
-        loglog(ax, sigmas, series, styles=styles,
-               ylabel="MSE(ablated, full)", title=title)
+            loglog(ax, sigmas, series, styles=styles,
+                   ylabel="MSE(ablated, full)", title=f"{target} · {rname}")
 
-    ax = axes[-1]
-    series = {}
-    for label, key, marker in (("zero in_lres", "ablate_lres", "o"),
-                               ("zero in_hres", "ablate_hres", "s"),
-                               (third_lbl, third, "^")):
-        series[label] = [r[key]["correlation_with_full"] for r in data["sigma_results"]]
+    ax = axes[-1][0]
+    series = {label: [r[key]["correlation_with_full"] for r in data["sigma_results"]]
+              for label, key, _, _ in pathways if key in first}
     loglog(ax, sigmas, series, ylabel="correlation(ablated, full)",
-           title="correlation summary (all channels, global)", logy=False)
+           title="correlation summary (all channels, GLOBAL field)", logy=False)
+    for col in range(1, cols):
+        axes[-1][col].axis("off")
 
-    fig.suptitle(_title(ckpt_id, "conditioning ablation (zero lres / hres / noisy vs full)"),
-                 fontsize=12)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.suptitle(_title(ckpt_id, "conditioning ablation (zero lres / hres / noisy vs "
+                                 "full) — one column per region"), fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     return [fig]
 
 
@@ -240,8 +234,8 @@ def render_activation_norms(data: dict, ckpt_id: str) -> list:
                 [b.replace("processor.", "") for b in block_names],
                 title="per-block L2 norm", cmap="viridis", cbar_label="L2", fig=fig)
         axes[3].set_xlabel("sigma")
-    fig.suptitle(_title(ckpt_id, "activation norms (encoder · processor · decoder)"),
-                 fontsize=12)
+    fig.suptitle(_title(ckpt_id, "activation norms (encoder · processor · decoder) — "
+                                 "GLOBAL field, not case-restricted"), fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return [fig]
 
@@ -274,7 +268,8 @@ def render_cka(data: dict, ckpt_id: str) -> list:
            {"within chunk-A (L0-7)": wa, "within chunk-B (L8-15)": wb,
             "cross-chunk": cr},
            ylabel="mean CKA", title="chunk summary", logy=False, ylim=(0.5, 1.0))
-    fig.suptitle(_title(ckpt_id, "CKA layer similarity (processor blocks)"), fontsize=12)
+    fig.suptitle(_title(ckpt_id, "CKA layer similarity (processor blocks) — "
+                                 "GLOBAL field, not case-restricted"), fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     return [fig]
 
@@ -347,6 +342,15 @@ def render_patching(data: dict, ckpt_id: str) -> list:
 # integrated gradients: extreme-centered driver maps lead, then locality + bars
 # ---------------------------------------------------------------------------
 
+def _probes_txt(data: dict) -> str:
+    """Human-readable probe geometry: 'eye (26.0N,289.8E) R=150 km, 9 cells'."""
+    parts = []
+    for n, b in (data.get("boxes") or {}).items():
+        parts.append(f"{n} ({b.get('lat', 0):.1f}N,{b.get('lon', 0):.1f}E) "
+                     f"R={b.get('radius_km', 0):g} km, {b.get('n_cells', '?')} target cells")
+    return "; ".join(parts) if parts else "—"
+
+
 def _ig_index(data: dict):
     """(targets, functionals, sigmas, disp_sigma, idx, spatial) for one IG JSON."""
     targets = data["surface_targets"]
@@ -381,10 +385,8 @@ def render_ig(data: dict, ckpt_id: str) -> list:
     # 1) per-target signed driver maps at disp_sigma (eye preferred)
     fkey = spatial[0] if spatial else None
     if fkey:
-        # Inner dashed ring = the probe's actual radius; outer = 500 km context.
         probe_key = fkey.split(":", 1)[1] if fkey.startswith("box:") else fkey
         probe_r = (data.get("boxes", {}).get(probe_key, {}) or {}).get("radius_km")
-        rings = (probe_r, 500.0) if probe_r and probe_r != 500.0 else (200.0, 500.0)
         for t in targets:
             e = idx.get((fkey, t, disp_sigma))
             if e is None or "zoom" not in e:
@@ -397,27 +399,29 @@ def render_ig(data: dict, ckpt_id: str) -> list:
             for j, (vname, vals) in enumerate(varmaps):
                 geo_panel(fig, 1, len(varmaps), 1 + j, lat, lon, np.asarray(vals),
                           title=f"{vname}  (signed)", diverging=True, center=center,
-                          rings=rings)
+                          probe_radius_km=probe_r, obs=z.get("obs"))
             loc = e.get("coherence", {}).get("frac_within_500km")
             locstr = (f"{loc*100:.0f}% of influence within 500 km" if loc is not None
                       else "")
             fig.suptitle(_title(ckpt_id,
-                                f"integrated gradients · {fkey} — what drives the {t} extreme",
+                                f"integrated gradients · {fkey} — what drives the {t} "
+                                f"(contours: observed {t})",
                                 f"σ={disp_sigma:g}", locstr), fontsize=11)
             fig.tight_layout(rect=(0, 0, 1, 0.92))
             figs.append(fig)
 
         # 2) locality vs sigma
-        fig, ax = plt.subplots(1, 1, figsize=(9, 5))
+        fig, ax = plt.subplots(1, 1, figsize=(9, 5.4))
         series = {t: [(idx.get((fkey, t, s), {}) or {}).get("coherence", {})
                       .get("frac_within_500km", np.nan) for s in sigmas]
                   for t in targets}
         loglog(ax, sigmas, series, logy=False, ylim=(0.0, 1.02),
-               ylabel="fraction of input influence within 500 km",
+               ylabel="fraction of lres |attribution| within 500 km of the probe",
                title=f"Locality of the receptive field on the {fkey}, vs σ")
+        fig.text(0.02, 0.01, "probe: " + _probes_txt(data), fontsize=7)
         fig.suptitle(_title(ckpt_id, f"integrated gradients · {fkey} · locality vs sigma"),
                      fontsize=12)
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.tight_layout(rect=(0, 0.04, 1, 0.95))
         figs.append(fig)
 
     # 3) top-12 driver bars per target, one page per ranking functional
@@ -523,7 +527,6 @@ def render_ig_cases(datas: dict, ckpt_id: str) -> list:
         fkey = spatial[0]
         probe_key = fkey.split(":", 1)[1] if fkey.startswith("box:") else fkey
         probe_r = (d.get("boxes", {}).get(probe_key, {}) or {}).get("radius_km")
-        rings = (probe_r, 500.0) if probe_r and probe_r != 500.0 else (200.0, 500.0)
         for t in d["surface_targets"]:
             e = idx.get((fkey, t, disp_sigma))
             if e is None or "zoom" not in e:
@@ -536,23 +539,26 @@ def render_ig_cases(datas: dict, ckpt_id: str) -> list:
             for j, (vname, vals) in enumerate(varmaps):
                 geo_panel(fig, 1, len(varmaps), 1 + j, lat, lon, np.asarray(vals),
                           title=f"{vname}  (signed)", diverging=True, center=center,
-                          rings=rings)
+                          probe_radius_km=probe_r, obs=z.get("obs"))
             loc = e.get("coherence", {}).get("frac_within_500km")
             locstr = (f"{loc*100:.0f}% of influence within 500 km" if loc is not None
                       else "")
-            fig.suptitle(_title(ckpt_id, f"IG · {case} · {fkey} — drives the {t}",
+            fig.suptitle(_title(ckpt_id, f"IG · {case} · {fkey} — drives the {t} "
+                                         f"(contours: observed {t})",
                                 f"σ={disp_sigma:g}", locstr), fontsize=11)
             fig.tight_layout(rect=(0, 0, 1, 0.92))
             figs.append(fig)
 
     # 2) one locality panel across cases
-    fig, ax = plt.subplots(1, 1, figsize=(9, 5))
+    fig, ax = plt.subplots(1, 1, figsize=(9, 5.4))
     drew = False
+    probe_lines = []
     for case, d in datas.items():
         _, _, sigmas, _, idx, spatial = _ig_index(d)
         if not spatial:
             continue
         fkey = spatial[0]
+        probe_lines.append(f"{case}: {_probes_txt(d)}")
         for t in d["surface_targets"]:
             ys = [(idx.get((fkey, t, s), {}) or {}).get("coherence", {})
                   .get("frac_within_500km", np.nan) for s in sigmas]
@@ -563,49 +569,55 @@ def render_ig_cases(datas: dict, ckpt_id: str) -> list:
         ax.set_xscale("log")
         ax.set_ylim(0.0, 1.02)
         ax.set_xlabel("sigma")
-        ax.set_ylabel("fraction of input influence within 500 km")
+        ax.set_ylabel("fraction of lres |attribution| within 500 km of the probe")
         ax.set_title("Locality of the receptive field on each case's probe, vs σ",
                      fontsize=10)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
+        fig.text(0.02, 0.01, "probes — " + " | ".join(probe_lines), fontsize=7)
         fig.suptitle(_title(ckpt_id, "IG · locality vs sigma — all cases"), fontsize=12)
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.tight_layout(rect=(0, 0.04, 1, 0.95))
         figs.append(fig)
     else:
         plt.close(fig)
 
-    # 3) driver bars: rows = union targets, columns = cases (primary functional);
-    #    spectral functionals get their own row block when present.
+    # 3) driver bars: rows = union targets, columns = cases (primary functional),
+    #    ONE PAGE PER SIGMA REGIME — rankings are strongly sigma-dependent
+    #    (e.g. eye msl: wind-driven at σ=5, msl-driven at σ>=20).
     cases = list(datas)
-    panels = []  # (case, label, entry)
     all_targets = [t for t in SURFACE_TARGETS
                    if any(t in d["surface_targets"] for d in datas.values())]
-    fig, axes = plt.subplots(len(all_targets), len(cases),
-                             figsize=(7 * len(cases), 3.4 * len(all_targets)),
-                             squeeze=False)
-    drew = False
-    for col, case in enumerate(cases):
-        d = datas[case]
-        _, functionals, _, disp_sigma, idx, spatial = _ig_index(d)
-        rank_fs = ([spatial[0]] if spatial else []) + \
-                  [f for f in functionals if f.startswith("spectral")]
-        for row, t in enumerate(all_targets):
-            ax = axes[row][col]
-            e = next((idx.get((f, t, disp_sigma)) for f in rank_fs
-                      if idx.get((f, t, disp_sigma))), None)
-            if e is None:
-                ax.axis("off")
-                continue
-            drew = True
-            _ig_bars_ax(ax, e)
-            ax.set_title(f"{case} · {e['functional']} · {t}", fontsize=9)
-    if drew:
-        fig.suptitle(_title(ckpt_id, "IG · top drivers — case studies side by side",
-                            "red=+ / blue=− · hres edged"), fontsize=11)
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
-        figs.append(fig)
-    else:
-        plt.close(fig)
+    show_sigmas = sorted({s for d in datas.values()
+                          for s in (_ig_index(d)[3], max(_ig_index(d)[2]))})
+    for s_show in show_sigmas:
+        fig, axes = plt.subplots(len(all_targets), len(cases),
+                                 figsize=(7 * len(cases), 3.4 * len(all_targets)),
+                                 squeeze=False)
+        drew = False
+        for col, case in enumerate(cases):
+            d = datas[case]
+            _, functionals, _, _, idx, spatial = _ig_index(d)
+            rank_fs = ([spatial[0]] if spatial else []) + \
+                      [f for f in functionals if f.startswith("spectral")]
+            for row, t in enumerate(all_targets):
+                ax = axes[row][col]
+                e = next((idx.get((f, t, s_show)) for f in rank_fs
+                          if idx.get((f, t, s_show))), None)
+                if e is None:
+                    ax.axis("off")
+                    continue
+                drew = True
+                _ig_bars_ax(ax, e)
+                ax.set_title(f"{case} · {e['functional']} · {t}", fontsize=9)
+        if drew:
+            regime = ("conditioning-reading regime" if s_show >= 20 else
+                      "structure-refinement regime")
+            fig.suptitle(_title(ckpt_id, f"IG · top drivers · σ={s_show:g} ({regime})",
+                                "red=+ / blue=− · hres edged"), fontsize=11)
+            fig.tight_layout(rect=(0, 0, 1, 0.95))
+            figs.append(fig)
+        else:
+            plt.close(fig)
     return figs
 
 
@@ -744,14 +756,16 @@ def describe_norms(data, meta):
     return ("Activation norms: forward hooks record the magnitude (L2 / std / max) of the encoder, processor and "
             f"decoder outputs while denoising at sigmas {_fmt_sigmas(data)} — which parts of the network are "
             "active at which noise regime. The per-block heatmap (when present) breaks the processor into its "
-            "16 blocks.")
+            "16 blocks. SCOPE: computed on the FULL GLOBAL field of the event batch — activations are not "
+            "restricted to any case-study region (hidden-grid nodes mix information globally).")
 
 
 def describe_cka(data, meta):
     return ("CKA layer similarity: linear Centered Kernel Alignment between the activations of every pair of "
             f"processor blocks, per sigma ({_fmt_sigmas(data)}). CKA ~1 = two blocks compute near-identical "
             "representations. Block clusters reveal processing stages; the chunk-summary panel tracks "
-            "within-chunk vs cross-chunk similarity vs sigma (the 16 blocks are chained as 2 chunks of 8).")
+            "within-chunk vs cross-chunk similarity vs sigma (the 16 blocks are chained as 2 chunks of 8). "
+            "SCOPE: computed on the FULL GLOBAL field of the event batch, not case-restricted.")
 
 
 DESCRIBERS = {
