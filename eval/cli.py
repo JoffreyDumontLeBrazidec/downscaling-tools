@@ -32,7 +32,7 @@ LOG = logging.getLogger(__name__)
 
 ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
-    "sigma", "mechanistic", "intermediate",
+    "sigma", "sigma_loss", "mechanistic", "intermediate",
     "spectra_ecmwf", "mlflow",
     "precip_dist", "precip_events",
     "interp",

@@ -1,3 +1,5 @@
+# SMOKE lane for the sigma_loss evaluator (M0 validation): 4-point grid + k=2.
+# Derived from o96_o320.yaml; only the sigma_loss block differs.
 predict:
   input_root: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -93,8 +95,8 @@ sigma:
 # Diagnostics-only; runs the model (requires --checkpoint, like sigma). The grid
 # is log-spaced through this lane lognormal heavy-tail band (sigma up to ~500).
 sigma_loss:
-  sigma_grid: [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 80.0, 150.0, 300.0, 500.0]
-  k: 16
+  sigma_grid: [0.1, 1.0, 80.0, 500.0]
+  k: 2
   seed: 1234
   variables: all
   extreme_band: [80.0, 500.0]
