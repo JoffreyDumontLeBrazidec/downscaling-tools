@@ -151,12 +151,16 @@ def _agg_repeats(recs: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 def permute_all_variables(prepared, run_pair, scorer, n_repeats,
-                          var_names_lres, var_names_hres, on_progress=None):
+                          var_names_lres, var_names_hres, var_names_ntgt=None,
+                          on_progress=None):
     """For each input variable, permute it across the batch and score against
     the paired baseline.
 
-    run_pair(group, x_perm, rep) -> (perm_out, base_out): forward the permuted
-    input and return it with the repeat-paired baseline output.
+    Covers up to THREE conditioning pathways: lres (x_interp), hres (x_hres) and
+    — when ``var_names_ntgt`` is given — the noised target itself (y_residual,
+    the 'noisy_hres' pathway). run_pair(group, x_perm, rep) -> (perm_out,
+    base_out): forward the permuted input and return it with the repeat-paired
+    baseline output.
     """
     x_interp = prepared["x_interp"]
     x_hres = prepared["x_hres"]
@@ -166,9 +170,11 @@ def permute_all_variables(prepared, run_pair, scorer, n_repeats,
             f"Need batch_size >= 2 for permutation, got {batch_size}. "
             "Pass more (date, member, step) bundles, e.g. --event franklin_o96_o320_m4.")
 
-    importance = {"lres": {}, "hres": {}}
-    for group, x_ref, names in (("lres", x_interp, var_names_lres),
-                                ("hres", x_hres, var_names_hres)):
+    groups = [("lres", x_interp, var_names_lres), ("hres", x_hres, var_names_hres)]
+    if var_names_ntgt is not None:
+        groups.append(("noisy", prepared["y_residual"], var_names_ntgt))
+    importance = {g[0]: {} for g in groups}
+    for group, x_ref, names in groups:
         n_vars = x_ref.shape[-1]
         for var_idx in range(n_vars):
             recs = []
@@ -220,13 +226,17 @@ def run_sigma_mode(bundle, prepared, args, target_indices, region_masks,
         def run_pair(group, x_perm, rep):
             if group == "lres":
                 out = denoise_at_sigma(bundle, x_perm, x_hres, y_residual, sigma, noise=noise)
-            else:
+            elif group == "hres":
                 out = denoise_at_sigma(bundle, x_interp, x_perm, y_residual, sigma, noise=noise)
+            else:  # 'noisy': x_perm is the permuted y_residual (noised target)
+                out = denoise_at_sigma(bundle, x_interp, x_hres, x_perm, sigma, noise=noise)
             return out, baseline_out
 
+        ntgt_names = var_names.get("output") if getattr(args, "permute_noisy", False) else None
         importance = permute_all_variables(
             prepared, run_pair, scorer, args.n_repeats,
-            var_names.get("input_lres"), var_names.get("input_hres"))
+            var_names.get("input_lres"), var_names.get("input_hres"),
+            var_names_ntgt=ntgt_names)
 
         # Legacy aggregate ratio (vs clean target) kept for back-compat plots.
         for group in importance:
@@ -235,7 +245,7 @@ def run_sigma_mode(bundle, prepared, args, target_indices, region_masks,
                 entry["importance_ratio_aggregate"] = float(
                     entry["paired_mse_aggregate"] / max(baseline_agg_mse, 1e-10))
 
-        sigma_results.append({
+        res = {
             "sigma": sigma,
             "surface_targets": list(target_indices.keys()),
             "regions": list(region_masks.keys()),
@@ -244,7 +254,10 @@ def run_sigma_mode(bundle, prepared, args, target_indices, region_masks,
             "baseline_region_per_target_mse": baseline_region,
             "lres_importance": importance["lres"],
             "hres_importance": importance["hres"],
-        })
+        }
+        if "noisy" in importance:
+            res["noisy_importance"] = importance["noisy"]
+        sigma_results.append(res)
     return {"sigma_results": sigma_results}
 
 
@@ -356,6 +369,9 @@ def main(argv=None):
     p.add_argument("--extreme-side", default="auto",
                    choices=["auto", "abs", "high", "low"],
                    help="Which tail; auto = low for msl (cyclones), abs otherwise.")
+    p.add_argument("--permute-noisy", action="store_true",
+                   help="Also permute the noised-target channels (the 'noisy_hres' "
+                        "pathway) -> noisy_importance (sigma mode only).")
     args = p.parse_args(argv)
     setup_logging()
 

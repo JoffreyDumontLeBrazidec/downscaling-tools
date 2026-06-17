@@ -1,0 +1,122 @@
+# o1280->o2560 UNIFIED lane — drives the multi-ds-unified Jupiter ckpt 9d6f73 through
+# eval.cli -> prepml -> anemoi-inference (UnifiedDownscalingRunner) on ac, 8xA100/2-node.
+# Mirrors o320_o1280_b785bf12_unified.yaml but for the 91-in / 9-out o2560 recipe:
+#   in_lres=91 (13 sfc + 6 pl x 13 lvl), in_hres=10 forcings (NO insolation), out_hres=9 surface.
+# shard_strategy=edges (heads OOMs the empty-2nd-node-shard on 8 ranks). Seed via CODEX_SAMPLER_SEED
+# (env, robust across the prepml runner chain) for the seeded manual-vs-prepml parity check.
+default_host: atos_ac_unified
+allowed_hosts:
+  prepare: [atos_ac_unified]
+  predict: [atos_ac_unified]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+prepare:
+  bundle_filename_tpl: "enfo_o1280_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to2_step006_input.grib"
+    lres_pl_grib:    "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to2_step006_input.grib"
+    hres_grib:       "/home/ecm5702/perm/reference/o1280_o2560/unified_91var/o2560-z-lsm.grib"
+    lres_sfc_channels:   "10u,10v,2d,2t,msl,skt,tcw,tcc,hcc,lcc,mcc,ssrd,strd"
+    lres_pl_channels:    "q,t,u,v,w,z"
+    target_sfc_channels: "NONE"
+    target_pl_channels:  "NONE"
+
+predict:
+  members: [1, 2]
+  steps: [6]
+  dates: ["20250926"]
+  num_gpus_per_model: 8
+  weather_states: ["10u", "10v", "2d", "2t", "msl", "skt", "tcw", "tp", "cp"]
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_SAMPLER_SEED: "1234"
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 1000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000.0
+    S_noise: 1.05
+    seed: 1234
+
+spectra:
+  fields: ["10u", "10v", "2t", "msl"]
+
+evaluator_groups:
+  default: []
+  diagnostics: []
+
+prepml:
+  debug_expvers: []
+  runner: anemoi-dev
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  input:
+    class: od
+    stream: enfo
+    type: pf
+    grid: O1280
+  output:
+    class: rd
+    stream: enfo
+    type: pf
+  output_template: /home/ecm5702/hpcperm/data/o2560-template.grib
+  forcings_npz: /home/ecm5702/hpcperm/data/o2560-forcings.npz
+  constant_high_res_forcings:
+    - cos_latitude
+    - cos_longitude
+    - lsm
+    - sin_latitude
+    - sin_longitude
+    - z
+  high_res_input:
+    - cos_julian_day
+    - cos_latitude
+    - cos_local_time
+    - cos_longitude
+    - lsm
+    - sin_julian_day
+    - sin_latitude
+    - sin_local_time
+    - sin_longitude
+    - z
+  truth:
+    root: /home/ecm5702/perm/reference/o1280_o2560/unified_91var
+  time_step: 6h
+  lead_time: 6h
+  platform:
+    gpu:
+      time: "0-00:30"
+      submit_arguments:
+        partition: gpu_debug
+        total_nodes: 2
+        gpus_per_node: 4
+        tasks_per_node: 4
+        RAW_PRAGMA:
+          - "#SBATCH --gres=gpu:4"
+          - "#SBATCH --qos=dg"
+
+resource_profiles:
+  predict:
+    qos: dg
+    nodes: 2
+    gpus: 4
+    ntasks_per_node: 4
+    time: "00:30:00"
+    mem: "0"
+    cpus: 8

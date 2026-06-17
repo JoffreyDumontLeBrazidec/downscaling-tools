@@ -547,11 +547,27 @@ def add_region_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
 def get_hres_lat_lon(bundle, split: str = "valid"):
     """Return (lat, lon) numpy arrays for the hres output grid from the datamodule.
 
-    Mirrors predict.py: ``data.latitudes[2]`` / ``data.longitudes[2]``.
+    Single-DS mirrors predict.py: ``data.latitudes[2]`` / ``data.longitudes[2]``.
+    Unified datamodules expose ``data`` as a dict keyed by dataset; the hres
+    output grid is ``data["out_hres"]``.
     """
     dm = bundle.datamodule
     ds = dm.ds_valid if split == "valid" else dm.ds_train
     data = ds.data
+
+    if getattr(bundle, "unified", False) or isinstance(data, dict):
+        d = data["out_hres"] if "out_hres" in data else next(iter(data.values()))
+        lat = np.asarray(d.latitudes)
+        lon = np.asarray(d.longitudes)
+        # If the dataset still nests multiple resolutions, take the hres one
+        # (the array with the most points).
+        if lat.dtype == object or lat.ndim > 1:
+            cand_lat = list(lat)
+            cand_lon = list(lon)
+            k = max(range(len(cand_lat)), key=lambda i: np.size(cand_lat[i]))
+            lat, lon = np.asarray(cand_lat[k]), np.asarray(cand_lon[k])
+        return lat, lon
+
     lat = np.asarray(data.latitudes[2])
     lon = np.asarray(data.longitudes[2])
     return lat, lon

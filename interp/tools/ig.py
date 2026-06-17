@@ -198,9 +198,15 @@ def resolve_tail_side(side: str, tname: str) -> str:
 # ---------------------------------------------------------------------------
 
 def integrated_gradients(bundle, prepared, sigma, noise, target_indices,
-                         specs, n_steps, baseline_li, baseline_h,
+                         specs, n_steps, baseline_li, baseline_h, baseline_y,
                          pairs_per_pass=8):
-    """Return {(functional, target): (attr_li, attr_h)} for one sigma.
+    """Return {(functional, target): (attr_li, attr_h, attr_y)} for one sigma.
+
+    Three conditioning pathways are attributed along the SAME baseline->input
+    path: lres conditioning (x_interp), hres forcings (x_hres) and the NOISED
+    TARGET itself (y_residual, the 'noisy_hres' pathway — what the denoiser is
+    handed to refine). The diffusion noise is held fixed; only the clean signal
+    y_residual is integrated from its baseline.
 
     One forward per path-step is shared across a CHUNK of (functional, target)
     scalars; one backward per scalar (retain_graph) reuses that forward graph.
@@ -216,31 +222,36 @@ def integrated_gradients(bundle, prepared, sigma, noise, target_indices,
 
     diff_li = x_interp - baseline_li
     diff_h = x_hres - baseline_h
+    diff_y = y_res - baseline_y
 
     pairs = [(f, t) for f in specs for t in target_indices]
     chunks = [pairs[i:i + pairs_per_pass] for i in range(0, len(pairs), pairs_per_pass)]
     grads_li = {key: torch.zeros_like(x_interp) for key in pairs}
     grads_h = {key: torch.zeros_like(x_hres) for key in pairs}
+    grads_y = {key: torch.zeros_like(y_res) for key in pairs}
 
     for k in range(n_steps):
         alpha = (k + 0.5) / n_steps
         for chunk in chunks:
             xi = (baseline_li + alpha * diff_li).detach().requires_grad_(True)
             xh = (baseline_h + alpha * diff_h).detach().requires_grad_(True)
-            out = denoise_at_sigma_grad(bundle, xi, xh, y_res, sigma, noise)
+            yt = (baseline_y + alpha * diff_y).detach().requires_grad_(True)
+            out = denoise_at_sigma_grad(bundle, xi, xh, yt, sigma, noise)
             for i, (fkey, tname) in enumerate(chunk):
                 scalar = _apply_functional(out, target_indices[tname], tname, specs[fkey])
-                gi, gh = torch.autograd.grad(
-                    scalar, [xi, xh], retain_graph=(i < len(chunk) - 1))
+                gi, gh, gy = torch.autograd.grad(
+                    scalar, [xi, xh, yt], retain_graph=(i < len(chunk) - 1))
                 grads_li[fkey, tname] += gi.detach()
                 grads_h[fkey, tname] += gh.detach()
-            del out, xi, xh
+                grads_y[fkey, tname] += gy.detach()
+            del out, xi, xh, yt
 
     attrs = {}
     for key in pairs:
         attr_li = diff_li * (grads_li[key] / n_steps)
         attr_h = diff_h * (grads_h[key] / n_steps)
-        attrs[key] = (attr_li.detach(), attr_h.detach())
+        attr_y = diff_y * (grads_y[key] / n_steps)
+        attrs[key] = (attr_li.detach(), attr_h.detach(), attr_y.detach())
     return attrs
 
 
@@ -272,10 +283,21 @@ def _summarize(attr, names):
     return per_var, per_cell
 
 
-def _coherence(agg, lat, lon, eye_lat, eye_lon):
+# Probe-relative locality buffer (km) added to the output-disk radius: "how
+# much influence sits inside the disk, and inside the disk + this buffer".
+PROBE_BUFFER_KM = 350.0
+# Distance-grid edges (km) for the radial cumulative-attribution profiles.
+RADIAL_EDGES_KM = list(range(0, 3001, 100))
+
+
+def _coherence(agg, lat, lon, eye_lat, eye_lon, probe_r_km=None):
     """Spatial-coherence summary of a nonneg per-cell influence field `agg`.
 
     Answers: is the model's influence on the probe LOCAL to the storm or remote?
+    Distances are measured from THIS member's own probe centre, so the summary
+    is storm-relative and safe to average across ensemble members. When the
+    output-disk radius is known, also reports the fraction inside the disk and
+    inside disk + PROBE_BUFFER_KM (probe-relative locality, item 3).
     """
     d = haversine_km(eye_lat, norm_lon(eye_lon), norm_lon(lat), norm_lon(lon))
     total = float(agg.sum())
@@ -288,7 +310,7 @@ def _coherence(agg, lat, lon, eye_lat, eye_lon):
     centroid_lat = float((w * lat).sum())
     centroid_dist = float(haversine_km(
         eye_lat, norm_lon(eye_lon), np.array([centroid_lat]), np.array([centroid_lon]))[0])
-    return {
+    out = {
         "total_influence": total,
         "frac_within_200km": float(agg[d <= 200].sum() / total),
         "frac_within_500km": float(agg[d <= 500].sum() / total),
@@ -298,6 +320,31 @@ def _coherence(agg, lat, lon, eye_lat, eye_lon):
         "centroid_offset_km": centroid_dist,
         "effective_radius_km": float((w * d).sum()),
     }
+    if probe_r_km:
+        out["probe_radius_km"] = float(probe_r_km)
+        out["frac_within_probe"] = float(agg[d <= probe_r_km].sum() / total)
+        out["frac_within_probe_plus_buffer"] = float(
+            agg[d <= probe_r_km + PROBE_BUFFER_KM].sum() / total)
+        out["buffer_km"] = PROBE_BUFFER_KM
+    return out
+
+
+def _radial_cdf(agg_per_var, names, lat, lon, center, edges):
+    """Cumulative |attribution| vs distance, per variable, storm-relative.
+
+    agg_per_var: (n_cells, n_vars) NONNEG influence (already |.| and summed over
+    targets). Returns {varname: [cum-fraction at each edge]} measured from
+    `center`. Storm-relative, so averageable across members.
+    """
+    d = haversine_km(center[0], norm_lon(center[1]), norm_lon(lat), norm_lon(lon))
+    edges = np.asarray(edges, dtype=float)
+    within = d[:, None] <= edges[None, :]            # (n_cells, n_edges)
+    cum = (agg_per_var[:, :, None] * within[:, None, :]).sum(axis=0)  # (n_vars, n_edges)
+    tot = agg_per_var.sum(axis=0)                     # (n_vars,)
+    tot = np.where(tot > 0, tot, 1.0)
+    frac = cum / tot[:, None]
+    return {names.get(v, f"var_{v}"): frac[v].astype(float).tolist()
+            for v in range(agg_per_var.shape[1])}
 
 
 def _zoom_maps(per_cell, names, lat, lon, center, zoom_deg, topk,
@@ -335,6 +382,51 @@ def _zoom_maps(per_cell, names, lat, lon, center, zoom_deg, topk,
 
 
 # ---------------------------------------------------------------------------
+# multi-member averaging helpers (alignment-safe: scalars & storm-relative
+# locality are averaged across ensemble members; maps come from member 0)
+# ---------------------------------------------------------------------------
+
+def _baselines(kind, prepared):
+    xi, xh, yr = prepared["x_interp"], prepared["x_hres"], prepared["y_residual"]
+    if kind == "zeros":
+        return torch.zeros_like(xi), torch.zeros_like(xh), torch.zeros_like(yr)
+    if kind == "mean":
+        def _m(t):
+            return t.mean(dim=(0, 1, 2, 3), keepdim=True).expand_as(t).contiguous()
+        return _m(xi), _m(xh), _m(yr)
+    raise SystemExit(f"unknown --baseline {kind!r}")
+
+
+def _accum_pv(dst, pv):
+    for k, v in pv.items():
+        d = dst.setdefault(k, {"name": v["name"], "mean_abs": 0.0, "signed_mean": 0.0})
+        d["mean_abs"] += v["mean_abs"]
+        d["signed_mean"] += v["signed_mean"]
+
+
+def _mean_pv(dst, n):
+    return {k: {"name": v["name"], "mean_abs": v["mean_abs"] / n,
+                "signed_mean": v["signed_mean"] / n} for k, v in dst.items()}
+
+
+def _accum_dict(dst, d):
+    for k, v in d.items():
+        if isinstance(v, (int, float)):
+            dst[k] = dst.get(k, 0.0) + float(v)
+
+
+def _accum_curves(dst, curves):
+    for name, ys in curves.items():
+        prev = dst.get(name)
+        dst[name] = list(ys) if prev is None else [a + b for a, b in zip(prev, ys)]
+
+
+def _probe_radius(fkey, boxes_meta):
+    key = fkey.split(":", 1)[1] if fkey.startswith("box:") else fkey
+    return (boxes_meta.get(key, {}) or {}).get("radius_km")
+
+
+# ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
 
@@ -351,61 +443,108 @@ def run_integrated_gradients(args):
 
     bundle_dir, dates, members, steps, _ = resolve_event_args(args)
     eb = collect_event_bundles(bundle, bundle_dir, dates, members, steps)
-    if eb.x_lres.shape[0] > 1:
-        LOGGER.warning("IG forward is batched; encoder mis-assembles batch>1 — "
-                       "got batch %d, results for elements >0 are unreliable.",
-                       eb.x_lres.shape[0])
+    n_members = int(eb.x_lres.shape[0])
     lat_lres, lon_lres, lat_hres, lon_hres = eb.coords
-    y = eb.y.to(bundle.device)
+    LOGGER.info("IG over %d ensemble member(s): maps + storm centre from member 0; "
+                "driver bars, coherence and radial locality averaged storm-relative.",
+                n_members)
 
-    prepared = prepare_batch(bundle, eb.x_lres, eb.x_hres, y)
-    xi_grid = prepared["x_interp"].shape[-2]
-    xh_grid = prepared["x_hres"].shape[-2]
+    lres_names = vn["input_lres"]            # idx -> name (lres conditioning)
+    hres_names = vn["input_hres"]            # idx -> name (hres forcings)
+    ntgt_names = vn.get("output", {})        # idx -> name (noised-target channels)
 
-    # x_interp lives on the HRES grid (lres is interpolated up); x_hres too.
     def _coords_for(n):
         if n == len(lat_hres):
             return lat_hres, lon_hres
         if n == len(lat_lres):
             return lat_lres, lon_lres
-        raise ValueError(
-            f"grid size {n} matches neither hres({len(lat_hres)}) nor lres({len(lat_lres)})")
+        raise ValueError(f"grid size {n} matches neither hres nor lres")
 
-    lat_xi, lon_xi = _coords_for(xi_grid)
-    _coords_for(xh_grid)
+    # Cross-member accumulators (alignment-safe averaging).
+    acc = {}            # (fkey, tname, sigma) -> running sums of scalars/coherence
+    member0_zoom = {}   # (fkey, tname, sigma) -> zoom maps from member 0 only
+    radial_acc = {}     # (fkey, sigma) -> running sums of per-var radial CDFs
+    specs0 = boxes_meta0 = None
+    lat_xi = lon_xi = None
 
-    # Probe field for box/eye auto-detection on the hres grid. The detector
-    # finds the MINIMUM, so msl is used as-is (cyclone center) and tp is
-    # negated (heaviest-precip center).
-    probe_field = None
-    if y.shape[-2] == len(lat_hres):
-        p_idx = target_indices.get(args.probe_field)
-        if p_idx is not None:
-            f = y[0, 0, 0, :, p_idx].cpu().numpy()
-            probe_field = f if args.probe_field == "msl" else -f
-        else:
-            LOGGER.warning("probe field %r not in this checkpoint's targets %s",
-                           args.probe_field, list(target_indices))
+    for m in range(n_members):
+        prepared = prepare_batch(bundle, eb.x_lres[m:m + 1], eb.x_hres[m:m + 1],
+                                 eb.y[m:m + 1])
+        y_m = eb.y[m:m + 1].to(bundle.device)
+        lat_xi, lon_xi = _coords_for(prepared["x_interp"].shape[-2])
 
-    specs, boxes_meta = build_functional_specs(
-        args, bundle, target_indices, y, lat_hres, lon_hres, probe_field,
-        functionals, args.boxes)
+        # Probe field for THIS member, so the eye is centred on its own storm.
+        probe_field = None
+        if y_m.shape[-2] == len(lat_hres):
+            p_idx = target_indices.get(args.probe_field)
+            if p_idx is not None:
+                f = y_m[0, 0, 0, :, p_idx].cpu().numpy()
+                probe_field = f if args.probe_field == "msl" else -f
+        specs, boxes_meta = build_functional_specs(
+            args, bundle, target_indices, y_m, lat_hres, lon_hres, probe_field,
+            functionals, args.boxes)
+        if m == 0:
+            specs0, boxes_meta0 = specs, boxes_meta
+        base_li, base_h, base_y = _baselines(args.baseline, prepared)
 
-    # Baselines for the IG path integral.
-    if args.baseline == "zeros":
-        base_li = torch.zeros_like(prepared["x_interp"])
-        base_h = torch.zeros_like(prepared["x_hres"])
-    elif args.baseline == "mean":
-        base_li = prepared["x_interp"].mean(dim=(0, 1, 2, 3), keepdim=True).expand_as(
-            prepared["x_interp"]).contiguous()
-        base_h = prepared["x_hres"].mean(dim=(0, 1, 2, 3), keepdim=True).expand_as(
-            prepared["x_hres"]).contiguous()
-    else:
-        raise SystemExit(f"unknown --baseline {args.baseline!r}")
+        for sigma in args.sigmas:
+            LOGGER.info("member %d/%d, IG at sigma=%.3f", m, n_members, sigma)
+            noise = torch.randn_like(prepared["y_residual"])
+            attrs = integrated_gradients(
+                bundle, prepared, sigma, noise, target_indices, specs,
+                args.ig_steps, base_li, base_h, base_y,
+                pairs_per_pass=args.pairs_per_pass)
+            fvals = _functional_values(bundle, prepared, sigma, noise,
+                                       target_indices, specs)
 
-    lres_names = vn["input_lres"]   # idx -> name
-    hres_names = vn["input_hres"]
+            for fkey, spec in specs.items():
+                center = spec.get("center")
+                probe_r = _probe_radius(fkey, boxes_meta)
+                agg = {"lres": None, "hres": None, "ntgt": None}  # sum |attr| over targets
+                cells = {}
+                for tname in target_indices:
+                    attr_li, attr_h, attr_y = attrs[fkey, tname]
+                    lres_pv, lres_cell = _summarize(attr_li, lres_names)
+                    hres_pv, hres_cell = _summarize(attr_h, hres_names)
+                    ntgt_pv, ntgt_cell = _summarize(attr_y, ntgt_names)
+                    key = (fkey, tname, sigma)
+                    a = acc.setdefault(key, {"F": 0.0, "n": 0, "lres": {},
+                                             "hres": {}, "ntgt": {}, "coh": {}})
+                    a["n"] += 1
+                    a["F"] += fvals[fkey, tname]
+                    _accum_pv(a["lres"], lres_pv)
+                    _accum_pv(a["hres"], hres_pv)
+                    _accum_pv(a["ntgt"], ntgt_pv)
+                    if center is not None:
+                        coh = _coherence(np.abs(lres_cell).sum(axis=1), lat_xi, lon_xi,
+                                         center[0], center[1], probe_r_km=probe_r)
+                        _accum_dict(a["coh"], coh)
+                        for grp, cell in (("lres", lres_cell), ("hres", hres_cell),
+                                          ("ntgt", ntgt_cell)):
+                            agg[grp] = np.abs(cell) if agg[grp] is None else agg[grp] + np.abs(cell)
+                        if m == 0:
+                            t_idx = target_indices[tname]
+                            obs = (y_m[0, 0, 0, :, t_idx].cpu().numpy()
+                                   if y_m.shape[-2] == len(lat_xi) else None)
+                            self_idx = next((i for i, n in lres_names.items()
+                                             if n == tname), None)
+                            member0_zoom[key] = _zoom_maps(
+                                lres_cell, lres_names, lat_xi, lon_xi, center,
+                                args.zoom_deg, args.topk_zoom, obs=obs,
+                                must_include=self_idx)
+                if center is not None and agg["lres"] is not None:
+                    rk = (fkey, sigma)
+                    r = radial_acc.setdefault(rk, {"n": 0, "lres": {}, "hres": {},
+                                                   "ntgt": {}})
+                    r["n"] += 1
+                    _accum_curves(r["lres"], _radial_cdf(agg["lres"], lres_names,
+                                  lat_xi, lon_xi, center, RADIAL_EDGES_KM))
+                    _accum_curves(r["hres"], _radial_cdf(agg["hres"], hres_names,
+                                  lat_xi, lon_xi, center, RADIAL_EDGES_KM))
+                    _accum_curves(r["ntgt"], _radial_cdf(agg["ntgt"], ntgt_names,
+                                  lat_xi, lon_xi, center, RADIAL_EDGES_KM))
 
+    # ---- assemble averaged results -----------------------------------------
     all_results = {
         "checkpoint": args.checkpoint,
         "ckpt_id": ckpt_id_from_path(args.checkpoint),
@@ -413,62 +552,44 @@ def run_integrated_gradients(args):
         "data_source": "bundles",
         "bundle_paths": [str(p) for p in eb.paths],
         "surface_targets": list(target_indices.keys()),
-        "functionals": list(specs.keys()),
-        "boxes": boxes_meta,
+        "functionals": list(specs0.keys()),
+        "boxes": boxes_meta0,
         "ig_steps": args.ig_steps,
         "baseline": args.baseline,
-        "batch_size": int(eb.x_lres.shape[0]),
+        "batch_size": n_members,
+        "n_samples": n_members,
+        "maps_from_member": 0,
         "sigmas": list(args.sigmas),
         "map_sigma": args.map_sigma,
         "zoom_deg": args.zoom_deg,
+        "probe_buffer_km": PROBE_BUFFER_KM,
         "tail_percentile": getattr(args, "tail_percentile", None),
         "lres_var_names": {str(k): v for k, v in lres_names.items()},
         "hres_var_names": {str(k): v for k, v in hres_names.items()},
+        "ntgt_var_names": {str(k): v for k, v in ntgt_names.items()},
         "results": [],
+        "radial_locality": [],
     }
-
-    for sigma in args.sigmas:
-        LOGGER.info("IG at sigma=%.3f", sigma)
-        # noise held FIXED across the whole baseline->input path for this sigma
-        noise = torch.randn_like(prepared["y_residual"])
-        attrs = integrated_gradients(
-            bundle, prepared, sigma, noise, target_indices, specs,
-            args.ig_steps, base_li, base_h, pairs_per_pass=args.pairs_per_pass)
-        fvals = _functional_values(bundle, prepared, sigma, noise,
-                                   target_indices, specs)
-        store_maps = (args.map_sigma is not None and abs(sigma - args.map_sigma) < 1e-9)
-
-        for fkey, spec in specs.items():
-            for tname in target_indices:
-                attr_li, attr_h = attrs[fkey, tname]
-                lres_pv, lres_cell = _summarize(attr_li, lres_names)
-                hres_pv, _ = _summarize(attr_h, hres_names)
-                entry = {
-                    "sigma": sigma,
-                    "functional": fkey,
-                    "target": tname,
-                    "F_value": fvals[fkey, tname],
-                    "lres": lres_pv,
-                    "hres": hres_pv,
-                }
-                center = spec.get("center")
-                if center is not None:
-                    agg_lres = np.abs(lres_cell).sum(axis=1)
-                    entry["coherence"] = _coherence(agg_lres, lat_xi, lon_xi,
-                                                    center[0], center[1])
-                    # Per-cell maps only for storm-centered probes at map_sigma
-                    # (full-res zoom of WHERE the input drivers live).
-                    if store_maps:
-                        t_idx = target_indices[tname]
-                        obs = (y[0, 0, 0, :, t_idx].cpu().numpy()
-                               if y.shape[-2] == len(lat_xi) else None)
-                        self_idx = next((i for i, n in lres_names.items()
-                                         if n == tname), None)
-                        entry["zoom"] = _zoom_maps(lres_cell, lres_names, lat_xi,
-                                                   lon_xi, center, args.zoom_deg,
-                                                   args.topk_zoom, obs=obs,
-                                                   must_include=self_idx)
-                all_results["results"].append(entry)
+    for (fkey, tname, sigma), a in acc.items():
+        n = a["n"]
+        entry = {"sigma": sigma, "functional": fkey, "target": tname,
+                 "F_value": a["F"] / n,
+                 "lres": _mean_pv(a["lres"], n), "hres": _mean_pv(a["hres"], n),
+                 "ntgt": _mean_pv(a["ntgt"], n)}
+        if a["coh"]:
+            entry["coherence"] = {k: v / n for k, v in a["coh"].items()}
+        z = member0_zoom.get((fkey, tname, sigma))
+        if z is not None:
+            entry["zoom"] = z
+        all_results["results"].append(entry)
+    for (fkey, sigma), r in radial_acc.items():
+        n = r["n"]
+        all_results["radial_locality"].append({
+            "functional": fkey, "sigma": sigma, "edges_km": RADIAL_EDGES_KM,
+            "lres": {k: [y / n for y in ys] for k, ys in r["lres"].items()},
+            "hres": {k: [y / n for y in ys] for k, ys in r["hres"].items()},
+            "ntgt": {k: [y / n for y in ys] for k, ys in r["ntgt"].items()},
+        })
 
     results_file = output_path / "integrated_gradients.json"
     with open(results_file, "w") as f:
@@ -505,7 +626,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Integrated Gradients (Tier-2) for AIFSDD")
     add_model_args(p)
     add_event_args(p)
-    add_sigma_args(p)
+    # IG default sigma ladder: 1, 5, 50 (low / mid / high noise regime).
+    # Always these three unless overridden on the CLI.
+    add_sigma_args(p, default=[1.0, 5.0, 50.0])
     p.add_argument("--functionals", default="global_mean,box,eye",
                    help="comma list of: global_mean, box, eye, tail, spectral")
     p.add_argument("--boxes", nargs="*", default=["franklin:auto"],
@@ -517,13 +640,15 @@ def main(argv=None):
     p.add_argument("--baseline", default="zeros", choices=["zeros", "mean"],
                    help="IG baseline: zeros (default) or per-variable climatology mean")
     p.add_argument("--map-sigma", type=float, default=5.0,
-                   help="store per-cell attribution maps only at this sigma")
+                   help="the renderer's DEFAULT display sigma for the zoom maps "
+                        "(maps themselves are stored at every sigma)")
     p.add_argument("--eye-radius-km", type=float, default=150.0,
                    help="radius of the 'eye' extreme-core functional")
     p.add_argument("--zoom-deg", type=float, default=12.0,
                    help="half-width (deg) of stored zoom maps around the storm center")
-    p.add_argument("--topk-zoom", type=int, default=4,
-                   help="per-variable zoom maps for the top-K input vars")
+    p.add_argument("--topk-zoom", type=int, default=8,
+                   help="per-variable zoom maps for the top-K input vars "
+                        "(stored at every sigma; the renderer shows a subset)")
     p.add_argument("--auto-window", default=None,
                    help="lat0,lat1,lon0,lon1 (deg, lon 0..360) for storm auto-detect")
     p.add_argument("--probe-field", default="msl", choices=["msl", "tp"],

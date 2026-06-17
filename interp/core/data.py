@@ -38,6 +38,17 @@ EVENTS: dict[str, dict] = {
         "peak_bundle": ("/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia/"
                         "eefo_o96_0001_date20230826_time0000_mem01_step072h_input_bundle.nc"),
     },
+    # Same storm at the o320->o1280 lane (the "disease" lane for the TC gap).
+    # Source: the 181be03e o320_o1280 manual-eval bundles_with_y (eefo_o320 input
+    # bundles carry the o1280 target). Naming matches find_bundles' glob.
+    "franklin_o320_o1280": {
+        "bundle_dir": ("/home/ecm5702/perm/eval/"
+                       "manual_181be03e_new_o320_o1280_20260421_manual_eval/data/bundles_with_y"),
+        "dates": ["20230826"],
+        "members": ["01"],
+        "steps": ["048"],
+        "label": "franklin",
+    },
     # Same window, 4 members -> batch_size 4 (needed by permutation).
     "franklin_o96_o320_m4": {
         "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia",

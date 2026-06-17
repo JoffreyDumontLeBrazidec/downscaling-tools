@@ -47,11 +47,20 @@ def _num_gpus_per_model(predict: dict) -> int:
     return num_gpus
 
 
-def _model_runner_config(num_gpus_per_model: int) -> str | dict[str, dict[str, str]]:
-    """Build the PrepML/anemoi-inference runner stanza."""
+def _model_runner_config(
+    num_gpus_per_model: int, base_runner: str = "downscaling"
+) -> str | dict[str, dict[str, str]]:
+    """Build the PrepML/anemoi-inference runner stanza.
+
+    ``base_runner`` selects the anemoi-inference runner the prepml ``anemoi`` task
+    instantiates. Default ``"downscaling"`` = the fork DS 2-tensor runner.
+    ``"downscaling_unified"`` = the UnifiedDownscalingRunner driving the
+    multi-ds-unified dict-batch checkpoints (registered via runner.venv
+    sitecustomize). Read from lane ``prepml.base_runner``.
+    """
     if num_gpus_per_model == 1:
-        return "downscaling"
-    return {"parallel": {"base_runner": "downscaling"}}
+        return base_runner
+    return {"parallel": {"base_runner": base_runner}}
 
 
 def _gpu_submit_arguments(prepml: dict, num_gpus_per_model: int) -> dict[str, Any]:
@@ -149,7 +158,9 @@ def generate_prepml_config(
         },
         "model": {
             "name": "anemoi",
-            "runner": _model_runner_config(num_gpus_per_model),
+            "runner": _model_runner_config(
+                num_gpus_per_model, prepml.get("base_runner", "downscaling")
+            ),
             "checkpoint": str(checkpoint_path),
             "lead_time": lead_time,
             "development_hacks": {

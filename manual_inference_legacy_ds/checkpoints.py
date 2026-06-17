@@ -67,35 +67,11 @@ def get_checkpoint(dir_exp, name_exp, name_ckpt):
     return checkpoint, config_checkpoint
 
 
-def adapt_config_hpc(config_checkpoint, config=None):
-    """Adapt checkpoint config paths for the local HPC.
-
-    Two modes:
-      * Legacy single-DS (``config`` provided): copy ``hardware.paths`` from an
-        externally composed anemoi-config (see ``instantiate_config``). Used by
-        the sigma evaluator / older single-dataset lanes.
-      * Unified multi-ds (``config is None``): the config is checkpoint-native, so
-        only inject ``hardware.paths`` from env vars where those keys exist. The
-        unified anemoi-config resolves data/grid/residual/truncation locations from
-        ``${oc.env:DATA_DIR|GRID_DIR|RESIDUAL_STATISTICS_DIR|INTER_MAT_DIR}`` in
-        ``system.input.*`` at access time, so those env vars must be exported by
-        the runtime (handled by the eval host config).
-    """
-    if config is not None:
-        config_checkpoint.hardware.paths = OmegaConf.to_container(
-            config.hardware.paths, resolve=True
-        )
-        return config_checkpoint
-
-    hw_paths = {
-        "data": os.environ.get("DATA_DIR", "/home/mlx/ai-ml/datasets/"),
-        "output": os.environ.get("OUTPUT", "/ec/res4/scratch/ecm5702/aifs"),
-        "grids": os.environ.get("GRID_DIR", "/home/mlx/ai-ml/grids/"),
-    }
-    if hasattr(config_checkpoint, "hardware") and hasattr(config_checkpoint.hardware, "paths"):
-        for k, v in hw_paths.items():
-            if hasattr(config_checkpoint.hardware.paths, k):
-                setattr(config_checkpoint.hardware.paths, k, v)
+def adapt_config_hpc(config_checkpoint, config):
+    # config_checkpoint.hardware.paths = config.hardware.paths
+    config_checkpoint.hardware.paths = OmegaConf.to_container(
+        config.hardware.paths, resolve=True
+    )
     return config_checkpoint
 
 

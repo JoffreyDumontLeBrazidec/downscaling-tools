@@ -53,7 +53,7 @@ CKPT_ID="${3:?CKPT_ID}"
 shift 3
 # Convert dash-less key[=value] extras into --key value tool flags.
 # Comma-split values only for keys that argparse declares as nargs lists.
-NARGS_KEYS=" sigmas modes dates members steps run-dirs storm-center "
+NARGS_KEYS=" sigmas modes dates members steps run-dirs storm-center seeds ceiling-sigmas seed-sigmas "
 EXTRA=()
 for kv in "$@"; do
   if [[ "$kv" == *=* ]]; then
@@ -107,6 +107,10 @@ case "${TOOL}" in
   ig)
     # IG needs batch 1: single-member event
     run_tool ig integrated_gradients --event franklin_o96_o320 "$@"
+    ;;
+  trajectory)
+    # batch-1, single-member event; o320->o1280 via INTERP_EVENT=franklin_o320_o1280
+    run_tool trajectory trajectory --event "${INTERP_EVENT:-franklin_o96_o320}" "$@"
     ;;
   report)
     python -m interp.viz --run-dir "${OUT_ROOT}" "$@"

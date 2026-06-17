@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -69,6 +70,40 @@ def test_cli_evaluate_rejects_quaver_only(tmp_path):
     )
     assert result.returncode != 0
     assert "Unknown evaluator(s) in --only: ['quaver']" in result.stderr
+
+
+def test_run_evaluators_raises_when_evaluator_run_fails(tmp_path, monkeypatch):
+    """Evaluator run() exceptions must fail the CLI/job instead of producing empty scores."""
+    from eval import cli as eval_cli
+
+    evaluator_name = "broken_for_test"
+    module_name = f"eval.evaluators.{evaluator_name}"
+    fake_module = types.ModuleType(module_name)
+
+    def run(*args, **kwargs):
+        raise FileNotFoundError("No predictions_*.nc files found in rendered path")
+
+    fake_module.EVALUATOR_SPEC = {}
+    fake_module.run = run
+
+    monkeypatch.setitem(sys.modules, module_name, fake_module)
+    monkeypatch.setattr(eval_cli, "ALL_EVALUATORS", [evaluator_name])
+
+    with pytest.raises(RuntimeError, match="broken_for_test.run"):
+        eval_cli._run_evaluators(
+            tmp_path / "predictions",
+            {},
+            [evaluator_name],
+            tmp_path,
+        )
+
+
+def test_run_scoreboard_raises_when_no_scores(tmp_path):
+    """A scoreboard with no records is a failed evaluation, not a successful empty result."""
+    from eval import cli as eval_cli
+
+    with pytest.raises(RuntimeError, match="Scoreboard produced no scores"):
+        eval_cli._run_scoreboard(tmp_path, {}, ["tc"], tmp_path)
 
 
 def test_cli_predict_num_gpus_per_model_override():

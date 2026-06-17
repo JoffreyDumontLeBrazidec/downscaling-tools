@@ -1,0 +1,33 @@
+# Unified multi-ds eval host: same machine as atos_ac (AC, x86_64) but runs on the
+# unified ds-260612 runtime (multi-ds-unified anemoi-core) instead of .ds-dyn.
+# Use with `--host atos_ac_unified` to eval unified / multi-ds checkpoints natively
+# via eval.cli (manual_inference now speaks the unified dict-batch predict_step).
+code_root: /home/ecm5702/dev/downscaling-tools
+scratch_root: /home/ecm5702/scratch
+perm_root: /home/ecm5702/perm
+venv: /home/ecm5702/dev/.ds-260612
+
+scheduler:
+  qos: nf
+  default_time: "04:00:00"
+  default_mem: 64G
+  default_cpus: 16
+
+environment_setup:
+  module_loads:
+    - ecmwf-toolbox
+  exports:
+    DATA_DIR: /home/mlx/ai-ml/datasets/
+    DATA_STABLE_DIR: /home/mlx/ai-ml/datasets/stable/
+    OUTPUT: /ec/res4/scratch/ecm5702/aifs
+    GRID_DIR: /home/mlx/ai-ml/grids/
+    INTER_MAT_DIR: /home/ecm5702/hpcperm/data/inter_mat
+    RESIDUAL_STATISTICS_DIR: /home/ecm5702/hpcperm/data/residuals_statistics/
+    HYDRA_FULL_ERROR: "1"
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    TORCHINDUCTOR_COMPILE_THREADS: "1"
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+  # Sources the runtime selection layer: activates .ds-260612, sets PYTHONPATH, and
+  # hard-asserts anemoi-core == multi-ds-unified@<sha>. See runtimes/_lib.sh.
+  venv_activate: /home/ecm5702/dev/runtimes/ds-260612/activate.sh

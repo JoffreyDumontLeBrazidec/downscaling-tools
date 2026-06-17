@@ -66,8 +66,11 @@ def plot(
             LOG.error("interp.viz failed for %s (exit %d) — skipping", rd.name,
                       exc.returncode)
             continue
-        for pdf in sorted((rd / "plots").glob("*.pdf")):
-            shutil.copy2(pdf, plots_dir / f"interp_{rd.name}_{pdf.name}")
+        # Mirror the report PDF(s) AND the method-description markdown so the
+        # eval run carries the methods alongside the figures.
+        for artifact in sorted((rd / "plots").glob("*.pdf")) + \
+                sorted((rd / "plots").glob("*.md")):
+            shutil.copy2(artifact, plots_dir / f"interp_{rd.name}_{artifact.name}")
             n_mirrored += 1
-    LOG.info("interp.plot: mirrored %d PDFs to %s", n_mirrored, plots_dir)
+    LOG.info("interp.plot: mirrored %d artifacts to %s", n_mirrored, plots_dir)
     return plots_dir

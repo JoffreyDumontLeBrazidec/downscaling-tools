@@ -65,6 +65,8 @@ def main(argv=None):
         "activations": ("interp.tools.activations", "activation norms + CKA layer similarity"),
         "patching": ("interp.tools.patching", "causal activation patching (residual/grid_region/stage)"),
         "ig": ("interp.tools.ig", "integrated gradients (mean/box/eye/tail/spectral functionals)"),
+        "trajectory": ("interp.tools.trajectory",
+                       "x̂₀ birth-commit-erase trajectory (storm-core intensity vs σ)"),
         "report": ("interp.viz.report", "render the per-checkpoint PDF report from JSONs"),
         "compare": ("interp.compare", "summary-scalar comparison across run dirs"),
     }

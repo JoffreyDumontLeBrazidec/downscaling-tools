@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import os
 import re
@@ -17,8 +16,10 @@ from manual_inference.checkpoints import (
     adapt_config_hpc,
     get_checkpoint,
     get_datamodule,
+    instantiate_config,
     to_omegaconf,
 )
+from manual_inference.config import BUNDLE_IMPLICIT_HRES_FEATURES
 from manual_inference.config import DATASET_PATH_REWRITE_PREFIXES
 from manual_inference.config import DEFAULT_CKPT_ROOT
 from manual_inference.config import DEFAULT_EXPERIMENTS_DIR
@@ -26,7 +27,8 @@ from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 
 # Re-export for backward compatibility — external callers import these from here.
 __all__ = ["DEFAULT_EXTRA_ARGS_JSON"]
-from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
+from manual_inference.input_data_construction.bundle import extract_target_from_bundle
+from manual_inference.input_data_construction.bundle import find_missing_explicit_hres_inputs
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
 from manual_inference.input_data_construction.bundle import open_bundle_dataset
 from manual_inference.input_data_construction.bundle import parse_channel_subset_csv as _parse_channel_subset_csv
@@ -43,41 +45,6 @@ _JUPITER_RUNTIME_RE = re.compile(
     r"^/e/home/jusers/dumontlebrazidec1/jupiter/dev/\.runtime_datasets/[^/]+/"
 )
 _JUPITER_RUNTIME_LOCAL = "/home/mlx/ai-ml/datasets/"
-
-# Unified multi-ds predict_step kwarg routing.
-_NOISE_SCHEDULER_KEYS = {"num_steps", "sigma_max", "sigma_min", "rho", "schedule_type"}
-_SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
-
-
-def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group, extra_args: dict):
-    """Call predict_step with the unified dict-batch convention.
-
-    Unified multi-ds models take ``predict_step(batch={"in_lres":..., "in_hres":...}, ...)``.
-    Sampling overrides are routed by inspecting the predict_step signature: either a
-    single ``extra_args`` dict, or split ``noise_scheduler_params``/``sampler_params``.
-    """
-    predict_params = inspect.signature(inference_model.predict_step).parameters
-    predict_kwargs = {"model_comm_group": model_comm_group}
-
-    if "extra_args" in predict_params:
-        predict_kwargs["extra_args"] = extra_args
-    else:
-        noise_scheduler_params = {k: v for k, v in extra_args.items() if k in _NOISE_SCHEDULER_KEYS}
-        sampler_params = {k: v for k, v in extra_args.items() if k in _SAMPLER_KEYS}
-        remaining_params = {
-            k: v for k, v in extra_args.items() if k not in _NOISE_SCHEDULER_KEYS | _SAMPLER_KEYS
-        }
-        if "noise_scheduler_params" in predict_params and noise_scheduler_params:
-            predict_kwargs["noise_scheduler_params"] = noise_scheduler_params
-        else:
-            predict_kwargs.update(noise_scheduler_params)
-        if "sampler_params" in predict_params and sampler_params:
-            predict_kwargs["sampler_params"] = sampler_params
-        else:
-            predict_kwargs.update(sampler_params)
-        predict_kwargs.update(remaining_params)
-
-    return inference_model.predict_step(batch, **predict_kwargs)
 
 
 def _rewrite_dataset_paths_in_place(node):
@@ -211,10 +178,9 @@ def load_objects(
 ):
     ckpt_path, dir_exp, name_exp, name_ckpt = _split_ckpt_path(ckpt_path)
     checkpoint, config_checkpoint = get_checkpoint(dir_exp, name_exp, name_ckpt)
-    # Unified multi-ds: config is checkpoint-native. Inject local paths from env vars
-    # (DATA_DIR/GRID_DIR/RESIDUAL_STATISTICS_DIR/INTER_MAT_DIR are resolved via the
-    # checkpoint's system.input ${oc.env:...} entries; the runtime must export them).
-    config_checkpoint = adapt_config_hpc(config_checkpoint)
+    # Use checkpoint-native data/dataloader config, only overriding local paths.
+    local_paths_config = instantiate_config()
+    config_checkpoint = adapt_config_hpc(config_checkpoint, local_paths_config)
     config_for_datamodule = to_omegaconf(config_checkpoint)
     config_for_datamodule = _rewrite_dataset_paths_in_place(config_for_datamodule)
     config_for_datamodule.dataloader.validation.frequency = validation_frequency
@@ -232,14 +198,6 @@ def load_objects(
         map_location=torch.device(device),
         weights_only=False,
     ).to(device)
-    # Halo branch: processor blocks cache halo_info/partition as pickled attrs. Under
-    # model-parallel inference each rank would reuse rank-0's cache and OOB its per-rank
-    # tensor; invalidate so the cache rebuilds on first forward.
-    for _mod in inference_model.modules():
-        if hasattr(_mod, "_cached_halo_info"):
-            _mod._cached_halo_info = None
-        if hasattr(_mod, "_cached_partition"):
-            _mod._cached_partition = None
     if device == "cuda":
         if precision == "fp16":
             inference_model = inference_model.half()
@@ -271,6 +229,45 @@ def _parse_output_weather_states(value: str) -> list[str] | None:
     return requested or None
 
 
+def _validate_bundle_hres_contract(
+    *,
+    bundle=None,
+    bundle_nc=None,
+    name_to_idx_hres: dict[str, int],
+    name_to_idx_out: dict[str, int],
+) -> None:
+    source = bundle if bundle is not None else bundle_nc
+    if source is None:
+        raise TypeError("Either bundle or bundle_nc must be provided")
+    missing_hres = find_missing_explicit_hres_inputs(source, list(name_to_idx_hres.keys()))
+    if not missing_hres:
+        return
+
+    missing_preview = ", ".join(missing_hres[:10])
+    if len(missing_hres) > 10:
+        missing_preview += f", ... ({len(missing_hres)} total)"
+    overlap = sorted(set(name_to_idx_hres) & set(name_to_idx_out))
+    supported_preview = ", ".join(sorted(BUNDLE_IMPLICIT_HRES_FEATURES))
+    if set(name_to_idx_hres) == set(name_to_idx_out):
+        overlap_note = (
+            " The checkpoint's full HRES input channel set matches the model outputs exactly, "
+            "which indicates target-like HRES inputs and is incompatible with forcings-only bundle inference."
+        )
+    elif overlap:
+        overlap_note = (
+            f" The checkpoint's HRES inputs overlap with model outputs on {len(overlap)} channel(s) "
+            f"(for example: {', '.join(overlap[:5])})."
+        )
+    else:
+        overlap_note = ""
+    raise ValueError(
+        "Bundle inference is incompatible with this checkpoint/bundle combination. "
+        f"The bundle loader can synthesize only forcing/static HRES inputs ({supported_preview}); "
+        f"the checkpoint also requires explicit HRES channel(s) that are missing from the bundle: {missing_preview}."
+        f"{overlap_note} Rebuild the bundle with matching in_hres_* fields or use a checkpoint trained with forcings-only HRES inputs."
+    )
+
+
 def _predict_from_dataloader(
     *,
     inference_model,
@@ -286,29 +283,28 @@ def _predict_from_dataloader(
     output_weather_states: Sequence[str] | None = None,
     split: str = "valid",
 ):
-    ds = datamodule.ds_train if split == "train" else datamodule.ds_valid
-    data = ds.data
-    x_in = np.asarray(data["in_lres"][idx : idx + n_samples])  # [sample, vars, ens, grid]
-    x_in_hres = np.asarray(data["in_hres"][idx : idx + n_samples])
-    y = np.asarray(data["out_hres"][idx : idx + n_samples])
+    data = (datamodule.ds_train if split == "train" else datamodule.ds_valid).data
+    x_in = np.asarray(data[idx : idx + n_samples][0])  # [dates, vars, ens, grid]
+    x_in_hres = np.asarray(data[idx : idx + n_samples][1])
+    y = np.asarray(data[idx : idx + n_samples][2])
 
     x_in = np.transpose(x_in, (0, 2, 3, 1))  # [sample, ens, grid, vars]
     x_in_hres = np.transpose(x_in_hres, (0, 2, 3, 1))
     y = np.transpose(y, (0, 2, 3, 1))
 
-    name_to_idx_in = datamodule.data_indices["in_lres"].data.input.name_to_index
-    name_to_idx_out = datamodule.data_indices["out_hres"].model.output.name_to_index
+    name_to_idx_in = datamodule.data_indices.data.input[0].name_to_index
+    name_to_idx_out = datamodule.data_indices.model.output.name_to_index
 
     # Downscaling models expect full lres input (including forcings) — the model's
     # normalizer has parameters for all input channels.  Only filter the *output
     # reference* arrays (x_out, y_out) later; keep x_in unfiltered for predict_step.
     x_in_full = x_in  # keep full-channel copy for the model
 
-    lon_lres = np.asarray(datamodule.supporting_arrays["in_lres"]["longitudes"])
-    lat_lres = np.asarray(datamodule.supporting_arrays["in_lres"]["latitudes"])
-    lon_hres = np.asarray(datamodule.supporting_arrays["out_hres"]["longitudes"])
-    lat_hres = np.asarray(datamodule.supporting_arrays["out_hres"]["latitudes"])
-    dates = np.asarray(ds.datasets["out_hres"].dates[idx : idx + n_samples])
+    lon_lres = np.asarray(data.longitudes[0])
+    lat_lres = np.asarray(data.latitudes[0])
+    lon_hres = np.asarray(data.longitudes[2])
+    lat_hres = np.asarray(data.latitudes[2])
+    dates = np.asarray(data.dates[idx : idx + n_samples])
     full_weather_states = list(name_to_idx_out.keys())
     weather_states, selected_indices = resolve_output_weather_states(
         weather_states=full_weather_states,
@@ -326,24 +322,24 @@ def _predict_from_dataloader(
 
     for i_sample in range(n_samples):
         for j, m in enumerate(members):
-            x_l = torch.from_numpy(x_in_full[i_sample, m]).to(device)[None, None, None, ...]
-            x_h = torch.from_numpy(x_in_hres[i_sample, m]).to(device)[None, None, None, ...]
-            batch = {"in_lres": x_l, "in_hres": x_h}
+            x_l = torch.from_numpy(x_in_full[i_sample, m]).to(device)
+            x_h = torch.from_numpy(x_in_hres[i_sample, m]).to(device)
+            x_l = x_l[None, None, None, ...]
+            x_h = x_h[None, None, None, ...]
             with torch.inference_mode():
                 with torch.autocast(
                     device_type="cuda",
                     dtype=amp_dtype,
                     enabled=amp_enabled,
                 ):
-                    pred = _predict_with_compatible_kwargs(
-                        inference_model=inference_model,
-                        batch=batch,
+                    pred = inference_model.predict_step(
+                        x_l,
+                        x_h,
                         model_comm_group=model_comm_group,
                         extra_args=extra_args,
                     )
-            pred_tensor = pred["out_hres"] if isinstance(pred, dict) else pred
             y_pred[i_sample, j] = (
-                pred_tensor[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
+                pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
             )
 
     if not members:
@@ -386,12 +382,17 @@ def predict_from_bundle(
             "ensemble member while building the bundle."
         )
 
-    name_to_idx_lres = datamodule.data_indices["in_lres"].data.input.name_to_index
-    name_to_idx_hres = datamodule.data_indices["in_hres"].data.input.name_to_index
-    name_to_idx_out = datamodule.data_indices["out_hres"].model.output.name_to_index
+    name_to_idx_lres = datamodule.data_indices.data.input[0].name_to_index
+    name_to_idx_hres = datamodule.data_indices.data.input[1].name_to_index
+    name_to_idx_out = datamodule.data_indices.model.output.name_to_index
 
     bundle = open_bundle_dataset(bundle_nc)
     try:
+        _validate_bundle_hres_contract(
+            bundle=bundle,
+            name_to_idx_hres=name_to_idx_hres,
+            name_to_idx_out=name_to_idx_out,
+        )
         (
             x_lres_np,
             x_hres_np,
@@ -410,21 +411,18 @@ def predict_from_bundle(
         amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
         amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
-        # Unified multi-ds: predict_step takes a dict batch.
-        batch = {"in_lres": x_in, "in_hres": x_in_hres}
         with torch.inference_mode():
             with torch.autocast(
                 device_type="cuda",
                 dtype=amp_dtype,
                 enabled=amp_enabled,
             ):
-                pred = _predict_with_compatible_kwargs(
-                    inference_model=inference_model,
-                    batch=batch,
+                pred = inference_model.predict_step(
+                    x_in[0:1],
+                    x_in_hres[0:1],
                     model_comm_group=model_comm_group,
                     extra_args=extra_args,
                 )
-        pred_tensor = pred["out_hres"] if isinstance(pred, dict) else pred
 
         weather_states_full = list(name_to_idx_out.keys())
         weather_states, selected_indices = resolve_output_weather_states(
@@ -434,16 +432,16 @@ def predict_from_bundle(
         )
 
         x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
-        pred_np = pred_tensor[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
+        pred_np = pred[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
         dates = None
 
         x_np, _ = extract_filtered_input_from_output(
-            x_np, name_to_idx_lres, name_to_idx_out
+            x_np, datamodule.data_indices.data.input[0].name_to_index, name_to_idx_out
         )
         x_np = x_np[..., selected_indices]
 
         y_np = None
-        target_np, found_target_channels = extract_target_from_bundle_dataset(bundle, weather_states)
+        target_np, found_target_channels = extract_target_from_bundle(bundle, weather_states)
         if target_np is not None:
             y_np = target_np[None, None, ...]
             if found_target_channels < len(weather_states):
@@ -509,26 +507,14 @@ def _compute_x_interp_for_export(
                 raise RuntimeError(
                     "Inference model cannot export x_interp: missing interpolate_down and apply_interpolate_to_high_res."
                 )
-            # Unified multi-ds: apply_interpolate_to_high_res accepts exactly one ensemble
-            # member — input (batch, 1, grid_lres, vars), output (batch, 1, 1, grid_hres,
-            # vars). Loop per member (as the per-member dev/multi runs did) and stack to the
-            # [batch, member, grid_hres, vars] layout the interpolate_down branch yields.
-            member_interp = []
-            for member_idx in range(x_tensor.shape[1]):
-                member_x = x_tensor[:, member_idx : member_idx + 1, ...]
-                try:
-                    mi = model.apply_interpolate_to_high_res(
-                        member_x,
-                        grid_shard_sizes=None,
-                        model_comm_group=model_comm_group,
-                    )
-                except TypeError:
-                    mi = model.apply_interpolate_to_high_res(member_x)
-                # Collapse the size-1 time/ensemble axes -> (batch, grid_hres, vars),
-                # matching the interpolate_down branch's per-member ndim-3 output.
-                mi = mi.reshape(mi.shape[0], mi.shape[-2], mi.shape[-1])
-                member_interp.append(mi)
-            x_interp = torch.stack(member_interp, dim=1)
+            try:
+                x_interp = model.apply_interpolate_to_high_res(
+                    x_tensor,
+                    grid_shard_shapes=None,
+                    model_comm_group=model_comm_group,
+                )
+            except TypeError:
+                x_interp = model.apply_interpolate_to_high_res(x_tensor)
 
     return x_interp.detach().cpu().numpy().astype(np.float32)
 
@@ -913,15 +899,11 @@ def main() -> None:
             experiments_dir, name_exp, "predictions.nc"
         )
     out_path = Path(out_path)
-    # Output-path validation and write are rank-0 only. In a sharded multi-rank run,
-    # rank 0 writes predictions.nc first; if non-zero ranks then re-validated the path
-    # they would see the just-written file and abort, failing the whole job even though
-    # the output is correct. The dist.barrier() below keeps the ranks in sync.
+    _validate_output_path(
+        out_path=out_path,
+        allow_existing_output_dir=bool(getattr(args, "allow_existing_output_dir", False)),
+    )
     if global_rank == 0:
-        _validate_output_path(
-            out_path=out_path,
-            allow_existing_output_dir=bool(getattr(args, "allow_existing_output_dir", False)),
-        )
         ds.to_netcdf(out_path)
         print(f"Saved predictions: {out_path}")
     if dist.is_available() and dist.is_initialized():

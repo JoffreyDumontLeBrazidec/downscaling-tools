@@ -670,6 +670,7 @@ def _run_evaluators(
 ) -> list[str]:
     """Run selected evaluators on existing predictions. Returns list of evaluators that ran."""
     evaluators_run: list[str] = []
+    failures: list[str] = []
 
     for name in evaluators:
         if name not in ALL_EVALUATORS:
@@ -681,12 +682,13 @@ def _run_evaluators(
         # Import evaluator module
         try:
             mod = importlib.import_module(f"eval.evaluators.{name}")
-        except ImportError:
+        except ImportError as exc:
             LOG.error(
                 "Cannot import evaluator 'eval.evaluators.%s'. "
                 "Check that the module exists and has no import errors.",
                 name,
             )
+            failures.append(f"{name}.import: {exc}")
             continue
 
         spec = getattr(mod, "EVALUATOR_SPEC", {})
@@ -740,8 +742,9 @@ def _run_evaluators(
                     checkpoint=checkpoint,
                     run_label=run_label,
                 )
-            except Exception:
+            except Exception as exc:
                 LOG.error("Evaluator '%s' run() failed", name, exc_info=True)
+                failures.append(f"{name}.run: {exc}")
                 continue
 
         # Score
@@ -757,19 +760,27 @@ def _run_evaluators(
                     metrics_path.write_text(
                         json.dumps(scores, indent=2, default=str) + "\n"
                     )
-            except Exception:
+            except Exception as exc:
                 LOG.error("Evaluator '%s' score() failed", name, exc_info=True)
+                failures.append(f"{name}.score: {exc}")
+                continue
 
         # Plot
         plot_fn = getattr(mod, "plot", None)
         if plot_fn is not None:
             try:
                 plot_fn(results_dir, lane_config, eval_config, output_dir=results_dir)
-            except Exception:
+            except Exception as exc:
                 LOG.error("Evaluator '%s' plot() failed", name, exc_info=True)
+                failures.append(f"{name}.plot: {exc}")
+                continue
 
         evaluators_run.append(name)
         LOG.info("Evaluator '%s' completed. Output: %s", name, results_dir)
+
+    if failures:
+        failure_lines = "\n".join(f"- {failure}" for failure in failures)
+        raise RuntimeError(f"Evaluator failure(s):\n{failure_lines}")
 
     return evaluators_run
 
@@ -825,6 +836,11 @@ def _run_scoreboard(
     from eval.scoreboard.formatter import to_csv, to_markdown, to_pretty_text
 
     scores = aggregate_scores(eval_dir, lane_config, evaluators=evaluators)
+    if not scores:
+        raise RuntimeError(
+            "Scoreboard produced no scores. "
+            f"eval_dir={eval_dir} evaluators={evaluators}"
+        )
 
     # Write outputs
     scoreboard_dir = output_dir / "scoreboard"
