@@ -1,6 +1,19 @@
 # Canonical OPER analysis tail percentiles for TC scoring.
 # Keyed by resolution tag, then event name.
 # Adding new resolutions or events = YAML edit, not code change.
+#
+# CONTRACT NOTE (o96->o320, decided 2026-06-17; incident
+# epics/ds-multi-ds-parity/in-progress/20260617_o96_o320_unified_oldlike_tc_regression.md;
+# knowledge docs/knowledge/results/tc-extreme-score-support-contract.md):
+# The "o320" idalia/franklin values below are a CURATED effective-analysis target,
+# deliberately DEEPER than the embedded regridded OPER (idalia mslp_min 985.4 /
+# wind_max 24.5; this file 971.3 / 32.0) and shallower than the native OPER (946.8).
+# This is intentional: anchoring on the over-smoothed regridded OPER lets models
+# trivially overshoot and the EEFO floor collapses the score (~0.05); anchoring on
+# the deep native OPER floors franklin to 0.0. The curated mid-target is the only
+# well-conditioned, discriminating anchor. DO NOT "re-derive" these to a same-support
+# OPER percentile -- that re-breaks the metric. Keep pinned; the model is scored on
+# the REGRIDDED support against this target.
 
 o320:
   idalia:
@@ -33,3 +46,19 @@ o1280:
     wind_p99: 18.285049462085823
     wind_p999: 26.676243323031702
     wind_max: 45.27817758191151
+
+# Reference embedded OPER tail percentiles on the DOCUMENTED o96->o320 REGRIDDED
+# contract support (n=49005, 2026-06 reference gribs). NOT used in scoring -- read
+# only by the off-support guardrail (_warn_on_offcontract_support in tc.py) to WARN
+# when a run's embedded OPER was computed on a different TC-stats support (native /
+# legacy manual "strict") and is therefore not comparable to the public scoreboard.
+# mslp_min flags native; wind_p99 (a broad percentile) additionally flags manual strict.
+o320_contract_oper:
+  idalia:
+    mslp_min: 985.408
+    wind_p99: 12.343
+    wind_max: 24.515
+  franklin:
+    mslp_min: 957.395
+    wind_p99: 16.202
+    wind_max: 36.228

@@ -56,6 +56,21 @@ def load_canonical_analysis(
     return dict(section) if isinstance(section, dict) else {}
 
 
+def load_contract_oper(
+    resolution: str = "o320",
+    *,
+    path: Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load the documented regridded-contract embedded OPER reference.
+
+    Used only by the off-support guardrail in tc.py (WARN-only) to detect runs
+    scored on a different TC-stats support than the o96->o320 regridded contract.
+    Reuses canonical_analysis.yaml; the section key is ``<resolution>_contract_oper``.
+    Returns {} when the section is absent.
+    """
+    return load_canonical_analysis(f"{resolution}_contract_oper", path=path)
+
+
 def load_canonical_eefo(
     resolution: str | None = None,
     *,

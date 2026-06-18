@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,68 @@ from eval._backends.scoreboard.row_matching import (
 )
 from eval.scoreboard.types import RowClassification
 
+LOG = logging.getLogger(__name__)
+
 MSLP_REFERENCE_HPA = 1013.25
 _OVERSHOOT_BETA = 0.5
+
+# --- Documented o96->o320 TC scoring contract (decided 2026-06-17; incident
+# epics/ds-multi-ds-parity/in-progress/20260617_o96_o320_unified_oldlike_tc_regression.md;
+# knowledge: docs/knowledge/results/tc-extreme-score-support-contract.md) -----------
+# A single, documented support so extreme_score is comparable across all runs:
+#   * MODEL + EEFO floor are measured on the REGRIDDED support (eval.cli default;
+#     lane support_mode "both" -> the bare "idalia"/"franklin" events).
+#   * ANALYSIS target = the CURATED canonical AN (canonical_analysis.yaml "o320"),
+#     which is deliberately DEEPER than the embedded regridded OPER. The regridded
+#     OPER is over-smoothed (idalia mslp_min 985.4 / wind_max 24.5 vs curated
+#     971.3 / 32.0), so anchoring on it lets models trivially overshoot and the
+#     EEFO floor collapses the rescaled score (~0.05). Anchoring on the deep NATIVE
+#     OPER (946.8) is the opposite failure (franklin floors to 0.0). The curated
+#     mid-target is the only well-conditioned, discriminating anchor; it is NOT a
+#     same-support OPER percentile and must NOT be "re-derived" to either embedded
+#     support. Keep it pinned and documented.
+# Because the curated AN is intentionally != the embedded OPER, the guardrail below
+# does NOT compare canonical-vs-embedded (that gap is by design). Instead it detects
+# the real failure mode: a run whose EMBEDDED OPER was computed on a DIFFERENT
+# TC-stats support (native / legacy manual "strict") than the regridded contract,
+# which is the documented cause of the false "Idalia 21/21" regression. WARN-only.
+_OFFCONTRACT_MSLP_MIN_TOL_HPA = 3.0   # embedded vs contract regridded OPER mslp_min
+_OFFCONTRACT_WIND_P99_TOL_MS = 2.5    # embedded vs contract regridded OPER wind_p99
+
+
+def _warn_on_offcontract_support(
+    embedded: dict[str, Any] | None,
+    contract_oper: dict[str, Any] | None,
+    *,
+    event_name: str | None,
+) -> None:
+    """WARN when a run's embedded OPER row does not match the documented o96->o320
+    REGRIDDED contract OPER — i.e. it was measured on a different TC-stats support
+    (native / manual "strict") and its extreme_score is not comparable to the public
+    scoreboard. mslp_min flags native; wind_p99 (a broad percentile) additionally
+    flags the legacy manual "strict" support. Purely observational; no score change."""
+    if not isinstance(embedded, dict) or not isinstance(contract_oper, dict):
+        return
+    flags = []
+    for key, tol, unit in (
+        ("mslp_min", _OFFCONTRACT_MSLP_MIN_TOL_HPA, "hPa"),
+        ("wind_p99", _OFFCONTRACT_WIND_P99_TOL_MS, "m/s"),
+    ):
+        e = _finite_float(embedded.get(key))
+        c = _finite_float(contract_oper.get(key))
+        if e is None or c is None:
+            continue
+        if abs(e - c) > tol:
+            flags.append("%s embedded=%.3f vs contract=%.3f (%.3f %s)" % (key, e, c, abs(e - c), unit))
+    if flags:
+        LOG.warning(
+            "TC off-contract support for event=%s: embedded OPER does not match the "
+            "documented o96->o320 REGRIDDED contract [%s] — extreme_score is NOT "
+            "comparable to the public scoreboard (run scored on a different TC-stats "
+            "support, e.g. native / manual strict). See "
+            "docs/knowledge/results/tc-extreme-score-support-contract.md.",
+            event_name, "; ".join(flags),
+        )
 
 
 def _asymmetric_ratio_score(ratio: float) -> float:
@@ -319,6 +380,7 @@ def normalize_tc_rows(
     canonical_eefo: dict[str, Any] | None = None,
     event_name: str | None = None,
     extreme_reference_expid: str | None = None,
+    contract_oper: dict[str, Any] | None = None,
 ) -> None:
     """Analysis-anchored TC scoring with multi-depth tail percentiles.
 
@@ -349,6 +411,14 @@ def normalize_tc_rows(
         embedded_exp = str(embedded_analysis.get("exp", "")).upper() if embedded_analysis else ""
         if "O1280" not in embedded_exp:
             analysis_row = canonical_analysis
+            # Off-support guardrail (WARN-only). The documented contract scores the model
+            # on the REGRIDDED support against the curated canonical AN, so canonical !=
+            # embedded OPER is BY DESIGN. Flag instead any run whose embedded OPER was
+            # computed on a different support (native / manual "strict") and is therefore
+            # not comparable to the public scoreboard. See the contract block up top.
+            _warn_on_offcontract_support(
+                embedded_analysis, contract_oper, event_name=event_name
+            )
 
     if analysis_row is None:
         analysis_row = embedded_analysis if isinstance(embedded_analysis, dict) else None
@@ -511,6 +581,12 @@ def load_tc_extreme_scores_from_json(
 
         canonical_analysis_by_event = load_canonical_analysis("o320")
 
+    # Off-support guardrail reference: the documented regridded-contract embedded OPER
+    # per event (WARN-only; never used in scoring). See _warn_on_offcontract_support.
+    from eval._backends.scoreboard.canonical_data import load_contract_oper
+
+    contract_oper_by_event = load_contract_oper("o320")
+
     requested_events = tuple(event_names or ("idalia", "franklin"))
     scores: dict[str, float] = {}
     for event_name in requested_events:
@@ -524,14 +600,21 @@ def load_tc_extreme_scores_from_json(
             continue
         norm_rows = [row for row in rows if isinstance(row, dict)]
 
-        canonical = canonical_analysis_by_event.get(event_name) if canonical_analysis_by_event else None
-        eefo = canonical_eefo_by_event.get(event_name) if canonical_eefo_by_event else None
+        # Support variants share a base event ("idalia__native" -> "idalia"); strip the
+        # support suffix so native/regridded look up the SAME canonical AN/EEFO instead of
+        # silently falling back to the embedded (different-support) analysis row. (P3 fix,
+        # 2026-06-17 — previously "idalia__native" missed the YAML key and self-anchored.)
+        base_event = event_name.split("__", 1)[0]
+        canonical = canonical_analysis_by_event.get(base_event) if canonical_analysis_by_event else None
+        eefo = canonical_eefo_by_event.get(base_event) if canonical_eefo_by_event else None
+        contract_oper = contract_oper_by_event.get(base_event) if contract_oper_by_event else None
         normalize_tc_rows(
             norm_rows,
             canonical_analysis=canonical,
             canonical_eefo=eefo,
             event_name=event_name,
             extreme_reference_expid=extreme_reference_expid,
+            contract_oper=contract_oper,
         )
 
         chosen = find_model_row(norm_rows, run_id)
@@ -556,4 +639,28 @@ def load_tc_extreme_scores_from_json(
             val = _finite_float(chosen.get(f"_{ratio_key}_value"))
             if val is not None:
                 scores[f"{event_name}_{ratio_key}"] = val
+
+        # Raw physical extremes (hPa / m/s) — support-robust sanity anchors for the
+        # fragile extreme_score. Emit the matched row's own deepest MSLP and strongest
+        # wind, plus the OPER analysis / ENFO reference / EEFO input-baseline anchors so
+        # each event is self-checkable at a glance ("model 976.3 vs OPER 985.4"). The
+        # anchors are the same for every row in an event (one TC-stats support), so the
+        # scoreboard surfaces the matched-row pair per run and the anchors on the
+        # reference rows. (2026-06-18, incident 20260617.)
+        for raw_key in ("mslp_min", "wind_max"):
+            v = _finite_float(chosen.get(raw_key))
+            if v is not None:
+                scores[f"{event_name}_{raw_key}"] = v
+        for anchor_label, anchor_predicate in (
+            ("oper", is_analysis_row),
+            ("enfo", is_reference_row),
+            ("eefo", is_eefo_row),
+        ):
+            anchor_row = find_row_by_predicate(norm_rows, anchor_predicate)
+            if not isinstance(anchor_row, dict):
+                continue
+            for raw_key in ("mslp_min", "wind_max"):
+                v = _finite_float(anchor_row.get(raw_key))
+                if v is not None:
+                    scores[f"{event_name}_{anchor_label}_{raw_key}"] = v
     return scores

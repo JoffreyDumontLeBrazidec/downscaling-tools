@@ -180,3 +180,40 @@ def test_load_tc_extreme_scores_custom_events(tmp_path):
     )
 
     assert result == {"humberto": pytest.approx(1.0)}
+
+def test_load_tc_extreme_scores_emits_raw_extremes(tmp_path):
+    """Raw physical extremes (mslp_min/wind_max) are emitted for the matched row
+    plus OPER/ENFO/EEFO anchors — support-robust cross-check for extreme_score."""
+    stats_path = tmp_path / "tc.stats.json"
+    stats_path.write_text(json.dumps({
+        "events": {
+            "idalia": {
+                "extreme_tail": {
+                    "rows": [
+                        {"exp": "OPER_O320_0001", "mslp_p1": 1002.5, "mslp_p01": 993.5,
+                         "mslp_min": 985.4, "wind_p99": 12.3, "wind_p999": 19.7, "wind_max": 24.5},
+                        {"exp": "ENFO_O320_0001", "mslp_p1": 1002.5, "mslp_p01": 993.7,
+                         "mslp_min": 969.1, "wind_p99": 11.5, "wind_p999": 18.1, "wind_max": 42.9},
+                        {"exp": "EEFO_O96_0001", "mslp_p1": 1002.8, "mslp_p01": 996.5,
+                         "mslp_min": 988.6, "wind_p99": 11.0, "wind_p999": 15.7, "wind_max": 21.8},
+                        {"exp": "manual_deadbeef_new_o96_o320", "mslp_p1": 1002.9, "mslp_p01": 995.3,
+                         "mslp_min": 976.3, "wind_p99": 11.5, "wind_p999": 17.6, "wind_max": 34.9},
+                    ]
+                }
+            }
+        }
+    }))
+    result = load_tc_extreme_scores_from_json(
+        stats_path,
+        run_id="manual_deadbeef_new_o96_o320",
+        event_names=("idalia",),
+        extreme_reference_expid="ENFO_O320_0001",
+    )
+    # matched (model) row raw extremes
+    assert result["idalia_mslp_min"] == pytest.approx(976.3)
+    assert result["idalia_wind_max"] == pytest.approx(34.9)
+    # anchor context extremes
+    assert result["idalia_oper_mslp_min"] == pytest.approx(985.4)
+    assert result["idalia_oper_wind_max"] == pytest.approx(24.5)
+    assert result["idalia_enfo_mslp_min"] == pytest.approx(969.1)
+    assert result["idalia_eefo_wind_max"] == pytest.approx(21.8)

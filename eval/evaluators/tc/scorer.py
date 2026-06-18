@@ -109,6 +109,25 @@ def score(
                     "value": scores[sk],
                     "unit": "ratio_vs_an",
                 })
+        # Raw physical extremes (hPa / m/s): matched-row deepest MSLP + strongest wind,
+        # plus OPER/ENFO/EEFO anchors. Robust, hard-to-misread cross-check for the
+        # support-sensitive extreme_score. (2026-06-18)
+        for raw_key, unit in (("mslp_min", "hPa"), ("wind_max", "m/s")):
+            sk = f"{event_name}_{raw_key}"
+            if sk in scores:
+                records.append({
+                    "metric": f"tc_{event_name}_{raw_key}",
+                    "value": scores[sk],
+                    "unit": unit,
+                })
+            for anchor in ("oper", "enfo", "eefo"):
+                ak = f"{event_name}_{anchor}_{raw_key}"
+                if ak in scores:
+                    records.append({
+                        "metric": f"tc_{event_name}_{anchor}_{raw_key}",
+                        "value": scores[ak],
+                        "unit": unit,
+                    })
 
     # Compute aggregate TC score (mean of per-event extreme scores)
     event_scores = [r["value"] for r in records if r["metric"].endswith("_extreme_score")]
