@@ -101,22 +101,22 @@ prepml:
   lead_time: 6h
   platform:
     gpu:
-      time: "0-01:00"
+      time: "0-00:30"
       submit_arguments:
-        partition: gpu
+        partition: gpu_debug
         total_nodes: 2
         gpus_per_node: 4
         tasks_per_node: 4
         RAW_PRAGMA:
           - "#SBATCH --gres=gpu:4"
-          - "#SBATCH --qos=ng"
+          - "#SBATCH --qos=dg"
 
 resource_profiles:
   predict:
-    qos: ng
+    qos: dg
     nodes: 2
     gpus: 4
     ntasks_per_node: 4
-    time: "01:00:00"
+    time: "00:30:00"
     mem: "0"
     cpus: 8
