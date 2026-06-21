@@ -224,8 +224,16 @@ def process_predictions_dir(
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
             ws_index = _weather_state_index(ds)
+            def _var_has_truth(var):
+                idx = ws_index.get(var)
+                if idx is None:
+                    return False
+                tv = np.asarray(y_true.isel(weather_state=idx, member=0).values)
+                return bool(np.isfinite(tv).any())
+            # Skip surface vars with no native truth (all-NaN y), e.g. unified o2560
+            # bundles carry truth only for 10u/10v/2t/msl. [skip-notruth-vars-fix]
             file_surface_variables = OrderedDict(
-                (var, weight) for var, weight in SURFACE_VARIABLES.items() if var in ws_index
+                (var, weight) for var, weight in SURFACE_VARIABLES.items() if _var_has_truth(var)
             )
             file_missing_variables = [var for var in SURFACE_VARIABLES if var not in ws_index]
             if not file_surface_variables:

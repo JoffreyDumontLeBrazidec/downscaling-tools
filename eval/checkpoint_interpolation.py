@@ -108,14 +108,26 @@ class CheckpointResidualInterpolator:
             raise ValueError(f"Unsupported low-resolution input shape for interpolation: {x_arr.shape}")
 
         with torch.inference_mode():
-            try:
-                interpolated = model.apply_interpolate_to_high_res(
-                    x_tensor,
-                    grid_shard_shapes=None,
-                    model_comm_group=None,
-                )
-            except TypeError:
-                interpolated = model.apply_interpolate_to_high_res(x_tensor)
+            # Unified multi-ds apply_interpolate_to_high_res accepts EXACTLY ONE ensemble
+            # member: input (batch, 1, grid_lres, vars) -> output (batch, 1, 1, grid_hres,
+            # vars). Passing all members at once (and the wrong kwarg grid_shard_shapes) fell
+            # into the no-kwarg except branch and produced an empty tensor (addmm 40320 got 0).
+            # Mirror manual_inference/prediction/predict.py: loop per member, grid_shard_sizes.
+            member_interp = []
+            for member_idx in range(x_tensor.shape[1]):
+                member_x = x_tensor[:, member_idx : member_idx + 1, ...]
+                try:
+                    mi = model.apply_interpolate_to_high_res(
+                        member_x,
+                        grid_shard_sizes=None,
+                        model_comm_group=None,
+                    )
+                except TypeError:
+                    mi = model.apply_interpolate_to_high_res(member_x)
+                # collapse size-1 time/ensemble axes -> (batch, grid_hres, vars)
+                mi = mi.reshape(mi.shape[0], mi.shape[-2], mi.shape[-1])
+                member_interp.append(mi)
+            interpolated = torch.stack(member_interp, dim=1)  # (batch, member, grid_hres, vars)
         interpolated_np = interpolated.detach().cpu().numpy().astype(np.float64)
 
         if x_arr.ndim == 2:

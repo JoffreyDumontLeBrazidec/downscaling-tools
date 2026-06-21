@@ -838,7 +838,9 @@ def _select_step(
 ) -> xr.Dataset:
     if step_hours is None:
         return ds
-    if "step" not in ds.dims and "step" not in ds.coords:
+    # Scalar/0-dim "step" coord (e.g. static z/lsm hres grib) is step-invariant;
+    # xarray cannot .sel on a 0-dim coord, so treat as a no-op. [unified-o2560-static-step-fix]
+    if "step" not in ds.dims:
         return ds
     target = np.timedelta64(int(step_hours), "h")
     try:
