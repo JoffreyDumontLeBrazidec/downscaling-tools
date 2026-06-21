@@ -1,3 +1,8 @@
+# DEPRECATED for scoreboard generation (2026-06-19). The v1 markdown-hub scoreboard is retired;
+# the scoreboard is now v2 (docs/scoreboard_<lane>/scoreboard.json + docs/scoreboard/build.py).
+# Scoring logic lives in eval.scoreboard.*. This module is retained ONLY for the compat helpers
+# still imported elsewhere (e.g. load_spectra_metrics in sigma_evaluator/scheduler_study.py).
+# Do not build scoreboards from here. See docs/instructions/scoreboard-surfaces.md.
 from __future__ import annotations
 
 import ast
@@ -58,13 +63,11 @@ from eval._backends.scoreboard.surface import (
     surface_weighted_nmse,
 )
 from eval._backends.scoreboard.tc import (
-    MSLP_REFERENCE_HPA,
     load_tc_extreme_scores_from_json as _canonical_load_tc_extreme_scores_from_json,
-    mslp_depth as _mslp_depth,
-    multi_depth_enfo_deviation as _multi_depth_enfo_deviation,
-    multi_depth_tc_score as _multi_depth_tc_score,
-    normalize_tc_rows as _normalize_tc_rows,
 )
+# NOTE: MSLP_REFERENCE_HPA / mslp_depth / multi_depth_* / normalize_tc_rows were removed
+# from eval._backends.scoreboard.tc under the raw-extremes contract (2026-06-21). They were
+# only re-exported here (never used in this module body), so the imports are dropped.
 
 # Canonical analysis: loaded from YAML for backward compat
 CANONICAL_OPER_O320_ANALYSIS = _load_canonical_analysis("o320")

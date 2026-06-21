@@ -119,6 +119,29 @@ def run(
     if not pred_files:
         raise FileNotFoundError(f"No prediction files found in {predictions_dir}")
 
+    # Fail LOUD preflight (run-trust contract, 2026-06-21): every configured event must
+    # (a) resolve in EVENTS / load_event and (b) have at least one matched prediction
+    # file. A misconfigured event (typo, missing YAML) or a zero-match selection silently
+    # dropping an event from the scoreboard is exactly the non-reproducibility this
+    # contract retires — so RAISE here instead of LOG.warning + skip.
+    resolved_events: dict[str, TCEvent] = {}
+    for event_name in event_names:
+        try:
+            event = _event_from_config(event_name)
+        except Exception as exc:
+            raise ValueError(
+                f"TC event '{event_name}' does not resolve in EVENTS or as an event "
+                f"config (load_event): {exc}. Fix lane_config['tc']['events']."
+            ) from exc
+        matched = select_prediction_files_for_event(pred_files, event)
+        if not matched:
+            raise FileNotFoundError(
+                f"TC event '{event_name}' has zero matched prediction files under "
+                f"{predictions_dir} (selected from {len(pred_files)} files). The event's "
+                f"dates/bbox do not match any prediction — refusing to silently drop it."
+            )
+        resolved_events[event_name] = event
+
     payload = {"events": {}}
 
     # When support_mode is "both", run all events in regridded first, then native.
@@ -127,11 +150,14 @@ def run(
 
     for mode in modes:
         for event_name in event_names:
-            event = _event_from_config(event_name)
+            # Preflighted above: event resolves and has >=1 matched prediction file.
+            event = resolved_events[event_name]
             event_pred_files = select_prediction_files_for_event(pred_files, event)
             if not event_pred_files:
-                LOG.info("Skipping event=%s: no matching prediction files", event_name)
-                continue
+                raise FileNotFoundError(
+                    f"TC event '{event_name}' has zero matched prediction files "
+                    f"(mode={mode}) — refusing to silently drop it."
+                )
 
             event_key = event_name if mode == modes[0] else f"{event_name}__{mode}"
 
@@ -164,12 +190,14 @@ def run(
                         LOG.warning("Attempt %d failed for event=%s mode=%s, retrying", attempt + 1, event_name, mode)
                     else:
                         LOG.error("Failed to load curves for event=%s mode=%s", event_name, mode, exc_info=True)
-            if curves is None:
-                continue
-
+                        raise
             if not curves:
-                LOG.warning("No curves loaded for event=%s mode=%s, skipping", event_name, mode)
-                continue
+                # Reference GRIBs / predictions produced no curves — fail loud rather
+                # than silently dropping the event from the scoreboard (run-trust contract).
+                raise RuntimeError(
+                    f"TC event '{event_name}' (mode={mode}) loaded no curves — no "
+                    f"reference GRIBs or matched predictions resolved. Refusing to skip."
+                )
 
             # Load input (x_interp) and target (y) curves directly from NetCDF files
             input_label = eval_config.get("input_label")

@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the ENFO O320 scoreboard from evaluation artifacts."""
+"""DEPRECATED / RETIRED (2026-06-19) — do not use.
+
+This generated the v1 O96->O320 markdown scoreboard hub. The scoreboard system is now v2:
+the source of truth is `docs/scoreboard_<lane>/scoreboard.json`, rendered by
+`docs/scoreboard/build.py`. Its default input CSV (`docs/scoreboard_o96_o320/state/source_26_30/
+scoreboard.csv`) has been deleted along with the rest of v1, so this script no longer runs.
+To add an eval to the board: `python3 docs/scoreboard/build.py --lane <lane> --ingest <run_root>`.
+See `docs/instructions/scoreboard-surfaces.md`. Kept only for git history.
+"""
 from __future__ import annotations
 
 import argparse

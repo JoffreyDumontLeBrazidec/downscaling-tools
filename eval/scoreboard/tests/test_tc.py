@@ -1,4 +1,10 @@
-"""Tests for TC scoring module."""
+"""Tests for the TC raw-extremes scoreboard loader.
+
+Per the run-trust contract (epics/run-trust-and-validation/tc-extremes-contract-decision.md,
+decided 2026-06-21), TC quality is reported as RAW extremes only — model / OPER / ENFO side
+by side on the same grid, with no score, ratio, anchor or curated-AN. These tests pin the
+loader's extraction behavior; the retired depth/score/anchor functions are gone.
+"""
 
 from __future__ import annotations
 
@@ -6,214 +12,93 @@ import json
 
 import pytest
 
-from eval._backends.scoreboard.tc import (
-    load_tc_extreme_scores_from_json,
-    mslp_depth,
-    multi_depth_enfo_deviation,
-    multi_depth_tc_score,
-    normalize_tc_rows,
-    rescale_with_eefo_floor,
-)
+from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
 
 
-def test_mslp_depth_standard():
-    assert mslp_depth(970.0) == pytest.approx(43.25)
-
-
-def test_mslp_depth_above_reference():
-    assert mslp_depth(1020.0) == 0.0
-
-
-def test_multi_depth_tc_score_perfect():
-    """Model matching analysis should score 1.0."""
-    analysis = {
-        "mslp_p1": 1002.7, "mslp_p01": 993.0, "mslp_min": 971.3,
-        "wind_p99": 14.0, "wind_p999": 22.4, "wind_max": 32.0,
-    }
-    result = multi_depth_tc_score(analysis, analysis)
-    assert result == pytest.approx(1.0)
-
-
-def test_multi_depth_tc_score_partial():
-    """Model weaker than analysis should score < 1.0."""
-    analysis = {
-        "mslp_p1": 970.0, "mslp_p01": 965.0, "mslp_min": 960.0,
-        "wind_p99": 30.0, "wind_p999": 35.0, "wind_max": 40.0,
-    }
-    model = {
-        "mslp_p1": 990.0, "mslp_p01": 985.0, "mslp_min": 980.0,
-        "wind_p99": 20.0, "wind_p999": 25.0, "wind_max": 30.0,
-    }
-    result = multi_depth_tc_score(model, analysis)
-    assert result is not None
-    assert 0.0 < result < 1.0
-
-
-def test_multi_depth_tc_score_no_data():
-    assert multi_depth_tc_score({}, {}) is None
-
-
-def test_multi_depth_enfo_deviation():
-    analysis = {
-        "mslp_p1": 970.0, "mslp_p01": 965.0, "mslp_min": 960.0,
-        "wind_p99": 30.0, "wind_p999": 35.0, "wind_max": 40.0,
-    }
-    enfo = {
-        "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
-        "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
-    }
-    model = {
-        "mslp_p1": 975.0, "mslp_p01": 970.0, "mslp_min": 965.0,
-        "wind_p99": 28.0, "wind_p999": 32.0, "wind_max": 36.0,
-    }
-    result = multi_depth_enfo_deviation(model, enfo, analysis)
-    assert result is not None
-    assert result > 0.0
-
-
-def test_rescale_with_eefo_floor():
-    assert rescale_with_eefo_floor(0.8, 0.2) == pytest.approx(0.75)
-    assert rescale_with_eefo_floor(0.5, None) == pytest.approx(0.5)
-    assert rescale_with_eefo_floor(0.1, 0.2) == pytest.approx(0.0)
-
-
-def test_normalize_tc_rows_analysis_anchored():
-    """With explicit canonical analysis, scoring uses multi-depth."""
-    analysis = {
-        "mslp_p1": 970.0, "mslp_p01": 965.0, "mslp_min": 960.0,
-        "wind_p99": 30.0, "wind_p999": 35.0, "wind_max": 40.0,
-    }
-    rows = [
-        dict(exp="OPER_O320_0001", **analysis),
-        {
-            "exp": "ENFO_O320_0001",
-            "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
-            "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
-        },
-        {
-            "exp": "manual_model_run",
-            "mslp_p1": 975.0, "mslp_p01": 970.0, "mslp_min": 965.0,
-            "wind_p99": 28.0, "wind_p999": 32.0, "wind_max": 36.0,
-        },
-    ]
-    normalize_tc_rows(rows, canonical_analysis=analysis)
-
-    oper_row = rows[0]
-    assert oper_row["_extreme_score_value"] == 1.0
-
-    model_row = rows[2]
-    score = model_row["_extreme_score_value"]
-    assert score is not None
-    assert 0.5 < score < 1.0
-
-
-def test_normalize_tc_rows_legacy_fallback():
-    """Without tail percentiles, uses batch-relative normalization."""
-    rows = [
-        {"exp": "ENFO_O320", "mslp_980_990_fraction": 0.1, "wind_gt_25_fraction": 0.1},
-        {"exp": "manual_model", "mslp_980_990_fraction": 0.8, "wind_gt_25_fraction": 0.6},
-    ]
-    normalize_tc_rows(rows)
-    assert rows[1]["_extreme_score_value"] == pytest.approx(1.0)
-
-
-def test_load_tc_extreme_scores_from_json_with_explicit_canonical(tmp_path):
-    """Pass canonical analysis explicitly to bypass YAML lookup."""
+def _write_stats(tmp_path, events):
     stats_path = tmp_path / "tc.stats.json"
-    analysis = {
-        "mslp_p1": 970.0, "mslp_p01": 965.0, "mslp_min": 960.0,
-        "wind_p99": 30.0, "wind_p999": 35.0, "wind_max": 40.0,
-    }
-    stats_path.write_text(json.dumps({
-        "events": {
-            "idalia": {
-                "extreme_tail": {
-                    "rows": [
-                        dict(exp="OPER_O320_0001", **analysis),
-                        {
-                            "exp": "ENFO_O320_0001",
-                            "mslp_p1": 980.0, "mslp_p01": 975.0, "mslp_min": 970.0,
-                            "wind_p99": 25.0, "wind_p999": 28.0, "wind_max": 32.0,
-                        },
-                        {
-                            "exp": "manual_0c446b41_new_o96_o320",
-                            "mslp_p1": 975.0, "mslp_p01": 970.0, "mslp_min": 965.0,
-                            "wind_p99": 28.0, "wind_p999": 32.0, "wind_max": 36.0,
-                        },
-                    ]
-                }
-            },
-        }
-    }))
-
-    result = load_tc_extreme_scores_from_json(
-        stats_path,
-        run_id="manual_0c446b41_new_o96_o320",
-        canonical_analysis_by_event={"idalia": analysis},
-    )
-
-    assert 0.5 < result["idalia"] < 1.0
-    assert "idalia_enfo_dev" in result
-    assert result["idalia_enfo_dev"] > 0.0
+    stats_path.write_text(json.dumps({"events": events}))
+    return stats_path
 
 
-def test_load_tc_extreme_scores_custom_events(tmp_path):
-    stats_path = tmp_path / "tc.stats.json"
-    stats_path.write_text(json.dumps({
-        "events": {
-            "humberto": {
-                "extreme_tail": {
-                    "rows": [
-                        {"exp": "ENFO_O320", "mslp_980_990_fraction": 0.1, "wind_gt_25_fraction": 0.1},
-                        {"exp": "manual_95a07500_new_o48_o96", "mslp_980_990_fraction": 0.9, "wind_gt_25_fraction": 0.8},
-                    ]
-                }
+def test_emits_raw_extremes_model_oper_enfo(tmp_path):
+    """model / OPER / ENFO each emit the four raw extremes from the same stats JSON."""
+    stats_path = _write_stats(tmp_path, {
+        "idalia": {
+            "extreme_tail": {
+                "rows": [
+                    {"exp": "OPER_O320_0001", "mslp_min": 985.4, "mslp_p001": 993.5,
+                     "wind_max": 24.5, "wind_p9999": 19.7},
+                    {"exp": "ENFO_O320_0001", "mslp_min": 969.1, "mslp_p001": 993.7,
+                     "wind_max": 42.9, "wind_p9999": 18.1},
+                    {"exp": "manual_deadbeef_new_o96_o320", "mslp_min": 976.3, "mslp_p001": 995.3,
+                     "wind_max": 34.9, "wind_p9999": 17.6},
+                ]
             }
         }
-    }))
-
+    })
     result = load_tc_extreme_scores_from_json(
-        stats_path,
-        run_id="manual_95a07500_new_o48_o96",
-        event_names=("humberto",),
-        canonical_analysis_by_event={},
+        stats_path, run_id="manual_deadbeef_new_o96_o320", event_names=("idalia",),
     )
-
-    assert result == {"humberto": pytest.approx(1.0)}
-
-def test_load_tc_extreme_scores_emits_raw_extremes(tmp_path):
-    """Raw physical extremes (mslp_min/wind_max) are emitted for the matched row
-    plus OPER/ENFO/EEFO anchors — support-robust cross-check for extreme_score."""
-    stats_path = tmp_path / "tc.stats.json"
-    stats_path.write_text(json.dumps({
-        "events": {
-            "idalia": {
-                "extreme_tail": {
-                    "rows": [
-                        {"exp": "OPER_O320_0001", "mslp_p1": 1002.5, "mslp_p01": 993.5,
-                         "mslp_min": 985.4, "wind_p99": 12.3, "wind_p999": 19.7, "wind_max": 24.5},
-                        {"exp": "ENFO_O320_0001", "mslp_p1": 1002.5, "mslp_p01": 993.7,
-                         "mslp_min": 969.1, "wind_p99": 11.5, "wind_p999": 18.1, "wind_max": 42.9},
-                        {"exp": "EEFO_O96_0001", "mslp_p1": 1002.8, "mslp_p01": 996.5,
-                         "mslp_min": 988.6, "wind_p99": 11.0, "wind_p999": 15.7, "wind_max": 21.8},
-                        {"exp": "manual_deadbeef_new_o96_o320", "mslp_p1": 1002.9, "mslp_p01": 995.3,
-                         "mslp_min": 976.3, "wind_p99": 11.5, "wind_p999": 17.6, "wind_max": 34.9},
-                    ]
-                }
-            }
-        }
-    }))
-    result = load_tc_extreme_scores_from_json(
-        stats_path,
-        run_id="manual_deadbeef_new_o96_o320",
-        event_names=("idalia",),
-        extreme_reference_expid="ENFO_O320_0001",
-    )
-    # matched (model) row raw extremes
+    # model (bare keys)
     assert result["idalia_mslp_min"] == pytest.approx(976.3)
+    assert result["idalia_mslp_p001"] == pytest.approx(995.3)
     assert result["idalia_wind_max"] == pytest.approx(34.9)
-    # anchor context extremes
+    assert result["idalia_wind_p9999"] == pytest.approx(17.6)
+    # OPER baseline
     assert result["idalia_oper_mslp_min"] == pytest.approx(985.4)
     assert result["idalia_oper_wind_max"] == pytest.approx(24.5)
+    # ENFO reference (strongest tails)
     assert result["idalia_enfo_mslp_min"] == pytest.approx(969.1)
-    assert result["idalia_eefo_wind_max"] == pytest.approx(21.8)
+    assert result["idalia_enfo_wind_p9999"] == pytest.approx(18.1)
+    # No score / ratio / anchor keys under the raw contract.
+    assert "idalia" not in result
+    assert not any(k.endswith("_ratio") or "extreme_score" in k or k.endswith("_dev")
+                   for k in result)
+
+
+def test_missing_source_is_omitted(tmp_path):
+    """A source absent from the rows simply doesn't appear (no crash, no fabricated value)."""
+    stats_path = _write_stats(tmp_path, {
+        "humberto": {
+            "extreme_tail": {
+                "rows": [
+                    {"exp": "manual_95a07500_new_o48_o96", "mslp_min": 945.6, "wind_max": 47.3},
+                ]
+            }
+        }
+    })
+    result = load_tc_extreme_scores_from_json(
+        stats_path, run_id="manual_95a07500_new_o48_o96", event_names=("humberto",),
+    )
+    assert result["humberto_mslp_min"] == pytest.approx(945.6)
+    assert result["humberto_wind_max"] == pytest.approx(47.3)
+    # No OPER/ENFO rows present -> no oper_/enfo_ keys.
+    assert not any(k.startswith("humberto_oper_") or k.startswith("humberto_enfo_")
+                   for k in result)
+    # p0.1 / p99.9 absent in the row -> not emitted.
+    assert "humberto_mslp_p001" not in result
+
+
+def test_unknown_event_yields_empty(tmp_path):
+    stats_path = _write_stats(tmp_path, {"idalia": {"extreme_tail": {"rows": []}}})
+    result = load_tc_extreme_scores_from_json(
+        stats_path, run_id="whatever", event_names=("nonexistent",),
+    )
+    assert result == {}
+
+
+def test_legacy_kwargs_are_ignored(tmp_path):
+    """Old anchor kwargs are accepted (back-compat) but do not affect the raw output."""
+    stats_path = _write_stats(tmp_path, {
+        "idalia": {"extreme_tail": {"rows": [
+            {"exp": "manual_x_new_o96_o320", "mslp_min": 970.0, "wind_max": 40.0},
+        ]}}
+    })
+    result = load_tc_extreme_scores_from_json(
+        stats_path, run_id="manual_x_new_o96_o320", event_names=("idalia",),
+        canonical_analysis_by_event={"idalia": {"mslp_min": 960.0}},
+        extreme_reference_expid="ENFO_O320_0001",
+    )
+    assert result == {"idalia_mslp_min": pytest.approx(970.0),
+                      "idalia_wind_max": pytest.approx(40.0)}
