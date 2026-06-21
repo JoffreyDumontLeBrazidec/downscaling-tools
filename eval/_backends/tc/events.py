@@ -50,7 +50,7 @@ EVENTS: dict[str, TCEvent] = {
         month="08",
         dates=["16", "17", "18", "19", "20"],
         analysis_dates=["20230816"],
-        bbox=BoundingBox(north=35.0, south=0.0, east=-95.0, west=-125.0),
+        bbox=BoundingBox(north=35.0, south=5.0, east=-95.0, west=-117.0),  # E-Pac 117-95W (non-overlapping w/ fernanda)
     ),
     "dora": TCEvent(
         name="dora",
@@ -61,7 +61,7 @@ EVENTS: dict[str, TCEvent] = {
             "09", "10", "11", "12", "13", "14", "15", "16", "17",
         ],
         analysis_dates=["20230801", "20230807", "20230813"],
-        bbox=BoundingBox(north=25.0, south=5.0, east=-105.0, west=175.0),  # crosses dateline
+        bbox=BoundingBox(north=22.0, south=8.0, east=-130.0, west=-155.0),  # E-Pac 155-130W (was 175E..-105W: overlapped fernanda/hilary -> shared-low degeneracy)
     ),
     "fernanda": TCEvent(
         name="fernanda",
@@ -69,7 +69,7 @@ EVENTS: dict[str, TCEvent] = {
         month="08",
         dates=["12", "13", "14", "15", "16", "17"],
         analysis_dates=["20230812"],
-        bbox=BoundingBox(north=30.0, south=0.0, east=-105.0, west=-135.0),
+        bbox=BoundingBox(north=22.0, south=8.0, east=-117.0, west=-130.0),  # E-Pac 130-117W (non-overlapping)
     ),
     "humberto": TCEvent(
         name="humberto",
