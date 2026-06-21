@@ -22,4 +22,4 @@ environment_setup:
     TORCHINDUCTOR_COMPILE_THREADS: "1"
     OMP_NUM_THREADS: "1"
     MKL_NUM_THREADS: "1"
-  venv_activate: /home/ecm5702/dev/.ds-dyn/bin/activate
+  venv_activate: /home/ecm5702/dev/runtimes/ds-260612/activate.sh

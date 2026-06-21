@@ -35,6 +35,7 @@ def _sbatch_header(
     gpus: int = 0,
     ntasks_per_node: int = 1,
     job_name_suffix: str = "",
+    nodes: int = 1,
 ) -> str:
     """Render ``#SBATCH`` directive block."""
     short = _checkpoint_short(checkpoint)
@@ -51,7 +52,9 @@ def _sbatch_header(
         f"#SBATCH --time={time_limit}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --cpus-per-task={cpus}",
-        "#SBATCH --nodes=1",
+        # C8(i): --nodes is now configurable (lane resource_profiles.<stage>.nodes);
+        # multi-node sharded predict (e.g. o2560 on 2 nodes) needs nodes>1.
+        f"#SBATCH --nodes={nodes}",
         f"#SBATCH --ntasks-per-node={ntasks_per_node}",
         f"#SBATCH --output={slurm_out}",
     ]
@@ -197,10 +200,11 @@ def _cli_command(
     ntasks_per_node: int = 1,
 ) -> str:
     """Render the ``python -m eval.cli`` invocation."""
-    source_grib_prepare = bool(overrides and overrides.get("--source-grib-root"))
-    wrap_with_srun = ntasks_per_node > 1 and not (
-        mode == "predict" and source_grib_prepare
-    )
+    # C8(ii): the renderer must NOT wrap `predict` in srun. cmd_predict is the
+    # single owner of the predict srun (it derives --ntasks from
+    # num_gpus_per_model and guards against nesting). Wrapping here too produced
+    # a nested `srun srun python ...`. Other modes keep the multi-task srun wrap.
+    wrap_with_srun = ntasks_per_node > 1 and mode != "predict"
     launcher = "srun " if wrap_with_srun else ""
     parts = [
         "",
@@ -292,17 +296,20 @@ def render_sbatch(
         gpus = resource_overrides.get("gpus", 0)
         ntasks_per_node = resource_overrides.get("ntasks_per_node", 1)
         job_name_suffix = resource_overrides.get("job_name_suffix", "")
+        # C8(i): honor an explicit node count from the resource profile.
+        nodes = int(resource_overrides.get("nodes", 1))
     else:
         scheduler = host_cfg["scheduler"]
         gpus = 0
         ntasks_per_node = 1
         job_name_suffix = ""
+        nodes = 1
 
     parts = [
         _sbatch_header(
             lane, checkpoint, scheduler, host_cfg["scratch_root"],
             gpus=gpus, ntasks_per_node=ntasks_per_node,
-            job_name_suffix=job_name_suffix,
+            job_name_suffix=job_name_suffix, nodes=nodes,
         ),
         _comment_block(lane, host, checkpoint, mode),
         _environment_block(host_cfg["environment_setup"], host_cfg["code_root"], predict_env=predict_env),

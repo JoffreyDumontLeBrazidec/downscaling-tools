@@ -34,12 +34,27 @@ class PipelineManifest:
     checkpoint: str
 
 
-def _inject_preflight(script: str, code_root: str) -> str:
-    """Insert preflight checks before the ``# Run evaluation`` marker."""
+def _inject_preflight(
+    script: str, code_root: str, venv_activate: str | None = None,
+) -> str:
+    """Insert preflight checks before the ``# Run evaluation`` marker.
+
+    C7: pass the host's actual venv-activate path (the same one the sbatch
+    ``source``s) to ``preflight_venv`` so preflight validates the runtime the
+    job will really use, instead of resolving a (possibly dead) hardcoded venv.
+    When ``venv_activate`` is omitted, ``preflight_venv`` falls back to the
+    runtime selection layer.
+    """
+    if venv_activate:
+        import shlex
+
+        venv_arg = f" {shlex.quote(venv_activate)}"
+    else:
+        venv_arg = ""
     block = (
         "\n# Preflight checks\n"
         f"source {code_root}/eval/jobs/templates/preflight_eval_check.sh\n"
-        "preflight_cluster\npreflight_venv\npreflight_summary\n"
+        f"preflight_cluster\npreflight_venv{venv_arg}\npreflight_summary\n"
     )
     return script.replace("\n# Run evaluation", block + "\n# Run evaluation")
 
@@ -143,9 +158,11 @@ def render_pipeline(
     host_config = load_host(host)
     code_root = host_config["code_root"]
     scratch_root = host_config["scratch_root"]
+    # C7: the venv the sbatch actually sources; passed to preflight so it
+    # validates the same runtime rather than a hardcoded (dead) venv.
+    venv_activate = host_config.get("environment_setup", {}).get("venv_activate")
 
     # Compute shared eval output directory
-    reusing_existing_run = eval_output_dir is not None
     if eval_output_dir is None:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         ckpt_short = Path(checkpoint).name[:12]
@@ -163,7 +180,7 @@ def render_pipeline(
         mode="predict", overrides=overrides,
         resource_overrides=predict_resources,
     )
-    predict_script = _inject_preflight(predict_script, code_root)
+    predict_script = _inject_preflight(predict_script, code_root, venv_activate)
     predict_name = "01_predict"
     scripts.append(ScriptEntry(
         name=predict_name,
@@ -175,6 +192,12 @@ def render_pipeline(
     eval_names: list[str] = []
 
     if split_evaluators:
+        # C1: serialize the split evaluators. Each split `02_eval_<name>` job
+        # shares the same run dir (predictions/, evaluators/, plots/), so fanning
+        # them all out on the predict step makes them run in parallel and race on
+        # those shared paths (notably _consolidate_plots wiping <run_root>/plots/).
+        # Chain each evaluator on the previous one so exactly one runs at a time.
+        prev_eval_name: str | None = None
         for evaluator in evaluators:
             eval_resources = resolve_resources(
                 lane_config, host_config,
@@ -185,23 +208,28 @@ def render_pipeline(
             cli_overrides = dict(overrides) if overrides else {}
             cli_overrides["--only"] = evaluator
             cli_overrides["--predictions-dir"] = predictions_dir
-            if reusing_existing_run:
-                cli_overrides["--overwrite"] = True
+            # C1: always overwrite so a serialized re-run never silently skips on
+            # a pre-existing (possibly stale) evaluator dir from an earlier attempt.
+            cli_overrides["--overwrite"] = True
 
             eval_script = render_sbatch(
                 lane=lane, host=host, checkpoint=checkpoint,
                 mode="evaluate", overrides=cli_overrides,
                 resource_overrides=eval_resources,
             )
-            eval_script = _inject_preflight(eval_script, code_root)
+            eval_script = _inject_preflight(eval_script, code_root, venv_activate)
             name = f"02_eval_{evaluator}"
             eval_names.append(name)
+            # First evaluator waits on predict; the rest chain on the prior
+            # evaluator so they execute sequentially in the shared run dir.
+            dependency = prev_eval_name if prev_eval_name is not None else predict_name
             scripts.append(ScriptEntry(
                 name=name,
                 path=Path(f"{name}.sbatch"),
                 content=eval_script,
-                dependencies=[predict_name],
+                dependencies=[dependency],
             ))
+            prev_eval_name = name
     else:
         eval_resources = resolve_resources(
             lane_config, host_config, stage="evaluate",
@@ -209,14 +237,15 @@ def render_pipeline(
         eval_resources["job_name_suffix"] = "-eval"
         cli_overrides = dict(overrides) if overrides else {}
         cli_overrides["--predictions-dir"] = predictions_dir
-        if reusing_existing_run:
-            cli_overrides["--overwrite"] = True
+        # C1: always overwrite so the single combined evaluate job never skips on
+        # a stale evaluator dir left by an earlier attempt (was reuse-only before).
+        cli_overrides["--overwrite"] = True
         eval_script = render_sbatch(
             lane=lane, host=host, checkpoint=checkpoint,
             mode="evaluate", overrides=cli_overrides,
             resource_overrides=eval_resources,
         )
-        eval_script = _inject_preflight(eval_script, code_root)
+        eval_script = _inject_preflight(eval_script, code_root, venv_activate)
         name = "02_evaluate"
         eval_names.append(name)
         scripts.append(ScriptEntry(
@@ -238,7 +267,7 @@ def render_pipeline(
         mode="scoreboard", overrides=sb_overrides,
         resource_overrides=scoreboard_resources,
     )
-    scoreboard_script = _inject_preflight(scoreboard_script, code_root)
+    scoreboard_script = _inject_preflight(scoreboard_script, code_root, venv_activate)
     scoreboard_name = "03_scoreboard"
     scripts.append(ScriptEntry(
         name=scoreboard_name,

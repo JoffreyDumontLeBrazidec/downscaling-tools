@@ -35,26 +35,48 @@ preflight_cluster() {
   echo "[preflight] cluster=${PREFLIGHT_CLUSTER} (${host_short})"
 }
 
-preflight_venv() {
-  local stack="${1:-new}"
-  local cluster="${PREFLIGHT_CLUSTER:-unknown}"
+# C7: route venv resolution through the runtime selection layer instead of the
+# old hardcoded venv map (.ds-multi / .ds-ag / .ds-old / .ds-ag-old are all dead).
+# The runtime layer at runtimes/ds-260612/ is the single source of truth: its
+# expected.env names the per-arch venv. We validate the SAME activate path the
+# sbatch sources, which _inject_preflight passes in as $1.
+RUNTIME_LAYER_DIR="${PREFLIGHT_RUNTIME_DIR:-/home/ecm5702/dev/runtimes/ds-260612}"
 
-  # Canonical venv map (matches README design invariants)
-  local venv_ac_new="/home/ecm5702/dev/.ds-multi/bin/activate"  # 2026-06-12 runtime cleanup: .ds-dyn is gutted; .ds-multi is the operational AC venv (multi-ds runtime)
-  local venv_ag_new="/home/ecm5702/dev/.ds-ag/bin/activate"
-  local venv_ac_old="/home/ecm5702/dev/.ds-old/bin/activate"
-  local venv_ag_old="/home/ecm5702/dev/.ds-ag-old/bin/activate"
-
-  local key="${cluster}_${stack}"
-  local venv_path=""
-  case "${key}" in
-    ac_new) venv_path="${venv_ac_new}" ;;
-    ag_new) venv_path="${venv_ag_new}" ;;
-    ac_old) venv_path="${venv_ac_old}" ;;
-    ag_old) venv_path="${venv_ag_old}" ;;
-    *)      PREFLIGHT_ERRORS+=("Cannot resolve venv for cluster=${cluster} stack=${stack}")
-            return 1 ;;
+_preflight_runtime_venv_activate() {
+  # Echo the activate path for the current arch from the runtime layer's
+  # expected.env, or empty string on failure.
+  local rt_env="${RUNTIME_LAYER_DIR}/expected.env"
+  [[ -f "${rt_env}" ]] || return 1
+  # Read VENV_X86_64 / VENV_AARCH64 without sourcing the whole file.
+  local arch venv_root
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64)  venv_root="$(grep -E '^VENV_X86_64=' "${rt_env}" | head -1 | cut -d= -f2-)" ;;
+    aarch64) venv_root="$(grep -E '^VENV_AARCH64=' "${rt_env}" | head -1 | cut -d= -f2-)" ;;
+    *)       return 1 ;;
   esac
+  [[ -n "${venv_root}" ]] || return 1
+  printf '%s/bin/activate' "${venv_root}"
+}
+
+preflight_venv() {
+  # $1 (optional): explicit venv activate path to validate (the one the sbatch
+  # sources, passed by _inject_preflight). If omitted, resolve via the runtime
+  # layer. Legacy stack tokens ("new"/"old") are accepted but ignored — venv
+  # selection now comes entirely from the runtime layer / host config.
+  local arg="${1:-}"
+  local venv_path=""
+
+  if [[ "${arg}" == */* ]]; then
+    # Looks like a path → validate it directly.
+    venv_path="${arg}"
+  else
+    venv_path="$(_preflight_runtime_venv_activate)" || true
+    if [[ -z "${venv_path}" ]]; then
+      PREFLIGHT_ERRORS+=("Cannot resolve venv from runtime layer ${RUNTIME_LAYER_DIR} (expected.env missing or no venv for arch $(uname -m))")
+      return 1
+    fi
+  fi
 
   if [[ -f "${venv_path}" ]]; then
     echo "[preflight] venv OK: ${venv_path}"
@@ -71,7 +93,7 @@ preflight_venv() {
     active_real="$(readlink -f "${active_activate}" 2>/dev/null || printf '%s' "${active_activate}")"
     if [[ "${active_real}" != "${expected_real}" ]]; then
       PREFLIGHT_ERRORS+=(
-        "Active venv '${active_activate}' does not match cluster=${cluster} stack=${stack} expected '${venv_path}'"
+        "Active venv '${active_activate}' does not match expected '${venv_path}'"
       )
       return 1
     fi

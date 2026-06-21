@@ -503,6 +503,106 @@ def _launch_prepml(
     LOG.info("PrepML config pushed to ecFlow. stdout:\n%s", result.stdout.strip())
 
 
+# C6: tasks whose abort is cosmetic — they run AFTER the data is already in FDB
+# and only do bookkeeping/teardown. An abort confined to these must not fail the
+# eval. (The prepml suite's trailing `finish` task aborts routinely.)
+_PREPML_COSMETIC_TASKS = frozenset({"finish", "clean", "kill", "housekeeping"})
+# Data-producing tasks that MUST be complete for the FDB writes to be trusted.
+_PREPML_DATA_TASK_PREFIXES = ("fdb_write", "anemoi", "retrieve", "stage")
+
+
+def _prepml_data_complete_despite_abort(expver: str) -> bool:
+    """C6: return True if the only aborted prepml tasks are cosmetic ones.
+
+    The prepml suite family flips to ``aborted`` whenever any descendant task
+    aborts — including the trailing ``finish`` task, which runs *after*
+    ``fdb_write`` has already pushed every field to FDB. In that case the eval
+    data is complete and the abort is purely cosmetic.
+
+    We pull the ecFlow suite tree, isolate the ``family <expver>`` block, and
+    inspect per-task states:
+      - if any data-producing task (fdb_write/anemoi/retrieve/stage*) is
+        aborted -> NOT safe (return False),
+      - if at least one ``fdb_write`` task is complete and every aborted task is
+        cosmetic (finish/clean/...) -> safe (return True).
+
+    Conservative: any uncertainty (can't reach the server, no fdb_write seen,
+    parse failure) returns False so we fall back to the fatal path.
+    """
+    import re as _re
+
+    try:
+        result = subprocess.run(
+            [ECFLOW_BIN, "--get_state"],
+            capture_output=True, text=True, env={**os.environ, **ECFLOW_ENV},
+            timeout=60,
+        )
+    except Exception:
+        LOG.warning("C6: could not query ecFlow suite tree for expver=%s", expver, exc_info=True)
+        return False
+    if result.returncode != 0:
+        LOG.warning("C6: ecflow_client --get_state failed (rc=%d) for expver=%s",
+                    result.returncode, expver)
+        return False
+
+    lines = result.stdout.splitlines()
+    # Locate the `family <expver>` block. Capture its indentation so we know
+    # where the block ends (next line at the same-or-shallower indent that opens
+    # another family/suite).
+    fam_re = _re.compile(rf"^(\s*)family {_re.escape(expver)}\b")
+    start_idx = None
+    base_indent = 0
+    for i, line in enumerate(lines):
+        m = fam_re.match(line)
+        if m:
+            start_idx = i
+            base_indent = len(m.group(1))
+            break
+    if start_idx is None:
+        LOG.warning("C6: family %s not found in ecFlow tree", expver)
+        return False
+
+    block: list[str] = [lines[start_idx]]
+    for line in lines[start_idx + 1:]:
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        # Stop when we reach the next sibling/parent family at <= base indent.
+        if stripped.startswith("family ") and indent <= base_indent:
+            break
+        block.append(line)
+
+    task_re = _re.compile(r"^\s*task (\S+) #.*\bstate:(\w+)")
+    fdb_write_complete = False
+    aborted_noncosmetic: list[str] = []
+    for line in block:
+        tm = task_re.match(line)
+        if not tm:
+            continue
+        task_name, task_state = tm.group(1), tm.group(2)
+        if task_name.startswith("fdb_write") and task_state == "complete":
+            fdb_write_complete = True
+        if task_state == "aborted":
+            if task_name in _PREPML_COSMETIC_TASKS:
+                continue
+            # An aborted data task is a real failure.
+            if task_name.startswith(_PREPML_DATA_TASK_PREFIXES):
+                aborted_noncosmetic.append(task_name)
+            else:
+                # Unknown aborted task — be conservative, treat as real.
+                aborted_noncosmetic.append(task_name)
+
+    if not fdb_write_complete:
+        LOG.warning("C6: no completed fdb_write task found for expver=%s; treating abort as fatal", expver)
+        return False
+    if aborted_noncosmetic:
+        LOG.warning(
+            "C6: expver=%s has aborted non-cosmetic task(s): %s; treating abort as fatal",
+            expver, aborted_noncosmetic,
+        )
+        return False
+    return True
+
+
 def _wait_for_prepml(
     expver: str,
     timeout: int = 43200,
@@ -553,6 +653,20 @@ def _wait_for_prepml(
                 _time.sleep(30)
                 elapsed += 30
                 continue
+            # C6: the suite family aborts whenever ANY descendant task aborts,
+            # including the trailing cosmetic `finish` task that runs after every
+            # field is already in FDB. Before failing the eval, check whether the
+            # data-producing tasks (fdb_write/anemoi/retrieve/stage*) completed
+            # and only cosmetic tasks aborted. If so, the data is good — warn and
+            # return success instead of throwing away a completed run.
+            if _prepml_data_complete_despite_abort(expver):
+                LOG.warning(
+                    "PrepML suite for expver=%s reports 'aborted' but all data tasks "
+                    "(incl. fdb_write) completed and only cosmetic task(s) aborted. "
+                    "Treating as success; FDB writes are complete.",
+                    expver,
+                )
+                return
             raise RuntimeError(
                 f"PrepML suite aborted for expver={expver}. "
                 f"Check ecFlow logs at ~/prepml/{expver}/"
