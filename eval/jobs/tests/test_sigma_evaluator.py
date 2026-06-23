@@ -5,11 +5,20 @@ from types import SimpleNamespace
 import torch
 
 from eval._backends.sigma_evaluator.sigma_evaluator import SigmaEvaluator
+from eval._backends.sigma_evaluator.sigma_evaluator import _disable_first_run_checks_for_nan_free_sigma_eval
 
 
 class _IdentityProcessor:
     def __call__(self, tensor, **_kwargs):
         return tensor
+
+
+def test_disable_first_run_checks_for_nan_free_sigma_eval():
+    processor = SimpleNamespace(first_run=True)
+
+    _disable_first_run_checks_for_nan_free_sigma_eval(processor, None)
+
+    assert processor.first_run is False
 
 
 class _DummyInnerModel:

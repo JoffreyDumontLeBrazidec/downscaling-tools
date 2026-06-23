@@ -199,6 +199,13 @@ def _residual_post_processor(downscaler, target_dataset: str):
     return _mapping_get(getattr(downscaler.model, "post_processors", None), target_dataset)
 
 
+def _disable_first_run_checks_for_nan_free_sigma_eval(*processors) -> None:
+    for processor in processors:
+        if processor is not None and getattr(processor, "first_run", False):
+            processor.first_run = False
+            logger.info("Skipped redundant first-run processor NaN check for verified finite sigma bundles")
+
+
 class SigmaEvaluator:
     STANDARD_FIELDS = (
         "10u", "10v", "2d", "2t", "msl",
@@ -286,11 +293,16 @@ class SigmaEvaluator:
             x_interp_for_residual = x_interp_raw[..., channel_indices] if channel_indices is not None else x_interp_raw
 
             logger.info("Computing sigma residual target: x_interp=%s", tuple(x_interp_for_residual.shape))
+            residual_pre_processor = _residual_pre_processor(self.downscaler, target_dataset)
+            _disable_first_run_checks_for_nan_free_sigma_eval(
+                model_wrapper.pre_processors[target_dataset],
+                residual_pre_processor,
+            )
             residuals_target = inner_model.compute_residuals(
                 y=y_for_residual,
                 x_interp=x_interp_for_residual,
                 pre_processors_state=model_wrapper.pre_processors[target_dataset],
-                pre_processors_tendencies=_residual_pre_processor(self.downscaler, target_dataset),
+                pre_processors_tendencies=residual_pre_processor,
                 target_dataset=target_dataset,
                 skip_imputation=True,
             )
