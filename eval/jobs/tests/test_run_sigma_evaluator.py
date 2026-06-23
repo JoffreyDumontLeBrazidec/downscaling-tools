@@ -27,6 +27,86 @@ class _DummyMove:
         return self
 
 
+
+def test_run_sigma_evaluator_injects_checkpoint_compat_profile_before_load(
+    tmp_path: Path, monkeypatch
+):
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+
+    created_loaders = []
+
+    class _DummyLoader:
+        def __init__(self, *_args, **_kwargs):
+            self.config_checkpoint = _ns(
+                model=_ns(model=_ns()),
+                hardware=_ns(num_gpus_per_model=1),
+                dataloader=_ns(read_group_size=1, validation=_ns(frequency="6h", num_workers=8)),
+            )
+            self.config_for_datamodule = _ns(
+                model=_ns(model=_ns()),
+                hardware=_ns(num_gpus_per_model=1),
+                dataloader=_ns(read_group_size=1, validation=_ns(frequency="6h", num_workers=8)),
+            )
+            created_loaders.append(self)
+
+        def load(self):
+            assert self.config_checkpoint.model.model.compatibility_profile == "jupiter_ln_proof_20260622"
+            assert self.config_for_datamodule.model.model.compatibility_profile == "jupiter_ln_proof_20260622"
+            self.datamodule = object()
+            self.interface = _DummyMove()
+            self.downscaler = _DummyMove()
+
+    class _DummySigmaEvaluator:
+        def __init__(self, downscaler, datamodule, n_samples, name_to_index=None):
+            self.downscaler = downscaler
+            self.datamodule = datamodule
+            self.n_samples = n_samples
+            self.name_to_index = name_to_index
+
+        def evaluate_sigma(self, sigma, prediction_on_pure_noise):
+            return 0.25, {"diff_all_var_non_weighted": 0.5}
+
+    checkpoint_config = _ns(
+        model=_ns(model=_ns()),
+        hardware=_ns(num_gpus_per_model=1),
+        dataloader=_ns(read_group_size=1, validation=_ns(frequency="12h", num_workers=16)),
+    )
+
+    monkeypatch.setattr(mod, "ObjectFromCheckpointLoader", _DummyLoader)
+    monkeypatch.setattr(mod, "get_checkpoint", lambda *_args, **_kwargs: ({}, checkpoint_config))
+    monkeypatch.setattr(mod, "instantiate_config", lambda: _ns())
+    monkeypatch.setattr(mod, "adapt_config_hpc", lambda config_checkpoint, _config: config_checkpoint)
+    monkeypatch.setattr(mod, "_rewrite_dataset_paths_in_place", lambda cfg: cfg)
+    monkeypatch.setattr(mod, "SigmaEvaluator", _DummySigmaEvaluator)
+    monkeypatch.setattr(mod, "infer_lane_from_config", lambda _cfg: "o96_o320")
+    monkeypatch.setattr(mod, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(mod, "_init_model_comm_group", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mod, "_resolve_device", lambda requested_device, _local_rank: requested_device)
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
+
+    out_csv = tmp_path / "sigma_eval.csv"
+    args = argparse.Namespace(
+        ckpt_root="/tmp/checkpoints",
+        name_exp="exp",
+        name_ckpt="model.ckpt",
+        out_file="sigma_eval_table.csv",
+        out_csv=str(out_csv),
+        device="cpu",
+        num_gpus_per_model=1,
+        n_samples=1,
+        validation_frequency="50h",
+        sigmas="1",
+        run_pure_noise=False,
+        run_noised=False,
+        residual_statistics_fallback="",
+        checkpoint_compat_profile="jupiter_ln_proof_20260622",
+    )
+
+    mod.run_sigma_evaluator(args)
+
+    assert created_loaders
+    assert out_csv.exists()
+
 def test_run_sigma_evaluator_preserves_four_gpu_model_parallel_for_o1280_family(
     tmp_path: Path, monkeypatch
 ):

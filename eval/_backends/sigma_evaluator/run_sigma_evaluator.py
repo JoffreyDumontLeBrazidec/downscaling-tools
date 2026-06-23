@@ -5,6 +5,7 @@ import gc
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import torch
@@ -104,6 +105,48 @@ def _inject_minimal_hardware_config(config_checkpoint, host_config) -> None:
     else:
         from types import SimpleNamespace  # pylint: disable=import-outside-toplevel
         config_checkpoint.hardware = SimpleNamespace(**hw_dict)
+
+
+def _set_nested_config_value(cfg, path: tuple[str, ...], value) -> None:
+    if cfg is None:
+        return
+    try:
+        from omegaconf import OmegaConf, open_dict  # pylint: disable=import-outside-toplevel
+
+        if OmegaConf.is_config(cfg):
+            with open_dict(cfg):
+                node = cfg
+                for part in path[:-1]:
+                    child = OmegaConf.select(node, part, default=None)
+                    if child is None:
+                        setattr(node, part, OmegaConf.create({}))
+                        child = getattr(node, part)
+                    node = child
+                setattr(node, path[-1], value)
+            return
+    except Exception:
+        logger.debug("Falling back to object/dict config mutation", exc_info=True)
+
+    node = cfg
+    for part in path[:-1]:
+        if isinstance(node, dict):
+            node = node.setdefault(part, {})
+        else:
+            child = getattr(node, part, None)
+            if child is None:
+                child = SimpleNamespace()
+                setattr(node, part, child)
+            node = child
+    if isinstance(node, dict):
+        node[path[-1]] = value
+    else:
+        setattr(node, path[-1], value)
+
+
+def _apply_checkpoint_compat_profile(cfg, profile: str) -> None:
+    profile = (profile or "").strip()
+    if profile:
+        _set_nested_config_value(cfg, ("model", "model", "compatibility_profile"), profile)
 
 
 def _resolve_output_name_to_index(downscaler, datamodule) -> dict[str, int]:
@@ -225,6 +268,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Fallback residual statistics filename when the configured file is missing.",
     )
+    parser.add_argument(
+        "--checkpoint-compat-profile",
+        type=str,
+        default="",
+        help="Optional checkpoint compatibility profile, e.g. jupiter_ln_proof_20260622.",
+    )
     return parser
 
 
@@ -317,6 +366,12 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
             fallback_residuals = repaired
     if fallback_residuals is not None:
         print(f"Using fallback residual statistics file: {fallback_residuals}")
+
+    checkpoint_compat_profile = (getattr(args, "checkpoint_compat_profile", "") or "").strip()
+    if checkpoint_compat_profile:
+        print(f"Applying checkpoint compatibility profile: {checkpoint_compat_profile}")
+        _apply_checkpoint_compat_profile(object_loader.config_checkpoint, checkpoint_compat_profile)
+        _apply_checkpoint_compat_profile(object_loader.config_for_datamodule, checkpoint_compat_profile)
 
     if args.device == "auto":
         requested_device = "cuda" if torch.cuda.is_available() else "cpu"

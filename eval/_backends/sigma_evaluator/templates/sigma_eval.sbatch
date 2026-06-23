@@ -15,6 +15,7 @@ STACK_FLAVOR="new"                # new | old
 SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
+CHECKPOINT_COMPAT_PROFILE=""
 
 # ---------- Derived from LANE ----------
 case $LANE in
@@ -88,6 +89,11 @@ OUT_CSV="/home/ecm5702/scratch/eval/scoreboards/sigma/${RUN_ID}_sigma_eval.csv"
 mkdir -p "$(dirname "$OUT_CSV")"
 
 # ---------- Run ----------
+COMPAT_ARGS=()
+if [[ -n "$CHECKPOINT_COMPAT_PROFILE" ]]; then
+    COMPAT_ARGS=(--checkpoint-compat-profile "$CHECKPOINT_COMPAT_PROFILE")
+fi
+
 srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --name_exp "$CHECKPOINT_REF" \
     --name_ckpt "$CKPT_NAME" \
@@ -96,6 +102,7 @@ srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --n_samples "$N_SAMPLES" \
     --validation_frequency "$VALIDATION_FREQUENCY" \
     --num-gpus-per-model "$NGPU" \
-    --device auto
+    --device auto \
+    "${COMPAT_ARGS[@]}"
 
 echo "Done. Output: $OUT_CSV"
