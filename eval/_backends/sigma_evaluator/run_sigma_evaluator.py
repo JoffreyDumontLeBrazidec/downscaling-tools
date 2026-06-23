@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import pandas as pd
 import torch
 import torch.distributed as dist
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 from eval._backends.checkpoint_utils import infer_lane_from_config
 
 from manual_inference.checkpoints import (
@@ -143,15 +145,216 @@ def _set_nested_config_value(cfg, path: tuple[str, ...], value) -> None:
         setattr(node, path[-1], value)
 
 
+def _get_nested_config_value(cfg, path: tuple[str, ...]):
+    if cfg is None:
+        return None
+    try:
+        from omegaconf import OmegaConf  # pylint: disable=import-outside-toplevel
+
+        if OmegaConf.is_config(cfg):
+            return OmegaConf.select(cfg, ".".join(path), default=None)
+    except Exception:
+        logger.debug("Falling back to object/dict config lookup", exc_info=True)
+
+    node = cfg
+    for part in path:
+        if isinstance(node, dict):
+            node = node.get(part)
+        else:
+            node = getattr(node, part, None)
+        if node is None:
+            return None
+    return node
+
+
 def _apply_checkpoint_compat_profile(cfg, profile: str) -> None:
     profile = (profile or "").strip()
     if profile:
         _set_nested_config_value(cfg, ("model", "model", "compatibility_profile"), profile)
 
 
+def _localize_external_checkpoint_paths(cfg) -> list[tuple[str, str]]:
+    rewrites: list[tuple[str, str]] = []
+
+    inter_mat_dir = Path(os.environ.get("INTER_MAT_DIR", "/home/ecm5702/hpcperm/data/inter_mat"))
+    inter_mat_paths = (
+        ("model", "residual", "in_lres", "interpolation_file_path"),
+        ("system", "input", "truncation"),
+        ("system", "input", "truncation_inv"),
+    )
+    for path in inter_mat_paths:
+        current = _get_nested_config_value(cfg, path)
+        if not isinstance(current, str) or not current:
+            continue
+        local_path = inter_mat_dir / Path(current).name
+        if local_path.exists() and str(local_path) != current:
+            _set_nested_config_value(cfg, path, str(local_path))
+            rewrites.append((current, str(local_path)))
+
+    return rewrites
+
+
+def _get_output_name_to_index_from_data_indices(data_indices) -> dict[str, int]:
+    if data_indices is None:
+        return {}
+    candidates = []
+    if isinstance(data_indices, dict):
+        candidates.extend(
+            data_indices[key]
+            for key in ("out_hres", "output", "target")
+            if key in data_indices
+        )
+        candidates.extend(data_indices.values())
+    else:
+        candidates.append(data_indices)
+
+    for candidate in candidates:
+        try:
+            name_to_index = candidate.model.output.name_to_index
+            if name_to_index:
+                return dict(name_to_index)
+        except AttributeError:
+            continue
+    return {}
+
+
+class _BundleSigmaDataset(Dataset):
+    def __init__(self, bundle_paths: list[Path], data_indices) -> None:
+        self.bundle_paths = bundle_paths
+        self.data_indices = data_indices
+        self.name_to_idx_lres = data_indices["in_lres"].data.input.name_to_index
+        self.name_to_idx_hres = data_indices["in_hres"].data.input.name_to_index
+        self.output_name_to_index = _get_output_name_to_index_from_data_indices(data_indices)
+        if not self.output_name_to_index:
+            raise ValueError("Could not resolve output name_to_index from checkpoint data_indices.")
+        self.weather_states = list(self.output_name_to_index.keys())
+
+    def __len__(self) -> int:
+        return len(self.bundle_paths)
+
+    def __getitem__(self, idx: int):
+        from manual_inference.input_data_construction.bundle import (  # pylint: disable=import-outside-toplevel
+            extract_target_from_bundle_dataset,
+            load_inputs_from_bundle_numpy,
+            open_bundle_dataset,
+        )
+
+        bundle = open_bundle_dataset(self.bundle_paths[idx])
+        try:
+            x_lres_np, x_hres_np, *_ = load_inputs_from_bundle_numpy(
+                bundle,
+                self.name_to_idx_lres,
+                self.name_to_idx_hres,
+            )
+            y_np, found_target_channels = extract_target_from_bundle_dataset(
+                bundle,
+                self.weather_states,
+            )
+            if y_np is None:
+                raise ValueError(f"Bundle has no target_hres_* truth fields: {self.bundle_paths[idx]}")
+            if found_target_channels < len(self.weather_states):
+                raise ValueError(
+                    f"Bundle target coverage is incomplete for sigma evaluation: "
+                    f"{found_target_channels}/{len(self.weather_states)} in {self.bundle_paths[idx]}"
+                )
+
+            # Native Anemoi batches are dates x ensemble x grid x variables; the
+            # DataLoader adds the leading batch dimension.
+            return (
+                torch.from_numpy(x_lres_np)[None, None, ...],
+                torch.from_numpy(x_hres_np)[None, None, ...],
+                torch.from_numpy(y_np)[None, None, ...],
+            )
+        finally:
+            try:
+                bundle.close()
+            except Exception:
+                pass
+
+
+class _BundleSigmaDataModule:
+    def __init__(self, bundle_paths: list[Path], data_indices) -> None:
+        if not bundle_paths:
+            raise FileNotFoundError("No *_input_bundle.nc files found for bundle-root sigma evaluation.")
+        self.bundle_paths = bundle_paths
+        self.data_indices = data_indices
+        self._dataset = _BundleSigmaDataset(bundle_paths, data_indices)
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(self._dataset, batch_size=1, shuffle=False, num_workers=0)
+
+
+def _make_bundle_sigma_datamodule(*, bundle_root: str, data_indices, n_samples: int):
+    root = Path(bundle_root).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f"Bundle root does not exist: {root}")
+    bundle_paths = sorted(root.glob("*_input_bundle.nc"))
+    if n_samples > 0:
+        bundle_paths = bundle_paths[:n_samples]
+    return _BundleSigmaDataModule(bundle_paths, data_indices)
+
+
+def _resolve_downscaler_cls():
+    import importlib  # pylint: disable=import-outside-toplevel
+
+    candidates = (
+        ("anemoi.training.train.tasks", "GraphDiffusionDownscaler"),
+        ("anemoi.training.train.tasks.diffusiondownscaler", "GraphDiffusionDownscaler"),
+        ("anemoi.training.train.tasks.single_step", "GraphDownscaler"),
+        ("anemoi.training.train.downscaler", "GraphDownscaler"),
+    )
+    errors = []
+    for module_name, class_name in candidates:
+        try:
+            module = importlib.import_module(module_name)
+            return getattr(module, class_name)
+        except (ImportError, AttributeError) as exc:
+            errors.append(f"{module_name}.{class_name}: {exc}")
+    raise ImportError("Could not import a downscaler task class. Tried: " + "; ".join(errors))
+
+
+def _load_downscaler_from_checkpoint_metadata(
+    *,
+    ckpt_root: str,
+    name_exp: str,
+    name_ckpt: str,
+    checkpoint: dict,
+    config_checkpoint,
+):
+    downscaler_cls = _resolve_downscaler_cls()
+    hyper_parameters = checkpoint.get("hyper_parameters", {})
+    kwargs = {
+        "config": config_checkpoint,
+        "data_indices": hyper_parameters["data_indices"],
+        "graph_data": hyper_parameters["graph_data"],
+        "metadata": hyper_parameters["metadata"],
+        "statistics": hyper_parameters["statistics"],
+    }
+    if hyper_parameters.get("supporting_arrays") is not None:
+        kwargs["supporting_arrays"] = hyper_parameters["supporting_arrays"]
+    if hyper_parameters.get("statistics_tendencies") is not None:
+        kwargs["statistics_tendencies"] = hyper_parameters["statistics_tendencies"]
+    if hyper_parameters.get("truncation_data") is not None:
+        kwargs["truncation_data"] = hyper_parameters["truncation_data"]
+
+    return downscaler_cls.load_from_checkpoint(
+        str(Path(ckpt_root) / name_exp / name_ckpt),
+        strict=False,
+        weights_only=False,
+        **kwargs,
+    )
+
+
 def _resolve_output_name_to_index(downscaler, datamodule) -> dict[str, int]:
     """Extract model output name_to_index from downscaler or datamodule."""
     for source_name, obj in [("downscaler", downscaler), ("datamodule", datamodule)]:
+        try:
+            nti = _get_output_name_to_index_from_data_indices(obj.data_indices)
+            if nti:
+                logger.info("Resolved output name_to_index from %s data_indices (%d vars)", source_name, len(nti))
+                return nti
+        except AttributeError:
+            pass
         try:
             nti = obj.data_indices.model.output.name_to_index
             if nti is not None and len(nti) > 0:
@@ -274,6 +477,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional checkpoint compatibility profile, e.g. jupiter_ln_proof_20260622.",
     )
+    parser.add_argument(
+        "--bundle-root",
+        type=str,
+        default="",
+        help="Optional directory of *_input_bundle.nc files to use instead of the checkpoint validation zarr dataloader.",
+    )
     return parser
 
 
@@ -373,6 +582,15 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
         _apply_checkpoint_compat_profile(object_loader.config_checkpoint, checkpoint_compat_profile)
         _apply_checkpoint_compat_profile(object_loader.config_for_datamodule, checkpoint_compat_profile)
 
+    localized_paths = []
+    for cfg_candidate in (
+        object_loader.config_checkpoint,
+        object_loader.config_for_datamodule,
+    ):
+        localized_paths.extend(_localize_external_checkpoint_paths(cfg_candidate))
+    for old_path, new_path in localized_paths:
+        print(f"Localized checkpoint path: {old_path} -> {new_path}")
+
     if args.device == "auto":
         requested_device = "cuda" if torch.cuda.is_available() else "cpu"
     else:
@@ -386,14 +604,32 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
 
     try:
         model_comm_group = _init_model_comm_group(device, global_rank, world_size)
-        object_loader.load()
+        bundle_root = (getattr(args, "bundle_root", "") or "").strip()
+        if bundle_root:
+            print(f"Using bundle-root sigma inputs: {bundle_root}")
+            datamodule = _make_bundle_sigma_datamodule(
+                bundle_root=bundle_root,
+                data_indices=checkpoint["hyper_parameters"]["data_indices"],
+                n_samples=args.n_samples,
+            )
+            interface = None
+            downscaler = _load_downscaler_from_checkpoint_metadata(
+                ckpt_root=args.ckpt_root,
+                name_exp=args.name_exp,
+                name_ckpt=args.name_ckpt,
+                checkpoint=checkpoint,
+                config_checkpoint=object_loader.config_checkpoint,
+            )
+        else:
+            object_loader.load()
 
-        datamodule = object_loader.datamodule
-        interface = object_loader.interface
-        downscaler = object_loader.downscaler
+            datamodule = object_loader.datamodule
+            interface = object_loader.interface
+            downscaler = object_loader.downscaler
         _ = checkpoint  # keep behavior; checkpoint is loaded for config compatibility.
 
-        interface = interface.to(device)
+        if interface is not None:
+            interface = interface.to(device)
         downscaler = downscaler.to(device)
 
         _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_size)

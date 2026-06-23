@@ -107,6 +107,222 @@ def test_run_sigma_evaluator_injects_checkpoint_compat_profile_before_load(
     assert created_loaders
     assert out_csv.exists()
 
+
+def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
+    tmp_path: Path, monkeypatch
+):
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+
+    bundle_root = tmp_path / "bundles"
+    bundle_root.mkdir()
+    (bundle_root / "eefo_o320_0001_date20230826_time0000_mem01_step024h_input_bundle.nc").write_text(
+        "placeholder"
+    )
+
+    class _DummyLoader:
+        def __init__(self, *_args, **_kwargs):
+            self.config_checkpoint = _ns(
+                model=_ns(model=_ns()),
+                hardware=_ns(num_gpus_per_model=1),
+                dataloader=_ns(read_group_size=1, validation=_ns(frequency="6h", num_workers=8)),
+            )
+            self.config_for_datamodule = _ns(
+                model=_ns(model=_ns()),
+                hardware=_ns(num_gpus_per_model=1),
+                dataloader=_ns(read_group_size=1, validation=_ns(frequency="6h", num_workers=8)),
+            )
+
+        def load(self):
+            raise AssertionError("bundle-root mode must not open the checkpoint datamodule")
+
+    class _DummySigmaEvaluator:
+        def __init__(self, downscaler, datamodule, n_samples, name_to_index=None):
+            self.downscaler = downscaler
+            self.datamodule = datamodule
+            self.n_samples = n_samples
+            self.name_to_index = name_to_index
+
+        def evaluate_sigma(self, sigma, prediction_on_pure_noise):
+            assert self.datamodule.bundle_paths
+            assert self.name_to_index == {"2t": 0}
+            return 0.25, {"diff_all_var_non_weighted": 0.5}
+
+    checkpoint = {
+        "hyper_parameters": {
+            "data_indices": {"out_hres": _ns(model=_ns(output=_ns(name_to_index={"2t": 0})))},
+            "graph_data": {"graph": "data"},
+            "metadata": {"meta": "data"},
+            "statistics": {"stats": "data"},
+            "statistics_tendencies": {"tendencies": "data"},
+            "supporting_arrays": {"supporting": "arrays"},
+        }
+    }
+    checkpoint_config = _ns(
+        model=_ns(model=_ns()),
+        hardware=_ns(num_gpus_per_model=1),
+        dataloader=_ns(read_group_size=1, validation=_ns(frequency="12h", num_workers=16)),
+    )
+    downscaler = _DummyMove()
+    datamodule = _ns(bundle_paths=[])
+
+    def _dummy_bundle_datamodule(*, bundle_root, data_indices, n_samples):
+        datamodule.bundle_paths = list(Path(bundle_root).glob("*_input_bundle.nc"))[:n_samples]
+        datamodule.data_indices = data_indices
+        return datamodule
+
+    monkeypatch.setattr(mod, "ObjectFromCheckpointLoader", _DummyLoader)
+    monkeypatch.setattr(mod, "get_checkpoint", lambda *_args, **_kwargs: (checkpoint, checkpoint_config))
+    monkeypatch.setattr(mod, "instantiate_config", lambda: _ns())
+    monkeypatch.setattr(mod, "adapt_config_hpc", lambda config_checkpoint, _config: config_checkpoint)
+    monkeypatch.setattr(mod, "_rewrite_dataset_paths_in_place", lambda cfg: cfg)
+    monkeypatch.setattr(mod, "SigmaEvaluator", _DummySigmaEvaluator)
+    monkeypatch.setattr(mod, "infer_lane_from_config", lambda _cfg: "o96_o320")
+    monkeypatch.setattr(mod, "_get_parallel_info", lambda: (0, 0, 1))
+    monkeypatch.setattr(mod, "_init_model_comm_group", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mod, "_resolve_device", lambda requested_device, _local_rank: requested_device)
+    monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        mod,
+        "_load_downscaler_from_checkpoint_metadata",
+        lambda *_args, **_kwargs: downscaler,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        mod,
+        "_make_bundle_sigma_datamodule",
+        _dummy_bundle_datamodule,
+        raising=False,
+    )
+
+    out_csv = tmp_path / "sigma_eval.csv"
+    args = argparse.Namespace(
+        ckpt_root="/tmp/checkpoints",
+        name_exp="exp",
+        name_ckpt="model.ckpt",
+        out_file="sigma_eval_table.csv",
+        out_csv=str(out_csv),
+        device="cpu",
+        num_gpus_per_model=1,
+        n_samples=1,
+        validation_frequency="50h",
+        sigmas="1",
+        run_pure_noise=False,
+        run_noised=False,
+        residual_statistics_fallback="",
+        checkpoint_compat_profile="",
+        bundle_root=str(bundle_root),
+    )
+
+    mod.run_sigma_evaluator(args)
+
+    assert out_csv.exists()
+
+
+def test_resolve_downscaler_cls_prefers_unified_tasks_export(monkeypatch):
+    import types
+
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+
+    class _DummyDownscaler:
+        pass
+
+    fake_tasks = types.ModuleType("anemoi.training.train.tasks")
+    fake_tasks.GraphDiffusionDownscaler = _DummyDownscaler
+    monkeypatch.setitem(sys.modules, "anemoi.training.train.tasks", fake_tasks)
+
+    assert mod._resolve_downscaler_cls() is _DummyDownscaler
+
+
+def test_load_downscaler_from_checkpoint_metadata_uses_trusted_pickle_load(monkeypatch):
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    seen = {}
+
+    class _DummyDownscaler:
+        @classmethod
+        def load_from_checkpoint(cls, path, **kwargs):
+            seen["path"] = path
+            seen["kwargs"] = kwargs
+            return cls()
+
+    monkeypatch.setattr(mod, "_resolve_downscaler_cls", lambda: _DummyDownscaler)
+
+    checkpoint = {
+        "hyper_parameters": {
+            "data_indices": {"out_hres": object()},
+            "graph_data": {"graph": "data"},
+            "metadata": {"meta": "data"},
+            "statistics": {"stats": "data"},
+        }
+    }
+
+    mod._load_downscaler_from_checkpoint_metadata(
+        ckpt_root="/tmp/checkpoints",
+        name_exp="exp",
+        name_ckpt="model.ckpt",
+        checkpoint=checkpoint,
+        config_checkpoint=_ns(model=_ns(model=_ns())),
+    )
+
+    assert seen["path"] == "/tmp/checkpoints/exp/model.ckpt"
+    assert seen["kwargs"]["strict"] is False
+    assert seen["kwargs"]["weights_only"] is False
+
+
+def test_localize_external_checkpoint_paths_rewrites_existing_inter_mat(
+    tmp_path: Path, monkeypatch
+):
+    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+
+    inter_mat_dir = tmp_path / "inter_mat"
+    inter_mat_dir.mkdir()
+    local = inter_mat_dir / "interpol_O320_to_O1280_linear.mat.npz"
+    local.write_text("placeholder")
+    monkeypatch.setenv("INTER_MAT_DIR", str(inter_mat_dir))
+
+    cfg = _ns(
+        model=_ns(
+            residual=_ns(
+                in_lres=_ns(
+                    interpolation_file_path=(
+                        "/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/inter_mat/"
+                        "interpol_O320_to_O1280_linear.mat.npz"
+                    )
+                )
+            )
+        ),
+        system=_ns(
+            input=_ns(
+                truncation=(
+                    "/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/inter_mat/"
+                    "interpol_O320_to_O1280_linear.mat.npz"
+                ),
+                truncation_inv=(
+                    "/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/inter_mat/"
+                    "missing_local_file.mat.npz"
+                ),
+            )
+        ),
+    )
+
+    rewrites = mod._localize_external_checkpoint_paths(cfg)
+
+    assert cfg.model.residual.in_lres.interpolation_file_path == str(local)
+    assert cfg.system.input.truncation == str(local)
+    assert cfg.system.input.truncation_inv.endswith("missing_local_file.mat.npz")
+    assert rewrites == [
+        (
+            "/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/inter_mat/"
+            "interpol_O320_to_O1280_linear.mat.npz",
+            str(local),
+        ),
+        (
+            "/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/inter_mat/"
+            "interpol_O320_to_O1280_linear.mat.npz",
+            str(local),
+        ),
+    ]
+
+
 def test_run_sigma_evaluator_preserves_four_gpu_model_parallel_for_o1280_family(
     tmp_path: Path, monkeypatch
 ):

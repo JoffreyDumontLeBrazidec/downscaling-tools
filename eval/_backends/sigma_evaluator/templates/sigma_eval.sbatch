@@ -16,6 +16,7 @@ SIGMAS="1,5,10,100"
 N_SAMPLES=10
 VALIDATION_FREQUENCY="50h"
 CHECKPOINT_COMPAT_PROFILE=""
+BUNDLE_ROOT=""
 
 # ---------- Derived from LANE ----------
 case $LANE in
@@ -93,6 +94,10 @@ COMPAT_ARGS=()
 if [[ -n "$CHECKPOINT_COMPAT_PROFILE" ]]; then
     COMPAT_ARGS=(--checkpoint-compat-profile "$CHECKPOINT_COMPAT_PROFILE")
 fi
+BUNDLE_ARGS=()
+if [[ -n "$BUNDLE_ROOT" ]]; then
+    BUNDLE_ARGS=(--bundle-root "$BUNDLE_ROOT")
+fi
 
 srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --name_exp "$CHECKPOINT_REF" \
@@ -103,6 +108,7 @@ srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
     --validation_frequency "$VALIDATION_FREQUENCY" \
     --num-gpus-per-model "$NGPU" \
     --device auto \
-    "${COMPAT_ARGS[@]}"
+    "${COMPAT_ARGS[@]}" \
+    "${BUNDLE_ARGS[@]}"
 
 echo "Done. Output: $OUT_CSV"
