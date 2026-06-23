@@ -6,6 +6,7 @@ import torch
 
 from eval._backends.sigma_evaluator.sigma_evaluator import SigmaEvaluator
 from eval._backends.sigma_evaluator.sigma_evaluator import _disable_first_run_checks_for_nan_free_sigma_eval
+from eval._backends.sigma_evaluator.sigma_evaluator import _localize_data_index_tensors
 from eval._backends.sigma_evaluator.sigma_evaluator import _use_spatial_sigma_sharding
 
 
@@ -32,6 +33,23 @@ def test_spatial_sigma_sharding_requires_checkpoint_opt_in():
 
     downscaler.keep_batch_sharded = True
     assert _use_spatial_sigma_sharding(downscaler) is True
+
+
+def test_localize_data_index_tensors_accepts_unified_index_shape():
+    tensor_index = SimpleNamespace(
+        prognostic=torch.tensor([0]),
+        diagnostic=torch.tensor([], dtype=torch.long),
+        forcing=torch.tensor([], dtype=torch.long),
+        target=torch.tensor([], dtype=torch.long),
+        full=torch.tensor([0]),
+    )
+    collection = SimpleNamespace(
+        data=SimpleNamespace(input=tensor_index, output=tensor_index),
+        model=SimpleNamespace(input=tensor_index, output=tensor_index),
+    )
+
+    assert _localize_data_index_tensors({"out_hres": collection}, "cpu") == 0
+    assert tensor_index.full.device.type == "cpu"
 
 
 class _DummyInnerModel:

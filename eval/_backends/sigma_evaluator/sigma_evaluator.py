@@ -220,6 +220,22 @@ def _disable_first_run_checks_for_nan_free_sigma_eval(*processors) -> None:
             logger.info("Skipped redundant first-run processor NaN check for verified finite sigma bundles")
 
 
+def _localize_data_index_tensors(data_indices, device) -> int:
+    moved = 0
+    collections = data_indices.values() if isinstance(data_indices, dict) else (data_indices,)
+    for collection in collections:
+        for index_kind in ("data", "model"):
+            index = getattr(collection, index_kind, None)
+            for tensor_index_kind in ("input", "output"):
+                tensor_index = getattr(index, tensor_index_kind, None)
+                for field in ("prognostic", "diagnostic", "forcing", "target", "full"):
+                    tensor = getattr(tensor_index, field, None)
+                    if torch.is_tensor(tensor) and tensor.device != torch.device(device):
+                        setattr(tensor_index, field, tensor.to(device))
+                        moved += 1
+    return moved
+
+
 class SigmaEvaluator:
     STANDARD_FIELDS = (
         "10u", "10v", "2d", "2t", "msl",
@@ -274,6 +290,9 @@ class SigmaEvaluator:
             inner_model = model_wrapper.model
             model_comm_group = getattr(self.downscaler, "model_comm_group", None)
             target_dataset = _target_dataset_name(self.downscaler)
+            moved_index_tensors = _localize_data_index_tensors(inner_model.data_indices, x_in.device)
+            if moved_index_tensors:
+                logger.info("Localized %d checkpoint data-index tensors to %s", moved_index_tensors, x_in.device)
 
             spatial_sharding = _use_spatial_sigma_sharding(self.downscaler)
             logger.info(
