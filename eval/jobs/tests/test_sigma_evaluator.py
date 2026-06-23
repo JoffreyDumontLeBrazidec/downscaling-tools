@@ -23,13 +23,13 @@ def test_disable_first_run_checks_for_nan_free_sigma_eval():
     assert processor.first_run is False
 
 
-def test_spatial_sigma_sharding_requires_checkpoint_opt_in():
+def test_spatial_sigma_sharding_follows_model_parallel_inference_contract():
     class _Group:
         def size(self):
             return 4
 
     downscaler = SimpleNamespace(model_comm_group=_Group(), keep_batch_sharded=False)
-    assert _use_spatial_sigma_sharding(downscaler) is False
+    assert _use_spatial_sigma_sharding(downscaler) is True
 
     downscaler.keep_batch_sharded = True
     assert _use_spatial_sigma_sharding(downscaler) is True

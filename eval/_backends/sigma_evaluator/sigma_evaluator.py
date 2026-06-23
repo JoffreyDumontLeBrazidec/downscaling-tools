@@ -68,9 +68,14 @@ def _target_dataset_name(downscaler) -> str:
 
 
 def _use_spatial_sigma_sharding(downscaler) -> bool:
-    return bool(getattr(downscaler, "keep_batch_sharded", False)) and _comm_size(
-        getattr(downscaler, "model_comm_group", None)
-    ) > 1
+    """Match the unified model's inference path, not its dataloader policy.
+
+    ``keep_batch_sharded`` only controls whether the training task gathers reader
+    shards before ``_step``.  The unified model's ``_before_sampling`` spatially
+    shards its already-complete inference batch whenever model parallelism is
+    active, including for checkpoints whose training config sets that flag false.
+    """
+    return _comm_size(getattr(downscaler, "model_comm_group", None)) > 1
 
 
 def _set_grid_shard_state(downscaler, grid_shard_sizes) -> None:
