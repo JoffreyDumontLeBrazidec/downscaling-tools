@@ -67,6 +67,12 @@ def _target_dataset_name(downscaler) -> str:
     return "out_hres"
 
 
+def _use_spatial_sigma_sharding(downscaler) -> bool:
+    return bool(getattr(downscaler, "keep_batch_sharded", False)) and _comm_size(
+        getattr(downscaler, "model_comm_group", None)
+    ) > 1
+
+
 def _set_grid_shard_state(downscaler, grid_shard_sizes) -> None:
     dataset_names = list(getattr(downscaler, "dataset_names", ()) or ())
     if grid_shard_sizes is None:
@@ -141,11 +147,19 @@ def _shard_target_if_needed(y: torch.Tensor, grid_shard_sizes, target_dataset: s
     return shard_tensor(y, -2, target_shard_sizes, model_comm_group)
 
 
-def _prepare_unified_conditioning_and_raw_interp(inner_model, model_wrapper, x_in, x_in_hres, model_comm_group):
+def _prepare_unified_conditioning_and_raw_interp(
+    inner_model,
+    model_wrapper,
+    x_in,
+    x_in_hres,
+    model_comm_group,
+    *,
+    spatial_sharding: bool,
+):
     x_in = x_in[:, :1, ...]
     x_in_hres = x_in_hres[:, :1, ...]
 
-    upsample_sharded = _comm_size(model_comm_group) > 1
+    upsample_sharded = spatial_sharding and _comm_size(model_comm_group) > 1
     if upsample_sharded:
         from anemoi.models.distributed.graph import shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
@@ -168,7 +182,7 @@ def _prepare_unified_conditioning_and_raw_interp(inner_model, model_wrapper, x_i
     x_hres_conditioning = model_wrapper.pre_processors["in_hres"](x_in_hres, in_place=False)
 
     grid_shard_sizes = None
-    if model_comm_group is not None:
+    if spatial_sharding and model_comm_group is not None:
         from anemoi.models.distributed.graph import shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
 
@@ -261,9 +275,11 @@ class SigmaEvaluator:
             model_comm_group = getattr(self.downscaler, "model_comm_group", None)
             target_dataset = _target_dataset_name(self.downscaler)
 
+            spatial_sharding = _use_spatial_sigma_sharding(self.downscaler)
             logger.info(
-                "Preparing unified sigma batch (distributed=%s)",
+                "Preparing unified sigma batch (distributed=%s, spatial_sharding=%s)",
                 _comm_size(model_comm_group) > 1,
+                spatial_sharding,
             )
             x_in_interp_to_hres, x_in_hres, x_interp_raw, grid_shard_sizes = (
                 _prepare_unified_conditioning_and_raw_interp(
@@ -272,6 +288,7 @@ class SigmaEvaluator:
                     x_in,
                     x_in_hres,
                     model_comm_group,
+                    spatial_sharding=spatial_sharding,
                 )
             )
             _set_grid_shard_state(self.downscaler, grid_shard_sizes)

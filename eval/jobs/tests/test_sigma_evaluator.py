@@ -6,6 +6,7 @@ import torch
 
 from eval._backends.sigma_evaluator.sigma_evaluator import SigmaEvaluator
 from eval._backends.sigma_evaluator.sigma_evaluator import _disable_first_run_checks_for_nan_free_sigma_eval
+from eval._backends.sigma_evaluator.sigma_evaluator import _use_spatial_sigma_sharding
 
 
 class _IdentityProcessor:
@@ -19,6 +20,18 @@ def test_disable_first_run_checks_for_nan_free_sigma_eval():
     _disable_first_run_checks_for_nan_free_sigma_eval(processor, None)
 
     assert processor.first_run is False
+
+
+def test_spatial_sigma_sharding_requires_checkpoint_opt_in():
+    class _Group:
+        def size(self):
+            return 4
+
+    downscaler = SimpleNamespace(model_comm_group=_Group(), keep_batch_sharded=False)
+    assert _use_spatial_sigma_sharding(downscaler) is False
+
+    downscaler.keep_batch_sharded = True
+    assert _use_spatial_sigma_sharding(downscaler) is True
 
 
 class _DummyInnerModel:
