@@ -41,6 +41,7 @@ def _normalize_runner_config(raw_config: dict[str, Any]) -> dict[str, Any]:
     defaults: dict[str, Any] = {
         "date": None,
         "device": "cuda",
+        "precision": "float32",
         "allow_nans": None,
         "verbosity": 0,
         "world_size": 1,
