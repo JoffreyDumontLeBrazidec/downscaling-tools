@@ -59,7 +59,7 @@ def _install_fake_anemoi(monkeypatch, calls: list[object]):
     monkeypatch.setitem(sys.modules, "anemoi.inference", inference)
     monkeypatch.setitem(sys.modules, "anemoi.inference.runners", runners)
     monkeypatch.setitem(sys.modules, "downscaling_unified_runner", types.ModuleType("downscaling_unified_runner"))
-    return interface
+    return interface, runner
 
 
 def test_unified_runner_requires_existing_config(monkeypatch, tmp_path: Path):
@@ -81,7 +81,7 @@ def test_unified_runner_applies_env_before_constructing_runner(monkeypatch, tmp_
     )
     monkeypatch.delenv("UNIT_UNIFIED_ENV", raising=False)
     calls: list[object] = []
-    interface = _install_fake_anemoi(monkeypatch, calls)
+    interface, runner = _install_fake_anemoi(monkeypatch, calls)
     config = _prediction_config(types_mod, runner_config=runner_config)
 
     (
@@ -101,6 +101,7 @@ def test_unified_runner_applies_env_before_constructing_runner(monkeypatch, tmp_
     assert calls[1][1]["allow_nans"] is None
     assert inference_model is interface
     assert datamodule.data_indices is interface.data_indices
+    assert datamodule._unified_runner is runner
     assert extra_args == {"num_steps": 30, "sigma_max": 10000.0}
     assert (device, model_comm_group, global_rank, local_rank, world_size) == (
         "cuda:2",

@@ -110,7 +110,10 @@ def load_unified_runner(
     local_rank = int(getattr(runner, "local_rank", fallback_local_rank))
     world_size = int(getattr(runner, "world_size", fallback_world_size))
     model_comm_group = getattr(runner, "model_comm_group", None)
-    datamodule = SimpleNamespace(data_indices=data_indices)
+    # Keep the runner alive for the complete bundle loop.  ParallelRunnerMixin tears
+    # down its process group in ``__del__``; returning only ``runner.model`` would
+    # leave the interface holding a stale model communication group on first forward.
+    datamodule = SimpleNamespace(data_indices=data_indices, _unified_runner=runner)
 
     print(
         "Unified runner initialized "
