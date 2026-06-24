@@ -97,6 +97,8 @@ def test_unified_runner_applies_env_before_constructing_runner(monkeypatch, tmp_
 
     assert calls[0] == ("dotdict", "configured")
     assert calls[1][0] == "create_runner"
+    assert calls[1][1]["device"] == "cuda"
+    assert calls[1][1]["allow_nans"] is None
     assert inference_model is interface
     assert datamodule.data_indices is interface.data_indices
     assert extra_args == {"num_steps": 30, "sigma_max": 10000.0}

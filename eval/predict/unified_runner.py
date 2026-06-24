@@ -35,6 +35,32 @@ def _load_raw_config(path: Path) -> dict[str, Any]:
     return raw
 
 
+def _normalize_runner_config(raw_config: dict[str, Any]) -> dict[str, Any]:
+    """Supply the defaults PrepML normally injects before invoking Anemoi."""
+
+    defaults: dict[str, Any] = {
+        "date": None,
+        "device": "cuda",
+        "allow_nans": None,
+        "verbosity": 0,
+        "world_size": 1,
+        "use_grib_paramid": False,
+        "patch_metadata": {},
+        "output_frequency": None,
+        "trace_path": None,
+        "use_profiler": False,
+        "description": None,
+        "pre_processors": [],
+        "post_processors": None,
+        "forcings": None,
+        "debugging_info": {},
+        "env": {},
+    }
+    for key, value in defaults.items():
+        raw_config.setdefault(key, value)
+    return raw_config
+
+
 def _apply_runner_environment(raw_config: dict[str, Any]) -> None:
     """Apply runner configuration before importing Anemoi/model implementation modules."""
 
@@ -55,7 +81,7 @@ def load_unified_runner(
     if config.runner_config is None:
         raise SystemExit("--inference-backend unified requires --runner-config.")
     runner_config = Path(config.runner_config).expanduser()
-    raw_config = _load_raw_config(runner_config)
+    raw_config = _normalize_runner_config(_load_raw_config(runner_config))
     _apply_runner_environment(raw_config)
 
     # Importing this module registers ``downscaling_unified`` with Anemoi's runner registry.
