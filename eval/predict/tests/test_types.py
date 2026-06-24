@@ -47,6 +47,8 @@ def test_prediction_config_defaults(monkeypatch):
     assert config.precision == "fp32"
     assert config.num_gpus_per_model == 1
     assert config.validation_frequency == "50h"
+    assert config.inference_backend == "legacy"
+    assert config.runner_config is None
     assert config.rank0_write_wait_seconds == 7200
     assert config.members == mod.DEFAULT_MEMBERS
     assert config.steps == mod.DEFAULT_STEPS

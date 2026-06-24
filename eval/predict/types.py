@@ -38,6 +38,8 @@ class PredictionConfig:
     output_dir: Path
     device: str = "cuda"
     precision: str = "fp32"
+    inference_backend: str = "legacy"
+    runner_config: Path | None = None
     num_gpus_per_model: int = 1
     validation_frequency: str = "50h"
     extra_args_json: str = DEFAULT_EXTRA_ARGS_JSON

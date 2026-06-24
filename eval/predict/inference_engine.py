@@ -9,10 +9,16 @@ from typing import Sequence
 import numpy as np
 import torch
 
-from manual_inference.prediction.predict import _compute_x_interp_for_export, _predict_from_bundle
-
 from .bundle_manager import date_str_to_datetime64
 from .types import BundleKey, EnsemblePrediction, PredictionResult
+
+
+def _legacy_bundle_helpers():
+    """Import direct bundle helpers only after unified runner environment is configured."""
+
+    from manual_inference.prediction.predict import _compute_x_interp_for_export, _predict_from_bundle
+
+    return _compute_x_interp_for_export, _predict_from_bundle
 
 
 def _squeeze_leading_singletons(array: np.ndarray, target_ndim: int) -> np.ndarray:
@@ -47,7 +53,8 @@ def predict_single_bundle(
 ) -> PredictionResult:
     """Run prediction for a single input bundle and return structured outputs."""
 
-    x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, dates = _predict_from_bundle(
+    _, predict_from_bundle = _legacy_bundle_helpers()
+    x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, dates = predict_from_bundle(
         inference_model=inference_model,
         datamodule=datamodule,
         device=device,
@@ -147,7 +154,8 @@ def predict_ensemble_members(
 
     x_stack = np.stack(x_members, axis=0)[None, ...]
     try:
-        x_interp_stack = _compute_x_interp_for_export(
+        compute_x_interp_for_export, _ = _legacy_bundle_helpers()
+        x_interp_stack = compute_x_interp_for_export(
             inference_model=inference_model,
             x=x_stack,
             device=device,

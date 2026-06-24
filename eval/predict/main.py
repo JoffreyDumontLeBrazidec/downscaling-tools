@@ -4,18 +4,28 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from pathlib import Path
 from typing import Sequence
-
-from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
-from manual_inference.prediction.predict import DEFAULT_EXTRA_ARGS_JSON, _get_parallel_info, _resolve_ckpt_path
 
 from .bundle_manager import discover_bundles, resolve_date_step_pairs
 from .distributed_io import Rank0FileWriter, _destroy_process_group, _distributed_barrier
 from .inference_engine import predict_ensemble_members
 from .model_loader import load_inference_model
 from .output_writer import prediction_output_path, write_predictions_file
-from .types import BundleKey, PredictionConfig
+from .types import DEFAULT_EXTRA_ARGS_JSON, BundleKey, PredictionConfig
+
+
+OUTPUT_WEATHER_STATE_MODE_CHOICES = ("all", "surface-plus-core-pl")
+
+
+def _get_parallel_info() -> tuple[int, int, int]:
+    """Read launcher rank metadata without importing model implementation modules."""
+
+    local_rank = int(os.environ.get("LOCAL_RANK", os.environ.get("SLURM_LOCALID", 0)))
+    global_rank = int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", 0)))
+    world_size = int(os.environ.get("WORLD_SIZE", os.environ.get("SLURM_NTASKS", 1)))
+    return global_rank, local_rank, world_size
 
 
 def parse_int_list(raw: str) -> list[int]:
@@ -58,6 +68,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--num-gpus-per-model", type=int, default=1)
     parser.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
+    parser.add_argument(
+        "--inference-backend",
+        choices=["legacy", "unified"],
+        default="legacy",
+        help="Model-loading backend. unified uses a rendered Anemoi runner config.",
+    )
+    parser.add_argument(
+        "--runner-config",
+        default="",
+        help="Rendered Anemoi runner YAML, required with --inference-backend unified.",
+    )
     parser.add_argument("--validation-frequency", default="50h")
     parser.add_argument("--members", default="1,2,3,4,5,6,7,8,9,10")
     parser.add_argument("--steps", default="24,48,72,96,120")
@@ -130,7 +151,37 @@ def create_parser() -> argparse.ArgumentParser:
 
 def _resolve_checkpoint_path(args: argparse.Namespace) -> Path:
     if args.name_ckpt:
-        return Path(_resolve_ckpt_path(args.name_ckpt, args.ckpt_root))
+        raw = Path(args.name_ckpt).expanduser()
+        if raw.name.startswith("inference-") and raw.name.endswith(".ckpt"):
+            raise SystemExit(
+                "Pass the base checkpoint path, not the inference companion. "
+                f"Got {raw.name}; expected the matching non-inference .ckpt file."
+            )
+        if raw.is_absolute():
+            return raw
+        root = Path(args.ckpt_root).expanduser()
+        if raw.suffix == ".ckpt":
+            return root / raw
+        run_dir = root / raw
+        last_ckpt = run_dir / "last.ckpt"
+        if last_ckpt.exists():
+            return last_ckpt
+        candidates = sorted(run_dir.glob("*.ckpt"))
+        primary_candidates = [path for path in candidates if not path.name.startswith("inference-")]
+        if len(primary_candidates) == 1:
+            return primary_candidates[0]
+        if not candidates:
+            raise SystemExit(
+                f"No checkpoint file found under {run_dir}. Expected last.ckpt or one explicit *.ckpt file."
+            )
+        if not primary_candidates:
+            raise SystemExit(
+                f"Only inference companion checkpoint(s) found under {run_dir}. "
+                "Pass the matching base .ckpt path explicitly or restore the base checkpoint file."
+            )
+        raise SystemExit(
+            f"Multiple base checkpoint files found under {run_dir}. Pass an explicit --name-ckpt path."
+        )
     if args.ckpt_id:
         return Path(args.ckpt_root) / args.ckpt_id / "last.ckpt"
     raise SystemExit("Pass either --name-ckpt or --ckpt-id.")
@@ -160,6 +211,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the modular predictions workflow."""
 
     args = create_parser().parse_args(argv)
+    if args.inference_backend == "unified" and not args.runner_config:
+        raise SystemExit("--inference-backend unified requires --runner-config.")
     if args.allow_missing_target:
         raise SystemExit(
             "--allow-missing-target is no longer supported in the new stack. "
@@ -186,6 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=out_dir,
         device=args.device,
         precision=args.precision,
+        inference_backend=args.inference_backend,
+        runner_config=Path(args.runner_config) if args.runner_config else None,
         num_gpus_per_model=args.num_gpus_per_model,
         validation_frequency=args.validation_frequency,
         extra_args_json=args.extra_args_json,

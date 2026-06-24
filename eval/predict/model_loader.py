@@ -1,23 +1,19 @@
-"""Thin wrappers around manual inference model-loading utilities."""
+"""Backend dispatch for bundle-based model loading."""
 
 from __future__ import annotations
-
-import json
-
-import torch
-
-from manual_inference.prediction.predict import (
-    _get_parallel_info,
-    _init_model_comm_group,
-    _load_objects,
-    _resolve_device,
-)
 
 from .types import PredictionConfig
 
 
 def setup_distributed(config: PredictionConfig) -> tuple[str, object | None, int, int, int]:
     """Resolve device and initialize the model communication group."""
+
+    import torch
+    from manual_inference.prediction.predict import (
+        _get_parallel_info,
+        _init_model_comm_group,
+        _resolve_device,
+    )
 
     global_rank, local_rank, world_size = _get_parallel_info()
     if config.device == "cuda" and not torch.cuda.is_available():
@@ -40,10 +36,13 @@ def setup_distributed(config: PredictionConfig) -> tuple[str, object | None, int
     return device, model_comm_group, global_rank, local_rank, world_size
 
 
-def load_inference_model(
+def _load_legacy_inference_model(
     config: PredictionConfig,
 ) -> tuple[object, object, dict, str, object | None, int, int, int]:
     """Load the inference model, datamodule, parsed sampling args, and runtime metadata."""
+
+    import json
+    from manual_inference.prediction.predict import _load_objects
 
     device, model_comm_group, global_rank, local_rank, world_size = setup_distributed(config)
     extra_args = json.loads(config.extra_args_json) if config.extra_args_json else {}
@@ -63,4 +62,20 @@ def load_inference_model(
         global_rank,
         local_rank,
         world_size,
+    )
+
+
+def load_inference_model(
+    config: PredictionConfig,
+) -> tuple[object, object, dict, str, object | None, int, int, int]:
+    """Load the requested backend without importing legacy modules for unified runs."""
+
+    if config.inference_backend == "legacy":
+        return _load_legacy_inference_model(config)
+    if config.inference_backend == "unified":
+        from .unified_runner import load_unified_runner
+
+        return load_unified_runner(config)
+    raise SystemExit(
+        f"Unsupported inference backend {config.inference_backend!r}; expected 'legacy' or 'unified'."
     )
