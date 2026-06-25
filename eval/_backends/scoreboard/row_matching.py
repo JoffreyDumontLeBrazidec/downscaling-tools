@@ -13,6 +13,13 @@ DEFAULT_PREFIX_MAP: dict[str, RowClassification] = {
     "ENFO": RowClassification.REFERENCE,
     "IP6Y": RowClassification.REFERENCE,
     "EEFO": RowClassification.EEFO,
+    # Truth / input baseline rows present in some lanes (o48_o96, o320_o1280,
+    # o1280_o2560). Without these they default to MODEL, giving find_model_row two
+    # MODEL-classified rows so its "sole MODEL row" fallback returns None and the
+    # model extreme columns silently drop (run-trust 2026-06-23 regression fix).
+    "IEKM": RowClassification.UNKNOWN,    # high-res verifying analysis (truth)
+    "TARGET": RowClassification.UNKNOWN,  # display-labelled truth ("target O1280")
+    "INPUT": RowClassification.UNKNOWN,   # display-labelled input baseline ("input O320")
 }
 
 CHECKPOINT_TOKEN_RE = re.compile(r"(?:^|manual_)([0-9a-f]{7,64})(?:_|$)")

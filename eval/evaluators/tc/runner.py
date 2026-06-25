@@ -22,6 +22,10 @@ from eval._backends.tc.loading_predictions import (
     select_prediction_files_for_event,
 )
 from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
+from eval.evaluators.tc.comparison_contract import (
+    build_prediction_contract,
+    validate_comparison_contracts,
+)
 from eval._backends.tc.workflows import (
     _json_default,
     compute_event_stats,
@@ -169,6 +173,21 @@ def run(
                     reference_expids=reference_expids,
                 )
 
+            plot_cfg = resolve_plot_config(event_name, eval_config)
+            prediction_contract = build_prediction_contract(
+                prediction_files=[path for path, _ymd, _step in event_pred_files],
+                bbox=event.bbox,
+                support_mode=mode,
+                regrid_resolution=plot_cfg.regrid_resolution,
+                analysis_reference=analysis_expid or "",
+            )
+            reference_contract = dict(prediction_contract)
+            reference_contract["ensemble_members"] = max_pf_members
+            if analysis_expid:
+                validate_comparison_contracts(
+                    {"prediction": prediction_contract, "reference": reference_contract}
+                )
+
             curves = None
             max_attempts = 2 if mode == "regridded" else 1
             for attempt in range(max_attempts):
@@ -183,6 +202,7 @@ def run(
                         run_label=run_label,
                         pred_files=event_pred_files,
                         max_pf_members=max_pf_members,
+                        regrid_resolution=plot_cfg.regrid_resolution,
                     )
                     break
                 except Exception:
@@ -254,6 +274,18 @@ def run(
 
             event_stats["event"] = event_name
             event_stats["support_mode"] = mode
+            event_stats["comparison_contract"] = prediction_contract
+            event_stats["reference_comparison_contract"] = reference_contract
+            # Provenance for cross-run trust (2026-06-22): the per-event tail is pooled over
+            # ALL prediction files whose DD is in event.dates (a date RANGE), so the percentiles
+            # drift with WHICH init dates are in predictions_dir. Record what actually contributed
+            # so a consumer can gate comparisons on a matched (date set, support). Non-blocking
+            # visibility only (no validator) per the project rule.
+            _days, _steps = event_days_steps(event_pred_files)
+            event_stats["selected_days"] = _days
+            event_stats["n_dates"] = len(_days)
+            event_stats["steps_hours"] = _steps
+            event_stats["n_pred_files"] = len(event_pred_files)
             payload["events"][event_key] = event_stats
 
     stats_path = output_dir / "stats.json"

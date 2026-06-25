@@ -127,7 +127,7 @@ def _distribution_style(curve_key: str, *, oper_key: str, ml_palette: np.ndarray
     if curve_key in NAMED_DISTRIBUTION_STYLES:
         return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
     if curve_key == "ENFO_O320_0001":
-        return {"color": cm.batlow(0.68), "linestyle": "--", "linewidth": 2.0}
+        return {"color": "#E69F00", "linestyle": "--", "linewidth": 2.0}
     if curve_key in REFERENCE_STYLES:
         base = dict(REFERENCE_STYLES[curve_key])
         if curve_key.startswith("EEFO"):
@@ -137,15 +137,25 @@ def _distribution_style(curve_key: str, *, oper_key: str, ml_palette: np.ndarray
 
 
 def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
-    xbins = np.asarray(var_data["bin_edges"])
-    if variable == "mslp_hpa" and "data_range_msl" in var_data:
-        lo, hi = var_data["data_range_msl"]
-        pad = max((hi - lo) * 0.08, 1.0)
-        ax.set_xlim(min(xbins[-1], hi + pad), max(xbins[0], lo - pad))
-    elif variable == "wind10m_ms" and "data_range_wind" in var_data:
-        _lo, hi = var_data["data_range_wind"]
-        pad = max(hi * 0.05, 1.0)
-        ax.set_xlim(0, min(xbins[-1], hi + pad))
+    xbins = np.asarray(var_data["bin_edges"], dtype=np.float64)
+    if variable == "mslp_hpa":
+        if "data_range_msl" in var_data:
+            lo, hi = var_data["data_range_msl"]
+            pad = max((hi - lo) * 0.08, 1.0)
+            left = min(float(xbins[-1]), float(hi) + pad)
+            right = max(float(xbins[0]), float(lo) - pad)
+        else:
+            left = float(xbins[-1])
+            right = float(xbins[0])
+        # Lower MSLP means stronger storms; invert so intensity increases rightward.
+        ax.set_xlim(left, right)
+    elif variable == "wind10m_ms":
+        if "data_range_wind" in var_data:
+            _lo, hi = var_data["data_range_wind"]
+            pad = max(float(hi) * 0.05, 1.0)
+            ax.set_xlim(0, min(float(xbins[-1]), float(hi) + pad))
+        else:
+            ax.set_xlim(float(xbins[0]), float(xbins[-1]))
 
 
 def _positive_for_log(values: np.ndarray) -> np.ndarray:
@@ -289,15 +299,9 @@ def plot_pdf_ratios(
             linewidth=style["linewidth"],
         )
 
-    # Auto-crop x-axis
-    xbins_msl = np.asarray(var_mslp["bin_edges"])
-    xbins_wind = np.asarray(var_wind["bin_edges"])
-    if "data_range_msl" in var_mslp:
-        lo, hi = var_mslp["data_range_msl"]
-        axs[0].set_xlim(max(xbins_msl[0], lo - 5), min(xbins_msl[-1], hi + 5))
-    if "data_range_wind" in var_wind:
-        lo, hi = var_wind["data_range_wind"]
-        axs[1].set_xlim(0, min(xbins_wind[-1], hi + 2))
+    # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
+    _apply_distribution_xlim(axs[0], var_mslp, variable="mslp_hpa")
+    _apply_distribution_xlim(axs[1], var_wind, variable="wind10m_ms")
 
     for ax, mids, ylim, xlabel, title in [
         (axs[0], mids_msl, plot_config.mslp_ylim,
@@ -352,9 +356,10 @@ def plot_pdf_log(
 
     fig, axs = plt.subplots(1, 2, figsize=(12, 5))
 
-    # Plot operational analysis
-    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="#111827", label="OPER AN")
-    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="#111827", label="OPER AN")
+    # Plot operational analysis with its grid-specific reference name.
+    oper_label = _clean_distribution_label(oper_key, exp_labels, oper_key=oper_key)
+    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="#111827", label=oper_label)
+    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="#111827", label=oper_label)
 
     for key in curve_order:
         label = curve_label(key, exp_labels, oper_key=oper_key)
@@ -370,15 +375,9 @@ def plot_pdf_log(
                     color=style["color"], linestyle=style["linestyle"],
                     linewidth=style["linewidth"])
 
-    # Auto-crop x-axis
-    xbins_msl = np.asarray(var_mslp["bin_edges"])
-    xbins_wind = np.asarray(var_wind["bin_edges"])
-    if "data_range_msl" in var_mslp:
-        lo, hi = var_mslp["data_range_msl"]
-        axs[0].set_xlim(max(xbins_msl[0], lo - 5), min(xbins_msl[-1], hi + 5))
-    if "data_range_wind" in var_wind:
-        lo, hi = var_wind["data_range_wind"]
-        axs[1].set_xlim(0, min(xbins_wind[-1], hi + 2))
+    # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
+    _apply_distribution_xlim(axs[0], var_mslp, variable="mslp_hpa")
+    _apply_distribution_xlim(axs[1], var_wind, variable="wind10m_ms")
 
     for ax, xlabel, title in [
         (axs[0], "Mean Sea Level Pressure (hPa)", "PDF MSLP (log scale)"),
