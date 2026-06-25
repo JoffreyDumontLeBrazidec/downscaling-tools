@@ -32,7 +32,7 @@ EVENTS: dict[str, dict] = {
         "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia",
         "dates": ["20230826"],
         "members": ["01"],
-        "steps": ["048"],
+        "steps": ["072"],  # +72h = storm peak (default for TC-extreme/trajectory probes)
         "label": "franklin",
         # Single bundle at the storm peak (valid 2023-08-29, +72h) for patching.
         "peak_bundle": ("/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia/"
@@ -46,7 +46,7 @@ EVENTS: dict[str, dict] = {
                        "manual_181be03e_new_o320_o1280_20260421_manual_eval/data/bundles_with_y"),
         "dates": ["20230826"],
         "members": ["01"],
-        "steps": ["048"],
+        "steps": ["072"],  # +72h = storm peak (default for TC-extreme/trajectory probes)
         "label": "franklin",
     },
     # Same window, 4 members -> batch_size 4 (needed by permutation).
@@ -54,7 +54,7 @@ EVENTS: dict[str, dict] = {
         "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia",
         "dates": ["20230826"],
         "members": ["01", "02", "03", "04"],
-        "steps": ["048"],
+        "steps": ["072"],  # +72h = storm peak (default for TC-extreme/trajectory probes)
         "label": "franklin",
     },
     # Hurricane Humberto near its 2025-09-28 peak (init 20250926 + 48h),
