@@ -15,7 +15,7 @@ _LANE_ALLOWED_KEYS = {
     "evaluator_groups", "sigma", "sigma_loss", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
     "default_host", "allowed_hosts",
-    "precip_dist", "precip_events",
+    "precip_dist", "precip_events", "probabilistic",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}

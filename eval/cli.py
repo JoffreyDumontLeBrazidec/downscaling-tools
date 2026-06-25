@@ -36,7 +36,7 @@ ALL_EVALUATORS = [
     "sigma", "sigma_loss", "mechanistic", "intermediate",
     "spectra_ecmwf", "mlflow",
     "precip_dist", "precip_events",
-    "interp",
+    "interp", "probabilistic",
 ]
 
 DEFAULT_HOST = "atos_ac"
