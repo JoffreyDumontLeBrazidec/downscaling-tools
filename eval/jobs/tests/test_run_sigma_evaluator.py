@@ -135,15 +135,37 @@ def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
         def load(self):
             raise AssertionError("bundle-root mode must not open the checkpoint datamodule")
 
+    seen = {}
+
     class _DummySigmaEvaluator:
-        def __init__(self, downscaler, datamodule, n_samples, name_to_index=None):
-            self.downscaler = downscaler
-            self.datamodule = datamodule
-            self.n_samples = n_samples
+        def __init__(
+            self,
+            downscaler=None,
+            datamodule=None,
+            N_samples=None,
+            name_to_index=None,
+            *,
+            inference_model=None,
+            device=None,
+            model_comm_group=None,
+            bundle_paths=None,
+            output_weather_state_mode="all",
+            output_weather_states=None,
+            precision="fp32",
+            sigma_min_floor=0.02,
+        ):
+            seen["downscaler"] = downscaler
+            seen["inference_model"] = inference_model
+            seen["bundle_paths"] = bundle_paths
+            seen["name_to_index"] = name_to_index
             self.name_to_index = name_to_index
 
         def evaluate_sigma(self, sigma, prediction_on_pure_noise):
-            assert self.datamodule.bundle_paths
+            # Predict-routing mode: the model wrapper and the bundle paths must be wired,
+            # and the training-task downscaler must NOT be used.
+            assert seen["inference_model"] is not None
+            assert seen["downscaler"] is None
+            assert seen["bundle_paths"]
             assert self.name_to_index == {"2t": 0}
             return 0.25, {"diff_all_var_non_weighted": 0.5}
 
@@ -162,13 +184,13 @@ def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
         hardware=_ns(num_gpus_per_model=1),
         dataloader=_ns(read_group_size=1, validation=_ns(frequency="12h", num_workers=16)),
     )
-    downscaler = _DummyMove()
-    datamodule = _ns(bundle_paths=[])
+    inference_model = _ns(data_indices={"out_hres": _ns(model=_ns(output=_ns(name_to_index={"2t": 0})))})
+    datamodule = object()
 
-    def _dummy_bundle_datamodule(*, bundle_root, data_indices, n_samples):
-        datamodule.bundle_paths = list(Path(bundle_root).glob("*_input_bundle.nc"))[:n_samples]
-        datamodule.data_indices = data_indices
-        return datamodule
+    def _dummy_load_objects(*, ckpt_path, device, validation_frequency, precision, num_gpus_per_model_override=None):
+        seen["load_objects_ckpt"] = ckpt_path
+        seen["load_objects_gpus"] = num_gpus_per_model_override
+        return inference_model, datamodule, "/dir", "exp"
 
     monkeypatch.setattr(mod, "ObjectFromCheckpointLoader", _DummyLoader)
     monkeypatch.setattr(mod, "get_checkpoint", lambda *_args, **_kwargs: (checkpoint, checkpoint_config))
@@ -181,18 +203,7 @@ def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
     monkeypatch.setattr(mod, "_init_model_comm_group", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(mod, "_resolve_device", lambda requested_device, _local_rank: requested_device)
     monkeypatch.setattr(mod.torch.cuda, "is_available", lambda: False)
-    monkeypatch.setattr(
-        mod,
-        "_load_downscaler_from_checkpoint_metadata",
-        lambda *_args, **_kwargs: downscaler,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        mod,
-        "_make_bundle_sigma_datamodule",
-        _dummy_bundle_datamodule,
-        raising=False,
-    )
+    monkeypatch.setattr(mod, "_load_objects", _dummy_load_objects, raising=False)
 
     out_csv = tmp_path / "sigma_eval.csv"
     args = argparse.Namespace(
@@ -216,6 +227,9 @@ def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
     mod.run_sigma_evaluator(args)
 
     assert out_csv.exists()
+    # The inference wrapper was loaded once via _load_objects with the model-parallel width.
+    assert seen["load_objects_ckpt"] == "/tmp/checkpoints/exp/model.ckpt"
+    assert seen["load_objects_gpus"] == 1
 
 
 def test_resolve_downscaler_cls_prefers_unified_tasks_export(monkeypatch):

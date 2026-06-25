@@ -78,11 +78,22 @@ def _use_spatial_sigma_sharding(downscaler) -> bool:
     return _comm_size(getattr(downscaler, "model_comm_group", None)) > 1
 
 
-def _set_grid_shard_state(downscaler, grid_shard_sizes) -> None:
+def _apply_native_grid_shard_state(downscaler, grid_shard_sizes) -> None:
+    """Mirror native grid shard state onto the task instance.
+
+    ``_before_sampling`` is the single source of truth for the per-dataset grid
+    shard sizes (its hidden-mesh all-to-all is only consistent with the sizes it
+    derives itself).  The diffusion loss reduction reads ``grid_shard_slice`` off
+    the task, so we replicate ONLY the slices implied by the model's own sizes —
+    we never recompute the sizes ourselves.
+    """
     dataset_names = list(getattr(downscaler, "dataset_names", ()) or ())
-    if grid_shard_sizes is None:
-        downscaler.grid_shard_sizes = {name: None for name in dataset_names}
-        downscaler.grid_shard_slice = {name: None for name in dataset_names}
+    # No real sharding (single rank): _before_sampling returns either None or an
+    # all-None dict. Avoid importing the partition helper in that case.
+    if grid_shard_sizes is None or all(v is None for v in grid_shard_sizes.values()):
+        names = dataset_names or list(grid_shard_sizes or ())
+        downscaler.grid_shard_sizes = {name: None for name in names}
+        downscaler.grid_shard_slice = {name: None for name in names}
         return
 
     from anemoi.models.distributed.balanced_partition import get_partition_range
@@ -101,106 +112,34 @@ def _set_grid_shard_state(downscaler, grid_shard_sizes) -> None:
         downscaler.grid_shard_slice[dataset_name] = slice(start, end)
 
 
-def _shard_lres_for_raw_interpolation(x_lres_single_time: torch.Tensor, model_comm_group):
-    if _comm_size(model_comm_group) <= 1:
-        return x_lres_single_time, None
+def _raw_upsampled_interp_with_native_sizes(inner_model, x_in_lres, grid_shard_sizes, model_comm_group):
+    """Replicate the RAW (non-preprocessed) lres upsample that ``_before_sampling`` does internally.
 
-    from anemoi.models.distributed.graph import shard_tensor
-    from anemoi.models.distributed.shapes import get_shard_sizes
+    ``_before_sampling`` returns the PREPROCESSED upsampled conditioning, but the
+    residual target needs the RAW upsample on the same grid.  We reproduce exactly
+    the model's own ``residual["in_lres"]`` call.
 
-    lres_shard_sizes = get_shard_sizes(x_lres_single_time, -2, model_comm_group=model_comm_group)
-    return shard_tensor(x_lres_single_time, -2, lres_shard_sizes, model_comm_group), lres_shard_sizes
-
-
-def _interpolate_lres_to_hres_raw(inner_model, x_in_lres: torch.Tensor, model_comm_group) -> torch.Tensor:
-    x_for_interp, lres_shard_sizes = _shard_lres_for_raw_interpolation(x_in_lres[:, 0, ...], model_comm_group)
-    try:
-        x_interp = inner_model.apply_interpolate_to_high_res(
-            x_for_interp,
-            grid_shard_sizes=lres_shard_sizes,
-            model_comm_group=model_comm_group,
-        )
-    except TypeError:
-        try:
-            x_interp = inner_model.apply_interpolate_to_high_res(
-                x_for_interp,
-                grid_shard_shapes=getattr(inner_model, "lres_grid_shard_shapes", None),
-                model_comm_group=model_comm_group,
-            )
-        except TypeError:
-            x_interp = inner_model.apply_interpolate_to_high_res(x_for_interp)
-
-    if x_interp.ndim == 4:
-        x_interp = x_interp[:, None, ...]
-    if x_interp.ndim != 5:
-        raise ValueError(
-            "Expected interpolated low-resolution input to be 4D or 5D, "
-            f"got shape {tuple(x_interp.shape)}"
-        )
-    return x_interp
-
-
-def _shard_target_if_needed(y: torch.Tensor, grid_shard_sizes, target_dataset: str, model_comm_group) -> torch.Tensor:
-    if grid_shard_sizes is None:
-        return y
-    target_shard_sizes = grid_shard_sizes.get(target_dataset)
-    if target_shard_sizes is None:
-        return y
-
-    from anemoi.models.distributed.graph import shard_tensor
-
-    return shard_tensor(y, -2, target_shard_sizes, model_comm_group)
-
-
-def _prepare_unified_conditioning_and_raw_interp(
-    inner_model,
-    model_wrapper,
-    x_in,
-    x_in_hres,
-    model_comm_group,
-    *,
-    spatial_sharding: bool,
-):
-    x_in = x_in[:, :1, ...]
-    x_in_hres = x_in_hres[:, :1, ...]
-
-    upsample_sharded = spatial_sharding and _comm_size(model_comm_group) > 1
-    if upsample_sharded:
+    Note ``grid_shard_sizes["in_lres"]`` is the POST-upsample (hres) size — after
+    upsampling the lres input lives on the hres grid, so ``_before_sampling`` stores
+    the hres sizes under that key.  The RAW upsample, however, consumes the lres grid
+    and must be sharded with the LRES shard sizes, which ``_before_sampling`` derives
+    internally via ``get_shard_sizes`` and does not return.  We recompute them the
+    same way here.  Non-distributed falls through to the full-grid path.
+    """
+    sharded = grid_shard_sizes is not None and model_comm_group is not None and _comm_size(model_comm_group) > 1
+    lres_shard_sizes = None
+    if sharded:
         from anemoi.models.distributed.graph import shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
 
-        lres_in_shard_sizes = get_shard_sizes(x_in, -2, model_comm_group=model_comm_group)
-        x_in_for_interp = shard_tensor(x_in, -2, lres_in_shard_sizes, model_comm_group)
-        x_interp_raw = inner_model.residual["in_lres"](
-            x_in_for_interp,
-            grid_shard_sizes=lres_in_shard_sizes,
-            model_comm_group=model_comm_group,
-        )[:, :, None, :, :]
-    else:
-        x_interp_raw = inner_model.residual["in_lres"](
-            x_in,
-            grid_shard_sizes=None,
-            model_comm_group=model_comm_group,
-        )[:, :, None, :, :]
-
-    x_interp_conditioning = model_wrapper.pre_processors["in_lres"](x_interp_raw, in_place=False)
-    x_hres_conditioning = model_wrapper.pre_processors["in_hres"](x_in_hres, in_place=False)
-
-    grid_shard_sizes = None
-    if spatial_sharding and model_comm_group is not None:
-        from anemoi.models.distributed.graph import shard_tensor
-        from anemoi.models.distributed.shapes import get_shard_sizes
-
-        shard_sizes_hres = get_shard_sizes(x_in_hres, -2, model_comm_group=model_comm_group)
-        shard_sizes_lres = shard_sizes_hres
-        grid_shard_sizes = {
-            "in_lres": shard_sizes_lres,
-            "in_hres": shard_sizes_hres,
-            "out_hres": shard_sizes_hres,
-        }
-        x_hres_conditioning = shard_tensor(x_hres_conditioning, -2, shard_sizes_hres, model_comm_group)
-
-    return x_interp_conditioning, x_hres_conditioning, x_interp_raw, grid_shard_sizes
+        lres_shard_sizes = get_shard_sizes(x_in_lres, -2, model_comm_group=model_comm_group)
+        x_in_lres = shard_tensor(x_in_lres, -2, lres_shard_sizes, model_comm_group)
+    x_interp_raw = inner_model.residual["in_lres"](
+        x_in_lres,
+        grid_shard_sizes=lres_shard_sizes,
+        model_comm_group=model_comm_group,
+    )[:, :, None, :, :]
+    return x_interp_raw
 
 
 def _residual_pre_processor(downscaler, target_dataset: str):
@@ -247,14 +186,52 @@ class SigmaEvaluator:
         "skt", "sp", "tcw", "z_500", "u_850", "v_850",
     )
 
-    def __init__(self, downscaler, datamodule, N_samples, name_to_index=None):
+    def __init__(
+        self,
+        downscaler,
+        datamodule,
+        N_samples,
+        name_to_index=None,
+        *,
+        inference_model=None,
+        device=None,
+        model_comm_group=None,
+        bundle_paths=None,
+        output_weather_state_mode: str = "all",
+        output_weather_states=None,
+        precision: str = "fp32",
+        sigma_min_floor: float = 0.02,
+    ):
         self.downscaler = downscaler
         self.datamodule = datamodule
         self.N_samples = N_samples
         self.name_to_index = name_to_index or {}
         self._warned_fields: set = set()
 
+        # Predict-routing (unified) mode. When ``inference_model`` is provided we do
+        # NOT reconstruct the diffusion forward inside the harness; we call the model's
+        # own ``predict_step`` end-to-end (the same GREEN path as ``eval.cli predict``),
+        # with a degenerate 1-step sampler forced at the target sigma. The result is the
+        # one-step CEILING (capacity-at-sigma) prediction, scored vs the bundle truth y.
+        # This is the H3 instrument: NOT the EDM denoising loss, but a per-sigma skill
+        # ceiling that uses the only forward path known not to deadlock on the uneven
+        # hidden-mesh all-to-all split.
+        self.inference_model = inference_model
+        self.device = device
+        self.model_comm_group = model_comm_group
+        self.bundle_paths = list(bundle_paths) if bundle_paths is not None else None
+        self.output_weather_state_mode = output_weather_state_mode
+        self.output_weather_states = output_weather_states
+        self.precision = precision
+        self.sigma_min_floor = float(sigma_min_floor)
+
+    def _is_predict_routing_mode(self) -> bool:
+        return self.inference_model is not None and self.bundle_paths is not None
+
     def evaluate_sigma(self, sigma, prediction_on_pure_noise):
+        if self._is_predict_routing_mode():
+            return self._evaluate_sigma_predict(sigma, prediction_on_pure_noise)
+
         self.downscaler.eval()
         total_loss = 0.0
         total_metrics = {}
@@ -282,132 +259,151 @@ class SigmaEvaluator:
         return avg_loss, avg_metrics
 
     def evaluate_batch_with_sigma(self, sigma, batch, prediction_on_pure_noise):
-        if _is_unified_dict_api(self.downscaler):
-            return self._evaluate_batch_with_sigma_unified(sigma, batch, prediction_on_pure_noise)
+        # Predict-routing mode never reaches here (evaluate_sigma short-circuits).
+        # This dispatch only serves the legacy (non-unified, dataloader-batch) path.
         return self._evaluate_batch_with_sigma_legacy(sigma, batch, prediction_on_pure_noise)
 
-    def _evaluate_batch_with_sigma_unified(self, sigma, batch, prediction_on_pure_noise):
-        with torch.inference_mode():
-            batch = [x.to(self.downscaler.device) for x in batch]
-            x_in, x_in_hres, y = batch
+    # ------------------------------------------------------------------
+    # Predict-routing (unified) mode: call the model's REAL predict_step.
+    # ------------------------------------------------------------------
+    def _build_one_step_extra_args(self, sigma: float) -> dict:
+        """Force a degenerate 1-step denoise at ``sigma`` via predict_step kwargs.
 
-            model_wrapper = self.downscaler.model
-            inner_model = model_wrapper.model
-            model_comm_group = getattr(self.downscaler, "model_comm_group", None)
-            target_dataset = _target_dataset_name(self.downscaler)
-            moved_index_tensors = _localize_data_index_tensors(inner_model.data_indices, x_in.device)
-            if moved_index_tensors:
-                logger.info("Localized %d checkpoint data-index tensors to %s", moved_index_tensors, x_in.device)
+        ``num_steps=1`` with ``sigma_max==sigma`` and a tiny ``sigma_min`` floor makes
+        the sampler take a single denoising step starting from ``sigma``, so predict_step
+        returns the model's one-step teacher/ceiling prediction at that noise level.
+        ``schedule_type`` is forced to a single-segment scheduler (``karras``) so the
+        experimental piecewise default does not split the (1-step) schedule.
+        """
+        sigma_value = float(sigma)
+        sigma_min = min(self.sigma_min_floor, sigma_value)
+        return {
+            "schedule_type": "karras",
+            "num_steps": 1,
+            "sigma_max": sigma_value,
+            "sigma_min": sigma_min,
+            "rho": 7.0,
+            "sampler": "heun",
+            "S_churn": 0.0,
+            "S_min": 0.0,
+            "S_max": float("inf"),
+            "S_noise": 1.0,
+        }
 
-            spatial_sharding = _use_spatial_sigma_sharding(self.downscaler)
+    def _evaluate_sigma_predict(self, sigma, prediction_on_pure_noise):
+        """Average one-step CEILING skill over the bundle set at a fixed sigma.
+
+        For each bundle we call the inference model's own ``predict_step`` (via
+        ``_predict_from_bundle``) with the degenerate 1-step sampler forced at
+        ``sigma``, then compute per-field MSE between the prediction and the bundle
+        truth ``y``. ``prediction_on_pure_noise`` is accepted for CSV-schema parity but
+        is a no-op here: predict_step already initialises its own latent from noise at
+        ``sigma_max``, so there is no separate pure-noise target to seed.
+        """
+        from manual_inference.prediction.predict import _predict_from_bundle
+
+        if prediction_on_pure_noise:
             logger.info(
-                "Preparing unified sigma batch (distributed=%s, spatial_sharding=%s)",
-                _comm_size(model_comm_group) > 1,
-                spatial_sharding,
+                "predict-routing sigma mode ignores prediction_on_pure_noise "
+                "(predict_step seeds its own latent from noise at sigma_max=%.4g)",
+                float(sigma),
             )
-            x_in_interp_to_hres, x_in_hres, x_interp_raw, grid_shard_sizes = (
-                _prepare_unified_conditioning_and_raw_interp(
-                    inner_model,
-                    model_wrapper,
-                    x_in,
-                    x_in_hres,
-                    model_comm_group,
-                    spatial_sharding=spatial_sharding,
+
+        extra_args = self._build_one_step_extra_args(sigma)
+        bundle_paths = self.bundle_paths[: self.N_samples] if self.N_samples > 0 else self.bundle_paths
+
+        total_metrics: dict = {}
+        n_batches = 0
+        for bundle_path in bundle_paths:
+            with torch.inference_mode():
+                (
+                    _x,
+                    y_np,
+                    y_pred_np,
+                    *_grids_states,
+                ) = _predict_from_bundle(
+                    inference_model=self.inference_model,
+                    datamodule=self.datamodule,
+                    device=self.device,
+                    bundle_nc=str(bundle_path),
+                    member_index=0,
+                    extra_args=extra_args,
+                    precision=self.precision,
+                    model_comm_group=self.model_comm_group,
+                    output_weather_state_mode=self.output_weather_state_mode,
+                    output_weather_states=self.output_weather_states,
                 )
-            )
-            _set_grid_shard_state(self.downscaler, grid_shard_sizes)
-            logger.info(
-                "Prepared unified sigma batch: x_interp=%s x_hres=%s raw_interp=%s grid_sharded=%s",
-                tuple(x_in_interp_to_hres.shape),
-                tuple(x_in_hres.shape),
-                tuple(x_interp_raw.shape),
-                grid_shard_sizes is not None,
-            )
+            metrics = self._per_field_metrics_from_numpy(y_pred_np, y_np)
+            for key, value in metrics.items():
+                if torch.is_tensor(value):
+                    value = value.detach().float().cpu().item()
+                total_metrics[key] = total_metrics.get(key, 0.0) + float(value)
+            n_batches += 1
 
-            logger.info("Sharding sigma target if needed")
-            y_for_residual = _shard_target_if_needed(y, grid_shard_sizes, target_dataset, model_comm_group)
-            logger.info("Sigma target ready: y=%s", tuple(y_for_residual.shape))
+        if n_batches == 0:
+            raise RuntimeError("No bundles evaluated in predict-routing sigma mode.")
 
-            channel_indices = None
-            if hasattr(inner_model, "get_matching_channel_indices"):
-                channel_indices = inner_model.get_matching_channel_indices(target_dataset).to(x_interp_raw.device)
-            x_interp_for_residual = x_interp_raw[..., channel_indices] if channel_indices is not None else x_interp_raw
+        avg_metrics = {key: value / n_batches for key, value in total_metrics.items()}
+        # No EDM denoising loss in this instrument; report the all-field RMSE as ``loss``
+        # so the CSV ``loss`` column stays populated and monotone-comparable across sigma.
+        avg_loss = float(avg_metrics.get("diff_all_var_non_weighted", float("nan")))
+        return avg_loss, avg_metrics
 
-            logger.info("Computing sigma residual target: x_interp=%s", tuple(x_interp_for_residual.shape))
-            residual_pre_processor = _residual_pre_processor(self.downscaler, target_dataset)
-            _disable_first_run_checks_for_nan_free_sigma_eval(
-                model_wrapper.pre_processors[target_dataset],
-                residual_pre_processor,
-            )
-            residuals_target = inner_model.compute_residuals(
-                y=y_for_residual,
-                x_interp=x_interp_for_residual,
-                pre_processors_state=model_wrapper.pre_processors[target_dataset],
-                pre_processors_tendencies=residual_pre_processor,
-                target_dataset=target_dataset,
-                skip_imputation=True,
-            )
-            logger.info("Sigma residual target ready: residual=%s", tuple(residuals_target.shape))
+    def _per_field_metrics_from_numpy(self, y_pred_np, y_np) -> dict:
+        """Per-field MSE between prediction and bundle truth, plus all-field RMSE.
 
-            sigma_value = float(sigma)
-            sigma_base = torch.full(
-                (residuals_target.shape[0], residuals_target.shape[2]),
-                sigma_value,
-                device=residuals_target.device,
-                dtype=residuals_target.dtype,
-            )
-            sigma_tensor = sigma_base[:, None, :, None, None]
-            sigma_dict = {target_dataset: sigma_tensor}
-            noise_weights = {
-                target_dataset: (sigma_tensor**2 + inner_model.sigma_data**2) / (sigma_tensor * inner_model.sigma_data) ** 2
-            }
-            target_dict = {target_dataset: residuals_target}
+        ``y_pred_np`` and ``y_np`` come out of ``_predict_from_bundle`` in the model's
+        output-weather-state channel order (last axis), so ``self.name_to_index`` maps
+        field names to the channel axis directly. NaNs in truth (missing channels) are
+        masked out per field.
+        """
+        import numpy as np
 
-            if prediction_on_pure_noise:
-                residuals_target_noised = {target_dataset: torch.randn_like(residuals_target) * sigma_tensor}
+        metrics: dict = {}
+        if y_np is None:
+            logger.warning("Bundle has no truth y; per-field sigma metrics will be NaN")
+            for name in self.STANDARD_FIELDS:
+                metrics[f"mse_{name}_non_weighted"] = float("nan")
+            metrics["diff_all_var_non_weighted"] = float("nan")
+            return metrics
+
+        pred = np.asarray(y_pred_np, dtype=np.float64)
+        truth = np.asarray(y_np, dtype=np.float64)
+        # Collapse leading singleton axes so the channel axis is last and shapes match.
+        pred = np.squeeze(pred)
+        truth = np.squeeze(truth)
+        if pred.shape != truth.shape:
+            # Fall back to broadcasting on the shared trailing dims (channel axis last).
+            min_ndim = min(pred.ndim, truth.ndim)
+            pred = pred.reshape((-1,) + pred.shape[-min_ndim:]) if pred.ndim > min_ndim else pred
+            truth = truth.reshape((-1,) + truth.shape[-min_ndim:]) if truth.ndim > min_ndim else truth
+
+        diff = pred - truth
+        finite = np.isfinite(diff)
+        all_sq = diff[finite] ** 2 if finite.any() else np.array([np.nan])
+        metrics["diff_all_var_non_weighted"] = float(np.sqrt(np.nanmean(all_sq)))
+
+        num_output_vars = diff.shape[-1]
+        for name in self.STANDARD_FIELDS:
+            idx = self.name_to_index.get(name)
+            if idx is not None and idx < num_output_vars:
+                field_diff = diff[..., idx]
+                field_finite = np.isfinite(field_diff)
+                if field_finite.any():
+                    metrics[f"mse_{name}_non_weighted"] = float(
+                        np.mean(field_diff[field_finite] ** 2)
+                    )
+                else:
+                    metrics[f"mse_{name}_non_weighted"] = float("nan")
             else:
-                residuals_target_noised = self.downscaler._noise_target(target_dict, sigma_dict)
-
-            logger.info("Running unified sigma forward")
-            y_pred = self.downscaler(
-                {"in_lres": x_in_interp_to_hres, "in_hres": x_in_hres},
-                residuals_target_noised,
-                sigma_dict,
-            )
-            logger.info("Unified sigma forward ready: y_pred=%s", tuple(y_pred[target_dataset].shape))
-            logger.info("Computing unified sigma loss/metrics")
-            loss, metrics_next, _ = self.downscaler.compute_loss_metrics(
-                y_pred=y_pred,
-                y=target_dict,
-                validation_mode=True,
-                weights=noise_weights,
-                use_reentrant=False,
-            )
-            logger.info("Unified sigma loss/metrics ready")
-
-            residual_post_processor = _residual_post_processor(self.downscaler, target_dataset)
-            target_indices = inner_model.data_indices[target_dataset]
-            data_index = target_indices.data.output.full
-            logger.info("Computing sigma residual diff metrics")
-            denorm_pred_residuals = _call_processor(
-                residual_post_processor,
-                y_pred[target_dataset],
-                data_index=data_index,
-                skip_imputation=True,
-            )
-            denorm_truth_residuals = _call_processor(
-                residual_post_processor,
-                residuals_target,
-                data_index=data_index,
-                skip_imputation=True,
-            )
-
-            diff = denorm_pred_residuals - denorm_truth_residuals
-            self._add_residual_diff_metrics(metrics_next, diff)
-            logger.info("Sigma residual diff metrics ready")
-
-            del y_pred, residuals_target_noised, target_dict, residuals_target, x_in, x_in_hres
-        return loss, metrics_next
+                metrics[f"mse_{name}_non_weighted"] = float("nan")
+                if name not in self._warned_fields:
+                    self._warned_fields.add(name)
+                    logger.warning(
+                        "Field %r unavailable (idx=%s, n_out=%d) — writing NaN",
+                        name, idx, num_output_vars,
+                    )
+        return metrics
 
     def _add_residual_diff_metrics(self, metrics_next, diff: torch.Tensor) -> None:
         metrics_next["diff_all_var_non_weighted"] = torch.sqrt(_distributed_mean_square(diff))
