@@ -1,4 +1,4 @@
-"""TC evaluator visualization: one raw, log-density page per event/support."""
+"""TC evaluator visualization: one overview PDF page per event/support."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-# Kept imported as public plotting helpers; TC reports intentionally render log pages only.
 from eval._backends.tc.pdf_plot import plot_pdf_distribution_overview, plot_pdf_log, plot_pdf_ratios
 from eval._backends.tc.plot_config import resolve_plot_config
 from eval.evaluators.tc.comparison_contract import validate_comparison_contracts
@@ -67,7 +66,7 @@ def plot(
     output_dir: str | Path | None = None,
     stats_filename: str = "stats.json",
 ) -> Path:
-    """Write a compact raw/log TC-distribution PDF from saved event statistics."""
+    """Write a compact overview-style TC-distribution PDF from saved event statistics."""
     results_dir = Path(results_dir)
     output_dir = Path(output_dir) if output_dir else results_dir
     plots_dir = output_dir / "plots"
@@ -94,10 +93,10 @@ def plot(
             mode = str(event_stats["support_mode"])
             plot_cfg = resolve_plot_config(event, eval_config)
             plot_cfg = replace(plot_cfg, plot_title=f"{plot_cfg.plot_title.replace('normed pdfs', 'TC distributions')} [{mode}]")
-            fig = plot_pdf_log(plot_cfg, event_stats=event_stats)
+            fig = plot_pdf_distribution_overview(plot_cfg, event_stats=event_stats)
             pdf.savefig(fig, dpi=300)
             plt.close(fig)
-            LOG.info("Plotted raw/log TC distribution for event=%s mode=%s", event, mode)
+            LOG.info("Plotted overview TC distribution for event=%s mode=%s", event, mode)
 
     LOG.info("TC plots written to %s", pdf_path)
     return plots_dir

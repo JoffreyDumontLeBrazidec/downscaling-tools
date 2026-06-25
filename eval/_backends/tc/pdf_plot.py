@@ -123,15 +123,15 @@ def _distribution_ml_palette(count: int) -> np.ndarray:
 
 def _distribution_style(curve_key: str, *, oper_key: str, ml_palette: np.ndarray, ml_index: int) -> dict[str, object]:
     if curve_key == oper_key:
-        return {"color": "#111827", "linestyle": "-", "linewidth": 2.3}
+        return {"color": "#000000", "linestyle": "-", "linewidth": 3.0}
     if curve_key in NAMED_DISTRIBUTION_STYLES:
         return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
     if curve_key == "ENFO_O320_0001":
-        return {"color": "#E69F00", "linestyle": "--", "linewidth": 2.0}
+        return {"color": "#E69F00", "linestyle": "-.", "linewidth": 2.0}
     if curve_key in REFERENCE_STYLES:
         base = dict(REFERENCE_STYLES[curve_key])
         if curve_key.startswith("EEFO"):
-            base.update({"color": cm.lajolla(0.42), "linestyle": "--", "linewidth": 2.0})
+            base.update({"color": "red", "linestyle": "--", "linewidth": 2.0})
         return base
     return {"color": ml_palette[ml_index], "linestyle": "-", "linewidth": 2.8}
 
@@ -141,9 +141,8 @@ def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
     if variable == "mslp_hpa":
         if "data_range_msl" in var_data:
             lo, hi = var_data["data_range_msl"]
-            pad = max((hi - lo) * 0.08, 1.0)
-            left = min(float(xbins[-1]), float(hi) + pad)
-            right = max(float(xbins[0]), float(lo) - pad)
+            left = min(float(xbins[-1]), float(hi) + 5.0)
+            right = max(float(xbins[0]), float(lo) - 5.0)
         else:
             left = float(xbins[-1])
             right = float(xbins[0])
@@ -152,8 +151,7 @@ def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
     elif variable == "wind10m_ms":
         if "data_range_wind" in var_data:
             _lo, hi = var_data["data_range_wind"]
-            pad = max(float(hi) * 0.05, 1.0)
-            ax.set_xlim(0, min(float(xbins[-1]), float(hi) + pad))
+            ax.set_xlim(0, min(float(xbins[-1]), float(hi) + 2.0))
         else:
             ax.set_xlim(float(xbins[0]), float(xbins[-1]))
 
@@ -161,6 +159,23 @@ def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
 def _positive_for_log(values: np.ndarray) -> np.ndarray:
     arr = np.asarray(values, dtype=np.float64)
     return np.where(arr > 0.0, arr, np.nan)
+
+
+def _log_density_floor(*series: np.ndarray) -> float:
+    positive = []
+    for values in series:
+        arr = np.asarray(values, dtype=np.float64)
+        arr = arr[np.isfinite(arr) & (arr > 0.0)]
+        if arr.size:
+            positive.append(arr)
+    if not positive:
+        return 1e-12
+    return max(float(np.min(np.concatenate(positive))) * 0.1, 1e-12)
+
+
+def _floor_for_log(values: np.ndarray, *, floor: float) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64)
+    return np.where(np.isfinite(arr) & (arr > 0.0), arr, floor)
 
 
 def plot_pdf_distribution_overview(
@@ -186,7 +201,7 @@ def plot_pdf_distribution_overview(
     ml_palette = _distribution_ml_palette(len(ml_like_keys))
     ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
 
-    fig, axs = plt.subplots(1, 2, figsize=(13.6, 5.2), constrained_layout=True)
+    fig, axs = plt.subplots(1, 2, figsize=(13.8, 5.2), constrained_layout=True)
 
     series = [oper_key, *curve_order]
     seen: set[str] = set()
@@ -229,8 +244,8 @@ def plot_pdf_distribution_overview(
         )
 
     for ax, var_data, variable, xlabel, title in [
-        (axs[0], var_mslp, "mslp_hpa", "hPa", "Mean sea-level pressure"),
-        (axs[1], var_wind, "wind10m_ms", "m/s", "10 m wind speed"),
+        (axs[0], var_mslp, "mslp_hpa", "hPa", "Mean sea level pressure (PDF)"),
+        (axs[1], var_wind, "wind10m_ms", "m/s", "Wind speed (PDF)"),
     ]:
         ax.set_yscale("log")
         ax.set_xlabel(xlabel, fontsize=12)
@@ -354,41 +369,46 @@ def plot_pdf_log(
     ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
     ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
 
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axs = plt.subplots(1, 2, figsize=(13.8, 5))
 
-    # Plot operational analysis with its grid-specific reference name.
+    msl_series = [oper_hist_msl, *(np.asarray(var_mslp["curves"][key]["histogram"]) for key in curve_order)]
+    wind_series = [oper_hist_wind, *(np.asarray(var_wind["curves"][key]["histogram"]) for key in curve_order)]
+    msl_floor = _log_density_floor(*msl_series)
+    wind_floor = _log_density_floor(*wind_series)
+
     oper_label = _clean_distribution_label(oper_key, exp_labels, oper_key=oper_key)
-    axs[0].plot(mids_msl, oper_hist_msl, "--", linewidth=2, color="#111827", label=oper_label)
-    axs[1].plot(mids_wind, oper_hist_wind, "--", linewidth=2, color="#111827", label=oper_label)
+    axs[0].plot(mids_msl, _floor_for_log(oper_hist_msl, floor=msl_floor), "-", linewidth=3.0, color="#000000", label=oper_label)
+    axs[1].plot(mids_wind, _floor_for_log(oper_hist_wind, floor=wind_floor), "-", linewidth=3.0, color="#000000", label=oper_label)
 
     for key in curve_order:
         label = curve_label(key, exp_labels, oper_key=oper_key)
         style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
 
         hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
-        axs[0].plot(mids_msl, hist_msl, label=label,
+        axs[0].plot(mids_msl, _floor_for_log(hist_msl, floor=msl_floor), label=label,
                     color=style["color"], linestyle=style["linestyle"],
                     linewidth=style["linewidth"])
 
         hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
-        axs[1].plot(mids_wind, hist_wind, label=label,
+        axs[1].plot(mids_wind, _floor_for_log(hist_wind, floor=wind_floor), label=label,
                     color=style["color"], linestyle=style["linestyle"],
                     linewidth=style["linewidth"])
 
-    # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
     _apply_distribution_xlim(axs[0], var_mslp, variable="mslp_hpa")
     _apply_distribution_xlim(axs[1], var_wind, variable="wind10m_ms")
 
-    for ax, xlabel, title in [
-        (axs[0], "Mean Sea Level Pressure (hPa)", "PDF MSLP (log scale)"),
-        (axs[1], "10m wind speed (m/s)", "PDF 10m Wind Speed (log scale)"),
+    for ax, floor, xlabel, title in [
+        (axs[0], msl_floor, "Mean Sea Level Pressure (hPa)", "Mean sea level pressure (PDF)"),
+        (axs[1], wind_floor, "10m wind speed (m/s)", "Wind speed (PDF)"),
     ]:
         ax.set_yscale("log")
+        ax.set_ylim(bottom=floor)
+        ax.grid(False)
         ax.set_xlabel(xlabel, fontsize=14)
         ax.set_ylabel("Probability Density", fontsize=14)
         ax.set_title(title, fontsize=14)
         ax.legend()
 
-    fig.suptitle(plot_config.plot_title.replace("normed pdfs", "raw PDFs (log)"))
-    fig.tight_layout()
+    fig.suptitle(plot_config.plot_title.replace("normed pdfs", "TC distributions"))
+    fig.subplots_adjust(left=0.07, right=0.985, bottom=0.16, top=0.83, wspace=0.24)
     return fig
