@@ -1,0 +1,186 @@
+# o96->o320 UNIFIED MONTH lane (AUGUST 2023) for ckpt 50044778 (unified-oldlike 200k, epoch_043-step_200000).
+# Derived from o96_o320_785cac57_unified_aug2023.yaml (proven j757) + full evaluator config from o96_o320.yaml.
+# Scale: 31 dates x 10 members x lead 360h/24h -> prepml stages step=0/to/360/by/24 = 16 lead times (incl step 0).
+# Sampler matches THIS checkpoint's documented scoreboard eval (sigma_max=1000, S_max=1000), NOT the lane's 10000.
+# 2-GPU per model (1-GPU is BROKEN for the unified runner per preflight gotcha).
+# Stage 1: eval.cli predict --mode prepml --expver j75q (FDB).  Stage 2: --retrieve readback -> evaluate -> scoreboard.
+default_host: atos_ac_unified
+allowed_hosts:
+  prepare: [atos_ac_unified, atos_ag]
+  predict: [atos_ac_unified, atos_ag]
+  run: []
+  evaluate: [atos_ac, atos_ac_unified]
+  scoreboard: [atos_ac, atos_ac_unified]
+
+prepare:
+  bundle_filename_tpl: "eefo_o96_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    lres_pl_grib:    "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    hres_grib:       "{source_grib_root}/o320-z-lsm.grib"
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360]
+  dates: ["20230801", "20230802", "20230803", "20230804", "20230805", "20230806", "20230807", "20230808", "20230809", "20230810", "20230811", "20230812", "20230813", "20230814", "20230815", "20230816", "20230817", "20230818", "20230819", "20230820", "20230821", "20230822", "20230823", "20230824", "20230825", "20230826", "20230827", "20230828", "20230829", "20230830", "20230831"]
+  num_gpus_per_model: 2
+  # Explicit readback set: union of all evaluator needs (FDB still gets the full out_hres regardless).
+  weather_states: ["10u", "10v", "2t", "2d", "msl", "skt", "tcw", "sp", "t_850", "z_500"]
+  env:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_SAMPLER_SEED: "1234"
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 1000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000.0
+    S_noise: 1.05
+
+# TC evaluator over all 5 Aug-2023 storms with o320 truth. event_dates for dora/fernanda/hilary
+# are provisional (storm-peak valid dates) and will be re-confirmed in Stage 2 against the truth grib.
+tc:
+  beta: 0.5
+  mslp_ref: 1013.25
+  events: ["idalia", "franklin", "dora", "fernanda", "hilary"]
+  tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir: "/home/ecm5702/perm/reference/o96_o320/tc"
+  analysis_expid: "OPER_O320_0001"
+  extreme_reference_expid: "ENFO_O320_0001"
+  reference_expids: ["EEFO_O96_0001", "ENFO_O320_0001"]
+  support_mode: "both"
+  member_maps:
+    enabled: true
+    event_dates:
+      idalia: "20230829"
+      franklin: "20230828"
+      franklin_idalia: "20230829"
+      dora: "20230806"
+      fernanda: "20230815"
+      hilary: "20230818"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+spectra:
+  fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  wavenumber_threshold: 100.0
+  nside: 187
+  lmax: 374
+  steps: [120]
+  truth_cache_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_proxy"
+
+spectra_ecmwf:
+  template_root: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf/enfo_o320"
+  weather_states: ["10u", "10v", "2t", "sp", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
+
+surface:
+  weighting: "truth-std"
+
+probabilistic:
+  weather_states: ["2t", "10ff", "2d", "msl", "t_850", "z_500"]
+  domains: ["n.hem", "tropics", "s.hem", "europe"]
+  steps: [24, 48, 72, 96, 120]
+
+regions:
+  interesting:
+    amazon_forest: [-15.0, 5.0, -75.0, -45.0]
+    european_arctic: [-25.0, 0.0, 75.0, 90.0]
+    himalayas: [25.0, 40.0, 75.0, 100.0]
+    rocky_mountains: [35.0, 50.0, -120.0, -100.0]
+    west_sahara: [15.0, 30.0, -20.0, 0.0]
+    pyrenees_alpes: [40.0, 50.0, 0.0, 10.0]
+    eastern_us: [25.0, 45.0, -90.0, -70.0]
+    central_africa: [-10.0, 10.0, 10.0, 30.0]
+
+region_plot:
+  region_names:
+    - amazon_forest
+    - european_arctic
+    - himalayas
+    - rocky_mountains
+    - west_sahara
+    - pyrenees_alpes
+    - eastern_us
+    - central_africa
+
+evaluator_groups:
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
+  diagnostics: [probabilistic]
+
+prepml:
+  runner: anemoi-dev
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  debug_expvers: ["j5d7"]
+  input:
+    class: od
+    stream: eefo
+    type: pf
+    grid: O96
+  output:
+    class: rd
+    stream: enfo
+    type: pf
+  output_template: /home/ecm5702/hpcperm/data/o320-template.grib
+  forcings_npz: /home/ecm5702/hpcperm/data/o320-forcings.npz
+  constant_high_res_forcings: [cos_latitude, cos_longitude, lsm, sin_latitude, sin_longitude, z]
+  high_res_input: [cos_julian_day, cos_latitude, cos_local_time, cos_longitude, insolation, lsm, sin_julian_day, sin_latitude, sin_local_time, sin_longitude, z]
+  truth:
+    root: /home/ecm5702/perm/reference/o96_o320
+  time_step: 24h
+  lead_time: 360h
+  platform:
+    gpu:
+      time: "0-12:00"
+      submit_arguments:
+        total_nodes: 1
+        tasks_per_node: 2
+        gpus_per_node: 2
+        partition: gpu
+        RAW_PRAGMA:
+          - "#SBATCH --gres=gpu:2"
+          - "#SBATCH --qos=ng"
+          - "#SBATCH --mem=0"
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 2
+    ntasks_per_node: 2
+    time: "12:00:00"
+    mem: "0"
+    cpus: 8
+  evaluate:
+    time: "04:00:00"
+    mem: 128G
+  evaluate_tc:
+    time: "06:00:00"
+    mem: 128G
+    cpus: 4
+  evaluate_spectra:
+    time: "08:00:00"
+    mem: 128G
+  evaluate_region_plot:
+    time: "06:00:00"
+    mem: 128G
+    cpus: 8
+  scoreboard:
+    time: "00:30:00"
+    mem: 16G
+    cpus: 1

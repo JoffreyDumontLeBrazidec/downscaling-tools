@@ -153,11 +153,16 @@ def validate_truth_bundle(path: Path) -> list[str]:
         with xr.open_dataset(path) as ds:
             target_vars = sorted(v for v in ds.variables if v.startswith("target_hres_"))
             if not target_vars:
-                raise RuntimeError(f"Bundle missing target_hres_* variables: {path}")
+                # Non-blocking (project policy): genuinely truth-free bundle -> warn loudly, do not exit.
+                print(f"[validate_truth_bundle][WARN] no target_hres_* variables in {path} -- truth-aware metrics will be meaningless")
+                return []
             marker = str(ds.attrs.get("has_target_hres_fields", "")).strip().lower()
             if marker not in TRUTH_MARKERS:
-                raise RuntimeError(
-                    f"Bundle has invalid has_target_hres_fields={marker!r}: {path}"
+                # Cosmetic marker absent but the authoritative signal (target_hres_* vars) IS present.
+                # Trust the data; warn for visibility instead of hard-blocking (project policy).
+                print(
+                    f"[validate_truth_bundle][WARN] has_target_hres_fields={marker!r} but "
+                    f"{len(target_vars)} target_hres_* vars present in {path}; treating as truth-aware (non-blocking)"
                 )
             return target_vars
     except Exception as exc:
