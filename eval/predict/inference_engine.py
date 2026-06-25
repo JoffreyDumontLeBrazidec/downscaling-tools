@@ -9,7 +9,9 @@ from typing import Sequence
 import numpy as np
 import torch
 
-from manual_inference.prediction.predict import _compute_x_interp_for_export, _predict_from_bundle
+from ._mi import predict as _mi_predict
+_compute_x_interp_for_export = _mi_predict._compute_x_interp_for_export
+_predict_from_bundle = _mi_predict._predict_from_bundle
 
 from .bundle_manager import date_str_to_datetime64
 from .types import BundleKey, EnsemblePrediction, PredictionResult

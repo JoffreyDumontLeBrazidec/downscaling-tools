@@ -7,8 +7,11 @@ import csv
 from pathlib import Path
 from typing import Sequence
 
-from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
-from manual_inference.prediction.predict import DEFAULT_EXTRA_ARGS_JSON, _get_parallel_info, _resolve_ckpt_path
+from ._mi import dataset as _mi_dataset, predict as _mi_predict
+OUTPUT_WEATHER_STATE_MODE_CHOICES = _mi_dataset.OUTPUT_WEATHER_STATE_MODE_CHOICES
+DEFAULT_EXTRA_ARGS_JSON = _mi_predict.DEFAULT_EXTRA_ARGS_JSON
+_get_parallel_info = _mi_predict._get_parallel_info
+_resolve_ckpt_path = _mi_predict._resolve_ckpt_path
 
 from .bundle_manager import discover_bundles, resolve_date_step_pairs
 from .distributed_io import Rank0FileWriter, _destroy_process_group, _distributed_barrier
