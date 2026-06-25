@@ -6,12 +6,11 @@ import json
 
 import torch
 
-from manual_inference.prediction.predict import (
-    _get_parallel_info,
-    _init_model_comm_group,
-    _load_objects,
-    _resolve_device,
-)
+from ._mi import predict as _mi_predict
+_get_parallel_info = _mi_predict._get_parallel_info
+_init_model_comm_group = _mi_predict._init_model_comm_group
+_load_objects = _mi_predict._load_objects
+_resolve_device = _mi_predict._resolve_device
 
 from .types import PredictionConfig
 

@@ -8,7 +8,8 @@ from typing import Sequence
 import numpy as np
 import xarray as xr
 
-from manual_inference.prediction.dataset import build_predictions_dataset as _build_predictions_dataset
+from ._mi import dataset as _mi_dataset
+_build_predictions_dataset = _mi_dataset.build_predictions_dataset
 
 from .types import PredictionMetadata
 
