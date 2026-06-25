@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 
 from eval._backends.sigma_evaluator.sigma_evaluator import SigmaEvaluator
@@ -11,6 +12,8 @@ from eval._backends.sigma_evaluator.sigma_evaluator import _use_spatial_sigma_sh
 
 
 class _IdentityProcessor:
+    first_run = False
+
     def __call__(self, tensor, **_kwargs):
         return tensor
 
@@ -52,145 +55,108 @@ def test_localize_data_index_tensors_accepts_unified_index_shape():
     assert tensor_index.full.device.type == "cpu"
 
 
-class _DummyInnerModel:
-    def __init__(self):
-        self._decoder_datasets = ["out_hres"]
-        self._residual_pairs = {"out_hres": "in_lres"}
-        self.sigma_data = 1.0
-        output = SimpleNamespace(
-            full=torch.arange(2),
-            prognostic=torch.arange(2),
-            diagnostic=torch.tensor([], dtype=torch.long),
-        )
-        self.data_indices = {
-            "out_hres": SimpleNamespace(
-                data=SimpleNamespace(output=output),
-                model=SimpleNamespace(output=output),
-            )
-        }
-        self.interp_calls = []
-        self.residual_interp_calls = []
-        self.residual_calls = []
-        self.residual = {"in_lres": self._residual_interp}
+# ---------------------------------------------------------------------------
+# Predict-routing (unified) mode: the sigma diagnostic calls the model's REAL
+# predict_step (1-step sampler forced at sigma) instead of reconstructing the
+# diffusion forward inside the harness. These tests cover the per-sigma kwargs,
+# the per-field metric reduction, and the predict_step routing in evaluate_sigma.
+# ---------------------------------------------------------------------------
 
-    def _residual_interp(self, x, grid_shard_sizes=None, model_comm_group=None):
-        self.residual_interp_calls.append(
-            {
-                "shape": tuple(x.shape),
-                "grid_shard_sizes": grid_shard_sizes,
-                "model_comm_group": model_comm_group,
-            }
-        )
-        return torch.ones((x.shape[0], x.shape[2], 4, x.shape[-1]), device=x.device)
 
-    def _before_sampling(self, batch, pre_processors, n_step_input, model_comm_group, **_kwargs):
-        assert n_step_input == 1
-        assert model_comm_group is None
-        return (batch["in_lres"], batch["in_hres"]), {
-            "in_lres": None,
-            "in_hres": None,
-            "out_hres": None,
-        }
+def _predict_routing_evaluator(name_to_index, bundle_paths, inference_model):
+    return SigmaEvaluator(
+        downscaler=None,
+        datamodule=object(),
+        N_samples=len(bundle_paths),
+        name_to_index=name_to_index,
+        inference_model=inference_model,
+        device="cpu",
+        model_comm_group=None,
+        bundle_paths=bundle_paths,
+    )
 
-    def apply_interpolate_to_high_res(self, x, grid_shard_sizes=None, model_comm_group=None):
-        self.interp_calls.append(
-            {
-                "shape": tuple(x.shape),
-                "grid_shard_sizes": grid_shard_sizes,
-                "model_comm_group": model_comm_group,
-            }
-        )
-        return torch.ones((x.shape[0], 1, 1, 4, x.shape[-1]), device=x.device)
 
-    def get_matching_channel_indices(self, target_dataset):
-        assert target_dataset == "out_hres"
-        return torch.arange(2)
+def test_one_step_extra_args_force_single_denoise_at_sigma():
+    evaluator = _predict_routing_evaluator({"2t": 0}, ["b0"], inference_model=object())
+    args = evaluator._build_one_step_extra_args(3.5)
 
-    def compute_residuals(
-        self,
-        *,
-        y,
-        x_interp,
-        pre_processors_state,
-        pre_processors_tendencies,
-        target_dataset,
-        skip_imputation,
+    assert args["num_steps"] == 1
+    assert args["sigma_max"] == 3.5
+    # sigma_min floors below sigma so a single Heun step denoises from sigma.
+    assert args["sigma_min"] <= 3.5
+    assert args["schedule_type"] == "karras"
+    assert args["S_churn"] == 0.0
+
+
+def test_one_step_extra_args_floor_never_exceeds_small_sigma():
+    evaluator = _predict_routing_evaluator({"2t": 0}, ["b0"], inference_model=object())
+    args = evaluator._build_one_step_extra_args(0.005)
+    # For tiny sigma, sigma_min must not exceed sigma_max.
+    assert args["sigma_min"] <= args["sigma_max"] == 0.005
+
+
+def test_per_field_metrics_from_numpy_masks_nan_and_indexes_channels():
+    evaluator = SigmaEvaluator.__new__(SigmaEvaluator)
+    evaluator.name_to_index = {"2t": 0, "msl": 1}
+    evaluator.STANDARD_FIELDS = SigmaEvaluator.STANDARD_FIELDS
+    evaluator._warned_fields = set()
+
+    # shape (batch, ens, grid, vars) with 2 channels.
+    pred = np.zeros((1, 1, 4, 2), dtype=np.float32)
+    truth = np.zeros((1, 1, 4, 2), dtype=np.float32)
+    pred[..., 0] = 2.0  # 2t error == 2 -> mse 4
+    truth[..., 1] = 1.0  # msl error == -1 -> mse 1
+
+    metrics = evaluator._per_field_metrics_from_numpy(pred, truth)
+
+    assert abs(metrics["mse_2t_non_weighted"] - 4.0) < 1e-6
+    assert abs(metrics["mse_msl_non_weighted"] - 1.0) < 1e-6
+    # Fields not in the model output are NaN.
+    assert np.isnan(metrics["mse_10u_non_weighted"])
+    # All-field RMSE = sqrt(mean([4_each, 1_each])) = sqrt(2.5).
+    assert abs(metrics["diff_all_var_non_weighted"] - np.sqrt(2.5)) < 1e-6
+
+
+def test_per_field_metrics_handles_missing_truth():
+    evaluator = SigmaEvaluator.__new__(SigmaEvaluator)
+    evaluator.name_to_index = {"2t": 0}
+    evaluator.STANDARD_FIELDS = SigmaEvaluator.STANDARD_FIELDS
+    evaluator._warned_fields = set()
+
+    metrics = evaluator._per_field_metrics_from_numpy(np.zeros((1, 1, 4, 1)), None)
+    assert np.isnan(metrics["diff_all_var_non_weighted"])
+    assert np.isnan(metrics["mse_2t_non_weighted"])
+
+
+def test_evaluate_sigma_routes_through_predict_from_bundle(monkeypatch):
+    """evaluate_sigma calls the model's predict_step (via _predict_from_bundle) per bundle,
+    forcing a 1-step sampler at sigma, and averages per-field MSE vs the bundle truth y."""
+    import eval._backends.sigma_evaluator.sigma_evaluator as se_mod
+
+    calls = []
+
+    def _fake_predict_from_bundle(
+        *, inference_model, datamodule, device, bundle_nc, member_index,
+        extra_args, precision, model_comm_group, output_weather_state_mode, output_weather_states,
     ):
-        assert target_dataset == "out_hres"
-        assert skip_imputation is True
-        assert tuple(x_interp.shape) == tuple(y.shape)
-        self.residual_calls.append(tuple(x_interp.shape))
-        return y - x_interp
+        calls.append({"bundle": bundle_nc, "extra_args": extra_args})
+        # x, y, y_pred, lon_lres, lat_lres, lon_hres, lat_hres, weather_states, dates
+        y = np.zeros((1, 1, 4, 1), dtype=np.float32)
+        y_pred = np.full((1, 1, 4, 1), 2.0, dtype=np.float32)  # error 2 -> mse 4
+        return (None, y, y_pred, None, None, None, None, ["2t"], None)
 
+    # _predict_from_bundle is imported inside the method; patch it at its source module.
+    import manual_inference.prediction.predict as predict_mod
+    monkeypatch.setattr(predict_mod, "_predict_from_bundle", _fake_predict_from_bundle, raising=False)
 
-class _DummyDownscaler:
-    def __init__(self):
-        inner = _DummyInnerModel()
-        self.model = SimpleNamespace(
-            model=inner,
-            pre_processors={"in_lres": _IdentityProcessor(), "in_hres": _IdentityProcessor(), "out_hres": _IdentityProcessor()},
-            post_processors={"out_hres": _IdentityProcessor()},
-            pre_processors_tendencies={"out_hres": _IdentityProcessor()},
-            post_processors_tendencies={"out_hres": _IdentityProcessor()},
-        )
-        self.device = "cpu"
-        self.model_comm_group = None
-        self.target_dataset_names = ["out_hres"]
-        self.dataset_names = ["in_lres", "in_hres", "out_hres"]
-        self.forward_calls = []
+    inference_model = SimpleNamespace()
+    evaluator = _predict_routing_evaluator({"2t": 0}, ["b0", "b1"], inference_model)
+    evaluator.N_samples = 2
 
-    def eval(self):
-        return self
+    loss, metrics = evaluator.evaluate_sigma(1.5, prediction_on_pure_noise=False)
 
-    def _noise_target(self, target, sigma):
-        return {name: value for name, value in target.items()}
-
-    def __call__(self, x, y_noised, sigma):
-        assert set(x) == {"in_lres", "in_hres"}
-        assert set(y_noised) == {"out_hres"}
-        assert set(sigma) == {"out_hres"}
-        self.forward_calls.append((x, y_noised, sigma))
-        return {"out_hres": torch.zeros_like(y_noised["out_hres"])}
-
-    def compute_loss_metrics(self, y_pred, y, validation_mode, weights, **_kwargs):
-        assert validation_mode is True
-        assert set(y_pred) == {"out_hres"}
-        assert set(y) == {"out_hres"}
-        assert set(weights) == {"out_hres"}
-        return torch.tensor(1.0), {}, y_pred
-
-
-class _OneBatchDataModule:
-    def __init__(self, batch):
-        self.batch = batch
-
-    def val_dataloader(self):
-        return [self.batch]
-
-
-def test_unified_sigma_evaluator_uses_dict_api_without_legacy_lres_shard_attr():
-    downscaler = _DummyDownscaler()
-    batch = (
-        torch.zeros((1, 1, 1, 3, 2)),
-        torch.zeros((1, 1, 1, 4, 1)),
-        torch.full((1, 1, 1, 4, 2), 2.0),
-    )
-
-    evaluator = SigmaEvaluator(
-        downscaler,
-        _OneBatchDataModule(batch),
-        N_samples=1,
-        name_to_index={"2t": 0},
-    )
-
-    loss, metrics = evaluator.evaluate_batch_with_sigma(1.0, batch, prediction_on_pure_noise=False)
-
-    assert loss.item() == 1.0
-    assert downscaler.model.model.interp_calls == []
-    assert downscaler.model.model.residual_interp_calls == [
-        {"shape": (1, 1, 1, 3, 2), "grid_shard_sizes": None, "model_comm_group": None}
-    ]
-    assert downscaler.model.model.residual_calls == [(1, 1, 1, 4, 2)]
-    assert downscaler.forward_calls
-    assert "diff_all_var_non_weighted" in metrics
-    assert "mse_2t_non_weighted" in metrics
+    assert len(calls) == 2
+    assert calls[0]["extra_args"]["num_steps"] == 1
+    assert calls[0]["extra_args"]["sigma_max"] == 1.5
+    assert abs(metrics["mse_2t_non_weighted"] - 4.0) < 1e-6
+    assert abs(loss - 2.0) < 1e-6  # RMSE of all-field diff = sqrt(4) = 2

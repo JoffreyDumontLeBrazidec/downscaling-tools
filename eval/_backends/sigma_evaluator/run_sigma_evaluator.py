@@ -23,6 +23,7 @@ from manual_inference.checkpoints import (
 from manual_inference.prediction.predict import (
     _get_parallel_info,
     _init_model_comm_group,
+    _load_objects,
     _resolve_device,
     _rewrite_dataset_paths_in_place,
 )
@@ -294,6 +295,19 @@ def _make_bundle_sigma_datamodule(*, bundle_root: str, data_indices, n_samples: 
     return _BundleSigmaDataModule(bundle_paths, data_indices)
 
 
+def _list_bundle_paths(*, bundle_root: str, n_samples: int) -> list[Path]:
+    """Return the sorted *_input_bundle.nc paths under bundle_root (capped at n_samples)."""
+    root = Path(bundle_root).expanduser()
+    if not root.exists():
+        raise FileNotFoundError(f"Bundle root does not exist: {root}")
+    bundle_paths = sorted(root.glob("*_input_bundle.nc"))
+    if not bundle_paths:
+        raise FileNotFoundError("No *_input_bundle.nc files found for bundle-root sigma evaluation.")
+    if n_samples > 0:
+        bundle_paths = bundle_paths[:n_samples]
+    return bundle_paths
+
+
 def _resolve_downscaler_cls():
     import importlib  # pylint: disable=import-outside-toplevel
 
@@ -376,17 +390,13 @@ def _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_siz
     if model_comm_group is None or world_size <= 1:
         return
 
-    if hasattr(downscaler, "set_model_comm_group"):
-        downscaler.set_model_comm_group(
-            model_comm_group,
-            model_comm_group_id=0,
-            model_comm_group_rank=global_rank,
-            model_comm_num_groups=1,
-            model_comm_group_size=world_size,
-        )
-    else:
-        downscaler.model_comm_group = model_comm_group
-        downscaler.model_comm_group_size = world_size
+    # Mirror `predict`: pass model_comm_group PER CALL to _before_sampling/forward and let the
+    # model shard from the per-call grid_shard_sizes. Do NOT propagate persistent per-layer comm
+    # state via set_model_comm_group -- `predict` never does, and that persistent state mis-seeds
+    # the hidden-mesh all-to-all split (NCCL "wrong sizes used across ranks" deadlock). Just expose
+    # the group as an attribute so the evaluator can retrieve it for per-call passing.
+    downscaler.model_comm_group = model_comm_group
+    downscaler.model_comm_group_size = world_size
 
     downscaler.reader_group_rank = global_rank
     if (
@@ -606,39 +616,50 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
         model_comm_group = _init_model_comm_group(device, global_rank, world_size)
         bundle_root = (getattr(args, "bundle_root", "") or "").strip()
         if bundle_root:
-            print(f"Using bundle-root sigma inputs: {bundle_root}")
-            datamodule = _make_bundle_sigma_datamodule(
-                bundle_root=bundle_root,
-                data_indices=checkpoint["hyper_parameters"]["data_indices"],
-                n_samples=args.n_samples,
+            # PREDICT-ROUTING (unified) mode: do NOT reconstruct the diffusion forward.
+            # Load the model's own inference wrapper exactly as `eval.cli predict` does
+            # (torch.load of inference-<ckpt>, full-grid template datamodule) and let the
+            # model own ALL sharding via predict_step. This is the only forward path that
+            # does not deadlock on the uneven hidden-mesh all-to-all split. Per sigma we
+            # call predict_step with a degenerate 1-step sampler forced at that sigma.
+            print(f"Using bundle-root sigma inputs (predict-routing): {bundle_root}")
+            bundle_paths = _list_bundle_paths(bundle_root=bundle_root, n_samples=args.n_samples)
+            resolved_ckpt = str(Path(args.ckpt_root) / args.name_exp / args.name_ckpt)
+            inference_model, datamodule, _dir_exp, _name_exp = _load_objects(
+                ckpt_path=resolved_ckpt,
+                device=device,
+                validation_frequency=args.validation_frequency,
+                precision="fp32",
+                num_gpus_per_model_override=requested_model_parallel_gpus,
             )
             interface = None
-            downscaler = _load_downscaler_from_checkpoint_metadata(
-                ckpt_root=args.ckpt_root,
-                name_exp=args.name_exp,
-                name_ckpt=args.name_ckpt,
-                checkpoint=checkpoint,
-                config_checkpoint=object_loader.config_checkpoint,
-            )
+            downscaler = None
+            predict_routing = True
         else:
             object_loader.load()
 
             datamodule = object_loader.datamodule
             interface = object_loader.interface
             downscaler = object_loader.downscaler
+            inference_model = None
+            bundle_paths = None
+            predict_routing = False
         _ = checkpoint  # keep behavior; checkpoint is loaded for config compatibility.
 
         if interface is not None:
             interface = interface.to(device)
-        downscaler = downscaler.to(device)
-
-        _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_size)
+        if downscaler is not None:
+            downscaler = downscaler.to(device)
+            # Legacy (zarr-dataloader) path only: configure model-parallel comm state on
+            # the training task. Predict-routing never touches this — predict passes the
+            # comm group PER CALL into predict_step and never sets persistent comm state.
+            _setup_model_comm_group(downscaler, model_comm_group, global_rank, world_size)
 
         print(
             f"Running sigma evaluator on device: {device} "
             f"(lane={inferred_lane}, num_gpus_per_model={requested_model_parallel_gpus}, "
-            f"keep_batch_sharded={getattr(downscaler, 'keep_batch_sharded', 'N/A')}, "
-            f"lres_shard_shapes={getattr(downscaler, 'lres_grid_shard_shapes', 'N/A') is not None})"
+            f"predict_routing={predict_routing}, "
+            f"keep_batch_sharded={getattr(downscaler, 'keep_batch_sharded', 'N/A')})"
         )
 
         if args.sigmas.strip():
@@ -648,8 +669,30 @@ def run_sigma_evaluator(args: argparse.Namespace) -> Path:
 
         run_noised = args.run_noised or (not args.run_noised and not args.run_pure_noise)
         run_pure_noise = args.run_pure_noise
-        name_to_index = _resolve_output_name_to_index(downscaler, datamodule)
-        sigma_evaluator = SigmaEvaluator(downscaler, datamodule, args.n_samples, name_to_index)
+
+        if predict_routing:
+            name_to_index = _get_output_name_to_index_from_data_indices(
+                checkpoint["hyper_parameters"]["data_indices"]
+            )
+            if not name_to_index:
+                name_to_index = _get_output_name_to_index_from_data_indices(
+                    getattr(inference_model, "data_indices", None)
+                )
+            sigma_evaluator = SigmaEvaluator(
+                downscaler=None,
+                datamodule=datamodule,
+                N_samples=args.n_samples,
+                name_to_index=name_to_index,
+                inference_model=inference_model,
+                device=device,
+                model_comm_group=model_comm_group,
+                bundle_paths=bundle_paths,
+                output_weather_state_mode="all",
+                precision="fp32",
+            )
+        else:
+            name_to_index = _resolve_output_name_to_index(downscaler, datamodule)
+            sigma_evaluator = SigmaEvaluator(downscaler, datamodule, args.n_samples, name_to_index)
 
         def _run_one(sigma: float, prediction_on_pure_noise: bool) -> dict:
             if torch.cuda.is_available():
