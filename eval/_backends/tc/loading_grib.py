@@ -11,7 +11,7 @@ import numpy as np
 import xarray as xr
 
 from .data_types import BoundingBox, CurveVectors, FORECAST_STEP_COUNT, SupportMode, step_to_index
-from .grid import normalize_lon
+from .grid import normalize_lon, point_mask
 
 
 def _import_metview():
@@ -127,16 +127,32 @@ def load_grib_curves(
         an_step_indices = step_indices
 
     if support_mode == "native":
+        if bbox is None:
+            raise ValueError("bbox is required for native support mode")
         curves: dict[str, CurveVectors] = {}
-        curves[analysis_expid] = _load_native_curve(
-            an_files,
-            is_analysis=True,
-            per_date_an=per_date_an,
-            step_indices=an_step_indices,
-        )
+        if per_date_an:
+            # Keep one 00Z analysis frame from EACH verification-date file.
+            # Loading all files then isel(time=0) silently retained only the first date.
+            analysis_curves = [
+                _load_native_curve(
+                    [path], bbox=bbox, is_analysis=True, per_date_an=True,
+                    step_indices=an_step_indices,
+                )
+                for path in an_files
+            ]
+            curves[analysis_expid] = CurveVectors(
+                msl=np.concatenate([curve.msl for curve in analysis_curves]),
+                wind=np.concatenate([curve.wind for curve in analysis_curves]),
+            )
+        else:
+            curves[analysis_expid] = _load_native_curve(
+                an_files, bbox=bbox, is_analysis=True, per_date_an=False,
+                step_indices=an_step_indices,
+            )
         for expid in expids:
             curves[expid] = _load_native_curve(
                 [str(event_dir / f"surface_pf_{expid}_{date}.grib") for date in forecast_dates],
+                bbox=bbox,
                 is_analysis=False,
                 step_indices=step_indices,
                 max_pf_members=max_pf_members,
@@ -191,7 +207,9 @@ def load_grib_curve_from_paths(
         raise FileNotFoundError(f"No GRIB files matched: {grib_paths}")
 
     if support_mode == "native":
-        return _load_native_curve(files, is_analysis=False, step_indices=None)
+        if bbox is None:
+            raise ValueError("bbox is required for native support mode")
+        return _load_native_curve(files, bbox=bbox, is_analysis=False, step_indices=None)
 
     if support_mode == "regridded":
         if bbox is None:
@@ -210,17 +228,32 @@ def load_grib_curve_from_paths(
 # --- Internal helpers ---
 
 
+def _crop_native_dataset(ds: xr.Dataset, bbox: BoundingBox) -> xr.Dataset:
+    """Restrict a native GRIB dataset to the exact event box used by every curve."""
+    if "longitude" not in ds.coords or "latitude" not in ds.coords:
+        raise ValueError("Native GRIB dataset is missing longitude/latitude coordinates")
+    lon = normalize_lon(np.asarray(ds["longitude"].values, dtype=np.float64))
+    lat = np.asarray(ds["latitude"].values, dtype=np.float64)
+    if lon.ndim != 1 or lat.ndim != 1 or ds["longitude"].dims != ds["latitude"].dims:
+        raise ValueError("Native GRIB longitude/latitude coordinates must share one spatial dimension")
+    mask = point_mask(lon, lat, bbox)
+    if not np.any(mask):
+        raise ValueError(f"Native GRIB has no points inside event bbox {bbox}")
+    spatial_dim = ds["longitude"].dims[0]
+    return ds.assign_coords(longitude=(spatial_dim, lon)).isel({spatial_dim: mask})
+
+
 def _load_native_curve(
     files: list[str],
     *,
+    bbox: BoundingBox,
     is_analysis: bool,
     step_indices: list[int] | None,
     max_pf_members: int | None = None,
     per_date_an: bool = False,
 ) -> CurveVectors:
     ds = ekd.from_source("file", files).to_xarray(engine="cfgrib")
-    if "longitude" in ds.coords:
-        ds = ds.assign_coords(longitude=normalize_lon(ds["longitude"].values.astype(np.float64)))
+    ds = _crop_native_dataset(ds, bbox)
     # For per-date AN files, select 00Z only so each date contributes one frame.
     if per_date_an and "time" in ds.coords:
         ds = ds.isel(time=0)

@@ -166,7 +166,7 @@ def load_curves_for_event(
             forecast_dates=eff_forecast_dates or forecast_dates_for_event(event),
             reference_expids=ref_expids,
             support_mode=support_mode,
-            bbox=event.bbox if support_mode == "regridded" else None,
+            bbox=event.bbox,
             regrid_resolution=regrid_resolution,
             steps=eff_steps,
             max_pf_members=max_pf_members,
@@ -199,7 +199,7 @@ def load_curves_for_event(
             curves[label] = load_grib_curve_from_paths(
                 glob_path,
                 support_mode=support_mode,
-                bbox=event.bbox if support_mode == "regridded" else None,
+                bbox=event.bbox,
                 regrid_resolution=regrid_resolution,
             )
 

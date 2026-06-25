@@ -155,3 +155,48 @@ def test_humberto_compute_event_stats_uses_runtime_oper_and_references():
 
     assert stats["curve_order"] == ["demo-run", *exp_cfg.reference_expids]
     assert exp_cfg.reference_expids[0] in stats["variables"]["mslp_hpa"]["curves"]
+
+
+def test_crop_native_dataset_applies_the_event_bbox_to_grib_values():
+    ds = xr.Dataset(
+        {"msl": ("values", np.array([100000.0, 101000.0, 102000.0]))},
+        coords={
+            "longitude": ("values", np.array([-95.0, -75.0, -95.0])),
+            "latitude": ("values", np.array([20.0, 20.0, 45.0])),
+        },
+    )
+    bbox = data_types_mod.BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0)
+
+    cropped = loading_grib_mod._crop_native_dataset(ds, bbox)
+
+    assert cropped.sizes["values"] == 1
+    assert cropped["msl"].values.tolist() == [100000.0]
+
+
+def test_native_per_date_analysis_keeps_each_verification_date(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    def fake_load_native_curve(files, **kwargs):
+        calls.append(tuple(files))
+        value = float(len(calls))
+        return data_types_mod.CurveVectors(msl=np.array([value]), wind=np.array([value]))
+
+    monkeypatch.setattr(loading_grib_mod, "_is_per_date_an", lambda path: True)
+    monkeypatch.setattr(
+        loading_grib_mod, "_expand_analysis_files",
+        lambda *args, **kwargs: ["analysis-27.grib", "analysis-28.grib"],
+    )
+    monkeypatch.setattr(loading_grib_mod, "_load_native_curve", fake_load_native_curve)
+
+    curves = loading_grib_mod.load_grib_curves(
+        dir_data_base="/tmp/tc",
+        event_name="idalia",
+        analysis_expid="OPER_O320_0001",
+        analysis_dates=["20230826"],
+        forecast_dates=[],
+        support_mode="native",
+        bbox=data_types_mod.BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
+    )
+
+    assert calls == [("analysis-27.grib",), ("analysis-28.grib",)]
+    assert curves["OPER_O320_0001"].msl.tolist() == [1.0, 2.0]

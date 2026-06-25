@@ -28,6 +28,7 @@ from eval.config.loader import (
     validate_lane_host_compatible,
 )
 from eval.paths import resolve_eval_root
+from eval.evaluators.tc.comparison_contract import require_lane_analysis_reference
 
 LOG = logging.getLogger(__name__)
 
@@ -1342,6 +1343,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         if input_root:
             lane_config.setdefault("predict", {})["input_root"] = input_root
+
+    if args.subcommand in ("run", "evaluate") and "tc" in lane_config:
+        require_lane_analysis_reference(
+            lane_name, (lane_config.get("tc") or {}).get("analysis_expid"),
+        )
 
     # --- Build effective config ---
     effective = _build_effective_config(

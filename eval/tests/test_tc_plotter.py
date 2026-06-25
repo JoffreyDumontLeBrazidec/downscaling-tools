@@ -4,17 +4,40 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import pytest
 
+from eval._backends.tc import pdf_plot
+from eval._backends.tc.plot_config import TCPlotConfig
 from eval.evaluators.tc import plotter
 
 
-def test_tc_plotter_puts_all_overview_pages_before_ratio_and_log(tmp_path: Path, monkeypatch):
+def test_tc_plotter_writes_only_log_pages_in_canonical_order(tmp_path: Path, monkeypatch):
     results_dir = tmp_path / "tc"
     results_dir.mkdir()
+    def event_stats(event: str, mode: str) -> dict:
+        contract = {
+            "geographic_box": {"north": 40.0, "south": 10.0, "east": -80.0, "west": -100.0},
+            "support_mode": mode,
+            "regrid_resolution_degrees": 0.25,
+            "ensemble_members": 10,
+            "lead_times_hours": [24],
+            "start_dates": ["2023-08-26"],
+            "valid_dates": ["2023-08-27"],
+            "analysis_reference": "OPER_O320_0001",
+        }
+        return {
+            "event": event,
+            "support_mode": mode,
+            "comparison_contract": contract,
+            "reference_comparison_contract": dict(contract),
+        }
+
     stats = {
         "events": {
-            "humberto": {"event": "humberto", "support_mode": "regridded"},
-            "humberto__native": {"event": "humberto", "support_mode": "native"},
+            "idalia": event_stats("idalia", "regridded"),
+            "franklin__native": event_stats("franklin", "native"),
+            "idalia__native": event_stats("idalia", "native"),
+            "franklin": event_stats("franklin", "regridded"),
         }
     }
     (results_dir / "stats.json").write_text(json.dumps(stats), encoding="utf-8")
@@ -34,35 +57,115 @@ def test_tc_plotter_puts_all_overview_pages_before_ratio_and_log(tmp_path: Path,
         def savefig(self, fig, *, dpi=None):
             saved_pages.append(fig._tc_page_kind)  # type: ignore[attr-defined]
 
-    def _figure(kind: str, event_stats: dict):
+    def _figure(event_stats: dict):
         fig = plt.figure()
-        fig._tc_page_kind = f"{kind}:{event_stats['support_mode']}"  # type: ignore[attr-defined]
+        fig._tc_page_kind = f"log:{event_stats['event']}:{event_stats['support_mode']}"  # type: ignore[attr-defined]
         return fig
 
     monkeypatch.setattr(plotter, "PdfPages", RecordingPdfPages)
     monkeypatch.setattr(
         plotter,
         "plot_pdf_distribution_overview",
-        lambda plot_config, *, event_stats: _figure("overview", event_stats),
+        lambda *args, **kwargs: pytest.fail("overview pages must not be rendered"),
     )
     monkeypatch.setattr(
         plotter,
         "plot_pdf_ratios",
-        lambda plot_config, *, event_stats: _figure("ratio", event_stats),
+        lambda *args, **kwargs: pytest.fail("ratio-to-OPER pages must not be rendered"),
     )
     monkeypatch.setattr(
         plotter,
-        "plot_pdf_log",
-        lambda plot_config, *, event_stats: _figure("log", event_stats),
+        "plot_pdf_log", lambda plot_config, *, event_stats: _figure(event_stats),
     )
 
-    plotter.plot(results_dir, {}, {})
+    plotter.plot(results_dir, {}, {"events": ["idalia", "franklin"]})
 
     assert saved_pages == [
-        "overview:regridded",
-        "overview:native",
-        "ratio:regridded",
-        "log:regridded",
-        "ratio:native",
-        "log:native",
+        "log:franklin:native",
+        "log:franklin:regridded",
+        "log:idalia:native",
+        "log:idalia:regridded",
     ]
+
+
+def test_tc_log_plot_labels_oper_o320_explicitly():
+    event_stats = {
+        "analysis_key": "OPER_O320_0001",
+        "curve_order": ["model"],
+        "variables": {
+            "mslp_hpa": {
+                "bin_edges": [990.0, 995.0, 1000.0],
+                "bin_mids": [992.5, 997.5],
+                "oper_histogram": [0.1, 0.2],
+                "curves": {"model": {"histogram": [0.2, 0.1]}},
+            },
+            "wind10m_ms": {
+                "bin_edges": [0.0, 4.0, 8.0],
+                "bin_mids": [2.0, 6.0],
+                "oper_histogram": [0.2, 0.1],
+                "curves": {"model": {"histogram": [0.1, 0.2]}},
+            },
+        },
+    }
+
+    fig = pdf_plot.plot_pdf_log(TCPlotConfig(plot_title="Idalia"), event_stats=event_stats)
+    labels = [text.get_text() for ax in fig.axes for text in ax.get_legend().get_texts()]
+    plt.close(fig)
+
+    assert "OPER O320" in labels
+    assert "OPER AN" not in labels
+
+
+def test_tc_log_plot_uses_high_contrast_orange_for_enfo_o320():
+    style = pdf_plot.curve_style(
+        "ENFO_O320_0001",
+        ml_palette=None,  # This reference style does not consume the model palette.
+        ml_index=0,
+    )
+
+    assert isinstance(style["color"], str)
+    assert style["color"] == "#E69F00"
+    assert style["linestyle"] == "-."
+
+
+def test_tc_log_plot_inverts_mslp_axis_for_intensity_tail():
+    event_stats = {
+        "analysis_key": "OPER_O320_0001",
+        "curve_order": ["model"],
+        "variables": {
+            "mslp_hpa": {
+                "bin_edges": [985.0, 990.0, 995.0, 1000.0, 1005.0],
+                "bin_mids": [987.5, 992.5, 997.5, 1002.5],
+                "data_range_msl": [990.0, 1000.0],
+                "oper_histogram": [0.01, 0.1, 0.2, 0.03],
+                "curves": {"model": {"histogram": [0.02, 0.08, 0.22, 0.04]}},
+            },
+            "wind10m_ms": {
+                "bin_edges": [0.0, 4.0, 8.0, 12.0],
+                "bin_mids": [2.0, 6.0, 10.0],
+                "data_range_wind": [0.0, 10.0],
+                "oper_histogram": [0.2, 0.1, 0.01],
+                "curves": {"model": {"histogram": [0.18, 0.12, 0.02]}},
+            },
+        },
+    }
+
+    fig = pdf_plot.plot_pdf_log(TCPlotConfig(plot_title="Idalia"), event_stats=event_stats)
+    try:
+        assert fig.axes[0].get_xlim()[0] > fig.axes[0].get_xlim()[1]
+        assert fig.axes[1].get_xlim()[0] < fig.axes[1].get_xlim()[1]
+    finally:
+        plt.close(fig)
+
+
+def test_tc_plotter_rejects_stats_without_a_comparison_contract(tmp_path: Path, monkeypatch):
+    results_dir = tmp_path / "tc"
+    results_dir.mkdir()
+    (results_dir / "stats.json").write_text(
+        json.dumps({"events": {"idalia": {"event": "idalia", "support_mode": "regridded"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plotter, "plot_pdf_log", lambda *args, **kwargs: plt.figure())
+
+    with pytest.raises(ValueError, match="comparison contract"):
+        plotter.plot(results_dir, {}, {"events": ["idalia"]})

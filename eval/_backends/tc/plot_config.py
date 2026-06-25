@@ -92,7 +92,7 @@ def resolve_plot_config(event_name: str, eval_config: dict | None = None) -> TCP
 
 
 REFERENCE_STYLES: dict[str, dict] = {
-    "ENFO_O320_0001": {"label": "enfo_o320", "color": "black", "linestyle": "-.", "linewidth": 2},
+    "ENFO_O320_0001": {"label": "enfo_o320", "color": "#E69F00", "linestyle": "-.", "linewidth": 2},
     "ENFO_O48_0001": {"label": "enfo_o48", "color": "black", "linestyle": "-.", "linewidth": 2},
     "EEFO_O96_0001": {"label": "eefo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
     "ENFO_O96_0001": {"label": "enfo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
