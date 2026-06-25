@@ -43,6 +43,35 @@ python -m eval.cli scoreboard \
     --lane o96_o320
 ```
 
+**Local spread/CRPS diagnostics**:
+```bash
+python -m eval.cli evaluate \
+    --predictions-dir /path/to/predictions/ \
+    --lane o96_o320 --only probabilistic
+```
+
+The `probabilistic` evaluator reads local `predictions_YYYYMMDD_stepNNN.nc` files directly and writes `scores_by_lead.csv`, `summary_by_lead.csv`, `metrics.json`, and `plots/probabilistic_scores.pdf` under `evaluators/probabilistic/`. It computes CRPS, fair CRPS, spread, and ensemble-mean RMSE by lead time, variable, and domain without writing forecasts or scores to FDB. Quaver comparison curves can be overlaid from an exported local CSV, but quaver is not part of the evaluator runtime.
+
+To compare the local summary with a quaver-exported CSV using the same `step,weather_state,domain,metric` keys:
+
+```bash
+python -m eval.jobs.compare_probabilistic_reference \
+    --local-summary /path/to/evaluators/probabilistic/summary_by_lead.csv \
+    --reference-summary /path/to/quaver_reference.csv \
+    --out-dir /path/to/comparison/
+```
+
+For quaver references that already exist in the score DB, export a CSV first:
+
+```bash
+module load quaver
+export TMPDIR=/path/to/scratch/tmp
+quaver eval/jobs/export_quaver_probabilistic_reference.py \
+    --out-csv /path/to/quaver_reference.csv
+```
+
+Validation caveat: quaver surface scores are station-observation/FDB-backed, while the local evaluator scores gridded `y` embedded in prediction NetCDFs. Numeric parity therefore requires the same forecast, target, domain, variables, and member set. If quaver has no rows for the ML expver, the comparison can still overlay available ENFO/EEFO reference curves, but it is not model-vs-model parity.
+
 Use `--dry-run` on any subcommand to print the resolved config as JSON.
 
 Use `--include-diagnostics` to run the diagnostics group (sigma, mechanistic, intermediate) in addition to defaults.
