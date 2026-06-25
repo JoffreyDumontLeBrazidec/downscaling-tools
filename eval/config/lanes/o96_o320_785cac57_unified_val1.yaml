@@ -1,0 +1,96 @@
+# o96->o320 UNIFIED MONTH lane (AUGUST 2023) — derived from o96_o320_785cac57_unified.yaml (proven j74k).
+# Drives Leonardo ckpt 785cac57 (adamw_200k, step 75000) through eval.cli --mode prepml.
+# SOAP 200k (Leonardo) NOT converged as of 2026-06-18 (seg-B running, ETA ~06-21) -> using best on-ac.
+# Changes vs proven single-date lane: predict.dates = full Aug 2023 (31 days); queue gpu_debug/dg -> gpu/ng
+# (each (date,member) anemoi task is one fast o320 forward, but a month of tasks must not sit on the 30-min dg cap).
+# Pass --checkpoint <...785cac57.../inference-...step_075000.ckpt> at the CLI.
+default_host: atos_ac_unified
+allowed_hosts:
+  prepare: [atos_ac_unified, atos_ag]
+  predict: [atos_ac_unified, atos_ag]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+prepare:
+  bundle_filename_tpl: "eefo_o96_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    lres_pl_grib:    "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    hres_grib:       "{source_grib_root}/o320-z-lsm.grib"
+
+predict:
+  members: [1, 2]
+  steps: [24]
+  dates: ["20230826"]
+  num_gpus_per_model: 2
+  env:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_SAMPLER_SEED: "1234"
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 10000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 10000.0
+    S_noise: 1.05
+
+spectra:
+  fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+
+evaluator_groups:
+  default: []
+  diagnostics: []
+
+prepml:
+  runner: anemoi-dev
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  input:
+    class: od
+    stream: eefo
+    type: pf
+    grid: O96
+  output:
+    class: rd
+    stream: enfo
+    type: pf
+  output_template: /home/ecm5702/hpcperm/data/o320-template.grib
+  forcings_npz: /home/ecm5702/hpcperm/data/o320-forcings.npz
+  constant_high_res_forcings: [cos_latitude, cos_longitude, lsm, sin_latitude, sin_longitude, z]
+  high_res_input: [cos_julian_day, cos_latitude, cos_local_time, cos_longitude, insolation, lsm, sin_julian_day, sin_latitude, sin_local_time, sin_longitude, z]
+  truth:
+    root: /home/ecm5702/perm/reference/o96_o320
+  time_step: 24h
+  lead_time: 24h
+  platform:
+    gpu:
+      time: "0-02:00"
+      submit_arguments:
+        total_nodes: 1
+        tasks_per_node: 2
+        gpus_per_node: 2
+        partition: gpu
+        RAW_PRAGMA:
+          - "#SBATCH --gres=gpu:2"
+          - "#SBATCH --qos=ng"
+          - "#SBATCH --mem=0"
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 2
+    ntasks_per_node: 2
+    time: "02:00:00"
+    mem: "0"
+    cpus: 8
