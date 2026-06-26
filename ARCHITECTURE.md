@@ -128,6 +128,14 @@ eval/config/
 |-- loader.py       # Reads YAML, validates required keys, returns dict
 ```
 
+**Event boxes/dates have a single source of truth: the `events/*.yaml` files.**
+`eval/_backends/tc/events.py` does not hardcode coordinates — it loads those
+YAMLs into the `EVENTS` registry at import (so `from ...events import EVENTS`
+keeps working). To add or change a TC event, edit its YAML, never `events.py`.
+Scoring-event boxes must stay mutually non-overlapping (an overlap makes
+per-storm extrema pick up a neighbour's low — see the dora/fernanda/idalia
+shared-low degeneracy).
+
 **Lane YAML** is the central config file. It contains: predict defaults (dates,
 steps, members), per-evaluator parameters, evaluator groups, region definitions,
 and reference data paths.

@@ -1,9 +1,10 @@
 name: fernanda
 full_name: "Hurricane Fernanda"
-lat_min: 0.0
-lat_max: 30.0
-lon_min: -135.0
-lon_max: -105.0
+# Non-overlapping E-Pac crop (130-117W), disjoint from dora/hilary.
+lat_min: 8.0
+lat_max: 22.0
+lon_min: -130.0
+lon_max: -117.0
 dates: ["12", "13", "14", "15", "16", "17"]
 analysis_dates: ["20230812"]
 year: "2023"

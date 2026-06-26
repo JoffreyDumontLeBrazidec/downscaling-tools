@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from eval._backends.tc.data_types import BoundingBox
+from eval._backends.tc.events import EVENTS
 from eval.evaluators.tc.comparison_contract import (
     build_prediction_contract,
     validate_comparison_contracts,
@@ -41,7 +41,7 @@ def test_build_prediction_contract_uses_file_metadata(tmp_path: Path):
 
     contract = build_prediction_contract(
         prediction_files=[first, second],
-        bbox=BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
+        bbox=EVENTS["idalia"].bbox,
         support_mode="regridded",
         regrid_resolution=0.25,
         analysis_reference="OPER_O320_0001",
@@ -77,7 +77,7 @@ def test_validate_comparison_contracts_reports_each_mismatch(
     _write_prediction(prediction, init_date="2023-08-26T00:00:00", step=24)
     baseline = build_prediction_contract(
         prediction_files=[prediction],
-        bbox=BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
+        bbox=EVENTS["idalia"].bbox,
         support_mode="regridded",
         regrid_resolution=0.25,
         analysis_reference="OPER_O320_0001",
@@ -94,7 +94,7 @@ def test_validate_comparison_contracts_requires_oper_o320_for_o96_o320(tmp_path:
     _write_prediction(prediction, init_date="2023-08-26T00:00:00", step=24)
     contract = build_prediction_contract(
         prediction_files=[prediction],
-        bbox=BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
+        bbox=EVENTS["idalia"].bbox,
         support_mode="regridded",
         regrid_resolution=0.25,
         analysis_reference="OPER_O96_0001",

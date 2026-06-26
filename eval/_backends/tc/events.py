@@ -1,7 +1,17 @@
-"""Pure TC event identity — geographic/temporal only."""
+"""TC event identity — geographic/temporal only.
+
+SINGLE SOURCE OF TRUTH for TC boxes/dates is ``eval/config/events/*.yaml``
+(see ARCHITECTURE.md: lane/host/event configuration lives in ``eval/config/``).
+This module does NOT hardcode coordinates: it loads those YAML configs into the
+``EVENTS`` registry so existing imports (``from .events import EVENTS, TCEvent``)
+keep working. To add or change an event, edit its YAML — never this file.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from eval.config import loader as _loader
+from eval.config.loader import load_event
 
 from .data_types import BoundingBox
 
@@ -17,69 +27,39 @@ class TCEvent:
     scoring_eligible: bool = True  # False for combined events like franklin_idalia
 
 
-EVENTS: dict[str, TCEvent] = {
-    "franklin": TCEvent(
-        name="franklin",
-        year="2023",
-        month="08",
-        dates=["20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30"],
-        analysis_dates=["20230820", "20230826"],
-        bbox=BoundingBox(north=38.0, south=15.0, east=-58.0, west=-78.0),
-    ),
-    "idalia": TCEvent(
-        name="idalia",
-        year="2023",
-        month="08",
-        dates=["26", "27", "28", "29", "30"],
-        analysis_dates=["20230826"],
-        bbox=BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
-    ),
-    # Combined diagnostic region — covers both storms. Not for scoring.
-    "franklin_idalia": TCEvent(
-        name="franklin_idalia",
-        year="2023",
-        month="08",
-        dates=["20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30"],
-        analysis_dates=["20230820", "20230826"],
-        bbox=BoundingBox(north=40.0, south=10.0, east=-58.0, west=-100.0),
-        scoring_eligible=False,
-    ),
-    "hilary": TCEvent(
-        name="hilary",
-        year="2023",
-        month="08",
-        dates=["16", "17", "18", "19", "20"],
-        analysis_dates=["20230816"],
-        bbox=BoundingBox(north=35.0, south=5.0, east=-95.0, west=-117.0),  # E-Pac 117-95W (non-overlapping w/ fernanda)
-    ),
-    "dora": TCEvent(
-        name="dora",
-        year="2023",
-        month="08",
-        dates=[
-            "01", "02", "03", "04", "05", "06", "07", "08",
-            "09", "10", "11", "12", "13", "14", "15", "16", "17",
-        ],
-        analysis_dates=["20230801", "20230807", "20230813"],
-        bbox=BoundingBox(north=22.0, south=8.0, east=-130.0, west=-155.0),  # E-Pac 155-130W (was 175E..-105W: overlapped fernanda/hilary -> shared-low degeneracy)
-    ),
-    "fernanda": TCEvent(
-        name="fernanda",
-        year="2023",
-        month="08",
-        dates=["12", "13", "14", "15", "16", "17"],
-        analysis_dates=["20230812"],
-        bbox=BoundingBox(north=22.0, south=8.0, east=-117.0, west=-130.0),  # E-Pac 130-117W (non-overlapping)
-    ),
-    "humberto": TCEvent(
-        name="humberto",
-        year="2025",
-        month="09",
-        dates=["26", "27", "28", "29", "30"],
-        analysis_dates=["20250926"],
-        bbox=BoundingBox(north=45.0, south=15.0, east=-50.0, west=-90.0),
-    ),
-}
+def _event_from_cfg(cfg: dict) -> TCEvent:
+    """Build a TCEvent from a validated event-config dict (see loader.load_event)."""
+    analysis_dates = [str(d) for d in cfg.get("analysis_dates", [])]
+    year = str(cfg.get("year") or (analysis_dates[0][:4] if analysis_dates else ""))
+    month = str(cfg.get("month") or (analysis_dates[0][4:6] if analysis_dates else ""))
+    return TCEvent(
+        name=cfg["name"],
+        year=year,
+        month=month,
+        dates=[str(d) for d in cfg["dates"]],
+        analysis_dates=analysis_dates,
+        bbox=BoundingBox(
+            north=float(cfg["lat_max"]),
+            south=float(cfg["lat_min"]),
+            east=float(cfg["lon_max"]),
+            west=float(cfg["lon_min"]),
+        ),
+        scoring_eligible=bool(cfg.get("scoring_eligible", True)),
+    )
+
+
+def _load_events() -> dict[str, TCEvent]:
+    """Load every event YAML in eval/config/events/ into the registry."""
+    events_dir = _loader._CONFIG_DIR / "events"
+    out: dict[str, TCEvent] = {}
+    for path in sorted(events_dir.glob("*.yaml")):
+        cfg = load_event(path.stem)
+        out[cfg["name"]] = _event_from_cfg(cfg)
+    return out
+
+
+# Registry built from the YAML source of truth at import time.
+EVENTS: dict[str, TCEvent] = _load_events()
 
 
 def get_event(name: str) -> TCEvent:

@@ -165,7 +165,7 @@ def test_crop_native_dataset_applies_the_event_bbox_to_grib_values():
             "latitude": ("values", np.array([20.0, 20.0, 45.0])),
         },
     )
-    bbox = data_types_mod.BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0)
+    bbox = events_mod.EVENTS["idalia"].bbox  # single source of truth: events YAML
 
     cropped = loading_grib_mod._crop_native_dataset(ds, bbox)
 
@@ -195,7 +195,7 @@ def test_native_per_date_analysis_keeps_each_verification_date(monkeypatch):
         analysis_dates=["20230826"],
         forecast_dates=[],
         support_mode="native",
-        bbox=data_types_mod.BoundingBox(north=40.0, south=10.0, east=-80.0, west=-100.0),
+        bbox=events_mod.EVENTS["idalia"].bbox,
     )
 
     assert calls == [("analysis-27.grib",), ("analysis-28.grib",)]

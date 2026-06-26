@@ -1,8 +1,9 @@
 name: hilary
 full_name: "Hurricane Hilary"
-lat_min: 0.0
+# Non-overlapping E-Pac crop (117-95W), disjoint from fernanda.
+lat_min: 5.0
 lat_max: 35.0
-lon_min: -125.0
+lon_min: -117.0
 lon_max: -95.0
 dates: ["16", "17", "18", "19", "20"]
 analysis_dates: ["20230816"]

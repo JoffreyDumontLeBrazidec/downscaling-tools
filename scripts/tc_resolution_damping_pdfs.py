@@ -24,6 +24,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from eval._backends.tc.data_types import BoundingBox, CurveVectors
+from eval._backends.tc.events import EVENTS
 from eval._backends.tc.grid import normalize_lon, point_mask
 import cmcrameri.cm as cm
 import seaborn as sns
@@ -39,13 +40,13 @@ LOG = logging.getLogger(__name__)
 # ── Data paths ──────────────────────────────────────────────────────────────
 
 HUMBERTO_DATES = ["20250926", "20250927", "20250928", "20250929", "20250930"]
-HUMBERTO_BBOX = BoundingBox(north=45.0, south=15.0, east=-50.0, west=-90.0)
+HUMBERTO_BBOX = EVENTS["humberto"].bbox  # single source of truth: events YAML
 
 O96_DIR = "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930"
 O2560_DIR = "/home/ecm5702/hpcperm/data/input_data/destine_iekm_o2560_targets_humberto_20250926_20250930"
 
 FRANKLIN_DATES = ["20230825", "20230826", "20230827"]
-FRANKLIN_BBOX = BoundingBox(north=38.0, south=15.0, east=-58.0, west=-78.0)
+FRANKLIN_BBOX = EVENTS["franklin"].bbox  # single source of truth: events YAML
 FRANKLIN_DIR = "/home/ecm5702/hpcperm/data/tc/franklin"
 
 OUTDIR = Path("/home/ecm5702/scratch/eval/resolution_damping_analysis")

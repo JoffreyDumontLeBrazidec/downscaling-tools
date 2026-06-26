@@ -638,18 +638,42 @@ def run_tc_member_plots_legacy(
     out_root.mkdir(parents=True, exist_ok=True)
     generated: list[str] = []
 
+    # Box (lat, lon) for the Atlantic storms is taken from the SINGLE source of
+    # truth in events.py (EVENTS[*].bbox), which is maintained non-overlapping
+    # ("must NOT overlap with other scoring events"). Do NOT re-hardcode them
+    # here: the old idalia (lon -99..-71) / franklin (lon -79..-51) literals
+    # overlapped by ~8 deg of longitude, so any min/max over the idalia box
+    # silently picked up Franklin's deeper low (identical MSLP min -> wrong).
+    def _ev_latlon(name: str) -> dict:
+        b = EVENTS[name].bbox
+        return {"lat": (b.south, b.north), "lon": (b.west, b.east)}
+
     CASES = [
-        {"name": "dora", "lat": (5.5, 23.0), "lon": (-158.75, -141.0), "dates": [6], "time": 1,
+        {"name": "dora", **_ev_latlon("dora"), "dates": [6], "time": 1,
          "msl_levels": np.linspace(985, 1015, 31), "wind_levels": np.linspace(0, 30, 31)},
-        {"name": "fernanda", "lat": (1.0, 29.0), "lon": (-134.0, -105.0), "dates": [13], "time": 2,
+        {"name": "fernanda", **_ev_latlon("fernanda"), "dates": [13], "time": 2,
          "msl_levels": np.linspace(985, 1015, 31), "wind_levels": np.linspace(0, 30, 31)},
-        {"name": "hilary", "lat": (11.0, 29.0), "lon": (-120.0, -100.0), "dates": [17], "time": 1,
+        {"name": "hilary", **_ev_latlon("hilary"), "dates": [17], "time": 1,
          "msl_levels": np.linspace(965, 1015, 31), "wind_levels": np.linspace(0, 35, 31)},
-        {"name": "idalia", "lat": (11.0, 39.01), "lon": (-99.0, -71.01), "dates": [28], "time": 1,
+        {"name": "idalia", **_ev_latlon("idalia"), "dates": [28], "time": 1,
          "msl_levels": np.linspace(985, 1015, 31), "wind_levels": np.linspace(0, 30, 31)},
-        {"name": "franklin", "lat": (11.0, 39.0), "lon": (-79.0, -51.0), "dates": [28], "time": 1,
+        {"name": "franklin", **_ev_latlon("franklin"), "dates": [28], "time": 1,
          "msl_levels": np.linspace(985, 1015, 31), "wind_levels": np.linspace(0, 30, 31)},
     ]
+
+    # Non-blocking guard: warn (never raise) if any two case boxes overlap, so a
+    # future hand-edited box that double-counts a storm is visible in the logs
+    # without blocking experimentation.
+    for _i in range(len(CASES)):
+        for _j in range(_i + 1, len(CASES)):
+            _a, _b = CASES[_i], CASES[_j]
+            if (_a["lat"][0] < _b["lat"][1] and _b["lat"][0] < _a["lat"][1]
+                    and _a["lon"][0] < _b["lon"][1] and _b["lon"][0] < _a["lon"][1]):
+                LOG.warning(
+                    "TC plot boxes overlap: %s %s/%s vs %s %s/%s -- per-storm "
+                    "min/max may double-count a shared low",
+                    _a["name"], _a["lat"], _a["lon"], _b["name"], _b["lat"], _b["lon"],
+                )
 
     analysis = "OPER_O320_0001"
     expid_enfo_o320 = "ENFO_O320_0001"
