@@ -112,6 +112,27 @@ def _input_step_request(predict_steps: list[int], prepml_input: dict, time_step:
     return f"{first_step}/to/{last_step}/by/{step_hours}"
 
 
+def _gpu_resources(prepml: dict, num_gpus_per_model: int) -> dict[str, Any]:
+    """Build the prepml 0.125+ ``resources.inference.gpu`` block.
+
+    This is the schema current prepml ACTUALLY honors for GPU geometry. The older
+    ``platform.flavours.gpu.submit_arguments`` block is IGNORED by prepml for GPU count
+    (prepml hardcodes ``gres=gpu:1`` in its platform defaults and drops the config
+    override), which silently capped unified multi-GPU inference at 1 GPU -> the parallel
+    runner has no rank -> ``global_rank`` crash. ``tasks_per_node == gpus_per_node`` so
+    SLURM_NTASKS matches the shard count and the wrap shim srun-launches one rank per GPU
+    (world_size == num_gpus_per_model).
+    """
+    gpu_cfg = prepml.get("platform", {}).get("gpu", {})
+    return {
+        "total_nodes": 1,
+        "tasks_per_node": num_gpus_per_model,
+        "gpus_per_node": num_gpus_per_model,
+        "cpus_per_task": int(gpu_cfg.get("cpus_per_task", 32)),
+        "memory_per_node": str(gpu_cfg.get("memory_per_node", "64G")),
+    }
+
+
 def generate_prepml_config(
     *,
     lane_config: dict,
@@ -155,6 +176,8 @@ def generate_prepml_config(
         "runner": {
             "name": prepml["runner"],
             "venv": venv,
+            "version": "auto",
+            "model": prepml.get("runner_model", "aifs-single-mse"),
         },
         "model": {
             "name": "anemoi",
@@ -173,12 +196,16 @@ def generate_prepml_config(
             },
         },
         "platform": {
+            "name": prepml.get("platform", {}).get("name", "atos"),
             "flavours": {
                 "gpu": {
                     "submit_arguments": _gpu_submit_arguments(prepml, num_gpus_per_model),
                     "late": f"-c +{prepml['platform']['gpu']['time'].split('-', 1)[-1]}",
                 },
             },
+        },
+        "resources": {
+            "inference": {"gpu": _gpu_resources(prepml, num_gpus_per_model)},
         },
         "evaluation": False,
     }

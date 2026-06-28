@@ -17,7 +17,7 @@ from typing import Any
 
 LOG = logging.getLogger(__name__)
 
-PREPML_BIN = os.environ.get("EVAL_PREPML_BIN", "/usr/local/apps/prepml/0.99/bin/prepml")  # override to test newer prepml, e.g. /usr/local/apps/prepml/0.134/bin/prepml
+PREPML_BIN = os.environ.get("EVAL_PREPML_BIN", "/usr/local/apps/prepml/0.125/bin/prepml")  # override to test newer prepml, e.g. /usr/local/apps/prepml/0.134/bin/prepml
 ECFLOW_BIN = "/usr/local/apps/ecflow/5.13.0/bin/ecflow_client"
 ECFLOW_ENV = {"ECF_HOST": "ecflow-gen-mlx-001", "ECF_PORT": "3141"}
 LEDGER_PATH = Path.home() / ".config" / "eval" / "prepml_consumed.jsonl"

@@ -173,7 +173,8 @@ resource_profiles:
 prepml:
   debug_expvers: ["j5ya"]
   runner: anemoi-dev
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
   input:
     class: od
     stream: enfo
