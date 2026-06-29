@@ -32,8 +32,8 @@ tc:
   grib_dir: "/home/ecm5702/perm/reference/o96_o320/tc"
   analysis_expid: "OPER_O320_0001"
   extreme_reference_expid: "ENFO_O320_0001"
-  reference_expids: ["EEFO_O96_0001", "ENFO_O320_0001"]
-  support_mode: "both"
+  reference_expids: []  # KEEP EMPTY: input/target come from the truth-aware bundle; EEFO/ENFO here draw duplicate curves (guarded by _strip_bundle_duplicate_references)
+  support_mode: "regridded"
   member_maps:
     enabled: true
     event_dates:

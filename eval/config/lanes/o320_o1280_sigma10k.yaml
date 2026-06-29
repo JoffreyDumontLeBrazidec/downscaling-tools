@@ -47,8 +47,8 @@ tc:
   grib_dir: "/home/ecm5702/perm/reference/o320_o1280/tc"
   analysis_expid: "OPER_O1280_0001"
   extreme_reference_expid: "ENFO_O1280_0001"
-  reference_expids: ["EEFO_O320_0001", "ENFO_O1280_0001"]
-  support_mode: "both"
+  reference_expids: []  # KEEP EMPTY: input/target come from the truth-aware bundle; EEFO/ENFO here draw duplicate curves (guarded by _strip_bundle_duplicate_references)
+  support_mode: "regridded"
   input_label: "input O320"
   target_nc_label: "target O1280"
   analysis_display_label: "OPER-AN O1280"

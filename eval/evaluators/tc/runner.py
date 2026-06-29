@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from pathlib import Path
 
 from eval.config.loader import load_event
@@ -34,6 +36,60 @@ from eval._backends.tc.workflows import (
 )
 
 LOG = logging.getLogger(__name__)
+
+
+_GRIB_EXPID_RE = re.compile(r"([A-Za-z]+)_([Oo]\d+)_(\d{4})")
+
+
+def _expid_from_grib_path(path):
+    """Map a bundle source GRIB filename to its expid form.
+
+    e.g. '.../eefo_o320_0001_date20230826_..._sfc.grib' -> 'EEFO_O320_0001'.
+    Returns None when the name carries no <stream>_<grid>_<num> token.
+    """
+    if not path:
+        return None
+    m = _GRIB_EXPID_RE.search(os.path.basename(str(path)))
+    return f"{m.group(1).upper()}_{m.group(2).upper()}_{m.group(3)}" if m else None
+
+
+def _strip_bundle_duplicate_references(reference_expids, lane_config, eval_config):
+    """Definitive guard against the duplicate-curve regression.
+
+    The truth-aware bundle already carries the model INPUT (``x_interp``, drawn as
+    ``input_label``) and TARGET (``y``, drawn as ``target_nc_label``), both built from the
+    GRIBs named in ``prepare.args``. Listing those same products in ``reference_expids``
+    re-draws identical data as a second curve on a *different* regrid support -- the exact
+    redundancy fixed in 0f45ed7 and silently reverted in 8656a1a. Rather than trust the
+    config to stay correct, strip any reference whose product == the bundle's input/target
+    source. Non-blocking: warn and continue (correct-default philosophy; never gate the
+    scientist).
+    """
+    if not reference_expids:
+        return reference_expids
+    prep_args = ((lane_config.get("prepare") or {}).get("args")) or {}
+    bundle_products = {
+        e for e in (
+            _expid_from_grib_path(prep_args.get("lres_sfc_grib")),    # -> input curve
+            _expid_from_grib_path(prep_args.get("target_sfc_grib")),  # -> target curve
+        ) if e
+    }
+    if not bundle_products:
+        return reference_expids
+    kept, dropped = [], []
+    for expid in reference_expids:
+        (dropped if str(expid).upper() in bundle_products else kept).append(expid)
+    if dropped:
+        LOG.warning(
+            "TC: dropping reference_expids %s -- identical to the bundle's input/target "
+            "(already drawn as '%s' / '%s'); keeping them would plot duplicate curves on a "
+            "different regrid support. Non-blocking dedup (remove them from the lane "
+            "`reference_expids` to silence).",
+            dropped,
+            eval_config.get("input_label", "input"),
+            eval_config.get("target_nc_label", "target"),
+        )
+    return tuple(kept)
 
 
 def _event_from_config(event_name: str) -> TCEvent:
@@ -92,6 +148,9 @@ def run(
     grib_dir = grib_dir or eval_config.get("grib_dir")
     analysis_expid = analysis_expid or eval_config.get("analysis_expid")
     reference_expids: tuple[str, ...] = tuple(eval_config.get("reference_expids") or ())
+    reference_expids = _strip_bundle_duplicate_references(
+        reference_expids, lane_config, eval_config
+    )
     support_mode = eval_config.get("support_mode", support_mode)
 
     # run_label: explicit arg > eval_config > grandparent-of-predictions (handles data/ lean layout)
