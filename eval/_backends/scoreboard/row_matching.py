@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -49,6 +50,43 @@ def is_reference_row(exp: str) -> bool:
 
 def is_eefo_row(exp: str) -> bool:
     return classify_row(exp) == RowClassification.EEFO
+
+
+_GRIB_STREAM_RE = re.compile(r"([A-Za-z]+)_[Oo]?\d")
+
+
+def _grib_stream(path):
+    """First product token of a bundle source GRIB, lowercased ('enfo', 'eefo', 'iekm'...)."""
+    if not path:
+        return None
+    m = _GRIB_STREAM_RE.search(os.path.basename(str(path)))
+    return m.group(1).lower() if m else None
+
+
+def bundle_enfo_labels(lane_config, eval_config):
+    """Display labels of the bundle curve(s) that ARE the ENFO ensemble.
+
+    After _strip_bundle_duplicate_references removes the duplicate ENFO reference *curve*
+    from the plot, the ENFO data still lives in the bundle input/target row. This lets the
+    scoreboard keep its `enfo` column (labelled enfo, never 'target'/'input') by also
+    accepting that row. Lane-aware via prepare.args product stream: ENFO can be the input
+    (o1280_o2560, o48_o96) or the target (o320_o1280, o96_o320); truths (IEKM/DestinE)
+    carry no enfo stream and are not included. Same spirit as o48_o96, whose input curve
+    is already labelled "ENFO" and so classifies into the enfo column directly.
+    """
+    prep = ((lane_config.get("prepare") or {}).get("args")) or {}
+    out = set()
+    for label_keys, grib_key in (
+        (("input_label",), "lres_sfc_grib"),
+        (("target_nc_label", "target_label"), "target_sfc_grib"),
+    ):
+        if _grib_stream(prep.get(grib_key)) == "enfo":
+            for lk in label_keys:
+                lbl = eval_config.get(lk)
+                if lbl:
+                    out.add(str(lbl).strip())
+                    break
+    return out
 
 
 def find_row_by_predicate(
