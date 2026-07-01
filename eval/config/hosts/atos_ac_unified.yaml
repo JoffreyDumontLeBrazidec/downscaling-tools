@@ -30,4 +30,4 @@ environment_setup:
     MKL_NUM_THREADS: "1"
   # Sources the runtime selection layer: activates .ds-260612, sets PYTHONPATH, and
   # hard-asserts anemoi-core == multi-ds-unified@<sha>. See runtimes/_lib.sh.
-  venv_activate: /home/ecm5702/dev/runtimes/ds-260612/activate.sh
+  venv_activate: /home/ecm5702/dev/.ds-260612/bin/activate
