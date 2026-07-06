@@ -58,7 +58,6 @@ predict:
     S_noise: 1.05
   num_gpus_per_model: 1
   env:
-    CODEX_UNIFIED_SHARD_STRATEGY: edges
     CODEX_SAMPLER_SEED: '1234'
     PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
 tc:
