@@ -80,6 +80,8 @@ DEFAULT_EXTRA_ARGS_JSON = (
 )
 
 DATASET_PATH_REWRITE_PREFIXES = (
+    ("/leonardo_scratch/large/userexternal/jdumontl/tc_o320_o1280/data///", "/home/ecm5702/hpcperm/lanes/tc_o320_o1280/data/"),
+    ("/leonardo_scratch/large/userexternal/jdumontl/tc_o320_o1280/data/", "/home/ecm5702/hpcperm/lanes/tc_o320_o1280/data/"),
     ("/leonardo_work/DestE_340_25/ai-ml/datasets///", "/home/mlx/ai-ml/datasets/"),
     ("/leonardo_work/DestE_340_25/ai-ml/datasets/", "/home/mlx/ai-ml/datasets/"),
     ("/e/data1/jureap-data/ai-ml/datasets///", "/home/mlx/ai-ml/datasets/"),
