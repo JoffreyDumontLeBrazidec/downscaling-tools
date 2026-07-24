@@ -237,11 +237,20 @@ def cmd_collect(args: argparse.Namespace) -> None:
     if not metrics:
         raise SystemExit(f"ladder collect: no metrics found under {evaldir}")
     ladder = load_ladder(prof)
+    # Forward-parity audit stamp (P2 finding 2026-07-24: scoring under a different anemoi-core
+    # forward than the checkpoint trained with silently shifts spread ~2x — record, don't guess).
+    try:
+        core_sha = subprocess.run(
+            ["git", "-C", "/home/ecm5702/dev/pristine/anemoi-core", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        core_sha = "unknown"
     row = {
         "step": args.step,
         "checkpoint": args.checkpoint,
         "eval_dir": str(evaldir),
         "scored_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "eval_core_sha": core_sha,
         "metrics": metrics,
     }
     if args.baseline_label:
