@@ -1,0 +1,35 @@
+# Ladder profile — o1280→o2560 Jupiter re-baseline (fccc23dfb5de4dfbbb2ca0c0e0ce3fdf).
+# Tier LOCKED by owner 2026-07-24: every 20k, tiny tier (1 date × 2 leads × 10 members, Humberto).
+# Every rung AND the baseline (9d6f73) use this identical recipe — rows are only comparable
+# within this profile. TC at this budget = TREND indicator, never a verdict.
+card_id: o1280_o2560__reb-300k__20260716
+lane: o1280_o2560
+host: atos_ac_pristine
+bundle_dir: /home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full/bundles_with_y   # verify at first score; rebuild via eval.cli prepare if purged
+cadence: 20000
+budget:
+  dates: "20250926"
+  steps: "48,120"
+  members: "1,2,3,4,5,6,7,8,9,10"
+evaluators: tc,probabilistic,spectra
+spectra:
+  weather_states: "10u,2t"
+  nside: 64
+  lmax: 319
+storm_maps_args: ""            # humberto box comes from the lane config
+seed_draws: 0                  # candidate-B mode off for o2560 (predictions too expensive)
+slurm:
+  qos: ng
+  gpus: 4                      # o2560 needs 4-GPU model-parallel (num_gpus_per_model=4)
+  cpus: 32
+  mem: 256G
+  walltime: "06:00:00"
+baseline:
+  label: 9d6f73
+  checkpoint: /home/ecm5702/perm/checkpoints-jupiter-20260622/9d6f73d1/    # pick inference-*.ckpt step_126135 inside
+  frozen_refs:
+    crps_proxy_agg: 0.5392     # ~/perm/eval-rescue-20260709/o1280_o2560_crps_proxy/crps_proxy_9d6f73.json
+    spread_proxy_agg: 0.9411
+    scoreboard_nmse: 0.10916   # @step_090000 (the 127k ckpt was never scored)
+    tc_humberto_mslp_min: 928.18
+    tc_humberto_wind_max: 64.86

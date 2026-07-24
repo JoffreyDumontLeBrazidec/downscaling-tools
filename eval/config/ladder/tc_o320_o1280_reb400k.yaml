@@ -1,0 +1,42 @@
+# Ladder profile — o320→o1280 Jupiter re-baseline (34fdb91e87cd413ca510bb1f6749dbdb),
+# scored on the REGIONAL 250-bundle set via the proven graph-portable zero-transfer route
+# (ledger T27: regional LimitedArea screens faithful to global within run-noise, same runtime).
+#
+# ⚠ BUDGET = PROVISIONAL until study P1 lands (owner 2026-07-24: "the study decides").
+#   The values below are the candidate-C shape (2 Franklin-window dates × 3 leads × 10 members
+#   for CRPS/spread + spectra; seed-draws of one high-TC Franklin input for the TC tail) and
+#   MUST be updated from ladder_study_20260724/verdict.md before the backlog sweep.
+card_id: o320_o1280__reb-400k__20260716
+lane: tc_o320_o1280_regionalbundle
+host: atos_ac_pristine
+bundle_dir: /home/ecm5702/hpcperm/lanes/tc_o320_o1280/data/tc_atlantic_mdr_west_aug26_30_bundles
+cadence: 10000
+budget:                       # PROVISIONAL (P1 pending)
+  dates: "20230828,20230829"  # Franklin high-TC window
+  steps: "24,72,120"
+  members: "1,2,3,4,5,6,7,8,9,10"
+evaluators: tc,probabilistic,spectra
+spectra:
+  weather_states: "10u,2t"
+  nside: 64
+  lmax: 319
+storm_maps_args: ""
+seed_draws: 0                 # enable per P1 verdict (candidate B): draws of ONE fixed bundle
+seed_budget:                  # used only when seed_draws > 0
+  dates: "20230829"
+  steps: "48"
+  members: "1"
+slurm:
+  qos: ng
+  gpus: 1
+  cpus: 16
+  mem: 128G
+  walltime: "04:00:00"
+baseline:
+  label: e080
+  checkpoint: /home/ecm5702/perm/checkpoints-jupiter-20260622/b785bf12/   # pick inference-* e080_s374868 inside
+  frozen_refs:                # annotations only — NOT same-support with ladder rows
+    e080_gap_closed: [0.45, 0.43, 0.25]     # insample note :194 (ledger T13 re-baseline)
+    fine_band_b785_pristine: [0.94, 0.96]   # 10u/10v, regional_three_curve_verdict
+    fine_band_warmstart: [0.82, 0.78]
+    replica_noise_eye_hpa: [7.0, 4.8]       # idalia/franklin deepest-of-10 band (I1)
