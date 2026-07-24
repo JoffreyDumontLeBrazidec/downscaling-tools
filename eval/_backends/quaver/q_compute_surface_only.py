@@ -40,11 +40,11 @@ parser.add_argument(
     "--lead_time_step", type=int, default=24, help="Step between lead times in hours"
 )
 parser.add_argument("--grid", type=str, default="O320", help="Grid specification")
+parser.add_argument("--stream", type=str, default="enfo", help="MARS stream for the scored forecast (eefo for the coarse input curve, enfo for ML/reference)")
 parser.add_argument(
     "--class", dest="class_", type=str, default="rd", help="Class identifier"
 )
 parser.add_argument("--database", type=str, default="fdb", help="Database name")
-parser.add_argument("--stream", type=str, default="enfo", help="Ensemble stream: enfo (target/output), eefo (o320 input)")
 
 
 args = parser.parse_args()
@@ -60,8 +60,8 @@ lead_time_step = args.lead_time_step
 grid = args.grid
 class_ = args.class_
 expver = args.expver
-database = args.database
 stream_ = args.stream
+database = args.database
 oro_interp_postproc = (
     "orography_correction:"
     f"class=od,number=1,stream=enfo,type=pf,step=0,expver=0001,date=2024-01-01,grid={grid},database=off"
@@ -86,7 +86,7 @@ def get_forecast_quaver_ens(DATETIME, numbers):
         expver=f"{expver }",
         database=f"{database }",
         number=numbers,
-        stream=stream_,
+        stream=f"{stream_}",
         type="pf",
     )
 
@@ -139,7 +139,7 @@ def observations_surface(DATETIME, preproc, numbers):
         expver=f"{expver}",
         database=f"{ database}",
         number=numbers,
-        stream=stream_,
+        stream=f"{stream_}",
         type="pf",
     )
 
@@ -261,13 +261,3 @@ for date in dates:
 
     for num in ensemble_number_list:
         observations_surface(DATETIME, preproc=[], numbers=int(num))
-
-    analysis_upperair(
-        DATETIME,
-        preproc=[
-            "mean",
-        ],
-        numbers=ensemble_number_list,
-    )
-    for num in ensemble_number_list:
-        analysis_upperair(DATETIME, preproc=[], numbers=int(num))
