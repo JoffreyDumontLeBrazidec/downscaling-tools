@@ -38,9 +38,11 @@ CKPT_STEP_RE = re.compile(r"step[_=]?(\d+)")
 
 # --------------------------------------------------------------------------- profiles
 def load_profile(name: str) -> dict:
-    p = PROFILE_DIR / f"{name}.yaml"
+    # accept either a registered profile name or a direct path to a profile YAML
+    p = Path(name) if name.endswith(".yaml") else PROFILE_DIR / f"{name}.yaml"
     if not p.exists():
         raise SystemExit(f"ladder: unknown profile '{name}' (expected {p})")
+    name = p.stem
     prof = yaml.safe_load(p.read_text())
     prof["_name"] = name
     for key in ("card_id", "lane", "host", "bundle_dir", "budget"):
