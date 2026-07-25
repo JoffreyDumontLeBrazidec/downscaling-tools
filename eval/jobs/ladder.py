@@ -415,6 +415,15 @@ def cmd_loss(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------- plot
+INVARIANT_MARKERS = ("_enfo_", ".truth", "storm_box_min", "_n_draws", "_n_samples")
+
+
+def _is_invariant(key: str) -> bool:
+    """Reference/truth-derived metrics carry no model signal: they must be identical
+    across every rung of a profile, so they are an integrity check, not a curve."""
+    return any(m in key for m in INVARIANT_MARKERS)
+
+
 def cmd_plot(args: argparse.Namespace) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -426,49 +435,65 @@ def cmd_plot(args: argparse.Namespace) -> None:
     if not rows:
         raise SystemExit("ladder plot: no rows yet")
     steps = [r["step"] for r in rows]
+    baselines = ladder.get("baselines", {})
+    # normalise against the FIRST baseline; without one, against the first rung
+    ref_label, ref = (next(iter(baselines.items())) if baselines
+                      else ("first rung", {"metrics": rows[0]["metrics"]}))
+    ref_metrics = ref["metrics"]
 
     def pick(sub: str, contains: tuple = ()) -> dict[str, list]:
         keys = sorted({k for r in rows for k in r["metrics"]
-                       if k.startswith(sub) and all(c in k for c in contains)})
-        return {k: [r["metrics"].get(k) for r in rows] for k in keys}
+                       if k.startswith(sub) and all(c in k for c in contains)
+                       and not _is_invariant(k)})
+        out = {}
+        for k in keys:
+            base = ref_metrics.get(k)
+            if base in (None, 0):
+                continue                      # nothing to normalise against
+            out[k] = [(r["metrics"].get(k) / base if r["metrics"].get(k) is not None else None)
+                      for r in rows]
+        return out
 
     panels = [
-        ("CRPS (proxy)", pick("probabilistic_", ("crps",)), None),
-        ("Spread (proxy)", pick("probabilistic_", ("spread",)), None),
-        ("TC eye / wind (TREND indicator, ±replica noise)", pick("tc_"), 7.0),
-        ("Fine-band / spectra", {**pick("storm_"), **pick("spectra_")}, None),
-        ("Seed-draw distribution (candidate B)", pick("seed_"), None),
-        ("Train/val loss (diagnostic only — loss ≠ skill)", None, None),
+        ("CRPS (proxy)", pick("probabilistic_", ("crps",))),
+        ("Spread (proxy)", pick("probabilistic_", ("spread",))),
+        ("TC eye / wind (TREND indicator only)", pick("tc_")),
+        ("Fine-band / spectra", {**pick("storm_"), **pick("spectra_")}),
+        ("Seed-draw distribution (candidate B)", pick("seed_")),
+        ("Train/val loss (diagnostic only - loss != skill)", None),
     ]
     fig, axes = plt.subplots(3, 2, figsize=(16, 14))
-    for ax, (title, data, band) in zip(axes.flat, panels):
+    for ax, (title, data) in zip(axes.flat, panels):
         ax.set_title(title, fontsize=10)
         if title.startswith("Train"):
             for metric, s in ladder.get("loss", {}).items():
                 ax.plot(s["step"], s["value"], label=metric, lw=1)
+            ax.set_ylabel("loss")
         elif data:
-            for k, vals in list(data.items())[:8]:
-                ax.plot(steps, vals, marker="o", ms=3, lw=1, label=k.replace("probabilistic_", "")[:40])
-                if band:
-                    v = [x for x in vals if x is not None]
-                    if v:
-                        ax.fill_between(steps, [x - band if x else None for x in vals],
-                                        [x + band if x else None for x in vals], alpha=0.08)
-        # baseline reference lines
-        for label, brow in ladder.get("baselines", {}).items():
-            for k in (data or {}):
-                bv = brow["metrics"].get(k)
-                if bv is not None:
-                    ax.axhline(bv, ls="--", lw=0.8, alpha=0.5)
-        ax.legend(fontsize=6, loc="best")
+            for k, vals in list(data.items())[:10]:
+                ax.plot(steps, vals, marker="o", ms=3, lw=1,
+                        label=k.replace("probabilistic_", "").replace("storm_", "")[:44])
+            ax.axhline(1.0, ls="--", lw=1.0, color="k", alpha=0.6)
+            ax.set_ylabel(f"ratio to {ref_label}")
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(fontsize=6, loc="best")
         ax.set_xlabel("training step")
         ax.grid(alpha=0.2)
-    fig.suptitle(f"Ladder — {ladder['card_id']} (profile {prof['_name']}; baselines dashed)", fontsize=12)
+
+    # integrity line: references/truth must not move between rows
+    drift = [k for k in ref_metrics if _is_invariant(k)
+             and any(r["metrics"].get(k) is not None
+                     and abs(r["metrics"][k] - ref_metrics[k]) > 1e-9 for r in rows)]
+    shas = {r.get("eval_core_sha", "?")[:12] for r in rows} | {ref.get("eval_core_sha", "?")[:12]}
+    integrity = (f"invariants: {'DRIFTED ' + ','.join(drift[:3]) if drift else 'OK'}"
+                 f"  |  eval anemoi-core: {','.join(sorted(shas))}")
+    fig.suptitle(f"Ladder - {ladder['card_id']} (profile {prof['_name']}; "
+                 f"y = ratio to baseline '{ref_label}', dashed 1.0)\n{integrity}", fontsize=11)
     fig.tight_layout()
     out = Path(args.out) if args.out else ladder_paths(prof)["png"]
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=140)
-    print(f"ladder plot -> {out}")
+    print(f"ladder plot -> {out}  ({integrity})")
 
 
 # --------------------------------------------------------------------------- main
