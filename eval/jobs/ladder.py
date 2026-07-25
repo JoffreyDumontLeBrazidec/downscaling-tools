@@ -45,6 +45,9 @@ def load_profile(name: str) -> dict:
     name = p.stem
     prof = yaml.safe_load(p.read_text())
     prof["_name"] = name
+    # resolvable handle for the sbatch: a registered profile keeps its name, an
+    # out-of-repo YAML must travel as its absolute path
+    prof["_ref"] = name if p.parent == PROFILE_DIR else str(p.resolve())
     for key in ("card_id", "lane", "host", "bundle_dir", "budget"):
         if key not in prof:
             raise SystemExit(f"ladder: profile '{name}' missing key '{key}'")
@@ -119,7 +122,8 @@ PREDICT_SEED_DRAWS = """for D in $(seq 1 {draws}); do
     --checkpoint {ckpt} --bundle-dir {bundles} --output-dir {evaldir}/draw_$D \\
     --dates {dates} --steps {steps} --members {members}
 done
-python -m eval.jobs.ladder gatherdraws --eval-dir {evaldir} --draws {draws}
+python -m eval.jobs.ladder gatherdraws --eval-dir {evaldir} --draws {draws} \\
+  || echo "gatherdraws failed (non-fatal)"
 """
 
 
@@ -147,6 +151,15 @@ def cmd_score(args: argparse.Namespace) -> None:
             bundles=prof["bundle_dir"], evaldir=evaldir, draws=seed_draws,
             dates=sb["dates"], steps=sb["steps"], members=sb["members"])
         collect_extra += f" --seed-draws {seed_draws}"
+    if args.skip_predict:
+        # Reuse existing predictions: prediction is the expensive phase, and this is
+        # the recovery path when a rung dies downstream of predict.
+        have = sorted((evaldir / "predictions").glob("predictions_*.nc"))
+        if not have:
+            raise SystemExit(f"--skip-predict: no predictions under {evaldir}/predictions")
+        gd = (PREDICT_SEED_DRAWS.split("done\n", 1)[1].format(evaldir=evaldir, draws=seed_draws)
+              if seed_draws else "")
+        predict_block = f'echo "[skip-predict] reusing {len(have)} prediction file(s)"\n' + gd
 
     slurm = prof.get("slurm", {})
     script = SBATCH_TEMPLATE.format(
@@ -158,7 +171,7 @@ def cmd_score(args: argparse.Namespace) -> None:
         evaluators=prof.get("evaluators", "tc,probabilistic,spectra"),
         step_flag=f" --steps {b['steps']}",
         storm_args=prof.get("storm_maps_args", ""),
-        profile=prof["_name"], collect_extra=collect_extra)
+        profile=prof["_ref"], collect_extra=collect_extra)
     sb_path = evaldir / "ladder_score.sbatch"
     sb_path.write_text(script)
     if args.dry_run:
@@ -262,33 +275,60 @@ def cmd_collect(args: argparse.Namespace) -> None:
     print(f"ladder collect: step {args.step} -> {jp} ({len(metrics)} metrics)")
 
 
+def _pick_field(ds, name: str):
+    """Return one field regardless of prediction-file schema.
+
+    Manual-inference NCs stack every field into `y_pred` along a `weather_state`
+    coord (dims: sample, ensemble_member, grid_point_hres, weather_state); other
+    writers use `variable`, or expose one data_var per field.
+    """
+    for dim in ("weather_state", "variable"):
+        if dim in ds.dims:
+            return ds["y_pred"].sel({dim: name})
+    return ds[name]
+
+
+def _grid_dim(da) -> str:
+    """Name of the spatial dim to reduce over (never the member/sample axis)."""
+    return next((str(d) for d in da.dims if str(d).startswith("grid_point")), str(da.dims[-1]))
+
+
 def cmd_gatherdraws(args: argparse.Namespace) -> None:
-    """Candidate-B: reduce per-draw NCs to eye/wind distribution stats."""
+    """Candidate-B: reduce per-draw NCs to eye/wind distribution stats.
+
+    One sample = one (draw, member) pair -- draws are independent model-noise
+    realisations, members are the ensemble axis inside a draw. Reducing over the
+    grid dim only (not over members) keeps the whole sample of the conditional
+    PDF instead of collapsing it to one number per file.
+    """
     import numpy as np
     import xarray as xr
     evaldir = Path(args.eval_dir)
     eyes, winds = [], []
     for d in range(1, args.draws + 1):
         for nc in sorted((evaldir / f"draw_{d}" / "predictions").glob("predictions_*.nc")):
-            ds = xr.open_dataset(nc)
-            msl = ds["y_pred"].sel(variable="msl") if "variable" in ds.dims else ds["msl"]
-            eyes.append(float(np.min(np.asarray(msl))))
+            ds = xr.open_dataset(nc, decode_timedelta=False)
+            msl = _pick_field(ds, "msl")
+            eyes.extend(np.asarray(msl.min(dim=_grid_dim(msl))).ravel().tolist())
             try:
-                u = np.asarray(ds["y_pred"].sel(variable="10u"))
-                v = np.asarray(ds["y_pred"].sel(variable="10v"))
-                winds.append(float(np.max(np.hypot(u, v))))
-            except Exception:
+                u, v = _pick_field(ds, "10u"), _pick_field(ds, "10v")
+                spd = np.hypot(np.asarray(u), np.asarray(v))
+                winds.extend(np.max(spd, axis=u.dims.index(_grid_dim(u))).ravel().tolist())
+            except KeyError:
                 pass
             ds.close()
     stats = {}
     if eyes:
         e = np.asarray(eyes)
         stats.update(eye_median=float(np.median(e)), eye_p25=float(np.percentile(e, 25)),
-                     eye_min=float(e.min()), eye_std=float(e.std(ddof=1)), n_draws=len(eyes))
+                     eye_min=float(e.min()),
+                     eye_std=float(e.std(ddof=1)) if e.size > 1 else 0.0,
+                     n_draws=args.draws, n_samples=int(e.size))
     if winds:
         w = np.asarray(winds)
         stats.update(wind_median=float(np.median(w)), wind_p75=float(np.percentile(w, 75)),
-                     wind_max=float(w.max()), wind_std=float(w.std(ddof=1)))
+                     wind_max=float(w.max()),
+                     wind_std=float(w.std(ddof=1)) if w.size > 1 else 0.0)
     (evaldir / "seed_draws.json").write_text(json.dumps(stats, indent=1))
     print(f"gatherdraws: {stats}")
 
@@ -393,6 +433,8 @@ def main() -> None:
     s.add_argument("--checkpoint", required=True)
     s.add_argument("--step", type=int)
     s.add_argument("--baseline-label")
+    s.add_argument("--skip-predict", action="store_true",
+                   help="reuse the predictions already in the eval dir (rescore only)")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_score)
 
