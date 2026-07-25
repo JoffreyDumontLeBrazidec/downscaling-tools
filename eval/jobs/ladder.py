@@ -134,8 +134,8 @@ export METVIEW_PYTHON_START_TIMEOUT=300
 python -m eval.cli evaluate --lane {lane} --host {host} \\
   --predictions-dir {evaldir}/predictions --output-dir {evaldir} \\
   --only {evaluators} --run-label ladder_{card}_step{step}{step_flag}{overwrite_flag}
-python -m eval._backends.storm_maps.render --predictions-dir {evaldir}/predictions \\
-  --output-dir {evaldir}/evaluators/storm_maps {storm_args} || echo "storm_maps failed (non-fatal)"
+python -m eval._backends.storm_maps.render {evaldir}/predictions \\
+  --out {evaldir}/evaluators/storm_maps {storm_args} || echo "storm_maps failed (non-fatal)"
 python -m eval.jobs.ladder collect --profile {profile} --step {step} --eval-dir {evaldir} {collect_extra}
 """
 
@@ -238,39 +238,56 @@ def cmd_sweep(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------- collect
-def _read_json(p: Path) -> dict:
+def _read_json(p: Path):
+    """Parsed JSON (dict or list), or {} when absent/unreadable -- a missing
+    evaluator output must degrade the row, never crash the rung."""
     try:
         return json.loads(p.read_text())
     except Exception:
         return {}
 
 
+def _metric_rows(p: Path) -> dict:
+    """Read an evaluator's canonical metrics.json: a list of {metric, value, unit}.
+
+    This uniform list is the contract every evaluator honours; the per-evaluator
+    *summary* JSONs are internal shapes that have drifted (reading those is what
+    broke collect on smoke 33047585).
+    """
+    d = _read_json(p)
+    if not isinstance(d, list):
+        return {}
+    return {str(r["metric"]): r["value"] for r in d
+            if isinstance(r, dict) and r.get("metric") is not None and r.get("value") is not None}
+
+
+def _flatten(prefix: str, obj) -> dict:
+    """Flatten nested scalar dicts into dotted keys (storm_maps emits 2 levels)."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out.update(_flatten(f"{prefix}.{k}" if prefix else str(k), v))
+        return out
+    return {prefix: obj} if isinstance(obj, (int, float)) else {}
+
+
 def collect_metrics(evaldir: Path, steps_csv: str) -> dict:
+    ev = evaldir / "evaluators"
     out: dict = {}
-    prob = _read_json(evaldir / "evaluators" / "probabilistic" / "probabilistic_summary.json")
-    for k, v in (prob.get("headline_metrics") or {}).items():
-        # keep crps/fcrps/spread/rmse for tropics + n.hem only (ladder scope)
+    # probabilistic: ladder scope is CRPS/spread/RMSE over the two TC-relevant regions
+    for k, v in _metric_rows(ev / "probabilistic" / "metrics.json").items():
         if any(t in k for t in ("crps", "spread", "rmse")) and any(d in k for d in ("tropics", "n.hem")):
             out[k] = v
-    spec = _read_json(evaldir / "evaluators" / "spectra" / "metrics.json")
-    for k, v in spec.items():
-        if k.startswith("spectra_") and ("relative_l2" in k or "score" in k):
-            out[k] = v
-    tc = _read_json(evaldir / "evaluators" / "tc" / "stats.json")
-    for ev, evd in (tc.get("events") or {}).items():
-        rows = ((evd.get("extreme_tail") or {}).get("rows")) or []
-        for row in rows:
-            src = row.get("source") or row.get("label") or "model"
-            for m in ("mslp_min", "mslp_p001", "wind_max", "wind_p9999"):
-                if m in row and row[m] is not None:
-                    out[f"tc_{ev}_{src}_{m}"] = row[m]
-    sm = _read_json(evaldir / "evaluators" / "storm_maps" / "storm_maps_spectra.json")
-    for k, v in sm.items():
-        if "fine_band" in k or "storm_box_min" in k or "slope_fine" in k:
+    out.update(_metric_rows(ev / "spectra" / "metrics.json"))    # 1 relative_l2 per field
+    out.update(_metric_rows(ev / "tc" / "metrics.json"))         # tail keys per event
+    # storm_maps: fine-band (20-100 km) power ratio + log-log slope, nested 2 deep
+    for k, v in _flatten("", _read_json(ev / "storm_maps" / "storm_maps_spectra.json")).items():
+        if any(t in k for t in ("fine_band", "slope", "storm_box_min")):
             out[f"storm_{k}"] = v
     draws = _read_json(evaldir / "seed_draws.json")
-    for k, v in draws.items():
-        out[f"seed_{k}"] = v
+    if isinstance(draws, dict):
+        for k, v in draws.items():
+            out[f"seed_{k}"] = v
     return out
 
 
