@@ -415,13 +415,96 @@ def cmd_loss(args: argparse.Namespace) -> None:
 
 
 # --------------------------------------------------------------------------- plot
-INVARIANT_MARKERS = ("_enfo_", ".truth", "storm_box_min", "_n_draws", "_n_samples")
+# Reference/truth/input-derived metrics: constant by construction across rungs of a
+# profile (same case, same support, same input bundles), so they are an integrity check,
+# not a curve. `.input` belongs here too -- the input field never changes between rungs.
+INVARIANT_MARKERS = ("_enfo_", ".truth", ".input", "storm_box_min", "_n_draws", "_n_samples")
+
+PROB_RE = re.compile(r"^probabilistic_(?P<var>.+)_(?P<region>tropics|n\.hem)_"
+                     r"(?P<stat>crps|fcrps|spread|rmse_ens_mean)_mean$")
+
+# band title -> (probabilistic stat keys, direction). direction drives the panel tint:
+# "lower"/"higher" = unambiguously better in that direction, "target1" = closer to 1.0,
+# None = no tint (spread and slopes have no single good direction).
+PROB_BANDS = (("RMSE (ens mean)", ("rmse_ens_mean",), "lower"),
+              ("CRPS / fair-CRPS", ("crps", "fcrps"), "lower"),
+              ("Spread", ("spread",), None))
+
+HPA_BAND = 7.0   # I1 single-run replica noise at deepest-of-10 (hPa) -- see task 20260710
 
 
 def _is_invariant(key: str) -> bool:
-    """Reference/truth-derived metrics carry no model signal: they must be identical
-    across every rung of a profile, so they are an integrity check, not a curve."""
     return any(m in key for m in INVARIANT_MARKERS)
+
+
+def _unit_of(key: str) -> tuple[str, float]:
+    """(display unit, scale to apply). seed_eye_* is stored in Pa; show it in hPa so the
+    eye panels are directly comparable with the tc_*_mslp_* panels and share one noise band."""
+    if "mslp" in key:
+        return "hPa", 1.0
+    if key.startswith("seed_eye"):
+        return "hPa", 0.01 if not key.endswith("_std") else 0.01
+    if "wind" in key:
+        return "m/s", 1.0
+    if "relative_l2" in key:
+        return "rel-L2", 1.0
+    if "ratio_to_truth" in key:
+        return "ratio", 1.0
+    if "slope" in key:
+        return "slope", 1.0
+    return "native", 1.0
+
+
+def _panels(rows: list, ref_metrics: dict) -> list:
+    """Group the non-invariant metrics into panels.
+
+    One panel per (band, subject). Metrics that share a unit and a subject become SERIES
+    inside one panel -- the region split (tropics / n.hem) and crps-vs-fcrps -- because
+    plotting those on one axis is safe and halves the panel count.
+    Returns [{title, band, unit, direction, series: [(label, key, scale)]}].
+    """
+    keys = sorted({k for r in rows for k in r["metrics"]} | set(ref_metrics))
+    keys = [k for k in keys if not _is_invariant(k)]
+    panels: dict = {}
+
+    def cell(band, subject, key, label, direction):
+        unit, scale = _unit_of(key)
+        p = panels.setdefault((band, subject), {"title": subject, "band": band, "unit": unit,
+                                                "direction": direction, "series": []})
+        p["series"].append((label, key, scale))
+
+    for k in keys:
+        m = PROB_RE.match(k)
+        if m:
+            var, region, stat = m["var"], m["region"], m["stat"]
+            for band, stats, direction in PROB_BANDS:
+                if stat in stats:
+                    label = region if len(stats) == 1 else f"{region} {stat}"
+                    cell(band, var, k, label, direction)
+            continue
+        if k.startswith("spectra_") and "relative_l2" in k:
+            cell("Spectra (rel-L2)", k.split("_")[1], k, "model", "lower")
+        elif k.startswith("spectra_"):
+            continue                                    # _score is 1 - rel_l2, redundant
+        elif "fine_band" in k:
+            cell("Fine band 20-100 km", k.rsplit(".", 1)[-1], k, "model", "target1")
+        elif "slope_fine" in k:
+            # storm_slope_fine_20_100km.<field>.model -> subject is <field>
+            parts = k.split(".")
+            cell("Fine-band slope", parts[-2] if len(parts) > 2 else parts[-1], k, "model", None)
+        elif k.startswith("tc_"):
+            _, event, metric = k.split("_", 2)
+            cell("TC extremes", f"{event} {metric}", k, "model",
+                 "lower" if "mslp" in metric else "higher")
+        elif k.startswith("seed_"):
+            cell("Seed draws (candidate B)", k[len("seed_"):], k, "model",
+                 None if k.endswith("_std") else ("lower" if "eye" in k else "higher"))
+
+    order = [b for b, _, _ in PROB_BANDS] + ["Spectra (rel-L2)", "Fine band 20-100 km",
+                                             "Fine-band slope", "TC extremes",
+                                             "Seed draws (candidate B)"]
+    return sorted(panels.values(), key=lambda p: (order.index(p["band"]) if p["band"] in order
+                                                  else 99, p["title"]))
 
 
 def cmd_plot(args: argparse.Namespace) -> None:
@@ -431,69 +514,117 @@ def cmd_plot(args: argparse.Namespace) -> None:
 
     prof = load_profile(args.profile)
     ladder = load_ladder(prof)
-    rows = ladder["rows"]
+    rows = sorted(ladder["rows"], key=lambda r: r["step"])
     if not rows:
         raise SystemExit("ladder plot: no rows yet")
     steps = [r["step"] for r in rows]
     baselines = ladder.get("baselines", {})
-    # normalise against the FIRST baseline; without one, against the first rung
-    ref_label, ref = (next(iter(baselines.items())) if baselines
-                      else ("first rung", {"metrics": rows[0]["metrics"]}))
+    ref_label, ref = (next(iter(baselines.items())) if baselines else (None, {"metrics": {}}))
     ref_metrics = ref["metrics"]
 
-    def pick(sub: str, contains: tuple = ()) -> dict[str, list]:
-        keys = sorted({k for r in rows for k in r["metrics"]
-                       if k.startswith(sub) and all(c in k for c in contains)
-                       and not _is_invariant(k)})
-        out = {}
-        for k in keys:
-            base = ref_metrics.get(k)
-            if base in (None, 0):
-                continue                      # nothing to normalise against
-            out[k] = [(r["metrics"].get(k) / base if r["metrics"].get(k) is not None else None)
-                      for r in rows]
-        return out
+    panels = _panels(rows, ref_metrics)
+    loss = ladder.get("loss", {})
+    NCOL = 6
+    # Each band starts a fresh row so a score family reads as one horizontal strip and the
+    # band label always sits against the row it names.
+    grid: list = []
+    for p in panels:
+        if not grid or grid[-1][0] != p["band"] or len(grid[-1][1]) >= NCOL:
+            grid.append((p["band"], [p]))
+        else:
+            grid[-1][1].append(p)
+    nrow = len(grid) + (1 if loss else 0)
 
-    panels = [
-        ("CRPS (proxy)", pick("probabilistic_", ("crps",))),
-        ("Spread (proxy)", pick("probabilistic_", ("spread",))),
-        ("TC eye / wind (TREND indicator only)", pick("tc_")),
-        ("Fine-band / spectra", {**pick("storm_"), **pick("spectra_")}),
-        ("Seed-draw distribution (candidate B)", pick("seed_")),
-        ("Train/val loss (diagnostic only - loss != skill)", None),
-    ]
-    fig, axes = plt.subplots(3, 2, figsize=(16, 14))
-    for ax, (title, data) in zip(axes.flat, panels):
-        ax.set_title(title, fontsize=10)
-        if title.startswith("Train"):
-            for metric, s in ladder.get("loss", {}).items():
-                ax.plot(s["step"], s["value"], label=metric, lw=1)
-            ax.set_ylabel("loss")
-        elif data:
-            for k, vals in list(data.items())[:10]:
-                ax.plot(steps, vals, marker="o", ms=3, lw=1,
-                        label=k.replace("probabilistic_", "").replace("storm_", "")[:44])
-            ax.axhline(1.0, ls="--", lw=1.0, color="k", alpha=0.6)
-            ax.set_ylabel(f"ratio to {ref_label}")
-        if ax.get_legend_handles_labels()[0]:
-            ax.legend(fontsize=6, loc="best")
-        ax.set_xlabel("training step")
-        ax.grid(alpha=0.2)
+    fig, axes = plt.subplots(nrow, NCOL, figsize=(3.4 * NCOL, 2.85 * nrow), squeeze=False)
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    better = worse = mixed = 0
+    seen_bands: set = set()
 
-    # integrity line: references/truth must not move between rows
+    for ri, (band, ps) in enumerate(grid):
+        for ci in range(NCOL):
+            ax = axes[ri][ci]
+            if ci >= len(ps):
+                ax.axis("off")
+                continue
+            p = ps[ci]
+            votes = []
+            for si, (label, key, scale) in enumerate(sorted(p["series"])):
+                c = colors[si % len(colors)]
+                ls = "--" if "n.hem" in label else "-"
+                vals = [(r["metrics"][key] * scale if r["metrics"].get(key) is not None else None)
+                        for r in rows]
+                ax.plot(steps, vals, marker="o", ms=4, lw=1.4, color=c, ls=ls, label=label)
+                rv = ref_metrics.get(key)
+                if rv is None:
+                    continue
+                rv *= scale
+                ax.axhline(rv, color=c, ls=":", lw=1.2, alpha=0.9)
+                # replica-noise band: LEVELS only (a std is not a level -- shading +/-7 hPa
+                # around a 3 hPa std would drive the axis negative)
+                if p["unit"] == "hPa" and not key.endswith("_std"):
+                    ax.axhspan(rv - HPA_BAND, rv + HPA_BAND, color=c, alpha=0.10, lw=0)
+                if vals and vals[-1] is not None and p["direction"]:
+                    last = vals[-1]
+                    votes.append(abs(last - 1.0) < abs(rv - 1.0) if p["direction"] == "target1"
+                                 else (last < rv if p["direction"] == "lower" else last > rv))
+            # every series votes; tint only on agreement, so a panel is never green while
+            # one of its curves is worse
+            if votes and all(votes):
+                ax.set_facecolor("#eaf6ec"); better += 1
+            elif votes and not any(votes):
+                ax.set_facecolor("#fdeceb"); worse += 1
+            elif votes:
+                mixed += 1
+            ax.set_title(p["title"], fontsize=9.5)
+            ax.set_ylabel(p["unit"], fontsize=8)
+            ax.tick_params(labelsize=7.5)
+            ax.grid(alpha=0.2)
+            if len(p["series"]) > 1 and band not in seen_bands:
+                ax.legend(fontsize=6.5, loc="best")
+                seen_bands.add(band)
+            if ri == len(grid) - 1 or grid[ri + 1][0] != band:
+                ax.set_xlabel("training step", fontsize=8)
+            if ci == 0 and (ri == 0 or grid[ri - 1][0] != band):
+                ax.text(-0.36, 0.5, band, transform=ax.transAxes, rotation=90,
+                        va="center", ha="center", fontsize=9.5, fontweight="bold")
+
+    if loss:
+        for col in range(NCOL):
+            axes[nrow - 1][col].axis("off")
+        lax = fig.add_subplot(nrow, 1, nrow)
+        for metric, s in loss.items():
+            lax.plot(s["step"], s["value"], lw=1, label=metric)
+        lax.set_title("Train/val loss (diagnostic only - loss != skill)", fontsize=9.5)
+        lax.set_xlabel("training step", fontsize=8)
+        lax.legend(fontsize=7)
+        lax.grid(alpha=0.2)
+
+    # Run-identity guard: a ladder line only means "training evolution" if every rung comes
+    # from the SAME run. Rows carry the checkpoint path, so the parent dir is the run id.
+    runs = sorted({Path(r["checkpoint"]).parent.name for r in rows if r.get("checkpoint")})
+    run_warning = ("" if len(runs) <= 1 else
+                   f"  ||  WARNING: rows span {len(runs)} DIFFERENT runs ({', '.join(runs)}) "
+                   f"- the lines are NOT a training trajectory")
+
     drift = [k for k in ref_metrics if _is_invariant(k)
              and any(r["metrics"].get(k) is not None
                      and abs(r["metrics"][k] - ref_metrics[k]) > 1e-9 for r in rows)]
-    shas = {r.get("eval_core_sha", "?")[:12] for r in rows} | {ref.get("eval_core_sha", "?")[:12]}
+    shas = {r.get("eval_core_sha", "?")[:12] for r in rows} | ({ref.get("eval_core_sha", "?")[:12]}
+                                                              if ref_label else set())
     integrity = (f"invariants: {'DRIFTED ' + ','.join(drift[:3]) if drift else 'OK'}"
                  f"  |  eval anemoi-core: {','.join(sorted(shas))}")
-    fig.suptitle(f"Ladder - {ladder['card_id']} (profile {prof['_name']}; "
-                 f"y = ratio to baseline '{ref_label}', dashed 1.0)\n{integrity}", fontsize=11)
-    fig.tight_layout()
+    fig.suptitle(
+        f"Ladder - {ladder['card_id']} (profile {prof['_name']})   "
+        f"dotted = reference '{ref_label or 'none'}'; green = every curve better, red = every "
+        f"curve worse, white = mixed/no direction ({better} / {worse} / {mixed}); "
+        f"hPa level panels shaded +/-{HPA_BAND:g} hPa replica noise\n{integrity}{run_warning}",
+        fontsize=11)
+    fig.tight_layout(rect=[0.01, 0, 1, 0.97 if nrow > 3 else 0.93])
     out = Path(args.out) if args.out else ladder_paths(prof)["png"]
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=140)
-    print(f"ladder plot -> {out}  ({integrity})")
+    fig.savefig(out, dpi=130)
+    print(f"ladder plot -> {out}  ({len(panels)} panels; {better} better / {worse} worse / "
+          f"{mixed} mixed; {integrity}){run_warning}")
 
 
 # --------------------------------------------------------------------------- main
