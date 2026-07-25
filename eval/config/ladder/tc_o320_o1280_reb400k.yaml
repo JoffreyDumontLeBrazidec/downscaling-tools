@@ -18,8 +18,8 @@ budget:                       # PROVISIONAL (P1 pending)
 evaluators: tc,probabilistic,spectra
 spectra:
   weather_states: "10u,2t"
-  nside: 64
-  lmax: 319
+  nside: 128           # lmax MUST be <= 4*nside (healpy); 64/319 was an invalid band
+  lmax: 512            # lane default 742/1484 costs >20 min per rung -- not ladder-cheap
 storm_maps_args: ""
 seed_draws: 0                 # enable per P1 verdict (candidate B): draws of ONE fixed bundle
 seed_budget:                  # used only when seed_draws > 0

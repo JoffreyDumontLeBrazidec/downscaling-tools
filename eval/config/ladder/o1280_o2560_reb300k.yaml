@@ -14,8 +14,8 @@ budget:
 evaluators: tc,probabilistic,spectra
 spectra:
   weather_states: "10u,2t"
-  nside: 64
-  lmax: 319
+  nside: 128           # lmax MUST be <= 4*nside (healpy); 64/319 was an invalid band
+  lmax: 512            # lane default 742/1484 costs >20 min per rung -- not ladder-cheap
 storm_maps_args: ""            # humberto box comes from the lane config
 seed_draws: 0                  # candidate-B mode off for o2560 (predictions too expensive)
 slurm:
