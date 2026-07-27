@@ -128,7 +128,7 @@ SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --output={logdir}/ladder_{card}_step{step}_%j.out
 set -euo pipefail
 module load ecmwf-toolbox || true
-source {venv}/bin/activate
+{activate}
 cd {repo}
 export METVIEW_PYTHON_START_TIMEOUT=300
 {predict_block}
@@ -197,7 +197,7 @@ def cmd_score(args: argparse.Namespace) -> None:
         card=prof["card_id"], step=step, qos=slurm.get("qos", "ng"),
         gpus=slurm.get("gpus", 1), cpus=slurm.get("cpus", 16), mem=slurm.get("mem", "128G"),
         walltime=slurm.get("walltime", "04:00:00"), logdir=paths["scratch"] / "logs",
-        venv=prof.get("venv", "/home/ecm5702/dev/.ds-260612"), repo=REPO,
+        activate=_activate_line(prof), repo=REPO,
         predict_block=predict_block, lane=lane, host=prof["host"], evaldir=evaldir,
         evaluators=prof.get("evaluators", "tc,probabilistic,spectra"),
         step_flag=f" --steps {b['steps']}",
@@ -211,6 +211,20 @@ def cmd_score(args: argparse.Namespace) -> None:
         return
     out = subprocess.run(["sbatch", str(sb_path)], capture_output=True, text=True, check=True)
     print(out.stdout.strip(), f"-> {evaldir}")
+
+
+def _activate_line(prof: dict) -> str:
+    """How the rung enters its runtime.
+
+    `venv_activate` (a runtime-selection script) wins over `venv` when present: a bare
+    `source <venv>/bin/activate` is not enough for runtimes that also need a PYTHONPATH
+    overlay, and mixing the two silently gives a venv without its overlay. Mirror the
+    `venv_activate` of the eval HOST the profile targets.
+    """
+    act = prof.get("venv_activate")
+    if act:
+        return f"source {act}"
+    return f"source {prof.get('venv', '/home/ecm5702/dev/.ds-260612')}/bin/activate"
 
 
 def infer_step(ckpt: str) -> int:
@@ -382,6 +396,25 @@ def cmd_gatherdraws(args: argparse.Namespace) -> None:
     print(f"gatherdraws: {stats}")
 
 
+def _in_family(run_dir: Path, args: argparse.Namespace) -> bool:
+    """Is this run dir part of the requested run family?
+
+    --run-id: the run itself plus every run whose `mlflow.parentRunId` is that id. A resume
+    creates a CHILD run, so the parent alone covers only the first leg. Use this whenever the
+    run name is absent, generic or reused (`to_delete` names 291 dirs in the Jupiter store --
+    matching those by name would splice unrelated runs into one curve).
+    --run-name: EXACT name match; substring matching merges families whose names are prefixes
+    of one another.
+    """
+    if args.run_id:
+        if run_dir.name == args.run_id:
+            return True
+        tag = run_dir / "tags" / "mlflow.parentRunId"
+        return tag.is_file() and tag.read_text().strip() == args.run_id
+    tag = run_dir / "tags" / "mlflow.runName"
+    return tag.is_file() and tag.read_text().strip() == args.run_name
+
+
 # --------------------------------------------------------------------------- loss
 def cmd_loss(args: argparse.Namespace) -> None:
     """Concatenate an MLflow FILE-STORE run family (parent + resume-leg child runs sharing
@@ -395,6 +428,8 @@ def cmd_loss(args: argparse.Namespace) -> None:
     file store writes per-variable validation metrics as SUBDIRECTORIES, e.g.
     'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0'.
     """
+    if not (args.run_name or args.run_id):
+        raise SystemExit("ladder loss: pass --run-name or --run-id")
     prof = load_profile(args.profile)
     ladder = load_ladder(prof)
     wanted = args.metrics.split(",")
@@ -405,10 +440,7 @@ def cmd_loss(args: argparse.Namespace) -> None:
     series: dict[str, dict] = {}
     legs: list[str] = []
     for run_dir in sorted(root.iterdir()):
-        name_tag = run_dir / "tags" / "mlflow.runName"
-        # exact match: substring matching silently merges sibling families whose names are
-        # prefixes of one another
-        if not name_tag.is_file() or name_tag.read_text().strip() != args.run_name:
+        if not _in_family(run_dir, args):
             continue
         legs.append(run_dir.name)
         for metric in wanted:
@@ -424,8 +456,9 @@ def cmd_loss(args: argparse.Namespace) -> None:
                 if step not in cur or ts >= cur[step][0]:
                     cur[step] = (ts, val)
     if not legs:
-        raise SystemExit(f"ladder loss: no run named exactly '{args.run_name}' under {root}")
-    label = args.label or args.run_name
+        raise SystemExit(f"ladder loss: no run matching "
+                         f"{args.run_id or args.run_name!r} under {root}")
+    label = args.label or args.run_id or args.run_name
     for metric, pts in series.items():
         ordered = sorted(pts.items())
         ladder["loss"][f"{label}::{metric}"] = {
@@ -740,7 +773,10 @@ def main() -> None:
     s = sub.add_parser("loss")
     s.add_argument("--profile", required=True)
     s.add_argument("--mlflow-dir", required=True)
-    s.add_argument("--run-name", required=True)
+    s.add_argument("--run-name", help="EXACT mlflow.runName; use --run-id when the name is "
+                                      "generic or reused")
+    s.add_argument("--run-id", help="mlflow run id: merges that run AND every child whose "
+                                    "mlflow.parentRunId is it (i.e. all resume legs)")
     s.add_argument("--metrics", default="train_multi_dataset_loss_step,val_multi_dataset_loss_epoch",
                    help="comma-separated MLflow metric names; nested names are allowed and are "
                         "where the per-variable validation MSE lives, e.g. "

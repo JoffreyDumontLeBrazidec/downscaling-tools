@@ -1,0 +1,50 @@
+# Ladder profile — 59e4 300k, the o96->o320 reference run.
+#
+# Scoreboard rank 1 for this lane (`manual-59e40596-new-piecewise30-h10-l20-sigma100`):
+# noise lognormal(0, 3.5), AdamW lr 1e-3, 300,000 steps, num_channels 512,
+# spectra_mean 0.9807, surface_weighted_nMSE 0.0950. Trained on JUPITER; 546 checkpoints
+# (step 1152 -> 300000) live there, the 300k pair was pulled to Atos in April.
+#
+# Lane `oldnew_keystone_cell_A` IS this run's registered sampler: piecewise-30,
+# sigma_max 1e5, high 10 / low 20, S_churn 2.5 -- i.e. the pw30 recipe the scoreboard row
+# was scored with. Do not swap it; the sampler is what the spectra column is sensitive to.
+#
+# MLflow: run family 59e40596023d4f72a1c5e2027805d7df = parent + 7 resume-leg children, ALL
+# named `to_delete`, so they must be joined by --run-id (parentRunId), never by name.
+# Its checkpoint has NO post_processors_tendencies -> the target was not residual-normalised
+# with separate statistics, so `val_mse_metric/<var>/1` is ALREADY in physical units squared
+# (no correction factor, unlike the newer multi-dataset runs).
+#
+# Task note: epics/training-diagnostics/metric-skill-gap/in-progress/20260727_ladder_mlflow_mse_spectra.md
+card_id: o96_o320__59e4-300k
+lane: oldnew_keystone_cell_A
+host: atos_ac_ds_cfec
+bundle_dir: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+# DS-era checkpoint: needs the legacy runtime AND its anemoi-core-ds PYTHONPATH overlay
+# (mirrors host atos_ac_ds_cfec). A bare venv activate cannot unpickle these checkpoints.
+venv_activate: /home/ecm5702/agent-work/20260727-ladder-mlflow/scripts/activate_ds_legacy.sh
+cadence: 50000
+
+# Pinned budget. Deliberately small: this ladder is a TREND instrument over 8 rungs, and
+# predict is the expensive phase. Two dates x one lead x 10 members.
+budget:
+  dates: '20230828,20230829'
+  steps: '120'
+  members: '10'
+
+evaluators: spectra
+
+# NB: the spectra runner reads `weather_states`, NOT `fields`.
+spectra:
+  weather_states: "10u,2t"
+  nside: 128
+  lmax: 512
+  steps:
+  - 120
+
+slurm:
+  qos: ng
+  gpus: 1
+  cpus: 16
+  mem: 128G
+  walltime: '02:00:00'
