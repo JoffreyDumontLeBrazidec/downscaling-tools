@@ -5,7 +5,6 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-from cartopy import crs
 from matplotlib.backends.backend_pdf import PdfPages
 
 from .data_types import BoundingBox
@@ -18,6 +17,8 @@ LOG = logging.getLogger(__name__)
 
 def _select_projection(bbox: BoundingBox):
     """Pick LambertConformal for non-dateline-crossing bboxes, PlateCarree otherwise."""
+    from cartopy import crs
+
     if bbox.crosses_dateline:
         return crs.PlateCarree()
     central_lon = (bbox.west + bbox.east) / 2.0
@@ -70,6 +71,7 @@ def _plot_member_page(
     """Create a 2x3 grid for one member: rows=[MSLP, Wind], cols=[Input, Prediction, Target]."""
     import cartopy.feature as cfeature
     import cmcrameri.cm as cmc
+    from cartopy import crs
     from matplotlib.gridspec import GridSpec
 
     proj = _select_projection(bbox)
