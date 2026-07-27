@@ -1,0 +1,53 @@
+# Ladder profile — SOAP pristine 200k (7b599ee1), o96->o320.
+#
+# Run: scoreboard `manual-7b599ee1-pristine-soap-200k`, rank 6, role CONTROL for the current
+# Muon/Lion/EDM2 comparison set. SOAP lr 3e-3, 200k steps, pristine core 8ec1623d2.
+# 8 checkpoints at a clean 25k cadence (25k..200k), all local on Atos with inference companions.
+# ONE run -> the ladder's run-identity guard is satisfied.
+#
+# ⚠ NO MLFLOW COLUMN IS POSSIBLE FOR THIS RUN. Its launcher (job 50047397) passed
+# `diagnostics.log.mlflow.enabled=False`, so nothing was ever logged;
+# `7b599ee1-8393-4c14-8cb6-1daa5dee86f8` is a hydra run UUID, NOT an mlflow run id.
+# The MSE column is therefore the INFERENCE-side
+# `probabilistic_<var>_<region>_rmse_ens_mean_mean` (RMSE of the ensemble mean vs truth, full
+# Heun sampling, native physical units) -- i.e. the expensive metric the MLflow row was only
+# ever a candidate proxy for. That is the better metric, just not the free one.
+#
+# Lane = the VALIDATED pristine eval lane for this checkpoint family (the one the scoreboard row
+# was produced with), so the sampler is the recipe this run is already scored under. Do not swap
+# it: spectra is sensitive to the sampler.
+#
+# Task note: epics/training-diagnostics/metric-skill-gap/in-progress/20260727_ladder_mlflow_mse_spectra.md
+card_id: soap200k_o96_o320
+lane: o96_o320_pristine_adamw_aug2630_10m
+host: atos_ac_pristine
+bundle_dir: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+venv: /home/ecm5702/dev/.ds-260612
+cadence: 25000
+
+# Pinned budget. Narrowed from the lane's 5 dates x 5 leads to 2 dates x the single lead the
+# spectra column scores, because predict is the expensive phase and this is a TREND instrument
+# over 8 rungs. Same dates/lead as the 59e4 card so the two runs stay comparable.
+budget:
+  dates: '20230828,20230829'
+  steps: '120'
+  members: '1,2,3,4,5,6,7,8,9,10'
+
+evaluators: probabilistic,spectra
+
+# NB: the spectra runner reads `weather_states`, NOT `fields` (the base lane spells it `fields`,
+# which the runner ignores). Ladder pin: nside 128 / lmax 512 on the two surface fields --
+# cheaper than the lane's nside 187 / 6 fields and the same recipe as the other ladder cards.
+spectra:
+  weather_states: "10u,2t"
+  nside: 128
+  lmax: 512
+  steps:
+  - 120
+
+slurm:
+  qos: ng
+  gpus: 1
+  cpus: 16
+  mem: 128G
+  walltime: '02:00:00'
