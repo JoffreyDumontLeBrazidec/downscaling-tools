@@ -1,0 +1,43 @@
+# Ladder profile — 712fce o96->o320 200k, the ONE run that carries both instruments:
+#   * 12 rungs of inference-side scores (probabilistic, already computed 2026-07-07,
+#     eval commit b8b52ce, lane oldnew_keystone_cell_D, 5 dates x 5 leads x 10 members)
+#   * an MLflow file store under the run root (val_out_hres_mse_metric per variable)
+# Used to test whether the free dense MLflow metric tracks the expensive inference RMSE.
+# Task note: epics/training-diagnostics/metric-skill-gap/in-progress/20260727_ladder_mlflow_mse_spectra.md
+card_id: conv712_o96_o320
+lane: oldnew_keystone_cell_D
+host: atos_ac_unified
+bundle_dir: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+venv: /home/ecm5702/dev/.ds-260612
+cadence: 10000
+
+# Recorded for provenance — predictions already exist, every rung runs --skip-predict.
+budget:
+  dates: '20230826,20230827,20230828,20230829,20230830'
+  steps: '120'
+  members: '10'
+
+# Only the missing column is computed. probabilistic/ is symlinked in from the existing
+# study dir, so the pinned probabilistic knobs below are documentation of what produced it.
+evaluators: spectra
+
+# Ladder spectra pin (same as the o320->o1280 ladder profiles): nside 128 / lmax 512 on the
+# two surface fields. nside 64 + lmax 319 is an INVALID SHT band (healpy needs lmax <= 4*nside).
+# NB: the spectra runner reads `weather_states`, NOT `fields` (the base lane spells it
+# `fields`, which the runner ignores) -- pinning `fields` silently left all 6 lane fields on.
+spectra:
+  weather_states: "10u,2t"
+  fields:
+  - 10u
+  - 2t
+  nside: 128
+  lmax: 512
+  steps:
+  - 120
+
+slurm:
+  qos: ng
+  gpus: 1
+  cpus: 8
+  mem: 64G
+  walltime: '01:00:00'

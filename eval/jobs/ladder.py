@@ -12,7 +12,8 @@ Subcommands:
   score    --profile P --checkpoint CK --step N [--baseline-label L] [--dry-run]
   sweep    --profile P --run-root DIR [--dry-run]        # score every unscored step_* ckpt
   collect  --profile P --step N --eval-dir DIR [...]     # (called inside the sbatch) -> row
-  loss     --profile P --mlflow-dir DIR --run-name NAME  # train/val series into ladder.json
+  loss     --profile P --mlflow-dir DIR --run-name NAME [--label L] [--metrics ...]
+           # MLflow file-store series into ladder.json under '<label>::<metric>'
   plot     --profile P [--out PNG]
 Storage:  scratch_root/eval/ladder/<card_id>/step_<N>/   (run artifacts)
           perm_root/eval-ladders/<card_id>/{ladder.json, ladder.png}
@@ -384,34 +385,63 @@ def cmd_gatherdraws(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- loss
 def cmd_loss(args: argparse.Namespace) -> None:
     """Concatenate an MLflow FILE-STORE run family (parent + resume-leg child runs sharing
-    mlflow.runName) into per-metric step series. File format: '<ts_ms> <value> <step>'."""
+    mlflow.runName) into per-metric step series. File format: '<ts_ms> <value> <step>'.
+
+    Stored as '<label>::<metric>' so ONE ladder can hold a run and the baseline run it is
+    judged against. That separation is the point: an MLflow curve only ever means something
+    beside another MLflow curve, never beside an inference-derived number.
+
+    Nested metric names are supported and are where the useful metrics live -- an MLflow
+    file store writes per-variable validation metrics as SUBDIRECTORIES, e.g.
+    'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0'.
+    """
     prof = load_profile(args.profile)
     ladder = load_ladder(prof)
     wanted = args.metrics.split(",")
     root = Path(args.mlflow_dir)
-    series: dict[str, list] = {}
-    n_runs = 0
-    for run_dir in root.iterdir():
+    # metric -> {step: (ts_ms, value)}. On a resume overlap the LATEST write wins -- that is
+    # the leg that actually re-ran the step. The previous `dict(pts)` last-wins depended on
+    # iterdir() order, i.e. it picked an arbitrary leg.
+    series: dict[str, dict] = {}
+    legs: list[str] = []
+    for run_dir in sorted(root.iterdir()):
         name_tag = run_dir / "tags" / "mlflow.runName"
-        if not name_tag.exists() or args.run_name not in name_tag.read_text():
+        # exact match: substring matching silently merges sibling families whose names are
+        # prefixes of one another
+        if not name_tag.is_file() or name_tag.read_text().strip() != args.run_name:
             continue
-        n_runs += 1
+        legs.append(run_dir.name)
         for metric in wanted:
             mf = run_dir / "metrics" / metric
-            if not mf.exists():
+            if not mf.is_file():
                 continue
+            cur = series.setdefault(metric, {})
             for line in mf.read_text().splitlines():
                 parts = line.split()
-                if len(parts) == 3:
-                    series.setdefault(metric, []).append((int(parts[2]), float(parts[1])))
-    if not n_runs:
-        raise SystemExit(f"ladder loss: no runs matching '{args.run_name}' under {root}")
+                if len(parts) != 3:
+                    continue
+                ts, val, step = int(parts[0]), float(parts[1]), int(parts[2])
+                if step not in cur or ts >= cur[step][0]:
+                    cur[step] = (ts, val)
+    if not legs:
+        raise SystemExit(f"ladder loss: no run named exactly '{args.run_name}' under {root}")
+    label = args.label or args.run_name
     for metric, pts in series.items():
-        dedup = sorted(dict(pts).items())  # last value wins per step, sorted by step
-        ladder["loss"][metric] = {"step": [s for s, _ in dedup], "value": [v for _, v in dedup]}
+        ordered = sorted(pts.items())
+        ladder["loss"][f"{label}::{metric}"] = {
+            "step": [s for s, _ in ordered],
+            "value": [v for _, (_, v) in ordered],
+            "run_name": args.run_name,
+            "mlflow_dir": str(root),
+            "legs": len(legs),
+        }
     save_ladder(prof, ladder)
-    summary = ", ".join(f"{k}: {len(v['step'])} pts" for k, v in ladder["loss"].items())
-    print(f"ladder loss ({n_runs} run legs merged): {summary}")
+    got = sorted(k for k in ladder["loss"] if k.startswith(f"{label}::"))
+    summary = ", ".join(f"{k.split('::', 1)[1]}: {len(ladder['loss'][k]['step'])} pts" for k in got)
+    print(f"ladder loss [{label}] ({len(legs)} legs merged): {summary}")
+    missing = [m for m in wanted if m not in series]
+    if missing:
+        print(f"  NOT FOUND in this store: {', '.join(missing)}")
 
 
 # --------------------------------------------------------------------------- plot
@@ -507,6 +537,31 @@ def _panels(rows: list, ref_metrics: dict) -> list:
                                                   else 99, p["title"]))
 
 
+# The sigma-weighted diffusion losses. This epic's headline finding is that they are a
+# BROAD-SIGMA PROXY and not cross-run comparable, so they are labelled as a diagnostic and
+# are deliberately sorted to the end, after the per-variable validation MSE.
+SIGMA_WEIGHTED = ("multi_dataset_loss", "weighted_mse_loss")
+
+
+def _is_sigma_weighted(metric: str) -> bool:
+    return any(t in metric for t in SIGMA_WEIGHTED)
+
+
+def _loss_sort_key(metric: str) -> tuple:
+    # per-variable val MSE first, 'all' last within it, sigma-weighted losses after
+    return (1 if _is_sigma_weighted(metric) else 0, "all_scale" in metric, metric)
+
+
+def _loss_title(metric: str) -> str:
+    """'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0' -> 'val MSE sfc_2t'."""
+    leaf = metric.rsplit("/", 1)[-1]
+    for suf in ("_scale_0",):
+        leaf = leaf[: -len(suf)] if leaf.endswith(suf) else leaf
+    if "mse_metric" in metric:
+        return f"val MSE {leaf}"
+    return leaf
+
+
 def cmd_plot(args: argparse.Namespace) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -523,7 +578,16 @@ def cmd_plot(args: argparse.Namespace) -> None:
     ref_metrics = ref["metrics"]
 
     panels = _panels(rows, ref_metrics)
-    loss = ladder.get("loss", {})
+    # MLflow series are '<label>::<metric>' -> one panel per metric, one curve per label,
+    # native units. The old single flat axis put msl (Pa^2) on the same scale as 2t (K^2)
+    # and every curve flattened -- the exact failure the score panels were rebuilt to fix.
+    loss_groups: dict[str, dict] = {}
+    for key, s in ladder.get("loss", {}).items():
+        label, sep, metric = key.partition("::")
+        if not sep:
+            label, metric = "run", key
+        loss_groups.setdefault(metric, {})[label] = s
+    loss_panels = sorted(loss_groups.items(), key=lambda kv: _loss_sort_key(kv[0]))
     NCOL = 6
     # Each band starts a fresh row so a score family reads as one horizontal strip and the
     # band label always sits against the row it names.
@@ -533,7 +597,8 @@ def cmd_plot(args: argparse.Namespace) -> None:
             grid.append((p["band"], [p]))
         else:
             grid[-1][1].append(p)
-    nrow = len(grid) + (1 if loss else 0)
+    nloss_rows = (len(loss_panels) + NCOL - 1) // NCOL
+    nrow = len(grid) + nloss_rows
 
     fig, axes = plt.subplots(nrow, NCOL, figsize=(3.4 * NCOL, 2.85 * nrow), squeeze=False)
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -588,16 +653,26 @@ def cmd_plot(args: argparse.Namespace) -> None:
                 ax.text(-0.36, 0.5, band, transform=ax.transAxes, rotation=90,
                         va="center", ha="center", fontsize=9.5, fontweight="bold")
 
-    if loss:
-        for col in range(NCOL):
-            axes[nrow - 1][col].axis("off")
-        lax = fig.add_subplot(nrow, 1, nrow)
-        for metric, s in loss.items():
-            lax.plot(s["step"], s["value"], lw=1, label=metric)
-        lax.set_title("Train/val loss (diagnostic only - loss != skill)", fontsize=9.5)
-        lax.set_xlabel("training step", fontsize=8)
-        lax.legend(fontsize=7)
-        lax.grid(alpha=0.2)
+    for li, (metric, by_label) in enumerate(loss_panels):
+        ri, ci = len(grid) + li // NCOL, li % NCOL
+        ax = axes[ri][ci]
+        for si, (label, s) in enumerate(sorted(by_label.items())):
+            ax.plot(s["step"], s["value"], lw=1.2, color=colors[si % len(colors)],
+                    ls="-" if si == 0 else "--", label=label)
+        ax.set_title(_loss_title(metric), fontsize=9)
+        ax.set_ylabel("MLflow value (raw)", fontsize=7.5)
+        ax.set_xlabel("training step", fontsize=8)
+        ax.tick_params(labelsize=7.5)
+        ax.grid(alpha=0.2)
+        if len(by_label) > 1 and li == 0:
+            ax.legend(fontsize=6.5, loc="best")
+        if ci == 0:
+            band = ("MLflow: sigma-WEIGHTED LOSS\n(diagnostic, NOT skill)"
+                    if _is_sigma_weighted(metric) else "MLflow: per-variable val MSE")
+            ax.text(-0.36, 0.5, band, transform=ax.transAxes, rotation=90,
+                    va="center", ha="center", fontsize=8, fontweight="bold")
+    for li in range(len(loss_panels), nloss_rows * NCOL):
+        axes[len(grid) + li // NCOL][li % NCOL].axis("off")
 
     # Run-identity guard: a ladder line only means "training evolution" if every rung comes
     # from the SAME run. Rows carry the checkpoint path, so the parent dir is the run id.
@@ -666,7 +741,12 @@ def main() -> None:
     s.add_argument("--profile", required=True)
     s.add_argument("--mlflow-dir", required=True)
     s.add_argument("--run-name", required=True)
-    s.add_argument("--metrics", default="train_multi_dataset_loss_step,val_multi_dataset_loss_epoch")
+    s.add_argument("--metrics", default="train_multi_dataset_loss_step,val_multi_dataset_loss_epoch",
+                   help="comma-separated MLflow metric names; nested names are allowed and are "
+                        "where the per-variable validation MSE lives, e.g. "
+                        "val_out_hres_mse_metric/out_hres/sfc_2t_scale_0")
+    s.add_argument("--label", help="namespace for these series (default: the run name), so a run "
+                                   "and its baseline run can share one ladder.json")
     s.set_defaults(fn=cmd_loss)
 
     s = sub.add_parser("plot")
