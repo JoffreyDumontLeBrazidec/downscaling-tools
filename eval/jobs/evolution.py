@@ -79,6 +79,12 @@ COLUMNS: dict[str, Column] = {
                       unit="relative L2"),
     # spread has no "better" direction, so it carries lower_better=None
     "spread": Column("spread", "probabilistic_{f}_{region}_spread_mean", "ws", None),
+    # CRPS family. Prefer `fcrps`: it is the ensemble-size-FAIR form, and the anchors do not
+    # all carry the same member count -- the ENFO-target hline drops its verifying member, so
+    # it is scored with one member fewer than the model. Plain `crps` is biased by that
+    # difference; fair CRPS is not, which makes it the honest column against these hlines.
+    "fcrps": Column("fair CRPS", "probabilistic_{f}_{region}_fcrps_mean", "ws", True),
+    "crps": Column("CRPS", "probabilistic_{f}_{region}_crps_mean", "ws", True),
 }
 DEFAULT_COLUMNS = "rmse,spectra"
 
