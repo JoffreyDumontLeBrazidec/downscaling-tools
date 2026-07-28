@@ -30,6 +30,11 @@ import xarray as xr
 
 SRC = Path(sys.argv[1])          # a rung's predictions dir
 DST_ROOT = Path(sys.argv[2])     # where the two reference dirs go
+# Names are lane-dependent: eefo->enfo on o96->o320 and o320->o1280, but enfo->iekm on
+# o1280->o2560 and o48->o96 targets iekm. The ROLE (input / target) is what the builder
+# actually branches on; the names are labels only. Defaults preserve the original paths.
+INPUT_NAME = sys.argv[3] if len(sys.argv) > 3 else "eefo_input"
+TARGET_NAME = sys.argv[4] if len(sys.argv) > 4 else "enfo_target"
 
 # `x` (the low-res input) is required by the spectra proxy runner for its residual spectra --
 # omitting it fails the rung with "Predictions file missing low-resolution input x".
@@ -37,12 +42,13 @@ KEEP = ["x", "date", "lon_lres", "lat_lres", "lon_hres", "lat_hres",
         "init_date", "lead_step_hours", "valid_time"]
 
 
-def build(kind: str) -> None:
-    out = DST_ROOT / kind / "predictions"
+def build(role: str, name: str) -> None:
+    """role is "input" or "target"; name is only what the directory is called."""
+    out = DST_ROOT / name / "predictions"
     out.mkdir(parents=True, exist_ok=True)
     for f in sorted(SRC.glob("predictions_*.nc")):
         with xr.open_dataset(f, decode_timedelta=False) as ds:
-            if kind == "eefo_input":
+            if role == "input":
                 pred_v, truth_v = ds["x_interp"].values, ds["y"].values
             else:
                 # ENFO target: forecast = members 1..N-1, truth = member 0 repeated to match.
@@ -75,15 +81,18 @@ def build(kind: str) -> None:
                 else:
                     new[k] = v
             new.attrs = dict(ds.attrs)
-            new.attrs["reference_kind"] = kind
+            new.attrs["reference_kind"] = name
+            new.attrs["reference_role"] = role
             new.attrs["reference_note"] = (
-                "EEFO O96 input interpolated to O320, scored as if it were the forecast"
-                if kind == "eefo_input" else
-                "ENFO O320 target members 1..N scored against target member 0")
+                "the lane INPUT, interpolated onto the target grid and scored as if it "
+                "were the forecast -- what you get with no downscaling at all"
+                if role == "input" else
+                "the lane TARGET ensemble, members 1..N scored against member 0; member 0 "
+                "is the verifying truth and MUST stay out of the forecast")
             new.to_netcdf(out / f.name)
-        print("  %s <- %s" % (kind, f.name), flush=True)
+        print("  %s <- %s" % (name, f.name), flush=True)
 
 
-for k in ("eefo_input", "enfo_target"):
-    build(k)
+for _role, _name in (("input", INPUT_NAME), ("target", TARGET_NAME)):
+    build(_role, _name)
 print("done ->", DST_ROOT)
