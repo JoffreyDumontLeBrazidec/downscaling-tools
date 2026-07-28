@@ -35,11 +35,26 @@ budget:
 
 evaluators: probabilistic,spectra
 
+# Grid rows are 10u / 10v / 2t. Both wind COMPONENTS are stored weather_states, so BOTH
+# evaluators can score them -- unlike 10ff, which the probabilistic scorer derives as
+# hypot(10u, 10v) but spectra cannot see at all (it reads stored states only). Using the
+# components rather than the speed is what makes every panel of the grid fillable.
+probabilistic:
+  weather_states:
+  - 2t
+  - 10u
+  - 10v
+  - 10ff
+  - 2d
+  - msl
+  - t_850
+  - z_500
+
 # NB: the spectra runner reads `weather_states`, NOT `fields` (the base lane spells it `fields`,
 # which the runner ignores). Ladder pin: nside 128 / lmax 512 on the two surface fields --
 # cheaper than the lane's nside 187 / 6 fields and the same recipe as the other ladder cards.
 spectra:
-  weather_states: "10u,2t"
+  weather_states: "10u,10v,2t"
   nside: 128
   lmax: 512
   steps:

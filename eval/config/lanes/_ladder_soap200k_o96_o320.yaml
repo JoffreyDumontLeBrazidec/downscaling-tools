@@ -4,8 +4,18 @@
 # a lane NAME; the lane loader deep-merges this over `base`.
 base: o96_o320_pristine_adamw_aug2630_10m
 spectra:
-  weather_states: 10u,2t
+  weather_states: 10u,10v,2t
   nside: 128
   lmax: 512
   steps:
   - 120
+probabilistic:
+  weather_states:
+  - 2t
+  - 10u
+  - 10v
+  - 10ff
+  - 2d
+  - msl
+  - t_850
+  - z_500

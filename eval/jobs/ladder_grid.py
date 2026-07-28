@@ -3,7 +3,7 @@
 Layout requested 2026-07-27, adapted from the CRPS version to the metrics this work produces:
 
   columns   RMSE(ens mean)  |  spread  |  spectra rel-L2
-  rows      2t  |  10u  |  tp (when it exists on the lane)
+  rows      10u | 10v | 2t | tp (when it exists on the lane)
   curves    the experiment(s) of interest, the REFERENCE experiment (best working, currently
             SOAP pristine 200k), and ENFO as a flat black line (it does not train).
 
@@ -31,19 +31,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# (row label, probabilistic weather_state, spectra field)
-# NOTE 10u: the probabilistic evaluator scores 10ff (wind SPEED), not the u component, while
-# spectra scores 10u. They are different fields and the panel titles say which is which.
+# (row label, probabilistic weather_state, spectra field, unit)
+# 10u and 10v are STORED weather states, so both evaluators can score them. 10ff is not usable
+# here: the probabilistic scorer derives it as hypot(10u,10v) but spectra reads stored states
+# only and cannot see it -- which is why the rows are the components, not the speed.
+# A None entry means "this evaluator has no such field" and renders as an empty panel.
 ROWS = [
+    ("10u", "10u", "10u", "m/s"),
+    ("10v", "10v", "10v", "m/s"),
     ("2t", "2t", "2t", "K"),
-    ("10u / 10ff", "10ff", "10u", "m/s"),
     ("tp", "tp", "tp", "mm"),
 ]
-# (column label, key template, "lower is better")
+# (column label, key template, "lower is better", which field naming the column uses)
 COLS = [
-    ("RMSE (ens mean)", "probabilistic_{ws}_{region}_rmse_ens_mean_mean", True),
-    ("spread", "probabilistic_{ws}_{region}_spread_mean", None),   # neither direction is "good"
-    ("spectra rel-L2", "spectra_{sf}_relative_l2", True),
+    ("RMSE (ens mean)", "probabilistic_{f}_{region}_rmse_ens_mean_mean", True, "ws"),
+    ("spread", "probabilistic_{f}_{region}_spread_mean", None, "ws"),  # no "good" direction
+    ("spectra rel-L2", "spectra_{f}_relative_l2", True, "sf"),
 ]
 CURVE_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
 
@@ -98,23 +101,27 @@ def main() -> None:
                          "\n  ".join(sorted(supports)) +
                          "\nRe-score onto one budget, or pass --allow-mixed-support.")
 
-    fig, axes = plt.subplots(len(ROWS), len(COLS), figsize=(6.0 * len(COLS), 3.9 * len(ROWS)),
+    fig, axes = plt.subplots(len(ROWS), len(COLS), figsize=(6.0 * len(COLS), 3.6 * len(ROWS)),
                              squeeze=False)
     missing_enfo = False
+    legend_done = False
     for ri, (row_label, ws, sf, unit) in enumerate(ROWS):
-        for ci, (col_label, tpl, lower_better) in enumerate(COLS):
+        for ci, (col_label, tpl, lower_better, kind) in enumerate(COLS):
             ax = axes[ri][ci]
-            key = tpl.format(ws=ws, sf=sf, region=args.region)
+            field = ws if kind == "ws" else sf
+            key = tpl.format(f=field, region=args.region) if field else None
             drew = False
 
             for ei, (label, ladder, _) in enumerate(exps):
+                if key is None:
+                    break
                 st, v = series(ladder, key)
                 if np.isfinite(v).any():
                     ax.plot(st, v, "-o", ms=5, lw=1.8, color=CURVE_COLORS[ei % len(CURVE_COLORS)],
                             label=label, zorder=3)
                     drew = True
 
-            if ref is not None:
+            if ref is not None and key is not None:
                 rlabel, rladder, rstep = ref
                 st, v = series(rladder, key)
                 ok = np.isfinite(v)
@@ -125,11 +132,11 @@ def main() -> None:
                                label="ref: %s @%dk" % (rlabel, round(rs / 1000)))
                     drew = True
 
-            ev = enfo.get(key)
+            ev = enfo.get(key) if key else None
             if ev is not None:
                 ax.axhline(float(ev), ls="-", lw=2.0, color="black", zorder=4, label="ENFO")
                 drew = True
-            else:
+            elif key is not None:
                 missing_enfo = True
 
             if not drew:
@@ -143,12 +150,12 @@ def main() -> None:
                     matplotlib.ticker.FuncFormatter(lambda x, _: "%gk" % (x / 1000)))
                 ax.grid(alpha=0.25)
                 ax.set_xlabel("training step", fontsize=9)
-                ax.set_ylabel(unit if ci < 2 else "relative L2", fontsize=9)
-            field = ws if ci < 2 else sf
+                ax.set_ylabel(unit if kind == "ws" else "relative L2", fontsize=9)
             arrow = "" if lower_better is None else "  (lower = better)"
-            ax.set_title("%s — %s%s" % (col_label, field, arrow), fontsize=11)
-            if ri == 0 and ci == 0 and drew:
+            ax.set_title("%s — %s%s" % (col_label, field or row_label, arrow), fontsize=11)
+            if drew and not legend_done:
                 ax.legend(fontsize=8.5, loc="best")
+                legend_done = True
             if ci == 0:
                 ax.text(-0.20, 0.5, row_label, transform=ax.transAxes, rotation=90,
                         va="center", ha="center", fontsize=13, fontweight="bold")

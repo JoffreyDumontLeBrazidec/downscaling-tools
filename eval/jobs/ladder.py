@@ -121,8 +121,7 @@ def save_ladder(prof: dict, ladder: dict) -> Path:
 SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name=ladder_{card}_{step}
 #SBATCH --qos={qos}
-#SBATCH --gpus={gpus}
-#SBATCH --cpus-per-task={cpus}
+{partition_line}{gpus_line}#SBATCH --cpus-per-task={cpus}
 #SBATCH --mem={mem}
 #SBATCH --time={walltime}
 #SBATCH --output={logdir}/ladder_{card}_step{step}_%j.out
@@ -193,9 +192,14 @@ def cmd_score(args: argparse.Namespace) -> None:
         predict_block = f'echo "[skip-predict] reusing {len(have)} prediction file(s)"\n' + gd
 
     slurm = prof.get("slurm", {})
+    gpus = args.gpus if args.gpus is not None else slurm.get("gpus", 1)
+    partition = args.partition or slurm.get("partition")
     script = SBATCH_TEMPLATE.format(
-        card=prof["card_id"], step=step, qos=slurm.get("qos", "ng"),
-        gpus=slurm.get("gpus", 1), cpus=slurm.get("cpus", 16), mem=slurm.get("mem", "128G"),
+        card=prof["card_id"], step=step, qos=args.qos or slurm.get("qos", "ng"),
+        partition_line=(f"#SBATCH --partition={partition}\n" if partition else ""),
+        # a 0-GPU request must OMIT the directive; "--gpus=0" is rejected by the scheduler
+        gpus_line=(f"#SBATCH --gpus={gpus}\n" if int(gpus) > 0 else ""),
+        cpus=slurm.get("cpus", 16), mem=slurm.get("mem", "128G"),
         walltime=slurm.get("walltime", "04:00:00"), logdir=paths["scratch"] / "logs",
         activate=_activate_line(prof), repo=REPO,
         predict_block=predict_block, lane=lane, host=prof["host"], evaldir=evaldir,
@@ -248,7 +252,8 @@ def cmd_sweep(args: argparse.Namespace) -> None:
     print(f"ladder sweep: {len(cks)} ckpts found, {len(done)} scored, {len(todo)} to score: {todo}")
     for s in todo:
         ns = argparse.Namespace(profile=args.profile, checkpoint=str(cks[s]), step=s,
-                                baseline_label=None, dry_run=args.dry_run)
+                                baseline_label=None, dry_run=args.dry_run,
+                                skip_predict=False, partition=None, qos=None, gpus=None)
         cmd_score(ns)
 
 
@@ -747,6 +752,10 @@ def main() -> None:
     s.add_argument("--baseline-label")
     s.add_argument("--skip-predict", action="store_true",
                    help="reuse the predictions already in the eval dir (rescore only)")
+    s.add_argument("--partition", help="override the SLURM partition (a --skip-predict rescore "
+                                       "is CPU-only and need not queue for a GPU node)")
+    s.add_argument("--qos", help="override the SLURM QOS")
+    s.add_argument("--gpus", type=int, help="override the GPU count; 0 omits the request")
     s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_score)
 
