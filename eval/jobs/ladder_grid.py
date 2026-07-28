@@ -49,6 +49,8 @@ COLS = [
     ("spectra rel-L2", "spectra_{f}_relative_l2", True, "sf"),
 ]
 CURVE_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
+# non-training anchors: solid black reads as "the target", grey dash-dot as "the raw input"
+HLINE_STYLES = [("black", "-"), ("#777777", "-."), ("#2ca02c", "-.")]
 
 
 def load_card(spec: str):
@@ -84,7 +86,9 @@ def main() -> None:
                     help="LABEL=/path/to/ladder.json (repeatable)")
     ap.add_argument("--ref", help="LABEL=/path/to/ladder.json[:STEP] -- flat reference line "
                                   "(default: that card's LAST rung)")
-    ap.add_argument("--enfo", help="json of flat ENFO values keyed by the same metric names")
+    ap.add_argument("--hline", action="append", default=[],
+                    help="LABEL=/path/to/flat.json -- a non-training reference drawn as a "
+                         "horizontal line (repeatable), e.g. the EEFO input or the ENFO target")
     ap.add_argument("--region", default="n.hem")
     ap.add_argument("--out", required=True)
     ap.add_argument("--allow-mixed-support", action="store_true")
@@ -92,7 +96,10 @@ def main() -> None:
 
     exps = [load_card(s) for s in args.exp]
     ref = load_card(args.ref) if args.ref else None
-    enfo = json.loads(Path(args.enfo).read_text()) if args.enfo else {}
+    hlines = []
+    for spec in args.hline:
+        lab, _, path = spec.partition("=")
+        hlines.append((lab, json.loads(Path(path).read_text())))
 
     supports = {support_of(l) for _, l, _ in exps} | ({support_of(ref[1])} if ref else set())
     mixed = len(supports) > 1
@@ -132,11 +139,15 @@ def main() -> None:
                                label="ref: %s @%dk" % (rlabel, round(rs / 1000)))
                     drew = True
 
-            ev = enfo.get(key) if key else None
-            if ev is not None:
-                ax.axhline(float(ev), ls="-", lw=2.0, color="black", zorder=4, label="ENFO")
+            for hi, (hlabel, hvals) in enumerate(hlines):
+                hv = hvals.get(key) if key else None
+                if hv is None:
+                    continue
+                ax.axhline(float(hv), lw=2.0, zorder=4, label=hlabel,
+                           color=HLINE_STYLES[hi % len(HLINE_STYLES)][0],
+                           ls=HLINE_STYLES[hi % len(HLINE_STYLES)][1])
                 drew = True
-            elif key is not None:
+            if key is not None and not hlines:
                 missing_enfo = True
 
             if not drew:
@@ -163,7 +174,7 @@ def main() -> None:
     sup = ("SUPPORT  " + sorted(supports)[0]) if not mixed else \
           ("MIXED SUPPORT - curves are NOT comparable: " + " || ".join(sorted(supports)))
     note = ("" if not missing_enfo else
-            "\nENFO line absent: no ENFO score exists on this support yet")
+            "\nno non-training reference supplied (--hline)")
     fig.suptitle("Ladder grid  |  region %s\n%s%s" % (args.region, sup, note), fontsize=11)
     fig.tight_layout(rect=[0.012, 0, 1, 0.93])
     out = Path(args.out)
