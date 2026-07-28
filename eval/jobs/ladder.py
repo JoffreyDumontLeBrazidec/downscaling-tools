@@ -300,6 +300,11 @@ def collect_metrics(evaldir: Path, steps_csv: str) -> dict:
             out[k] = v
     out.update(_metric_rows(ev / "spectra" / "metrics.json"))    # 1 relative_l2 per field
     out.update(_metric_rows(ev / "tc" / "metrics.json"))         # tail keys per event
+    # tc_proxy: the cheap TC ladder column -- deepest eye + its distributional companion, plus
+    # the ENFO/EEFO anchors carried in the same prediction files. Kept SEPARATE from `tc` above
+    # because the two score on different supports (lane `support_mode` vs the model's native
+    # grid) and TC extremes are support-dependent.
+    out.update(_metric_rows(ev / "tc_proxy" / "metrics.json"))
     # storm_maps: fine-band (20-100 km) power ratio + log-log slope, nested 2 deep
     for k, v in _flatten("", _read_json(ev / "storm_maps" / "storm_maps_spectra.json")).items():
         if any(t in k for t in ("fine_band", "slope", "storm_box_min")):
