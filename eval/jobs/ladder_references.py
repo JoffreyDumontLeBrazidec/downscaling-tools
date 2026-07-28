@@ -25,6 +25,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import json
+
 import numpy as np
 import xarray as xr
 
@@ -40,6 +42,20 @@ TARGET_NAME = sys.argv[4] if len(sys.argv) > 4 else "enfo_target"
 # omitting it fails the rung with "Predictions file missing low-resolution input x".
 KEEP = ["x", "date", "lon_lres", "lat_lres", "lon_hres", "lat_hres",
         "init_date", "lead_step_hours", "valid_time"]
+
+
+def target_is_ensemble(sample_file: Path) -> bool:
+    """Does the TARGET vary across ensemble members on this lane?
+
+    Decides whether a target anchor exists at all. Where the target is a single deterministic
+    field the answer is no, and emitting one anyway yields a line at exactly 0.
+    """
+    with xr.open_dataset(sample_file, decode_timedelta=False) as ds:
+        y = ds["y"]
+        if "ensemble_member" not in y.dims or y.sizes["ensemble_member"] < 2:
+            return False
+        a = y.isel(sample=0, weather_state=0).values
+        return bool(np.abs(a - a[0:1]).max() > 0)
 
 
 def build(role: str, name: str) -> None:
@@ -93,6 +109,20 @@ def build(role: str, name: str) -> None:
         print("  %s <- %s" % (name, f.name), flush=True)
 
 
-for _role, _name in (("input", INPUT_NAME), ("target", TARGET_NAME)):
+_roles = [("input", INPUT_NAME)]
+if target_is_ensemble(sorted(SRC.glob("predictions_*.nc"))[0]):
+    _roles.append(("target", TARGET_NAME))
+else:
+    # Record WHY there is no target anchor. An absent file is indistinguishable from "nobody
+    # built it yet"; a marker lets the plot state the reason.
+    DST_ROOT.mkdir(parents=True, exist_ok=True)
+    (DST_ROOT / (TARGET_NAME + ".json")).write_text(json.dumps({
+        "_absent": "this lane's target is a single DETERMINISTIC field (identical across "
+                   "members): it has no ensemble and no member-to-member distance, so the "
+                   "anchor would be exactly 0",
+    }, indent=1))
+    print("target is deterministic on this lane -> no target anchor (marker written)")
+
+for _role, _name in _roles:
     build(_role, _name)
 print("done ->", DST_ROOT)

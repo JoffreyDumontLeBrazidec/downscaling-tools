@@ -1,0 +1,48 @@
+# Evolution card — o48->o96 fastlane, adamw arm.
+#
+# Two arms were run on this lane (soap 50047098, adamw 50047097), 4 rungs each
+# (10k/25k/50k/100k) with predictions ALREADY on disk. That makes o48->o96 the first lane where
+# the grid gets a real reference ML experiment: soap is the experiment, adamw the reference (or
+# the other way round) -- same lane, same dates/leads/members, so the support matches by
+# construction.
+#
+# Only the evaluators are re-run (predictions are symlinked in). The fastlane scored the lane's
+# DEFAULT weather states, which omit 10u/10v/tp; the grid needs them named explicitly.
+# o48->o96 is the lane that actually carries tp, so this is where the tp row stops being empty.
+card_id: o48_o96_fastlane_adamw
+lane: o48_o96_fastlane
+host: atos_ac_fastlane
+bundle_dir: /home/ecm5702/hpcperm/data/input_data/o48_o96
+venv: /home/ecm5702/dev/.ds-260612
+cadence: 25000
+
+budget:
+  dates: '20250925,20250926,20250927,20250928,20250929,20250930'
+  steps: '24,48,72,96,120'
+  members: '1,2,3,4,5,6,7,8,9,10'
+
+evaluators: probabilistic,spectra
+
+probabilistic:
+  weather_states:
+  - 2t
+  - 10u
+  - 10v
+  - tp
+  - msl
+
+# NB: the spectra runner reads `weather_states`, NOT `fields`.
+spectra:
+  weather_states: "10u,10v,2t,tp"
+  nside: 58
+  lmax: 116
+  steps:
+  - 120
+
+slurm:
+  qos: np
+  partition: par
+  gpus: 0
+  cpus: 16
+  mem: 128G
+  walltime: '02:00:00'

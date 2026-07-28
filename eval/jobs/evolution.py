@@ -6,9 +6,13 @@ this figure.
 
     rows      the weather states (10u, 10v, 2t, tp ...)
     columns   metric families, chosen from the COLUMNS registry below
-    curves    each --exp experiment, plus the --ref reference RUN as its own dashed curve
-    lines     --hline anchors that do NOT train, drawn flat: the EEFO input (no downscaling)
-              and the ENFO target (the target ensemble's own member-to-member distance)
+    curves    each --exp experiment, plus the --ref reference ML run as its own dashed curve
+    lines     --input and --target, which do NOT train and are drawn flat: the coarse input
+              (no downscaling) and the target ensemble's own member-to-member distance
+
+All three references are REQUIRED. A bare trajectory invites over-reading -- on o96->o320 the
+wind RMSE panels look like steady improvement until the anchors reveal the whole span is 3.5%
+wide. --allow-missing-references exists for bootstrapping and stamps the gap on the figure.
 
 ADDING A COLUMN
 ---------------
@@ -127,14 +131,33 @@ def render(
     out: Path,
     *,
     reference: tuple[str, dict] | None = None,
+    input_ref: tuple[str, dict] | None = None,
+    target_ref: tuple[str, dict] | None = None,
     hlines: list[tuple[str, dict]] | None = None,
+    allow_missing_references: bool = False,
     rows: list[str] | None = None,
     columns: list[str] | None = None,
     region: str = "n.hem",
     title: str | None = None,
     allow_mixed_support: bool = False,
 ) -> Path:
-    hlines = hlines or []
+    # target first so it takes the solid-black style, then input, then any extras
+    supplied = [x for x in (target_ref, input_ref) if x is not None]
+    # supplied but NOT APPLICABLE: reported, never drawn as a line
+    not_applicable = [(lab, v["_absent"]) for lab, v in supplied if "_absent" in v]
+    hlines = [h for h in supplied if "_absent" not in h[1]] + list(hlines or [])
+    missing = [n for n, v in (("reference run (--ref)", reference),
+                              ("input (--input)", input_ref),
+                              ("target (--target)", target_ref)) if v is None]
+    if missing and not allow_missing_references:
+        raise SystemExit(
+            "an evolution figure must carry all three references; missing: "
+            + ", ".join(missing)
+            + "\n  --ref    the reference ML experiment (a ladder.json)"
+            + "\n  --input  the INPUT anchor   (flat json from eval.jobs.ladder_references)"
+            + "\n  --target the TARGET anchor  (flat json from eval.jobs.ladder_references)"
+            + "\nPass --allow-missing-references only while bootstrapping a lane; the figure "
+              "is then stamped with what is missing.")
     row_specs = [ROWS[r] for r in (rows or DEFAULT_ROWS.split(","))]
     col_specs = [COLUMNS[c] for c in (columns or DEFAULT_COLUMNS.split(","))]
 
@@ -209,10 +232,18 @@ def render(
 
     # No title by default. The one exception is a figure that would otherwise mislead: when
     # mixed support has been forced, that warning is stamped on regardless.
-    banner = ("MIXED SUPPORT — these curves are NOT comparable: " + " || ".join(sorted(supports))
-              if mixed else title)
+    if mixed:
+        banner = "MIXED SUPPORT — these curves are NOT comparable: " + " || ".join(sorted(supports))
+    elif missing:
+        banner = "INCOMPLETE — missing " + ", ".join(missing)
+    elif not_applicable:
+        banner = "  |  ".join("%s not applicable on this lane — %s" % (lab, why)
+                              for lab, why in not_applicable)
+    else:
+        banner = title
     if banner:
-        fig.suptitle(banner, fontsize=11, color="#b00020" if mixed else "black")
+        fig.suptitle(banner, fontsize=9.5, wrap=True,
+                     color="#b00020" if (mixed or missing) else "#555555")
         fig.tight_layout(rect=[0.012, 0, 1, 0.95])
     else:
         fig.tight_layout(rect=[0.012, 0, 1, 1])
@@ -230,11 +261,16 @@ def main(argv: list[str] | None = None) -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--exp", action="append", required=True,
                     help="LABEL=/path/to/ladder.json (repeatable)")
-    ap.add_argument("--ref", help="LABEL=/path/to/ladder.json -- the reference RUN, drawn as its "
-                                  "own curve vs step")
+    ap.add_argument("--ref", help="LABEL=/path/to/ladder.json -- the reference ML experiment, "
+                                  "drawn as its own curve vs step (REQUIRED)")
+    ap.add_argument("--input", dest="input_ref",
+                    help="LABEL=/path/to/flat.json -- the INPUT anchor, drawn flat (REQUIRED)")
+    ap.add_argument("--target", dest="target_ref",
+                    help="LABEL=/path/to/flat.json -- the TARGET anchor, drawn flat (REQUIRED)")
     ap.add_argument("--hline", action="append", default=[],
-                    help="LABEL=/path/to/flat.json -- a non-training anchor drawn flat "
-                         "(repeatable): the EEFO input, the ENFO target")
+                    help="LABEL=/path/to/flat.json -- any further flat anchor (repeatable)")
+    ap.add_argument("--allow-missing-references", action="store_true",
+                    help="bootstrap a lane that has no reference yet; stamps the gap on the figure")
     ap.add_argument("--rows", default=DEFAULT_ROWS,
                     help="comma-separated, from: " + ",".join(ROWS))
     ap.add_argument("--columns", default=DEFAULT_COLUMNS,
@@ -254,7 +290,10 @@ def main(argv: list[str] | None = None) -> None:
         [load_card(s) for s in args.exp],
         Path(args.out),
         reference=load_card(args.ref) if args.ref else None,
+        input_ref=load_flat(args.input_ref) if args.input_ref else None,
+        target_ref=load_flat(args.target_ref) if args.target_ref else None,
         hlines=[load_flat(s) for s in args.hline],
+        allow_missing_references=args.allow_missing_references,
         rows=args.rows.split(","),
         columns=args.columns.split(","),
         region=args.region,

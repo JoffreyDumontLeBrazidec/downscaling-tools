@@ -308,9 +308,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="LABEL=/path/to/ladder.json (repeatable)")
     p_evo.add_argument("--ref", default=None,
                        help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve")
+    p_evo.add_argument("--input", dest="input_ref", default=None,
+                       help="LABEL=/path/to/flat.json -- the INPUT anchor (REQUIRED)")
+    p_evo.add_argument("--target", dest="target_ref", default=None,
+                       help="LABEL=/path/to/flat.json -- the TARGET anchor (REQUIRED)")
     p_evo.add_argument("--hline", action="append", default=[],
-                       help="LABEL=/path/to/flat.json -- non-training anchor drawn flat "
-                            "(repeatable): the EEFO input, the ENFO target")
+                       help="LABEL=/path/to/flat.json -- any further flat anchor (repeatable)")
+    p_evo.add_argument("--allow-missing-references", action="store_true",
+                       help="bootstrap a lane with no reference yet; stamps the gap on the figure")
     p_evo.add_argument("--rows", default=None, help="comma-separated weather states")
     p_evo.add_argument("--columns", default=None, help="comma-separated metric families")
     p_evo.add_argument("--region", default="n.hem")
@@ -1342,8 +1347,14 @@ def main(argv: list[str] | None = None) -> None:
             forwarded += ["--exp", e]
         if args.ref:
             forwarded += ["--ref", args.ref]
+        if args.input_ref:
+            forwarded += ["--input", args.input_ref]
+        if args.target_ref:
+            forwarded += ["--target", args.target_ref]
         for h in args.hline:
             forwarded += ["--hline", h]
+        if args.allow_missing_references:
+            forwarded.append("--allow-missing-references")
         if args.rows:
             forwarded += ["--rows", args.rows]
         if args.columns:
