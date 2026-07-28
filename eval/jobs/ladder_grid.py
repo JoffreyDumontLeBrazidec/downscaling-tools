@@ -2,7 +2,7 @@
 
 Layout requested 2026-07-27, adapted from the CRPS version to the metrics this work produces:
 
-  columns   RMSE(ens mean)  |  spread  |  spectra rel-L2
+  columns   RMSE(ens mean)  |  spectra rel-L2
   rows      10u | 10v | 2t | tp (when it exists on the lane)
   curves    the experiment(s) of interest, the REFERENCE experiment (best working, currently
             SOAP pristine 200k), and ENFO as a flat black line (it does not train).
@@ -45,7 +45,6 @@ ROWS = [
 # (column label, key template, "lower is better", which field naming the column uses)
 COLS = [
     ("RMSE (ens mean)", "probabilistic_{f}_{region}_rmse_ens_mean_mean", True, "ws"),
-    ("spread", "probabilistic_{f}_{region}_spread_mean", None, "ws"),  # no "good" direction
     ("spectra rel-L2", "spectra_{f}_relative_l2", True, "sf"),
 ]
 CURVE_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
@@ -84,8 +83,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp", action="append", required=True,
                     help="LABEL=/path/to/ladder.json (repeatable)")
-    ap.add_argument("--ref", help="LABEL=/path/to/ladder.json[:STEP] -- flat reference line "
-                                  "(default: that card's LAST rung)")
+    ap.add_argument("--ref", help="LABEL=/path/to/ladder.json -- the reference RUN, drawn as "
+                                  "its own curve vs step (not a frozen value)")
     ap.add_argument("--hline", action="append", default=[],
                     help="LABEL=/path/to/flat.json -- a non-training reference drawn as a "
                          "horizontal line (repeatable), e.g. the EEFO input or the ENFO target")
@@ -108,7 +107,7 @@ def main() -> None:
                          "\n  ".join(sorted(supports)) +
                          "\nRe-score onto one budget, or pass --allow-mixed-support.")
 
-    fig, axes = plt.subplots(len(ROWS), len(COLS), figsize=(6.0 * len(COLS), 3.6 * len(ROWS)),
+    fig, axes = plt.subplots(len(ROWS), len(COLS), figsize=(6.6 * len(COLS), 3.6 * len(ROWS)),
                              squeeze=False)
     missing_enfo = False
     legend_done = False
@@ -129,14 +128,12 @@ def main() -> None:
                     drew = True
 
             if ref is not None and key is not None:
-                rlabel, rladder, rstep = ref
+                # the reference is another RUN: plot its whole trajectory, not one frozen value
+                rlabel, rladder, _ = ref
                 st, v = series(rladder, key)
-                ok = np.isfinite(v)
-                if ok.any():
-                    rv = (v[list(st).index(rstep)] if rstep in list(st) else v[ok][-1])
-                    rs = rstep if rstep in list(st) else int(st[ok][-1])
-                    ax.axhline(rv, ls="--", lw=1.6, color="#d62728", zorder=2,
-                               label="ref: %s @%dk" % (rlabel, round(rs / 1000)))
+                if np.isfinite(v).any():
+                    ax.plot(st, v, "--s", ms=4, lw=1.6, color="#d62728", zorder=2,
+                            label="ref: %s" % rlabel)
                     drew = True
 
             for hi, (hlabel, hvals) in enumerate(hlines):
