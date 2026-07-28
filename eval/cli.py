@@ -38,6 +38,7 @@ ALL_EVALUATORS = [
     "spectra_ecmwf", "mlflow",
     "precip_dist", "precip_events",
     "interp", "probabilistic",
+    "quaver", "local_global",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -160,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lane_override_args(p_run)
     _add_prepare_args(p_run)
     _add_prepml_args(p_run)
+    p_run.add_argument("--output-dir", default=None, help="Override output directory (defaults to <scratch>/eval/<lane>/run_<TS>).")
     p_run.add_argument(
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
@@ -222,6 +224,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-label", default="",
         help="Short display label for this run (used in TC/plot legends). "
              "Overrides the automatic fallback from the predictions directory name.",
+    )
+    p_eval.add_argument(
+        "--expver", default=None,
+        help="PrepML/FDB expver of the run being evaluated. When set, the quaver "
+             "probabilistic scorecard is run automatically (FDB-based).",
     )
 
     # --- scoreboard ---
@@ -291,6 +298,51 @@ def build_parser() -> argparse.ArgumentParser:
     p_videogen.add_argument("--ckpt-label", default=None,
                             help="Override scene's ckpt_label (cosmetic).")
 
+    # --- evolution ---
+    p_evo = subparsers.add_parser(
+        "evolution",
+        help="Plot how an experiment is evolving vs a reference run, the EEFO input and the "
+             "ENFO target (one row per weather state, one column per metric family).",
+    )
+    p_evo.add_argument("--exp", action="append", required=True,
+                       help="LABEL=/path/to/ladder.json (repeatable)")
+    p_evo.add_argument("--ref", default=None,
+                       help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve")
+    p_evo.add_argument("--hline", action="append", default=[],
+                       help="LABEL=/path/to/flat.json -- non-training anchor drawn flat "
+                            "(repeatable): the EEFO input, the ENFO target")
+    p_evo.add_argument("--rows", default=None, help="comma-separated weather states")
+    p_evo.add_argument("--columns", default=None, help="comma-separated metric families")
+    p_evo.add_argument("--region", default="n.hem")
+    p_evo.add_argument("--title", default=None, help="optional figure title (default: none)")
+    p_evo.add_argument("--out", required=True)
+    p_evo.add_argument("--allow-mixed-support", action="store_true")
+
+    # --- tctracker ---
+    p_tctracker = subparsers.add_parser(
+        "tctracker",
+        help="Produce and verify ECMWF tctracker basin track archives from a PrepML/FDB expver.",
+    )
+    _add_common_args(p_tctracker)
+    _add_lane_override_args(p_tctracker)
+    p_tctracker.add_argument("--expver", required=True, help="PrepML/FDB expver to track, e.g. j761.")
+    p_tctracker.add_argument("--output-dir", default=None, help="Tracker run root (default: <scratch>/eval/<lane>/tctracker/<expver>).")
+    p_tctracker.add_argument("--time", default=None, help="Forecast cycle hour, e.g. 00.")
+    p_tctracker.add_argument("--start-step", type=int, default=None, help="First forecast step passed to tctracker -s.")
+    p_tctracker.add_argument("--end-step", type=int, default=None, help="Last forecast step passed to tctracker -f.")
+    p_tctracker.add_argument("--step-interval", type=int, default=None, help="Forecast step interval passed to tctracker -i.")
+    p_tctracker.add_argument("--grid", type=int, default=None, help="Output grid resolution passed to tctracker -r.")
+    p_tctracker.add_argument("--class", dest="fdb_class", default=None, help="FDB class passed to tctracker -C.")
+    p_tctracker.add_argument("--type", dest="fdb_type", default=None, help="FDB type passed to tctracker -T.")
+    p_tctracker.add_argument("--stream", default=None, help="FDB stream passed to tctracker -S.")
+    p_tctracker.add_argument("--vorticity", choices=("true", "false"), default=None, help="Whether tctracker should read vorticity (-v).")
+    p_tctracker.add_argument("--model-keyword", default=None, help="Value exported as model_keyword before invoking tctracker.")
+    p_tctracker.add_argument("--module", default=None, help="Environment module to load before invoking tctracker (default: tctracker).")
+    p_tctracker.add_argument("--overwrite", action="store_true", default=False, help="Re-run targets even if their tar already exists.")
+    p_tctracker.add_argument("--verify-only", action="store_true", default=False, help="Only verify existing tars/manifests; do not run tctracker.")
+    p_tctracker.add_argument("--parse-only", action="store_true", default=False, help="Only parse existing Atlantic tracks; do not run tctracker.")
+    p_tctracker.add_argument("--slurm-script", default=None, help="Write a single resumable sbatch script to this path and exit.")
+
     return parser
 
 
@@ -330,6 +382,18 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
     return {}
 
 
+def _with_prepml_quaver(evaluators: list[str], args: argparse.Namespace) -> list[str]:
+    """Auto-include the quaver scorecard for prepml evaluations (expver set).
+
+    Quaver is FDB-based and only meaningful when the run published an ensemble to
+    FDB under an expver. We avoid even listing it for manual runs. Applied to the
+    default / --include-diagnostics paths; --only stays explicit.
+    """
+    if getattr(args, "expver", None) and "quaver" not in evaluators:
+        return [*evaluators, "quaver"]
+    return evaluators
+
+
 def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str]:
     """Three-step evaluator resolution.
 
@@ -357,9 +421,9 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
         for e in diag_group:
             if e not in combined:
                 combined.append(e)
-        return combined
+        return _with_prepml_quaver(combined, args)
 
-    return list(evaluator_groups.get("default", []))
+    return _with_prepml_quaver(list(evaluator_groups.get("default", [])), args)
 
 
 def _get_git_commit() -> str:
@@ -688,6 +752,10 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     sampler_cfg = predict_cfg.get("sampler")
     if sampler_cfg:
         cmd += ["--extra-args-json", json.dumps(sampler_cfg)]
+
+    local_scope_cfg = predict_cfg.get("local_scope")
+    if local_scope_cfg:
+        cmd += ["--local-scope-json", json.dumps(local_scope_cfg)]
 
     # Wrap in srun for multi-GPU model parallelism. Requires an outer sbatch
     # allocation; falls back to single-process when not in SLURM.
@@ -1043,6 +1111,42 @@ def _run_scoreboard(
     print()
 
 
+
+def cmd_tctracker(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
+    """Run, verify, or parse ECMWF tctracker archives for a PrepML/FDB expver."""
+    from eval._backends.tctracker import (
+        build_config, parse_atlantic_tracks, render_slurm_script, run_batch,
+        verify_outputs, write_atlantic_summary, write_verification_summary,
+    )
+
+    config = build_config(args, lane_config, host_config, output_dir)
+
+    if getattr(args, "slurm_script", None):
+        script = render_slurm_script(
+            config,
+            code_root=host_config["code_root"],
+            venv_activate=host_config["environment_setup"]["venv_activate"],
+        )
+        script_path = Path(args.slurm_script)
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(script, encoding="utf-8")
+        script_path.chmod(script_path.stat().st_mode | 0o755)
+        LOG.info("tctracker sbatch script written to %s", script_path)
+        return
+
+    if not getattr(args, "verify_only", False) and not getattr(args, "parse_only", False):
+        run_batch(config)
+
+    verification = verify_outputs(config)
+    md_path, json_path = write_verification_summary(config, verification)
+    LOG.info("tctracker verification written to %s and %s", md_path, json_path)
+    if verification["issues"]:
+        raise RuntimeError(f"tctracker verification found {len(verification['issues'])} issue(s); see {json_path}")
+
+    tracks = parse_atlantic_tracks(config)
+    atl_md, atl_json = write_atlantic_summary(config, tracks)
+    LOG.info("Atlantic tctracker summary written to %s and %s", atl_md, atl_json)
+
 def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
     """Build truth-aware bundles only (no prediction)."""
     _assert_serial_prepare_context()
@@ -1230,6 +1334,27 @@ def main(argv: list[str] | None = None) -> None:
             forwarded.append("--no-ecflow")
         raise SystemExit(prepml_cleanup_main(forwarded))
 
+    # --- Evolution subcommand (reads ladder cards; no lane/host config needed) ---
+    if args.subcommand == "evolution":
+        from eval.jobs.evolution import main as evolution_main
+        forwarded: list[str] = ["--out", str(args.out), "--region", args.region]
+        for e in args.exp:
+            forwarded += ["--exp", e]
+        if args.ref:
+            forwarded += ["--ref", args.ref]
+        for h in args.hline:
+            forwarded += ["--hline", h]
+        if args.rows:
+            forwarded += ["--rows", args.rows]
+        if args.columns:
+            forwarded += ["--columns", args.columns]
+        if args.title:
+            forwarded += ["--title", args.title]
+        if args.allow_mixed_support:
+            forwarded.append("--allow-mixed-support")
+        evolution_main(forwarded)
+        return
+
     # --- Videogen subcommand (no lane/host config needed) ---
     if args.subcommand == "videogen":
         from eval._backends.videogen.__main__ import main as videogen_main
@@ -1327,11 +1452,17 @@ def main(argv: list[str] | None = None) -> None:
         # Place evaluator outputs alongside predictions, unless --output-dir overrides
         explicit_out = getattr(args, "output_dir", None)
         output_dir = Path(explicit_out) if explicit_out else Path(args.predictions_dir).parent
-    elif args.subcommand == "predict" and getattr(args, "output_dir", None):
+    elif args.subcommand in ("run", "predict") and getattr(args, "output_dir", None):
         output_dir = Path(args.output_dir)
     elif args.subcommand == "prepare":
         bundle_dir_arg = getattr(args, "bundle_dir", None)
         output_dir = Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)
+    elif args.subcommand == "tctracker":
+        from eval._backends.tctracker.pipeline import default_output_dir
+        explicit_out = getattr(args, "output_dir", None)
+        output_dir = Path(explicit_out) if explicit_out else default_output_dir(
+            host_config, lane_name, lane_config, getattr(args, "expver")
+        )
     else:
         output_dir = _resolve_output_dir(host_config, lane_name)
 
@@ -1358,6 +1489,11 @@ def main(argv: list[str] | None = None) -> None:
 
     # --- Dry run ---
     if args.dry_run:
+        if args.subcommand == "tctracker":
+            from eval._backends.tctracker import build_config, dry_run_payload
+            effective["tctracker"] = dry_run_payload(
+                build_config(args, lane_config, host_config, output_dir)
+            )
         print(json.dumps(effective, indent=2, default=str))
         if getattr(args, "mode", "manual") == "prepml" and args.subcommand in ("run", "predict"):
             from eval.predict.prepml_config import generate_prepml_config
@@ -1416,6 +1552,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.subcommand == "scoreboard":
         eval_dir = Path(args.eval_dir)
         _run_scoreboard(eval_dir, lane_config, evaluators, output_dir)
+    elif args.subcommand == "tctracker":
+        cmd_tctracker(args, lane_config, host_config, output_dir)
 
 
 if __name__ == "__main__":
