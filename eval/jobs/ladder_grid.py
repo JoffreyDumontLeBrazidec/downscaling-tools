@@ -80,8 +80,9 @@ def tc_rows(cards):
             for key in row.get("metrics", {}):
                 if key.startswith("tcproxy_") and key.endswith("_eye_deepest"):
                     stem = key[len("tcproxy_"):-len("_eye_deepest")]
-                    # skip the anchor variants: <event>_enfo, <event>_eefo
-                    if not stem.endswith("_enfo") and not stem.endswith("_eefo"):
+                    # skip the anchor variants (<event>_enfo, <event>_eefo) and the cheap-tier
+                    # variant (<event>_draws) -- those are SERIES on an event's row, not events.
+                    if not stem.endswith(("_enfo", "_eefo", "_draws")):
                         events.add(stem)
     return [(ev, ev, ev, "hPa") for ev in sorted(events)]
 CURVE_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
@@ -189,6 +190,18 @@ def main() -> None:
                             label="ref: %s" % rlabel)
                     drew = True
 
+            if args.component == "tc" and key is not None and "eye_deepest" in tpl:
+                # the ultra-cheap tier: N independent re-runs of ONE instance. RANK-ONLY -- it
+                # under-deepens by a near-constant ~6.6 hPa, and the ranking works because that
+                # offset is near-constant, so it is drawn dashed and never compared on VALUE.
+                dkey = f"tcproxy_{field}_draws_eye_deepest"
+                for ei, (label, ladder, _) in enumerate(exps):
+                    st, v = series(ladder, dkey)
+                    if np.isfinite(v).any():
+                        ax.plot(st, v, ":o", ms=4, lw=1.6, alpha=0.85,
+                                color=CURVE_COLORS[ei % len(CURVE_COLORS)],
+                                label="%s — 10-draw cheap tier (rank only)" % label)
+                        drew = True
             if args.component == "tc" and key is not None:
                 # the target/input curves travel inside the same prediction files, so they are
                 # invariant across rungs by construction. If they are NOT, the support moved
