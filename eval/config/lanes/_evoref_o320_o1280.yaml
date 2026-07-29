@@ -1,0 +1,23 @@
+# GENERATED for evolution reference anchors on the o320_o1280 lane.
+# The base lane scores spectra at FULL resolution (nside 742 / 1481), which is minutes per
+# field per file and blew a 2h walltime on 25 files. Anchors only need to be comparable to the
+# ladder cards, and those pin nside 128 / lmax 512 on the surface fields at one lead -- so pin
+# the same recipe here. Anchors scored on a different spectra recipe would not be comparable
+# to the experiment curve anyway.
+base: o320_o1280_b785bf12_unified_full
+spectra:
+  weather_states: "10u,10v,2t"
+  nside: 128
+  lmax: 512
+  steps:
+  - 120
+
+# The base lane scores the DEFAULT probabilistic fields (2t, 10ff, 2d, msl, ...), which omit the
+# wind COMPONENTS the grid plots. 10ff cannot be used as a row because spectra never sees it.
+probabilistic:
+  weather_states:
+  - 2t
+  - 10u
+  - 10v
+  - tp
+  - msl

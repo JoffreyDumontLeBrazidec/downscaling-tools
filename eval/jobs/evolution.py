@@ -98,6 +98,22 @@ REF_COLOR = "#d62728"
 HLINE_STYLES = [("black", "-"), ("#777777", "-."), ("#2ca02c", "-.")]
 
 
+def _absent_reason(payload: dict) -> str | None:
+    """Reason this anchor does not apply to the lane, or None if it carries real values.
+
+    Two conventions exist and both are honoured: {"absent": true, "reason": ...} written by
+    anchor_scores.py as `target.ABSENT.json`, and {"_absent": "<reason>"} written by
+    ladder_references.py. Same meaning, so the plot accepts either.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("absent"):
+        return str(payload.get("reason") or "not applicable on this lane")
+    if "_absent" in payload:
+        return str(payload["_absent"])
+    return None
+
+
 def load_card(spec: str) -> tuple[str, dict]:
     """LABEL=/path/to/ladder.json"""
     label, sep, path = spec.partition("=")
@@ -143,9 +159,9 @@ def render(
 ) -> Path:
     # target first so it takes the solid-black style, then input, then any extras
     supplied = [x for x in (target_ref, input_ref) if x is not None]
-    # supplied but NOT APPLICABLE: reported, never drawn as a line
-    not_applicable = [(lab, v["_absent"]) for lab, v in supplied if "_absent" in v]
-    hlines = [h for h in supplied if "_absent" not in h[1]] + list(hlines or [])
+    # supplied but NOT APPLICABLE on this lane: reported, never drawn as a line
+    not_applicable = [(lab, _absent_reason(v)) for lab, v in supplied if _absent_reason(v)]
+    hlines = [h for h in supplied if not _absent_reason(h[1])] + list(hlines or [])
     missing = [n for n, v in (("reference run (--ref)", reference),
                               ("input (--input)", input_ref),
                               ("target (--target)", target_ref)) if v is None]
