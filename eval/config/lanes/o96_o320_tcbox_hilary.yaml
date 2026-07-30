@@ -1,0 +1,37 @@
+# o96->o320 REGIONAL BOX screening lane -- HILARY (E Pacific, Aug 2023).
+# matrix5 sampler campaign 2026-07-30: 12 samplers x 5 storms on the box-cut route
+# (global pristine ckpt + local_scope/cut_graph, no new graphs/bundles).
+# Cut box = event registry box (5,35,-117,-95) padded 5 deg; scoring stays on the
+# registry box (interior), mirroring the proven franklin_idalia setup (44eb232).
+# Screening only -- never a public scoreboard row.
+base: o96_o320_pristine_adamw_aug2630_10m
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20230816", "20230817", "20230818", "20230819", "20230820"]
+  num_gpus_per_model: 1
+  local_scope:
+    mode: bbox
+    cut_graph: true
+    hidden_halo_hops: 1
+    label: hilary_full250_box
+    lat_min: 0.0
+    lat_max: 40.0
+    lon_min: -122.0
+    lon_max: -90.0
+
+tc:
+  events: ["hilary"]
+
+evaluator_groups:
+  default: [tc]
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    ntasks_per_node: 1
+    time: "02:00:00"
+    mem: 128G
+    cpus: 8

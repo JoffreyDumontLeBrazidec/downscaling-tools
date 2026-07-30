@@ -1,0 +1,20 @@
+# o96_o320_tcbox_dora_churn24 -- matrix5 sampler campaign arm (2026-07-30). Screening only.
+base: o96_o320_tcbox_dora
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 10000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 24.0
+    S_min: 0.75
+    S_max: 10000.0
+    S_noise: 1.05
