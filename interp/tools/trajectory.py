@@ -621,6 +621,37 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
         del det_bundle, det_inner, det_sampler
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+    elif seed_source == "file":
+        if not getattr(args, "plant_file", None):
+            raise SystemExit("--seed-source file requires --plant-file")
+        blob = torch.load(args.plant_file, map_location=device, weights_only=False)
+        plant = blob["plant"].to(device=device, dtype=y_residual_cond.dtype)
+        if tuple(plant.shape) != tuple(y_residual_cond.shape):
+            raise SystemExit("plant shape %s != expected %s" % (tuple(plant.shape),
+                                                                tuple(y_residual_cond.shape)))
+        m_here = metrics_of(plant)
+        m_src = blob.get("metrics") or {}
+        plant_info.update({"plant_file": str(args.plant_file),
+                           "source_metrics": m_src, "plant_metrics": m_here,
+                           "source_meta": blob.get("meta")})
+        if m_here is not None and m_src.get("msl") is not None:
+            drift = abs(float(m_here["msl"]) - float(m_src["msl"]))
+            lvl = LOGGER.warning if drift > 1.0 else LOGGER.info
+            lvl("plant-file residual-space check: msl here %.2f vs source %.2f (drift %.2f hPa)",
+                m_here["msl"], m_src["msl"], drift)
+
+    if getattr(args, "plant_dump", None) and global_rank == 0:
+        m_plant = plant_info.get("plant_metrics") or metrics_of(plant)
+        torch.save({"plant": plant.detach().to("cpu"), "metrics": m_plant,
+                    "meta": {"seed_source": seed_source,
+                             "checkpoint": str(args.checkpoint),
+                             "det_checkpoint": str(getattr(args, "det_checkpoint", None)),
+                             "bundle_paths": [str(b) for b in getattr(eb, "paths", [])] if "eb" in dir() else None}},
+                   args.plant_dump)
+        LOGGER.info("plant dumped to %s", args.plant_dump)
+    if getattr(args, "plant_only", False):
+        LOGGER.info("--plant-only: exiting after plant construction")
+        return {"plant": plant_info} if global_rank == 0 else None
 
     def _mean(finals):
         return {k: float(np.mean([f[k] for f in finals])) for k in finals[0]}
@@ -1204,7 +1235,7 @@ def main(argv=None):
     p.add_argument("--seeds", nargs="+", type=int, default=None,
                    help="explicit seed list (overrides --n-seeds / --seed-base)")
     p.add_argument("--seed-base", type=int, default=1000)
-    p.add_argument("--seed-source", choices=["truth", "self_deepest", "det_prior"],
+    p.add_argument("--seed-source", choices=["truth", "self_deepest", "det_prior", "file"],
                    default="truth",
                    help="[seeding] what to plant at sigma_seed: truth = the observed target "
                         "residual (A2 diagnostic, truth-leaks); self_deepest = deepest box-msl "
@@ -1215,6 +1246,13 @@ def main(argv=None):
                    help="[seeding/self_deepest] free draws to search for the deepest plant")
     p.add_argument("--det-checkpoint", default=None,
                    help="[seeding/det_prior] training-format det-supervised checkpoint path")
+    p.add_argument("--plant-file", default=None,
+                   help="[seeding/file] torch.save'd plant dict from a --plant-dump run "
+                        "(cross-runtime handoff when det and diffusion ckpts need different envs)")
+    p.add_argument("--plant-dump", default=None,
+                   help="[seeding] save the constructed plant (tensor+metrics) to this path")
+    p.add_argument("--plant-only", action="store_true", default=False,
+                   help="[seeding] exit after constructing (and dumping) the plant - no sweep")
     p.add_argument("--ceiling-sigmas", nargs="+", type=float,
                    default=[5.0, 10.0, 20.0, 40.0, 80.0, 150.0, 300.0],
                    help="sigmas for the teacher-forced denoiser ceiling probe; the "
