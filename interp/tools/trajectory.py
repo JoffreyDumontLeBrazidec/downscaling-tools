@@ -484,9 +484,44 @@ def _guided_denoiser(base_fn, lam, sig_lo, sig_hi):
     return guided
 
 
+def _autoguided_denoiser(strong_fn, weak_fn, w, sig_lo, sig_hi):
+    """Karras-style autoguidance: D' = w*D_strong - (w-1)*D_weak = D + (w-1)*(D - D_weak)
+    in [sig_lo, sig_hi]. Amplifies what the strong model learned beyond an undertrained
+    D_bad while preserving diversity (score-bias correction, not mode truncation).
+    Handles both the ds-API call (x_interp, x_hres, y_noised, sigma, ...) and the
+    unified dict-API call (x_dict, y_dict, sigma_dict, ...)."""
+    if float(w) == 1.0:
+        return strong_fn
+    w = float(w)
+    sig_lo, sig_hi = float(sig_lo), float(sig_hi)
+
+    def fn(*args, **kwargs):
+        D = strong_fn(*args, **kwargs)
+        try:
+            if args and isinstance(args[0], dict):
+                sig = float(next(iter(args[2].values())).reshape(-1)[0].item())
+                if not (sig_lo <= sig <= sig_hi):
+                    return D
+                Dw = weak_fn(*args, **kwargs)
+                if isinstance(D, dict):
+                    return {k: D[k] + (w - 1.0) * (D[k] - Dw[k].to(D[k].dtype)) for k in D}
+                Dwt = next(iter(Dw.values())) if isinstance(Dw, dict) else Dw
+                return D + (w - 1.0) * (D - Dwt.to(D.dtype))
+            sig = float(args[3].reshape(-1)[0].item())
+            if not (sig_lo <= sig <= sig_hi):
+                return D
+            Dw = weak_fn(*args, **kwargs)
+            return D + (w - 1.0) * (D - Dw.to(D.dtype))
+        except Exception:
+            LOGGER.exception("autoguidance wrap failed (returning unguided D)")
+            return D
+
+    return fn
+
+
 def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_cond, x_hres_cond,
                    y_residual_cond, start_sigma, seed, mcg, gss, free=False,
-                   guidance=None, sampler_kwargs=None):
+                   guidance=None, sampler_kwargs=None, denoise_fn=None):
     """Production-density Karras ladder from start_sigma down to ~0 (see _seeded_ladder).
     y_init = the TRUE storm re-noised to start_sigma (free=False) or pure noise (free=True).
     `guidance=(lam, sig_lo, sig_hi)` wraps the denoiser in σ-banded score amplification;
@@ -498,7 +533,7 @@ def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_con
     gen = torch.Generator(device=device.type).manual_seed(int(seed))
     eps = torch.randn(y_residual_cond.shape, device=device, dtype=y_residual_cond.dtype, generator=gen)
     y_init = (float(start_sigma) * eps) if free else (y_residual_cond + float(start_sigma) * eps)
-    denoise_fn = inner.fwd_with_preconditioning
+    denoise_fn = denoise_fn if denoise_fn is not None else inner.fwd_with_preconditioning
     if guidance is not None:
         denoise_fn = _guided_denoiser(denoise_fn, *guidance)
     skw = dict(sampler_kwargs or {})
@@ -799,13 +834,31 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         if args.s_churn_max is not None:
             skw["S_max"] = float(args.s_churn_max)
 
+    ag_fn, ag_info = None, None
+    if getattr(args, "autoguide_weight", None):
+        if not getattr(args, "autoguide_checkpoint", None):
+            raise SystemExit("--autoguide-weight requires --autoguide-checkpoint")
+        from interp.core.model import load_model as _load_weak
+        LOGGER.info("autoguidance: loading D_bad %s", args.autoguide_checkpoint)
+        weak_bundle = _load_weak(args.autoguide_checkpoint, device=str(device),
+                                 precision=args.precision, num_gpus_per_model=world_size)
+        ag_fn = _autoguided_denoiser(inner.fwd_with_preconditioning,
+                                     weak_bundle.inner_model.fwd_with_preconditioning,
+                                     float(args.autoguide_weight),
+                                     float(args.autoguide_sigma_lo),
+                                     float(args.autoguide_sigma_hi))
+        ag_info = {"checkpoint": str(args.autoguide_checkpoint),
+                   "weight": float(args.autoguide_weight),
+                   "sigma_lo": float(args.autoguide_sigma_lo),
+                   "sigma_hi": float(args.autoguide_sigma_hi)}
+
     finals = []
     for seed in seeds:
         torch.manual_seed(int(seed))
         yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
                             x_interp_cond, x_hres_cond, y_residual_cond, sigma_max, seed,
                             mcg, gss_arg, free=True, guidance=guidance,
-                            sampler_kwargs=(skw or None))
+                            sampler_kwargs=(skw or None), denoise_fn=ag_fn)
         m = metrics_of(yf)                                   # collective; rank 0 gets the dict
         if m is not None:
             finals.append(m)
@@ -852,7 +905,8 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
             "mode": "guidance", "units": "physical", "world_size": world_size,
             "config": {"guidance_lambda": lam, "guidance_sigma_lo": band[1],
-                       "guidance_sigma_hi": band[2], "sampler_kwargs": skw, "free": True},
+                       "guidance_sigma_hi": band[2], "sampler_kwargs": skw, "free": True,
+                       "autoguide": ag_info},
             "metric_rule": {"msl": "box-min (hPa)", "wind10m": "box p99 speed (m/s)",
                             "wind10m_max": "box max speed (m/s)"},
             "bundle_paths": [str(p) for p in eb.paths],
@@ -1279,6 +1333,16 @@ def main(argv=None):
                    help="[guidance] S_min — lower σ where churn applies (None = ckpt default)")
     p.add_argument("--s-churn-max", type=float, default=None,
                    help="[guidance] S_max — upper σ where churn applies (None = ckpt default)")
+    p.add_argument("--autoguide-checkpoint", default=None,
+                   help="[guidance] D_bad checkpoint for autoguidance (same lane + API family; "
+                        "loaded in-process). Karras 2024: D' = w*D_strong - (w-1)*D_weak")
+    p.add_argument("--autoguide-weight", type=float, default=None,
+                   help="[guidance] autoguidance weight w (>1 amplifies what the strong model "
+                        "learned beyond D_bad; None = off)")
+    p.add_argument("--autoguide-sigma-lo", type=float, default=0.0,
+                   help="[guidance] lower sigma of the autoguidance band (default 0 = full range)")
+    p.add_argument("--autoguide-sigma-hi", type=float, default=1.0e9,
+                   help="[guidance] upper sigma of the autoguidance band (default unbounded)")
     p.add_argument("--fp32-sampler", action=argparse.BooleanOptionalAction, default=True,
                    help="run the diffusion sampler in fp32 (halves its float64 state; "
                         "required to fit the realized path at O1280). --no-fp32-sampler "
