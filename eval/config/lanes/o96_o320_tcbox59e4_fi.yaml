@@ -1,0 +1,55 @@
+# o96->o320 REGIONAL BOX screening lane -- 59e4 300k ds-API ckpt, Franklin+Idalia box.
+# Autoguidance 5-storm screen base (2026-07-31). STANDALONE on purpose: must NOT inherit
+# the pristine piecewise-30 sampler (ds-era scheduler support unverified; the interp
+# probes that motivated this screen ran on the checkpoint's own sampler defaults).
+# Runs on host atos_ac_ds_cfec (.ds-dyn-dev runtime; unified runtime cannot unpickle).
+# Arm lanes override predict.sampler with ONLY autoguide_* keys (popped by
+# eval/predict/model_loader.py before predict_step -> ckpt-default sampling).
+# Screening only -- never a public scoreboard row.
+default_host: atos_ac_ds_cfec
+allowed_hosts:
+  prepare: [atos_ac_ds_cfec]
+  predict: [atos_ac_ds_cfec]
+  run: []
+  evaluate: [atos_ac_ds_cfec]
+  scoreboard: []
+
+prepare:
+  bundle_filename_tpl: "eefo_o96_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    lres_pl_grib:    "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    hres_grib:       "{source_grib_root}/o320-z-lsm.grib"
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20230826", "20230827", "20230828", "20230829", "20230830"]
+  num_gpus_per_model: 1
+  input_root: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+  env:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  local_scope:
+    mode: bbox
+    cut_graph: true
+    hidden_halo_hops: 1
+    label: franklin_idalia_59e4_box
+    lat_min: 10.0
+    lat_max: 40.0
+    lon_min: -100.0
+    lon_max: -58.0
+
+tc:
+  events: ["idalia", "franklin"]
+
+evaluator_groups:
+  default: [tc]
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    ntasks_per_node: 1
+    time: "03:00:00"
+    mem: 128G
+    cpus: 8
