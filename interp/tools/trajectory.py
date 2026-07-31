@@ -808,7 +808,7 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
 
 def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                   target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
-                  metrics_of, references, clat, clon, box_np, window, eb, out_path):
+                  metrics_of, references, clat, clon, box_np, window, eb, out_path, fields_of=None):
     """Inference-time FIX SCREEN for the o320→o1280 deep-eye under-commitment. Runs the FREE
     sampler (pure noise at sigma_max — the deployed path) over n seeds with two optional knobs
     and reports the resulting storm-core distribution vs the unguided baseline:
@@ -853,12 +853,16 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                    "sigma_hi": float(args.autoguide_sigma_hi)}
 
     finals = []
+    dumped = {}
     for seed in seeds:
         torch.manual_seed(int(seed))
         yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
                             x_interp_cond, x_hres_cond, y_residual_cond, sigma_max, seed,
                             mcg, gss_arg, free=True, guidance=guidance,
                             sampler_kwargs=(skw or None), denoise_fn=ag_fn)
+        if (getattr(args, "dump_fields", 0) and fields_of is not None
+                and len(dumped) < int(args.dump_fields)):
+            dumped[int(seed)] = fields_of(yf)
         m = metrics_of(yf)                                   # collective; rank 0 gets the dict
         if m is not None:
             finals.append(m)
@@ -868,6 +872,18 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             LOGGER.info("seed %d (lam=%.2g churn=%s): msl=%.1f hPa  wind_max=%.1f m/s",
                         seed, lam, skw.get("S_churn", "ckpt"),
                         m.get("msl", float("nan")), m.get("wind10m_max", float("nan")))
+
+    if dumped and global_rank == 0:
+        _, _, lat_hres, lon_hres = eb.coords
+        arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np]}
+        for name, vals in (fields_of(y_residual_cond) or {}).items():
+            arrs["truth_%s" % name] = vals
+        for seed, fields in dumped.items():
+            for name, vals in fields.items():
+                arrs["s%d_%s" % (seed, name)] = vals
+        out_path.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path / "guidance_fields.npz", **arrs)
+        LOGGER.info("dumped %d seed field-sets", len(dumped))
 
     result = None
     if global_rank == 0:
@@ -1148,7 +1164,7 @@ def run_trajectory(args):
     if args.mode == "guidance":
         return _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                              target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
-                             metrics_of, references, clat, clon, box_np, window, eb, out_path)
+                             metrics_of, references, clat, clon, box_np, window, eb, out_path, fields_of=fields_of)
 
     # Teacher-forced ceiling: feed the TRUE residual + noise at each sigma.
     ceiling = []
@@ -1333,6 +1349,9 @@ def main(argv=None):
                    help="[guidance] S_min — lower σ where churn applies (None = ckpt default)")
     p.add_argument("--s-churn-max", type=float, default=None,
                    help="[guidance] S_max — upper σ where churn applies (None = ckpt default)")
+    p.add_argument("--dump-fields", type=int, default=0,
+                   help="[guidance] save box physical fields (surface targets) for the first "
+                        "N seeds + truth to guidance_fields.npz (for offline box-FFT spectra)")
     p.add_argument("--autoguide-checkpoint", default=None,
                    help="[guidance] D_bad checkpoint for autoguidance (same lane + API family; "
                         "loaded in-process). Karras 2024: D' = w*D_strong - (w-1)*D_weak")
