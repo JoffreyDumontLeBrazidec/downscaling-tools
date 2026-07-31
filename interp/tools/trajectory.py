@@ -553,6 +553,75 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
+    # --- plant selection: what gets re-noised at sigma_seed -------------------
+    seed_source = getattr(args, "seed_source", "truth")
+    plant = y_residual_cond
+    plant_info = {"seed_source": seed_source}
+    if seed_source == "self_deepest":
+        if world_size != 1:
+            raise SystemExit("--seed-source self_deepest requires single-rank inference "
+                             "(plant selection uses rank-0 metrics)")
+        n_free = int(getattr(args, "n_free_draws", 20))
+        best, best_m = None, None
+        for i in range(n_free):
+            fseed = int(args.seed_base) + 50000 + i
+            torch.manual_seed(fseed)
+            yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
+                                x_interp_cond, x_hres_cond, y_residual_cond, sigma_max,
+                                fseed, mcg, gss_arg, free=True)
+            m = metrics_of(yf)
+            if (m is not None and np.isfinite(m.get("msl", np.nan))
+                    and _seed_row_physical("msl", m["msl"])
+                    and (best_m is None or m["msl"] < best_m["msl"])):
+                best_m, best = m, yf.detach().clone()
+            del yf
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        if best is None:
+            raise SystemExit("self_deepest: no physically-valid free draw found")
+        plant = best
+        plant_info.update({"n_free_draws": n_free, "plant_metrics": best_m})
+        LOGGER.info("self_deepest plant: deepest of %d free draws, box msl %.1f hPa",
+                    n_free, best_m["msl"])
+    elif seed_source == "det_prior":
+        if world_size != 1:
+            raise SystemExit("--seed-source det_prior requires single-rank inference")
+        if not getattr(args, "det_checkpoint", None):
+            raise SystemExit("--seed-source det_prior requires --det-checkpoint")
+        from interp.core.model import load_model as _load_det
+        LOGGER.info("det_prior: loading det checkpoint %s", args.det_checkpoint)
+        det_bundle = _load_det(args.det_checkpoint, device=str(device),
+                               precision=args.precision, num_gpus_per_model=world_size)
+        det_inner = det_bundle.inner_model
+        det_sampler, _, _ = _build_sampler(det_inner, device)
+        DET_SIGMA = 5.0e5   # D(x_T, 5e5) protocol: ladder [5e5, 5e5, 0], y_init = randn*5e5
+        det_sigmas = torch.tensor([DET_SIGMA, DET_SIGMA, 0.0], device=device, dtype=torch.float32)
+        gen = torch.Generator(device=device.type).manual_seed(int(args.seed_base))
+        eps = torch.randn(y_residual_cond.shape, device=device,
+                          dtype=y_residual_cond.dtype, generator=gen)
+        y_init = DET_SIGMA * eps
+        with torch.no_grad():
+            if is_dict_api(det_inner):
+                out = det_sampler.sample({"in_lres": x_interp_cond, "in_hres": x_hres_cond},
+                                         {"out_hres": y_init}, det_sigmas,
+                                         det_inner.fwd_with_preconditioning,
+                                         model_comm_group=mcg, S_churn=0.0)
+                plant = out["out_hres"] if isinstance(out, dict) else out
+            else:
+                plant = det_sampler.sample(x_interp_cond, x_hres_cond, y_init, det_sigmas,
+                                           det_inner.fwd_with_preconditioning,
+                                           model_comm_group=mcg, grid_shard_shapes=gss_arg,
+                                           S_churn=0.0)
+        plant = plant.detach()
+        m_plant = metrics_of(plant)
+        plant_info.update({"det_checkpoint": str(args.det_checkpoint),
+                           "det_sigma": DET_SIGMA, "plant_metrics": m_plant})
+        LOGGER.info("det_prior plant: box msl %.1f hPa",
+                    (m_plant or {}).get("msl", float("nan")))
+        del det_bundle, det_inner, det_sampler
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def _mean(finals):
         return {k: float(np.mean([f[k] for f in finals])) for k in finals[0]}
 
@@ -562,7 +631,7 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
         for seed in seeds:
             torch.manual_seed(int(seed))
             y_final = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
-                                     x_interp_cond, x_hres_cond, y_residual_cond, ss, seed, mcg, gss_arg)
+                                     x_interp_cond, x_hres_cond, plant, ss, seed, mcg, gss_arg)
             m = metrics_of(y_final)                      # collective; rank 0 gets the dict
             if m is not None:
                 finals.append(m)
@@ -640,6 +709,7 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
         result = {
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
             "mode": "seeding", "units": "physical", "world_size": world_size,
+            "seed_source": seed_source, "plant": plant_info,
             "metric_rule": {"msl": "box-min (hPa)", "wind10m": "box p99 speed (m/s)"},
             "bundle_paths": [str(p) for p in eb.paths],
             "surface_targets": list(target_indices.keys()), "metrics_reported": metrics_reported,
@@ -878,9 +948,16 @@ def run_trajectory(args):
             batch, bundle.pre_processors, 1, model_comm_group=mcg)
         gss = dss  # DatasetShardSizes -> threaded into denoise/sample via gss_arg
         out_sizes = dss["out_hres"]
-        x_interp_raw_sh = inner.apply_interpolate_to_high_res(
+        # apply_interpolate_to_high_res with grid_shard_sizes set drives the
+        # InterpolationConnection all_to_all path, which expects a GRID-SHARDED input.
+        # Passing the FULL lres grid + hres shard sizes makes the all_to_all split counts
+        # disagree across ranks -> NCCL all_to_all deadlock (the tier1 b785 hang). Match
+        # _before_sampling: upsample the full grid collective-free (grid_shard_sizes=None),
+        # then take this rank's grid shard locally.
+        xir_full = inner.apply_interpolate_to_high_res(
             eb.x_lres[0:1].to(device)[:, 0, ...],
-            grid_shard_sizes=out_sizes, model_comm_group=mcg)[:, None, ...]
+            grid_shard_sizes=None, model_comm_group=mcg)[:, None, ...]
+        x_interp_raw_sh = shard_tensor(xir_full, -2, out_sizes, mcg)
         y_sh = shard_tensor(y0, -2, get_shard_sizes(y0, -2, mcg), mcg)
         prt = getattr(bundle.model, "pre_processors_tendencies", None)
         y_residual_cond = inner.compute_residuals(
@@ -894,7 +971,12 @@ def run_trajectory(args):
         surf_remap = {name: i for i, name in enumerate(target_indices)}
 
         def metrics_of(residual):
-            phys_sh = reconstruct_phys(bundle, x_interp_raw_sh, residual)[..., surf_idx]
+            # The unified (dict-API) add_interp_to_state adds back the NORMALIZED interp
+            # (x_interp_cond), NOT the raw physical interp -- this matches the single-GPU
+            # dict-API path. Passing x_interp_raw_sh (physical, msl ~98300 Pa) inflated every
+            # reconstructed field to ~1e6 (the b785 faithfulness bug). compute_residuals above
+            # still correctly uses the RAW interp; only reconstruct takes the normalized state.
+            phys_sh = reconstruct_phys(bundle, x_interp_cond, residual)[..., surf_idx]
             phys_full = _gather_full(phys_sh)
             return reduce_box(phys_full, surf_remap, box_t, has_wind) if global_rank == 0 else None
 
@@ -932,6 +1014,15 @@ def run_trajectory(args):
 
     gss_arg = gss if sharded else None
 
+    # --- P1 lock-in capture (single-GPU only): per-call box FIELDS per surface target ---
+    fields_of = None
+    if not sharded:
+        def fields_of(residual):
+            phys = reconstruct_phys_box(bundle, recon_state_box, residual, box_t)
+            return {name: phys[0, 0, 0, :, i].detach().float().cpu().numpy()
+                    for name, i in target_indices.items()}
+
+
     # References (rank 0): target from the full observed y; x_interp from the raw interp.
     references = None
     if global_rank == 0:
@@ -943,6 +1034,19 @@ def run_trajectory(args):
             u, v = fb_xi[:, name2in["10u"]], fb_xi[:, name2in["10v"]]
             xi_metrics["wind10m"] = _q(torch.sqrt(u * u + v * v), CORE_Q_HIGH)
         references["x_interp"] = xi_metrics
+
+    # PARITY SELF-CHECK (env-gated, b785 faithfulness debug): reconstruct the TRUE residual
+    # -> must equal the observed target storm-core. metrics_of gathers (collective), so ALL
+    # ranks must call it. Garbage here => reconstruct/gather/layout bug; fine here => the
+    # model FORWARD (ceiling/realized) is the bug.
+    import os as _pos
+    if _pos.environ.get("INTERP_PARITY_CHECK"):
+        _chk = metrics_of(y_residual_cond)
+        if global_rank == 0:
+            _t = references["target"]
+            LOGGER.info("PARITY reconstruct(true_residual): msl=%.4f  target_msl=%.4f  "
+                        "x_interp_msl=%.4f  (msl match => reconstruct OK, model-forward is the bug)",
+                        _chk.get("msl"), _t.get("msl"), references["x_interp"].get("msl"))
 
     # A2 seeding-sigma sweep reuses the whole setup above (load / bundle / box / sharded
     # conditioning / metrics_of / references), then sweeps where the storm is planted.
@@ -978,11 +1082,14 @@ def run_trajectory(args):
     trajectories = []
     for seed in seeds:
         records = []
+        lock_fields = []                                     # [(sigma, {var: box np array})]
 
-        def on_call(sigma_scalar, D, _rec=records):
+        def on_call(sigma_scalar, D, _rec=records, _lf=lock_fields):
             m = metrics_of(D)                                # collective; runs on all ranks
             if m is not None:                                # only rank 0 records
                 _rec.append({"call_idx": len(_rec), "sigma": sigma_scalar, "metrics": m})
+            if getattr(args, "lockin", False) and fields_of is not None:
+                _lf.append((float(sigma_scalar), fields_of(D)))
 
         torch.manual_seed(int(seed))
         sampler_ctx = force_fp32_sampler() if args.fp32_sampler else contextlib.nullcontext()
@@ -992,8 +1099,37 @@ def run_trajectory(args):
                                       model_comm_group=mcg, grid_shard_shapes=gss_arg,
                                       sigma_min=SAMPLER_SIGMA_MIN)
         final_metrics = metrics_of(final_resid) or {}        # collective; {} on non-zero ranks
+        lockin = None
+        if getattr(args, "lockin", False) and fields_of is not None and global_rank == 0:
+            fin = fields_of(final_resid)
+            tgt = {name: y0[0, 0, 0, box_t, i].float().cpu().numpy()
+                   for name, i in target_indices.items()}
+
+            def _corr(a, b):
+                a = a - a.mean(); b = b - b.mean()
+                d = float(np.sqrt((a * a).sum() * (b * b).sum()))
+                return float((a * b).sum() / d) if d > 0 else float("nan")
+
+            # ref = FIRST-call x-hat-0 (sigma~sigma_max) ~= conditional mean given input:
+            # anomaly curves isolate when the SAMPLE-SPECIFIC (generative) part commits.
+            ref = lock_fields[0][1]
+            lockin = {"sigmas": [s for s, _ in lock_fields], "vars": {}}
+            for name in target_indices:
+                fin_a = fin[name] - ref[name]
+                tgt_a = tgt[name] - ref[name]
+                lockin["vars"][name] = {
+                    "corr_final": [_corr(f[name], fin[name]) for _, f in lock_fields],
+                    "corr_target": [_corr(f[name], tgt[name]) for _, f in lock_fields],
+                    "amp_ratio": [float(np.std(f[name]) / max(np.std(fin[name]), 1e-12))
+                                    for _, f in lock_fields],
+                    "corr_final_anom": [_corr(f[name] - ref[name], fin_a) for _, f in lock_fields],
+                    "corr_target_anom": [_corr(f[name] - ref[name], tgt_a) for _, f in lock_fields],
+                    "amp_ratio_anom": [float(np.std(f[name] - ref[name]) / max(np.std(fin_a), 1e-12))
+                                         for _, f in lock_fields],
+                }
         if global_rank == 0:
-            trajectories.append({"seed": int(seed), "steps": records, "final": final_metrics})
+            trajectories.append({"seed": int(seed), "steps": records, "final": final_metrics,
+                                 "lockin": lockin})
             if records:
                 d = records[-1]["metrics"].get("msl", float("nan")) - final_metrics.get("msl", float("nan"))
                 LOGGER.info("seed %d: %d denoiser calls, final msl=%.1f hPa "
@@ -1047,6 +1183,9 @@ def main(argv=None):
         description="Diffusion trajectory (A1) — storm-core x̂₀ vs σ (birth/commit/erase)")
     add_model_args(p)
     add_event_args(p)
+    p.add_argument("--lockin", action="store_true",
+                   help="P1: capture per-call box fields and emit per-variable lock-in "
+                        "(pattern-correlation vs own final / vs target) curves")
     p.add_argument("--mode", default="trajectory",
                    choices=["trajectory", "seeding", "residual_diag", "guidance"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
@@ -1065,6 +1204,17 @@ def main(argv=None):
     p.add_argument("--seeds", nargs="+", type=int, default=None,
                    help="explicit seed list (overrides --n-seeds / --seed-base)")
     p.add_argument("--seed-base", type=int, default=1000)
+    p.add_argument("--seed-source", choices=["truth", "self_deepest", "det_prior"],
+                   default="truth",
+                   help="[seeding] what to plant at sigma_seed: truth = the observed target "
+                        "residual (A2 diagnostic, truth-leaks); self_deepest = deepest box-msl "
+                        "of --n-free-draws free draws (truth-free self-restart); det_prior = "
+                        "single-forward prediction of a det-supervised checkpoint "
+                        "(--det-checkpoint, D(x_T, 5e5) protocol of the 20260723 det study)")
+    p.add_argument("--n-free-draws", type=int, default=20,
+                   help="[seeding/self_deepest] free draws to search for the deepest plant")
+    p.add_argument("--det-checkpoint", default=None,
+                   help="[seeding/det_prior] training-format det-supervised checkpoint path")
     p.add_argument("--ceiling-sigmas", nargs="+", type=float,
                    default=[5.0, 10.0, 20.0, 40.0, 80.0, 150.0, 300.0],
                    help="sigmas for the teacher-forced denoiser ceiling probe; the "
