@@ -15,7 +15,9 @@ _resolve_device = _mi_predict._resolve_device
 from .graph_cut import activate_local_graph_cut
 from .types import PredictionConfig
 
+import atexit as _atexit
 import logging
+import sys as _sys
 from pathlib import Path as _Path
 
 LOG = logging.getLogger(__name__)
@@ -51,7 +53,8 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
                 "autoguide_checkpoint given in inference- form but the base checkpoint "
                 f"{base} is missing; pass the training-format path")
         ckpt = str(base)
-    LOG.info("autoguidance: loading D_bad %s (w=%.3g, band [%.3g, %.3g])", ckpt, w, sig_lo, sig_hi)
+    print("[autoguidance] loading D_bad %s (w=%.3g, band [%.3g, %.3g])"
+          % (ckpt, w, sig_lo, sig_hi), file=_sys.stderr, flush=True)
     weak_model, _, _, _ = _load_objects(
         ckpt_path=str(ckpt),
         device=device,
@@ -66,8 +69,11 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     base_fn = strong_inner.fwd_with_preconditioning
     weak_fn = weak_inner.fwd_with_preconditioning
 
+    calls = {"n": 0, "in_band": 0}
+
     def _autoguided(*args, **kwargs):
         D = base_fn(*args, **kwargs)
+        calls["n"] += 1
         try:
             if args and isinstance(args[0], dict):   # unified dict-API: (x, y, sigma_dict, ...)
                 sig = float(next(iter(args[2].values())).reshape(-1)[0].item())
@@ -75,6 +81,7 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
                 sig = float(args[3].reshape(-1)[0].item())
             if not (sig_lo <= sig <= sig_hi):
                 return D
+            calls["in_band"] += 1
             Dw = weak_fn(*args, **kwargs)
             if isinstance(D, dict):
                 return {k: D[k] + (w - 1.0) * (D[k] - Dw[k].to(D[k].dtype)) for k in D}
@@ -90,6 +97,15 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     info = {"autoguide_checkpoint": str(ckpt), "autoguide_weight": w,
             "autoguide_sigma_lo": sig_lo, "autoguide_sigma_hi": sig_hi}
     inference_model._autoguide_info = info
+    inference_model._autoguide_calls = calls
+    print("[autoguidance] AUTOGUIDANCE ACTIVE w=%.3g D_bad=%s"
+          % (w, _Path(str(ckpt)).name), file=_sys.stderr, flush=True)
+
+    def _report():
+        print("[autoguidance] denoiser calls total=%d guided_in_band=%d"
+              % (calls["n"], calls["in_band"]), file=_sys.stderr, flush=True)
+
+    _atexit.register(_report)
     return info
 
 
