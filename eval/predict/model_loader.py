@@ -16,6 +16,7 @@ from .graph_cut import activate_local_graph_cut
 from .types import PredictionConfig
 
 import logging
+from pathlib import Path as _Path
 
 LOG = logging.getLogger(__name__)
 
@@ -39,6 +40,17 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     if not ckpt:
         raise SystemExit("autoguide_weight set but autoguide_checkpoint missing")
     w = float(w)
+    # load_objects() takes the BASE (training-format) path and loads "inference-"+name
+    # itself; the main model path is normalized upstream, so normalize D_bad here too
+    # (accept either format, as a user would expect).
+    ckpt_p = _Path(str(ckpt)).expanduser()
+    if ckpt_p.name.startswith("inference-"):
+        base = ckpt_p.with_name(ckpt_p.name[len("inference-"):])
+        if not base.exists():
+            raise SystemExit(
+                "autoguide_checkpoint given in inference- form but the base checkpoint "
+                f"{base} is missing; pass the training-format path")
+        ckpt = str(base)
     LOG.info("autoguidance: loading D_bad %s (w=%.3g, band [%.3g, %.3g])", ckpt, w, sig_lo, sig_hi)
     weak_model, _, _, _ = _load_objects(
         ckpt_path=str(ckpt),

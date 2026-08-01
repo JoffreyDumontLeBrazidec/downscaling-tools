@@ -1,0 +1,27 @@
+# o320_o1280_piecewise21_s1k.yaml
+# Sampler-schedule ablation vs the 2026-07-16 owner standard (30-step piecewise,
+# sigma_max=1e5): a LOWER noise ceiling (sigma_max=1000, the historical "s1k"
+# control level) paired with a SHORTER 21-step budget. Split kept at the base
+# lane's ~1:2 high:low ratio (7 high / 14 low), NOT the class default even
+# split, so the only two things that change vs the standard are step count and
+# ceiling. Everything else (members/steps/dates/num_gpus_per_model/env/tc
+# block/evaluator_groups) is UNCHANGED from the base o320_o1280 lane.
+base: o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 21
+    sigma_max: 1000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 7
+    num_steps_low: 14
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000.0
+    S_noise: 1.05

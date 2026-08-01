@@ -1,3 +1,5 @@
+# Explicit legacy sigma=10k reproducibility control.  The canonical
+# o320_o1280 lane standard is sigma_max=100000 as of 2026-07-16.
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ag]
@@ -162,7 +164,7 @@ prepml:
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

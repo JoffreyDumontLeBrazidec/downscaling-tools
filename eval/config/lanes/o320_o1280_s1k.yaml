@@ -1,3 +1,6 @@
+lineage: ds
+# DS-API LANE (eecdb127 o320->o1280). REQUIRES prepml 0.99 -> run with EVAL_PREPML_BIN=/usr/local/apps/prepml/0.99/bin/prepml
+# (prepml 0.110+ drop bundled anemoi-inference + change the staging CLI -> AssertionError: No variables provided on ds-era ckpts). runner.venv = lineages/ds/prepml-wrap.
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ag]
@@ -17,7 +20,9 @@ prepare:
 
 predict:
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  steps: [24, 48, 72, 96, 120]
+  # PREPML default = full 24->360h (prepml stages its own MARS eefo input, not bundle-limited).
+  # MANUAL is bundle-limited to 24-120h -> run manual with --steps 24,48,72,96,120.
+  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360]
   dates: ["20230826", "20230827", "20230828", "20230829", "20230830"]
   num_gpus_per_model: 4
   # Memory knobs for tight o1280 inference. ANEMOI_INFERENCE_NUM_CHUNKS chunks
@@ -128,6 +133,35 @@ regions:
 sigma:
   num_gpus_per_model: 4
 
+# Quaver probabilistic scorecard (FDB-based). Runs automatically for prepml
+# runs (FDB expver); self-skips for manual runs. grid = model OUTPUT grid.
+#
+# Produces the 3-curve CRPS *and spread* scorecards: input (coarse op. ENS) ->
+# ML (downscaled, this expver) -> reference (op. IFS-O1280). The input baseline
+# is computed automatically from the MARS archive and cached per (window,grid)
+# in input_cache_root, so the ~47-min compute is paid once per window and reused
+# across expvers. All keys below are OPTIONAL and auto-derived when omitted:
+#   - input.* is read from resolved.prepml.input (class/stream/grid); database
+#     is forced to off (MARS archive route). Set three_curve: false to fall back
+#     to experiment-only scorecards.
+#   - reference.* defaults to the standing op. IFS-O1280 (class od, expver 0001).
+#   - spread_include_reference: add the reference spread+error to the spread
+#     panel too (set false if a window lacks op. spread/em scores -> fair-mean).
+quaver:
+  grid: O1280
+  class: rd
+  database: fdb
+  three_curve: true
+  spread_include_reference: true
+  # input:            # overrides; auto-derived from resolved.prepml.input
+  #   grid: O320
+  #   class: od
+  #   expver: "0001"
+  # reference:        # standing high-res reference (op. IFS-O1280)
+  #   grid: O1280
+  #   label: enfo O1280
+  # input_cache_root: /home/ecm5702/perm/eval/_quaver_input_baseline_cache
+
 evaluator_groups:
   default: [tc, spectra, spectra_ecmwf, surface, region_plot]
   diagnostics: [sigma, mechanistic, intermediate, mlflow]
@@ -165,6 +199,10 @@ resource_profiles:
     time: "01:00:00"
     mem: 64G
     cpus: 8
+  evaluate_quaver:
+    time: "14:00:00"
+    mem: 64G
+    cpus: 4
   scoreboard:
     time: "00:30:00"
     mem: 16G
@@ -173,10 +211,12 @@ resource_profiles:
 prepml:
   debug_expvers: ["j5ya"]
   runner: anemoi-dev
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
+  venv: /home/ecm5702/hpcperm/lineages/ds/prepml-wrap
+  bin: /usr/local/apps/prepml/0.99/bin/prepml
+  prepml_099_compat: true   # prepml 0.99: drop resources.inference (0.125+) AND platform.name (so platform block stays 1-key -> gpu flavour with gres=gpu:4 is honored, not discarded)
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

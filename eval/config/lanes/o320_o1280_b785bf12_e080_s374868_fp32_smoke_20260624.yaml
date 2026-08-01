@@ -1,3 +1,4 @@
+lineage: plus-halo
 # o320->o1280 PARITY lane (franklin/idalia, Aug26-30 2023) for ckpt b785bf12 -- manual vs prepml validation.
 # Grid: 5 dates x 10 members x 5 lead times {24,48,72,96,120}h = 250 samples. Drives BOTH --mode manual and
 # --mode prepml from ONE lane (identical sampler sigma_max=10000 + seed 1234) so the ONLY difference is input
@@ -333,10 +334,10 @@ prepml:
   debug_expvers:
   - j714
   runner: anemoi-dev
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  venv: /home/ecm5702/hpcperm/lineages/plus-halo/prepml-wrap
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

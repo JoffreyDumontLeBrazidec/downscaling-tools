@@ -1,0 +1,50 @@
+# Regional-checkpoint eval adapter lane mirroring the tc_o320_o1280 shape.
+# This is NOT the canonical bundle-based tc_o320_o1280 inference path; it is the
+# dataloader-backed recovery/eval route for native regional checkpoints.
+# Keep its shape aligned with the Franklin/Idalia proof harness:
+# 5 dates (20230826..20230830) x 5 leads x 10 sampler-seed members.
+default_host: atos_ac
+allowed_hosts:
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+  predict: [atos_ac]
+  prepare: [atos_ac]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates:
+    - "20230826"
+    - "20230827"
+    - "20230828"
+    - "20230829"
+    - "20230830"
+
+tc:
+  beta: 0.5
+  mslp_ref: 1013.25
+  events: ["idalia", "franklin"]
+  tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  reference_expids: []
+  support_mode: "native"
+  input_label: "input O320 interpolated"
+  target_nc_label: "target O1280"
+  member_maps:
+    enabled: false
+
+evaluator_groups:
+  default: [tc]
+
+resource_profiles:
+  evaluate:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_tc:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  scoreboard:
+    time: "00:30:00"
+    mem: 16G
+    cpus: 1

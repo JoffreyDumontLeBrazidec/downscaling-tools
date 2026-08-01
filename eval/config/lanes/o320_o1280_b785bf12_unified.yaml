@@ -1,3 +1,4 @@
+lineage: plus-halo
 # o320->o1280 UNIFIED smoke lane — drives the multi-ds-unified Jupiter ckpt b785bf12
 # through eval.cli -> prepml 0.99 -> anemoi-inference (UnifiedDownscalingRunner) on ac.
 # Mirrors o320_o1280.yaml but: (a) allows atos_ac_unified for prepare/predict (the lane
@@ -35,9 +36,10 @@ predict:
     PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
     CODEX_UNIFIED_SHARD_STRATEGY: edges
   sampler:
+    # Keep the active unified path aligned with the o320_o1280 lane standard.
     schedule_type: "experimental_piecewise"
     num_steps: 30
-    sigma_max: 10000.0
+    sigma_max: 100000.0
     sigma_transition: 10.0
     sigma_min: 0.03
     high_schedule_type: "exponential"
@@ -48,7 +50,7 @@ predict:
     sampler: "heun"
     S_churn: 2.5
     S_min: 0.75
-    S_max: 10000.0
+    S_max: 100000.0
     S_noise: 1.05
 
 spectra:
@@ -63,10 +65,10 @@ prepml:
   debug_expvers: ["j5ya"]
   runner: anemoi-dev
   base_runner: downscaling_unified
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  venv: /home/ecm5702/hpcperm/lineages/plus-halo/prepml-wrap
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

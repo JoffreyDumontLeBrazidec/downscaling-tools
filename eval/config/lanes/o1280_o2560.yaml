@@ -68,6 +68,7 @@ spectra:
   truth_cache_dir: "/home/ecm5702/perm/reference/o1280_o2560/spectra_proxy"
 
 spectra_ecmwf:
+  truncation: 2559  # O2560 nominal cubic-octahedral truncation: TCo2559
   template_grib_root: "/home/ecm5702/hpcperm/data/input_data/o1280_o2560/humberto_20250926_20250930/o2560_targets"
   weather_states: ["10u", "10v", "2t", "msl"]
   reference_dir: "/home/ecm5702/perm/reference/o1280_o2560/spectra_ecmwf"

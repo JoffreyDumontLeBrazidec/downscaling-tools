@@ -31,12 +31,12 @@ predict:
     ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
     PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
   sampler:
-    # sigma_max 1000 -> 10000 (2026-06-11): inference ceiling for TC extremes per
-    # epics/o320_o1280/in-progress/20260610_tc_extremes_lane_gap_diagnosis.md
-    # (Idalia deficit-F 0.25 -> 0.46; sampler-variant trajectories confirm).
+    # Owner decision 2026-07-16: sigma_max=100000 is the o320->o1280 standard.
+    # Same-epsilon probes show pure noise and target+noise are spectrally matched
+    # at this ceiling; explicitly named s1k/sigma10k lanes remain as controls.
     schedule_type: "experimental_piecewise"
     num_steps: 30
-    sigma_max: 10000.0
+    sigma_max: 100000.0
     sigma_transition: 10.0
     sigma_min: 0.03
     high_schedule_type: "exponential"
@@ -47,7 +47,7 @@ predict:
     sampler: "heun"
     S_churn: 2.5
     S_min: 0.75
-    S_max: 10000.0
+    S_max: 100000.0
     S_noise: 1.05
 
 # TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
@@ -84,6 +84,7 @@ spectra:
   truth_cache_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_proxy"
 
 spectra_ecmwf:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
   template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
   weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
@@ -177,7 +178,7 @@ prepml:
   venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

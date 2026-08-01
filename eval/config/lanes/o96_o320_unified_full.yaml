@@ -1,3 +1,4 @@
+lineage: pristine
 predict:
   input_root: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
   members:
@@ -199,6 +200,38 @@ sigma_loss:
   - 0.05
   - 0.3
   validation_frequency: null
+
+tctracker:
+  output_lane: o96_o320
+  dates:
+  - '20230826'
+  - '20230827'
+  - '20230828'
+  - '20230829'
+  - '20230830'
+  members:
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  time: '00'
+  start_step: 0
+  end_step: 360
+  step_interval: 24
+  grid: 320
+  class: rd
+  type: pf
+  stream: enfo
+  vorticity: false
+  model_keyword: ""
+  module: tctracker
+
 evaluator_groups:
   default:
   - tc
@@ -247,7 +280,8 @@ prepml:
   - j5d7
   - j5d6
   runner: anemoi-dev
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-dyn-prepml-wrap
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
   input:
     class: od
     stream: eefo

@@ -1,0 +1,22 @@
+# I4-family idea-screening probe (20260710_idea_screening_wave.md): HEAVY-TAILED
+# CHURN NOISE, V3. noise_dist="student_t" applies ONLY to the churn re-noise draw
+# (scope=churn; the initial y_init draw stays Gaussian). S_churn=12 / band [40,120]
+# mirrors T14/job 36726141 (the Gaussian S_churn=12 band[40,120] full-field guard,
+# global o320_o1280 eecdb127 ckpt, ds lineage) so the two churn-noise-distribution
+# reads are on the SAME churn strength/band -- direct heavy-vs-Gaussian churn
+# comparison (T14 = Gaussian control read, this = Student-t arm), even though the
+# absolute checkpoint/lane differ (T14 is global/ds-lineage, this is the regional
+# warm-start ckpt) -- the comparison is about the noise-DISTRIBUTION axis at matched
+# churn strength, not an apples-to-apples lane replay. dof=3 (heavier tail, matching
+# V2's dose). Branch exp/heavytail-noise @ 633fbcc61, PYTHONPATH overlay required.
+# Screening evidence only -- never a public scoreboard row.
+base: tc_o320_o1280_regionalbundle
+
+predict:
+  sampler:
+    S_churn: 12.0
+    S_min: 40.0
+    S_max: 120.0
+    noise_dist: "student_t"
+    dof: 3.0
+    scope: "churn"

@@ -1,0 +1,95 @@
+# tc_o320_o1280_regionalbundle_densecommit.yaml
+# I2 idea-screening probe (20260710_idea_screening_wave.md): DENSE COMMIT-WINDOW SAMPLER.
+# Identical to tc_o320_o1280_regionalbundle.yaml (native-regional o320->o1280 via
+# box-cropped global bundles) except for an EXPLICIT sampler block that concentrates
+# ~2x more of the same 30-step budget in sigma in [20,120] (the storm-commit window per
+# residual_diag sigma* profiling: msl 84.8, 10u 54.7, 10v 44.6). Everything else
+# (members/steps/dates/num_gpus_per_model/tc/evaluator_groups/resource_profiles)
+# is UNCHANGED from the base regionalbundle lane -- only the sampler ladder differs.
+#
+# Verified via ExperimentalSamplerScheduler.get_schedule() on hpc-login (.ds-260612):
+#   BASELINE  (sigma_transition=10, high=exponential/10, low=karras/20, rho=7):
+#     31 ladder points, 2 land in [20,120] (79.4, 39.8).
+#   CANDIDATE (sigma_transition=20, high=karras/20 rho_high=12, low=karras/10, rho=7):
+#     31 ladder points, 4 land in [20,120] (92.1, 64.0, 44.0, 29.8) -- exactly 2x.
+# Screening evidence only -- never a public scoreboard row.
+base: o320_o1280
+
+default_host: atos_ac_pristine
+allowed_hosts:
+  prepare: [atos_ac_pristine]
+  predict: [atos_ac_pristine]
+  run: [atos_ac_pristine]
+  evaluate: [atos_ac_pristine]
+  scoreboard: [atos_ac_pristine]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20230826", "20230827", "20230828", "20230829", "20230830"]
+  # 1 GPU: the regional out grid (284713) is 23x smaller than global o1280 (6.6M).
+  num_gpus_per_model: 1
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 10000.0
+    sigma_min: 0.03
+    sigma_transition: 20.0
+    high_schedule_type: "karras"
+    low_schedule_type: "karras"
+    num_steps_high: 20
+    num_steps_low: 10
+    rho: 7.0
+    rho_high: 12.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 10000.0
+    S_noise: 1.05
+
+# Bundle-truth-anchored TC scoring (mirrors tc_o320_o1280): input+target come from the
+# cropped bundle's embedded truth; no external O1280 GRIB reference for this box.
+tc:
+  beta: 0.5
+  mslp_ref: 1013.25
+  events: ["idalia", "franklin"]
+  tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir:
+  analysis_expid: "target O1280"
+  extreme_reference_expid:
+  reference_expids: []
+  support_mode: "native"
+  input_label: "input O320"
+  target_nc_label: "target O1280"
+  analysis_display_label: "target O1280"
+  member_maps:
+    enabled: false
+
+evaluator_groups:
+  default: [tc, surface, probabilistic]
+  diagnostics: []
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    ntasks_per_node: 1
+    time: "06:00:00"
+    mem: 160G
+    cpus: 16
+  evaluate_tc:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_surface:
+    time: "01:00:00"
+    mem: 64G
+    cpus: 4
+  evaluate_probabilistic:
+    time: "01:00:00"
+    mem: 64G
+    cpus: 8
+  scoreboard:
+    time: "00:30:00"
+    mem: 16G
+    cpus: 1

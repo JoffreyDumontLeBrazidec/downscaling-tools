@@ -1,0 +1,43 @@
+# tc_o320_o1280_regionalbundle_humberto.yaml
+#
+# HELD-OUT out-of-window check (2026-07-10) for the regional o320->o1280 checkpoints.
+# Event: Hurricane Humberto, 2025-09-26..30 (core box [22,25]Nx[-60,-56], inside the
+# regional training box tc_atlantic_mdr_west=[5,35,-100,-40]). All three arms
+# (b785_zero_transfer, scratch512_33576405_best, warmstart_33576406_best) were trained
+# ONLY on data at or before 2023 (decoded fake-hindcast valid dates span 2003-2023) --
+# Humberto 2025 is strictly out-of-window for all three arms, a fair generalization test.
+#
+# See epics/tc-o320-o1280/README.md "## Held-out check design (2026-07-09)" for the full
+# design and the pre-registered decision rule (does the warm-start eye advantage over
+# b785-zero-transfer SURVIVE here, or was it memorized from 2003-2023 exposure).
+#
+# Bundles: built via eval.cli prepare --lane o320_o1280 --source-grib-root
+# .../humberto_20250926_20250930 (global) then cropped to the regional box with the
+# proven crop_bundles_to_regional_box.py tool (same tool as the canonical Aug26-30 set).
+base: tc_o320_o1280_regionalbundle
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 1
+
+tc:
+  beta: 0.5
+  mslp_ref: 1013.25
+  events: ["humberto"]
+  tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir:
+  analysis_expid: "target O1280"
+  extreme_reference_expid:
+  reference_expids: []
+  support_mode: "native"
+  input_label: "input O320"
+  target_nc_label: "target O1280"
+  analysis_display_label: "target O1280"
+  member_maps:
+    enabled: true
+    event_dates:
+      humberto: "20250928"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]

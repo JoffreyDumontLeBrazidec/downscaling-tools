@@ -1,3 +1,4 @@
+lineage: plus-halo
 default_host: atos_ac_unified
 allowed_hosts:
   prepare:
@@ -326,10 +327,10 @@ prepml:
   debug_expvers:
   - j5ya
   runner: anemoi-dev
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  venv: /home/ecm5702/hpcperm/lineages/plus-halo/prepml-wrap
   input:
     class: od
-    stream: enfo
+    stream: eefo
     type: pf
     grid: O320
   output:

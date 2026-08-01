@@ -1,0 +1,2 @@
+# Compatibility alias for the fast regional TC harness. Prefer tc_o320_o1280.
+base: tc_o320_o1280

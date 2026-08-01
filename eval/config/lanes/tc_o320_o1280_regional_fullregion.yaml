@@ -1,0 +1,58 @@
+base: tc_o320_o1280_regional
+
+# Full regional evaluator suite over the canonical Franklin/Idalia base inherited
+# from tc_o320_o1280_regional (5 dates x 5 leads x 10 sampler-seed members).
+default_host: atos_ac_pristine
+allowed_hosts:
+  prepare: [atos_ac_pristine]
+  predict: [atos_ac_pristine]
+  run: [atos_ac_pristine]
+  evaluate: [atos_ac_pristine]
+  scoreboard: [atos_ac_pristine]
+
+evaluator_groups:
+  default: [mlflow, tc, surface, probabilistic, region_plot]
+  diagnostics: []
+
+regions:
+  interesting:
+    franklin_outer: [15.0, 35.0, -78.0, -58.0]
+    franklin_core: [20.0, 33.0, -72.0, -60.0]
+    idalia_outer: [10.0, 35.0, -96.0, -78.0]
+    idalia_core: [20.0, 33.0, -92.0, -80.0]
+    mdr_west: [10.0, 24.0, -60.0, -40.0]
+    gulf_transition: [18.0, 31.0, -96.0, -84.0]
+  detail: {}
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    ntasks_per_node: 1
+    time: "03:00:00"
+    mem: 160G
+    cpus: 16
+  evaluate:
+    time: "03:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_tc:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_surface:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 4
+  evaluate_region_plot:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_probabilistic:
+    time: "02:00:00"
+    mem: 64G
+    cpus: 8
+  scoreboard:
+    time: "00:30:00"
+    mem: 16G
+    cpus: 1

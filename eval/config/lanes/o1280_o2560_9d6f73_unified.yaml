@@ -1,3 +1,4 @@
+lineage: plus-halo
 # o1280->o2560 UNIFIED lane — drives the multi-ds-unified Jupiter ckpt 9d6f73 through
 # eval.cli -> prepml -> anemoi-inference (UnifiedDownscalingRunner) on ac, 8xA100/2-node.
 # Mirrors o320_o1280_b785bf12_unified.yaml but for the 91-in / 9-out o2560 recipe:
@@ -65,7 +66,7 @@ prepml:
   debug_expvers: []
   runner: anemoi-dev
   base_runner: downscaling_unified
-  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  venv: /home/ecm5702/hpcperm/lineages/plus-halo/prepml-wrap
   input:
     class: od
     stream: enfo

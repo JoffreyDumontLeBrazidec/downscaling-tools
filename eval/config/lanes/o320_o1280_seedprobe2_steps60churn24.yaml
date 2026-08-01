@@ -1,0 +1,27 @@
+# o320_o1280_seedprobe2_steps60churn24.yaml — sampler tail-hunt wave 2, 2026-07-29.
+# ONE fixed input (deepest EEFO Franklin input: date20230829 step048 eefo-mem8, 973.1 hPa),
+# members 1..50 = FIFTY symlinked copies => 50 independent diffusion draws.
+# Aspiration: deepest ENFO at same valid time = 942.9 hPa (pooled) / 952.5 (same-init).
+# Arm: 60 steps (20/40) + S_churn=24 (gamma 0.4/step x 60 steps = max total injection)
+base: o320_o1280
+
+predict:
+  dates: ["20230829"]
+  steps: [48]
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 60
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 20
+    num_steps_low: 40
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 24.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05

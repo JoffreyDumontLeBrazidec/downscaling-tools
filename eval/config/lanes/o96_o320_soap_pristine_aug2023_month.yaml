@@ -1,0 +1,173 @@
+# o96->o320 PRISTINE SOAP 200k -- AUGUST 2023 MONTH prepml->FDB lane (31 dates x 10 members x lead 360h/24h).
+# Copy of o96_o320_pristine_adamw_aug2630_10m.yaml (same pristine runner/sampler/forcings/evaluators for a
+# clean parity vs the SOAP MANUAL scoreboard) with dates/steps/lead_time/walltime expanded to the full month.
+# Checkpoint (SOAP inference companion) + fresh --expver are passed at the CLI.
+# Requires the retrieve prognostics-filter fix in ~/dev/anemoi-inference-prepml-staging (else retrieve stages 0 vars).
+default_host: atos_ac_pristine
+allowed_hosts:
+  prepare: [atos_ac_pristine, atos_ac_unified, atos_ag]
+  predict: [atos_ac_pristine, atos_ac_unified, atos_ag]
+  run: []
+  evaluate: [atos_ac_pristine, atos_ac]
+  scoreboard: [atos_ac_pristine, atos_ac]
+
+prepare:
+  bundle_filename_tpl: "eefo_o96_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib:   "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    lres_pl_grib:    "{source_grib_root}/eefo_o96_0001_date{date}_time0000_input.grib"
+    hres_grib:       "{source_grib_root}/o320-z-lsm.grib"
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360]
+  dates: ["20230801", "20230802", "20230803", "20230804", "20230805", "20230806", "20230807", "20230808", "20230809", "20230810", "20230811", "20230812", "20230813", "20230814", "20230815", "20230816", "20230817", "20230818", "20230819", "20230820", "20230821", "20230822", "20230823", "20230824", "20230825", "20230826", "20230827", "20230828", "20230829", "20230830", "20230831"]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+  env:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_SAMPLER_SEED: "1234"
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 10000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 10000.0
+    S_noise: 1.05
+
+tc:
+  beta: 0.5
+  mslp_ref: 1013.25
+  events: ["idalia", "franklin"]
+  tail_keys: ["mslp_p1", "mslp_p01", "mslp_min", "wind_p99", "wind_p999", "wind_max"]
+  grib_dir: "/home/ecm5702/perm/reference/o96_o320/tc"
+  analysis_expid: "OPER_O320_0001"
+  extreme_reference_expid: "ENFO_O320_0001"
+  reference_expids: []  # KEEP EMPTY: input/target come from the truth-aware bundle; EEFO/ENFO here draw duplicate curves (guarded by _strip_bundle_duplicate_references)
+  support_mode: "regridded"
+  member_maps:
+    enabled: true
+    event_dates:
+      idalia: "20230829"
+      franklin: "20230828"
+      franklin_idalia: "20230829"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+spectra:
+  fields: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  wavenumber_threshold: 100.0
+  nside: 187
+  lmax: 374
+  steps: [120]
+  truth_cache_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_proxy"
+
+spectra_ecmwf:
+  template_root: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf/enfo_o320"
+  weather_states: ["10u", "10v", "2t", "sp", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
+
+surface:
+  weighting: "truth-std"
+
+regions:
+  interesting:
+    amazon_forest: [-15.0, 5.0, -75.0, -45.0]
+    european_arctic: [-25.0, 0.0, 75.0, 90.0]
+    himalayas: [25.0, 40.0, 75.0, 100.0]
+    rocky_mountains: [35.0, 50.0, -120.0, -100.0]
+    west_sahara: [15.0, 30.0, -20.0, 0.0]
+    pyrenees_alpes: [40.0, 50.0, 0.0, 10.0]
+    eastern_us: [25.0, 45.0, -90.0, -70.0]
+    central_africa: [-10.0, 10.0, 10.0, 30.0]
+
+region_plot:
+  region_names:
+    - amazon_forest
+    - european_arctic
+    - himalayas
+    - rocky_mountains
+    - west_sahara
+    - pyrenees_alpes
+    - eastern_us
+    - central_africa
+
+sigma:
+  num_gpus_per_model: 1
+
+# Per-sigma denoiser-loss profile (F-space, single forward passes, no sampling).
+# Diagnostics-only; runs the model (requires --checkpoint, like sigma). The grid
+# is log-spaced through this lane lognormal heavy-tail band (sigma up to ~500).
+sigma_loss:
+  sigma_grid: [0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 80.0, 150.0, 300.0, 500.0]
+  k: 16
+  seed: 1234
+  variables: all
+  extreme_band: [80.0, 500.0]
+  fine_band: [0.05, 0.3]
+  # Canonical fixed eval batches come from the checkpoint-native validation split
+  # (deterministic for a fixed ANEMOI_BASE_SEED); set validation_frequency to
+  # override the stride (default: native config).
+  validation_frequency: null
+
+evaluator_groups:
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
+  diagnostics: [sigma, sigma_loss, mechanistic, intermediate, mlflow]
+
+prepml:
+  runner: anemoi-dev
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  input:
+    class: od
+    stream: eefo
+    type: pf
+    grid: O96
+  output:
+    class: rd
+    stream: enfo
+    type: pf
+  output_template: /home/ecm5702/hpcperm/data/o320-template.grib
+  forcings_npz: /home/ecm5702/hpcperm/data/o320-forcings.npz
+  constant_high_res_forcings: [cos_latitude, cos_longitude, lsm, sin_latitude, sin_longitude, z]
+  high_res_input: [cos_julian_day, cos_latitude, cos_local_time, cos_longitude, insolation, lsm, sin_julian_day, sin_latitude, sin_local_time, sin_longitude, z]
+  truth:
+    root: /home/ecm5702/perm/reference/o96_o320
+  time_step: 24h
+  lead_time: 360h
+  platform:
+    gpu:
+      time: "0-08:00"
+      submit_arguments:
+        total_nodes: 1
+        tasks_per_node: 4
+        gpus_per_node: 4
+        partition: gpu
+        RAW_PRAGMA:
+          - "#SBATCH --gres=gpu:4"
+          - "#SBATCH --qos=ng"
+          - "#SBATCH --mem=0"
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 4
+    ntasks_per_node: 4
+    time: "48:00:00"
+    mem: "0"
+    cpus: 8

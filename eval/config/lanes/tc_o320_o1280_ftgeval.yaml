@@ -1,0 +1,10 @@
+# EXPERIMENT lane (ftg over-smoothing eval 2026-07-18): cut-graph 1-GPU clean fp32 route
+# for the +100k global fine-tune (ckpt 7ce959b8). Extends acok (host-unlocked, cut_graph,
+# sigma_max=100000); bumps the piecewise sampler to 40 steps (owner ask, untried at sigma_max=100000).
+base: tc_o320_o1280_acok
+default_host: atos_ac_pristine
+predict:
+  sampler:
+    num_steps: 40
+    num_steps_high: 20
+    num_steps_low: 20

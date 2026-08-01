@@ -1,0 +1,6 @@
+# smoke for the autoguidance eval.cli route (1 date x 1 member x 1 step).
+base: o96_o320_pristine_ag15
+predict:
+  members: [1]
+  steps: [120]
+  dates: ["20230826"]
