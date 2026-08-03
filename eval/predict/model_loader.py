@@ -46,22 +46,40 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     # itself; the main model path is normalized upstream, so normalize D_bad here too
     # (accept either format, as a user would expect).
     ckpt_p = _Path(str(ckpt)).expanduser()
+    inference_only = None
     if ckpt_p.name.startswith("inference-"):
         base = ckpt_p.with_name(ckpt_p.name[len("inference-"):])
-        if not base.exists():
-            raise SystemExit(
-                "autoguide_checkpoint given in inference- form but the base checkpoint "
-                f"{base} is missing; pass the training-format path")
-        ckpt = str(base)
+        if base.exists():
+            ckpt = str(base)
+        else:
+            inference_only = ckpt_p
+    elif not ckpt_p.exists():
+        companion = ckpt_p.with_name("inference-" + ckpt_p.name)
+        if not companion.exists():
+            raise SystemExit("autoguide_checkpoint not found: %s (nor %s)" % (ckpt_p, companion))
+        inference_only = companion
     print("[autoguidance] loading D_bad %s (w=%.3g, band [%.3g, %.3g])"
           % (ckpt, w, sig_lo, sig_hi), file=_sys.stderr, flush=True)
-    weak_model, _, _, _ = _load_objects(
-        ckpt_path=str(ckpt),
-        device=device,
-        validation_frequency=config.validation_frequency,
-        precision=config.precision,
-        num_gpus_per_model_override=config.num_gpus_per_model,
-    )
+    if inference_only is not None:
+        # inference-only D_bad: the serialized interface already carries the weights;
+        # config/datamodule are irrelevant for a denoiser-only role.
+        import torch as _torch
+        print("[autoguidance] inference-only D_bad: %s" % inference_only.name,
+              file=_sys.stderr, flush=True)
+        weak_model = _torch.load(str(inference_only), map_location=device,
+                                 weights_only=False)
+        try:
+            weak_model = weak_model.to(device)
+        except Exception:
+            pass
+    else:
+        weak_model, _, _, _ = _load_objects(
+            ckpt_path=str(ckpt),
+            device=device,
+            validation_frequency=config.validation_frequency,
+            precision=config.precision,
+            num_gpus_per_model_override=config.num_gpus_per_model,
+        )
     if config.local_scope_json:
         activate_local_graph_cut(weak_model, config.local_scope_json)
     strong_inner = getattr(inference_model, "model", inference_model)
