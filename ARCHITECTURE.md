@@ -102,10 +102,28 @@ Not every evaluator needs all three. This is convention, not a base class.
 - Evaluators import from `eval.config`, `eval.discovery`, `eval.shared`, their
   own `kernel/`, and stdlib. Never from `eval.jobs` or another evaluator.
 
-**Current state**: Kernels currently live in separate top-level directories
-(`eval/tc/`, `eval/spectra/`, `eval/sigma_evaluator/`, etc.) and scoring math
-lives in `eval/scoreboard/{tc,spectra,surface}.py`. These will be consolidated
-into their evaluator packages as sbatch templates migrate to `eval.cli`.
+**Current state**: the consolidation is done. Compute kernels live in
+`eval/_backends/<name>/` and the thin evaluator wrappers in
+`eval/evaluators/<name>/` (`runner.py` / `scorer.py` / `plotter.py`, each
+exporting `EVALUATOR_SPEC`). `eval/cli.py` dispatches by name through
+`importlib.import_module(f"eval.evaluators.{name}")` over the `ALL_EVALUATORS`
+registry, so an evaluator is reachable if and only if it appears in that list.
+The old top-level paths (`eval/tc/`, `eval/spectra/`, ...) no longer exist and
+their import paths fail immediately, which is intentional.
+
+Three further facts a reader needs:
+
+- `eval/lean_layout.py` projects the lean run-root layout natively in the
+  harness; `eval/cli.py` delegates run-root resolution and plot consolidation
+  to it.
+- `eval/archive/` is frozen but **not** dead --
+  `eval/_backends/weight_diagnostics/mechanistic_compare_v1.py` and
+  `eval/tests/test_eval_run.py` still import from it, so it cannot be removed
+  without untangling those first.
+- `manual_inference/` and `manual_inference_legacy_ds/` are a deliberate fork,
+  not an accident: `eval/predict/_mi.py` routes between them on the
+  `KEYSTONE_LEGACY_DS` environment variable so cfec83a3-era single-dataset
+  checkpoints keep working. Both are load-bearing.
 
 ## 3. Configuration
 

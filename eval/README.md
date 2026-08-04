@@ -191,18 +191,58 @@ See [`eval/predict/README.md`](predict/README.md) for full documentation.
 
 Contains retired scripts and old templates. Not used in live workflows.
 
-### ECMWF tctracker expver archives
 
-Use this CLI surface when the source is a PrepML/FDB expver rather than local NetCDF predictions:
+## Retiring a lane
+
+Lanes are cheap to keep and expensive to delete wrongly. `base:` inheritance means a lane
+nobody runs may still be somebody's parent, and a running SLURM job may name a lane that
+appears nowhere in this repo.
+
+Before deleting a lane, **all four** must hold:
+
+1. **No survivor inherits from it** - no remaining `eval/config/lanes/*.yaml` has `base: <name>`.
+2. **No ladder profile targets it** - check `lane:` in `eval/config/ladder/*.yaml`.
+3. **No queued or running job names it** - check `squeue`, resolve each `Command=` script, and
+   look for `--lane <name>`. This is the check people skip, and the one that breaks live
+   campaigns.
+4. **No open epic note names it** - search the `in-progress` notes under `~/dev/docs`.
+
+Then, and only then:
 
 ```bash
-python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761
+git rm eval/config/lanes/<name>.yaml
 ```
 
-The command writes basin track tar files, logs, manifests, verification summaries, and an Atlantic track summary under the tctracker run root. For the verified j761 bundle, inspect existing artifacts without rerunning production:
+`git rm`, never `rm` - git history is the archive. To recover:
 
 ```bash
-python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761 --output-dir /home/ecm5702/scratch/eval/o96_o320/tctracker/j761 --verify-only
+git show <deletion-commit>^:eval/config/lanes/<name>.yaml > eval/config/lanes/<name>.yaml
 ```
 
-Use `--parse-only` for track parsing only, and `--slurm-script PATH` to render a single resumable nf job script.
+A campaign's arms are retired once the campaign is scored: the scoreboard row plus git
+history is the record.
+
+Afterwards, confirm the surviving set still loads and that the failure list did not grow:
+
+```bash
+env -u PYTHONPATH ~/dev/.ds-260612/bin/python -c "
+import glob, os, sys; sys.path.insert(0, '.')
+from eval.config.loader import load_lane
+bad = []
+for p in sorted(glob.glob('eval/config/lanes/*.yaml')):
+    n = os.path.basename(p)[:-5]
+    try: load_lane(n)
+    except Exception as e: bad.append((n, type(e).__name__))
+print('fail=%d' % len(bad)); [print(' ', b) for b in bad]"
+```
+
+A **new** name in that list means you deleted somebody's `base:`.
+
+## Unwired evaluators
+
+`eval/evaluators/leadtime/` and `eval/_backends/leadtime/` are complete but deliberately
+absent from `ALL_EVALUATORS` in `eval/cli.py`, so nothing can reach them. They have never
+been validated against a scored run, and a reachable-but-unvalidated evaluator in an eval
+harness is how you get a silently-wrong number weeks later.
+
+Wiring one in is a change that ships with a validation run, not a one-line registry edit.
