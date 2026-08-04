@@ -1,0 +1,51 @@
+# sigma_max validity control (see lanes/_sigmamax100k_o96_o320.yaml).
+# Jobs: 35355429 (p2ctrl) / 35355438 (p2a family-wise revelation equalization).
+# Pinned TC grid per Study A (settled 2026-07-27): SELECT by eefo input depth — dates
+# 20230828+20230829 x leads 24/48/72/120 x members 1..10 = 80 predictions reproduces the
+# full-250 deepest to ~0.1 hPa on this lane. Keep the grid FIXED across rungs and arms.
+# Judge: deepest eye + the distributional companion (casemin_mean) moving TOGETHER;
+# TC at ladder budget = trend indicator. Wind extremes have NO cheap proxy (open re-test).
+# Task note: epics/per-variable-noise-schedules/in-progress/20260729_idea_study_per_variable_sigma.md
+card_id: sigmamax100k_o96_o320
+lane: _sigmamax100k_o96_o320
+host: atos_ac_pristine
+bundle_dir: /home/ecm5702/hpcperm/data/input_data/o96_o320/idalia
+venv: /home/ecm5702/dev/.ds-260612
+cadence: 5000
+
+budget:
+  dates: "20230828,20230829"
+  steps: "24,48,72,120"
+  members: "1,2,3,4,5,6,7,8,9,10"
+
+evaluators: tc,probabilistic,spectra
+
+probabilistic:
+  weather_states:
+  - 2t
+  - 10u
+  - 10v
+  - 10ff
+  - 2d
+  - msl
+  - t_850
+  - z_500
+
+spectra:
+  weather_states: "10u,10v,2t"
+  nside: 128
+  lmax: 512
+  steps:
+  - 120
+
+slurm:
+  qos: ng
+  gpus: 1
+  cpus: 16
+  mem: 128G
+  walltime: "04:00:00"
+
+# member-maps plotting disabled for ladder rungs (viz-only; blew 3-4h walltimes repeatedly)
+tc:
+  member_maps:
+    enabled: false

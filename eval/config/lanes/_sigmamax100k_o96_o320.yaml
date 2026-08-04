@@ -1,0 +1,8 @@
+# ONE-VARIABLE CONTROL for the 2026-08-04 sigma_max validity question.
+# Identical to the validated lane o96_o320_pristine_adamw_aug2630_10m in EVERY respect except
+# sampler.sigma_max, raised 10000 -> 100000 to match the value the o96->o320 checkpoints declare
+# in their anemoi.json. If TC/CRPS/spectra move materially between this and the standard rung,
+# the lane's sigma_max choice matters and every absolute P2 number needs re-basing.
+base: o96_o320_pristine_adamw_aug2630_10m
+sampler:
+  sigma_max: 100000.0
