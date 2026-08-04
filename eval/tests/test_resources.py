@@ -19,11 +19,19 @@ def _host_config():
 def test_resolve_resources_host_defaults():
     resources = resolve_resources({}, _host_config(), stage="predict")
     assert resources["qos"] == "nf"
-    assert resources["time"] == "04:00:00"
+    # predict/evaluate carry their own conservative 48h default so a lane without
+    # an explicit resource_profile cannot inherit a short host default_time and
+    # get TIME_LIMIT-killed mid-run (see _default_time_for_stage).
+    assert resources["time"] == "48:00:00"
     assert resources["mem"] == "64G"
     assert resources["cpus"] == 16
     assert resources["gpus"] == 0
     assert resources["ntasks_per_node"] == 1
+
+
+def test_resolve_resources_host_default_time_used_for_other_stages():
+    resources = resolve_resources({}, _host_config(), stage="scoreboard")
+    assert resources["time"] == "04:00:00"
 
 
 def test_resolve_resources_stage_overlay():
