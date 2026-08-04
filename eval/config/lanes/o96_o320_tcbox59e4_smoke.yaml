@@ -1,6 +1,0 @@
-# 59e4 ds-API + cut_graph + autoguidance SMOKE (1 date x 1 member x 2 steps). ctrl arm.
-base: o96_o320_tcbox59e4_fi
-predict:
-  members: [1]
-  steps: [72, 120]
-  dates: ["20230826"]

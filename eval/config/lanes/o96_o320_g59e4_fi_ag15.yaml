@@ -1,6 +1,0 @@
-# 59e4 GLOBAL autoguidance arm: w=1.5, D_bad cfec@50k; sampler otherwise ckpt-default.
-base: o96_o320_g59e4_fi
-predict:
-  sampler:
-    autoguide_checkpoint: "/home/ecm5702/scratch/aifs/checkpoint/cfec83a3cd0644778e2bfcbacfa9f4fc/anemoi-by_epoch-epoch_010-step_050864.ckpt"
-    autoguide_weight: 1.5

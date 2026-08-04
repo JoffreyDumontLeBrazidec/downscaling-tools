@@ -1,6 +1,0 @@
-# Autoguidance global sample set for the canonical evaluators: 5 dates x 10 members x
-# steps {72,120} = 100 global samples. The lane spectra block scores step 120, so this
-# matches ab250_global (ctrl) on the evaluated support while costing ~1/2.5 of the full set.
-base: o96_o320_pristine_ag15
-predict:
-  steps: [72, 120]

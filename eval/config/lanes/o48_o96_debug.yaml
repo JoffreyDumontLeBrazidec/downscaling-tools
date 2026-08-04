@@ -1,5 +1,0 @@
-base: o48_o96
-
-spectra_ecmwf:
-  steps: [24]
-  members: [1]
