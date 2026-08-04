@@ -240,11 +240,30 @@ def load_objects(
             _mod._cached_halo_info = None
         if hasattr(_mod, "_cached_partition"):
             _mod._cached_partition = None
-    if device == "cuda":
+    if str(device).startswith("cuda"):
         if precision == "fp16":
             inference_model = inference_model.half()
         elif precision == "bf16":
             inference_model = inference_model.bfloat16()
+    # Memory lever MI_BF16_SAMPLER=1 (2026-07-13): cast the sampler conditioning (upsampled
+    # residual + hres forcings returned by _before_sampling) to bf16 AFTER the fp32 sparse
+    # residual has run. Drops the full-grid diffusion sampler state fp32->bf16 (~7 GB/rank),
+    # which is what OOMs 1-GPU global-o1280 pristine inference on 96 GB GH200 (holds ~84 GB
+    # fp32 + a 12.6 GB fp32 layernorm transient). Does NOT feed bf16 to torch.sparse.mm
+    # (unsupported: addmm_sparse_cuda not implemented for BFloat16). Keeps residual fp32 +
+    # autocast-bf16 compute = same precision class as the accepted b785-375k eval route.
+    if precision == "bf16" and os.environ.get("MI_BF16_SAMPLER", "0") == "1":
+        _core = getattr(inference_model, "model", None)
+        if _core is not None and hasattr(_core, "_before_sampling"):
+            _orig_before_sampling = _core._before_sampling
+            def _before_sampling_bf16(*a, __orig=_orig_before_sampling, **k):
+                bsd, gss = __orig(*a, **k)
+                bsd = tuple(
+                    t.bfloat16() if isinstance(t, torch.Tensor) and t.is_floating_point() else t
+                    for t in bsd
+                )
+                return bsd, gss
+            _core._before_sampling = _before_sampling_bf16
     graph_data = inference_model.graph_data
     datamodule = get_datamodule(config_for_datamodule, graph_data)
     return inference_model, datamodule, dir_exp, name_exp
@@ -321,7 +340,9 @@ def _predict_from_dataloader(
         dtype=np.float32,
     )
 
-    amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
+    amp_enabled = str(device).startswith("cuda") and precision in {"fp16", "bf16"}
+    if os.environ.get("MI_BF16_NATIVE", "0") == "1" and precision == "bf16":
+        amp_enabled = False  # native bf16 layernorm (~6.3GB) vs autocast fp32 transient (~12.6GB); OOM fix for 1-GPU global-o1280
     amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
     for i_sample in range(n_samples):
@@ -406,8 +427,21 @@ def predict_from_bundle(
         )
         x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
         x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
+        # Opt-in memory lever (MI_BF16_INPUTS=1): cast inputs so diffusion sampler state
+        # (full-grid, per-rank, NOT sharded) is bf16 instead of fp32 — halves the ~14 GB/rank
+        # sampler footprint that OOMs global-o1280 pristine inference on 40 GB A100s.
+        # Normalized-space bf16; same precision class as the b785-375k unified eval route.
+        if (
+            str(device).startswith("cuda")
+            and precision == "bf16"
+            and os.environ.get("MI_BF16_INPUTS", "0") == "1"
+        ):
+            x_in = x_in.bfloat16()
+            x_in_hres = x_in_hres.bfloat16()
 
-        amp_enabled = device == "cuda" and precision in {"fp16", "bf16"}
+        amp_enabled = str(device).startswith("cuda") and precision in {"fp16", "bf16"}
+        if os.environ.get("MI_BF16_NATIVE", "0") == "1" and precision == "bf16":
+            amp_enabled = False  # native bf16 layernorm (~6.3GB) vs autocast fp32 transient (~12.6GB); OOM fix for 1-GPU global-o1280
         amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
         # Unified multi-ds: predict_step takes a dict batch.
@@ -436,15 +470,35 @@ def predict_from_bundle(
         x_np = x_in[0, 0, 0].detach().cpu().numpy().astype(np.float32)
         pred_np = pred_tensor[0, 0, 0][..., selected_indices].detach().cpu().numpy().astype(np.float32)
         dates = None
+        # Free the sampler forward's cached GPU memory now that the output is on CPU, before
+        # the unsharded full-grid x_interp export (~9 GB on global o1280) reallocates on GPU.
+        # Needed on aarch64 GH200 (expandable_segments inert) to avoid a rank0 gather OOM.
+        import gc as _gc
+        _gc.collect()
+        if str(device).startswith("cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         x_np, _ = extract_filtered_input_from_output(
             x_np, name_to_idx_lres, name_to_idx_out
         )
         x_np = x_np[..., selected_indices]
 
+        local_graph_mask = getattr(inference_model, "_local_graph_cut_data_mask", None)
+        if local_graph_mask is not None:
+            local_graph_mask = local_graph_mask.detach().cpu().numpy().astype(bool)
+            if pred_np.shape[-2] != int(local_graph_mask.sum()):
+                raise ValueError(
+                    "Local cut-graph prediction size mismatch: "
+                    f"model returned {pred_np.shape[-2]} hres nodes but mask selects {int(local_graph_mask.sum())}."
+                )
+            lon_hres = np.asarray(lon_hres)[local_graph_mask]
+            lat_hres = np.asarray(lat_hres)[local_graph_mask]
+
         y_np = None
         target_np, found_target_channels = extract_target_from_bundle_dataset(bundle, weather_states)
         if target_np is not None:
+            if local_graph_mask is not None:
+                target_np = target_np[local_graph_mask, :]
             y_np = target_np[None, None, ...]
             if found_target_channels < len(weather_states):
                 print(
@@ -809,7 +863,8 @@ def main() -> None:
                 "Pass --debug-from-dataloader to run it intentionally."
             )
         data = (datamodule.ds_train if args.split == "train" else datamodule.ds_valid).data
-        max_members = int(np.asarray(data[args.idx : args.idx + 1][0]).shape[2])
+        _probe = data["in_lres"] if hasattr(data, "keys") else data  # multi-ds: data is dict-keyed {in_lres,in_hres,out_hres}
+        max_members = int(np.asarray(_probe[args.idx : args.idx + 1][0]).shape[2])
         members = _parse_members(args.members, max_members)
         (
             x,
@@ -875,6 +930,10 @@ def main() -> None:
     else:
         raise SystemExit("Unknown command")
 
+    import gc as _gc2
+    _gc2.collect()
+    if str(args.device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.empty_cache()
     x_interp = _compute_x_interp_for_export(
         inference_model=inference_model,
         x=x,

@@ -42,11 +42,25 @@ EVENTS: dict[str, dict] = {
     # Source: the 181be03e o320_o1280 manual-eval bundles_with_y (eefo_o320 input
     # bundles carry the o1280 target). Naming matches find_bundles' glob.
     "franklin_o320_o1280": {
-        "bundle_dir": ("/home/ecm5702/perm/eval/"
+        # Canonical input bundles (post 2026-06-26 storage-layout migration):
+        # targets/input data live under ~/perm/data/input_data/<lane>/ (the old
+        # perm/eval/...manual_eval/bundles_with_y path was migrated to scratch).
+        "bundle_dir": ("/home/ecm5702/scratch/eval/perm_eval_legacy_20260626/"
                        "manual_181be03e_new_o320_o1280_20260421_manual_eval/data/bundles_with_y"),
         "dates": ["20230826"],
         "members": ["01"],
         "steps": ["072"],  # +72h = storm peak (default for TC-extreme/trajectory probes)
+        "label": "franklin",
+    },
+    # DEEP Franklin instance — truth storm-core min 942.9 hPa (vs 973.6 for the
+    # date0826/mem01/step072 default). Selected as the deepest member/step over
+    # the eecdb127 o320->o1280 predictions, for the deep-TC ceiling/compare_traj.
+    "franklin_o320_o1280_deep": {
+        "bundle_dir": ("/home/ecm5702/scratch/eval/perm_eval_legacy_20260626/"
+                       "manual_181be03e_new_o320_o1280_20260421_manual_eval/data/bundles_with_y"),
+        "dates": ["20230828"],
+        "members": ["05"],
+        "steps": ["072"],
         "label": "franklin",
     },
     # Same window, 4 members -> batch_size 4 (needed by permutation).

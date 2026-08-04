@@ -104,7 +104,7 @@ def instantiate_config(
 ):
     if anemoi_config_dir is None:
         anemoi_config_dir = os.environ.get(
-            "ANEMOI_CONFIG_DIR", "/home/ecm5702/dev/anemoi-config"
+            "ANEMOI_CONFIG_DIR", "/home/ecm5702/dev/pristine/anemoi-config"
         )
     if config_name is None:
         config_name = os.environ.get("ANEMOI_CONFIG_NAME", "o96_o320")

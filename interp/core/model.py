@@ -122,6 +122,23 @@ def load_model(
             setattr(inference_model.model, _meth,
                     types.MethodType(orig_func, inference_model.model))
         break
+    # Force the memory-efficient 'edges' grid-sharding for model-parallel inference.
+    # Old unified checkpoints (e.g. b785) bake shard_strategy='heads' on the encoder/
+    # decoder mappers + processor, whose all_to_all_transpose materialises full QKV over
+    # the entire (e.g. O1280 6.6M-node) grid on EVERY rank -> OOM on A100-40GB regardless
+    # of rank count. 'edges' shards+chunks the graph locally -- exactly what every unified
+    # eval lane uses (the retired CODEX_UNIFIED_SHARD_STRATEGY=edges). Numerically
+    # equivalent; only the work partition changes. Only meaningful when actually sharded.
+    if num_gpus_per_model > 1:
+        _n_over = 0
+        for _m in inference_model.modules():
+            if getattr(_m, "shard_strategy", None) == "heads":
+                _m.shard_strategy = "edges"
+                _n_over += 1
+        if _n_over:
+            LOGGER.info(
+                "load_model: forced shard_strategy heads->edges on %d modules "
+                "for O1280-safe model-parallel inference", _n_over)
     inference_model.eval()
 
     return InterpModelBundle(

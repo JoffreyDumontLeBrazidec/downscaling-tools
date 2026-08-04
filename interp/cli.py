@@ -5,7 +5,8 @@ Usage
     cd ~/dev/downscaling-tools
     python -m interp <tool> [tool args]
 
-Tools: permutation, ablation, activations, patching, ig, report, compare.
+Tools: permutation, ablation, activations, patching, ig, tc_emergence,
+tc_emergence_sweep, report, compare.
 Every tool shares the same model / event-bundle / sigma flags (see
 add_model_args / add_event_args / add_sigma_args).
 """
@@ -67,6 +68,10 @@ def main(argv=None):
         "ig": ("interp.tools.ig", "integrated gradients (mean/box/eye/tail/spectral functionals)"),
         "trajectory": ("interp.tools.trajectory",
                        "x̂₀ birth-commit-erase trajectory (storm-core intensity vs σ)"),
+        "tc_emergence": ("interp.tools.tc_emergence",
+                         "fast fixed-sigma TC-core emergence probe for checkpoint sweeps"),
+        "tc_emergence_sweep": ("interp.tools.tc_emergence_sweep",
+                              "sweep TC min/max probe across good/bad checkpoint ladders"),
         "report": ("interp.viz.report", "render the per-checkpoint PDF report from JSONs"),
         "compare": ("interp.compare", "summary-scalar comparison across run dirs"),
     }

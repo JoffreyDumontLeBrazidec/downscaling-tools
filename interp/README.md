@@ -17,6 +17,7 @@ probe). Named events live in `interp/core/data.py:EVENTS`.
 | Which inputs matter (per noise level / end-to-end)? | `permutation` (`--mode sigma\|sampling`) | `permutation_importance[_full_sampling].json` |
 | Which inputs matter **for the extremes**? | `permutation --extreme-percentile 99`, `ig --functionals tail` | same + `integrated_gradients.json` |
 | Which inputs create the **small scales**? | `ig --functionals spectral` | `integrated_gradients.json` |
+| Do TC min-MSLP / max-10m-wind extremes emerge cheaply enough for 10k-step sweeps? | `tc_emergence`, `tc_emergence_sweep` | `tc_emergence.json`, `tc_emergence_sweep_{rows,by_sigma,summary,ranked}.csv`, `tc_emergence_sweep_by_sigma_ranked.csv` |
 | How much does each conditioning pathway carry vs σ? | `ablation` | `conditioning_ablation.json` |
 | Which block/stage causally commits each field? | `patching` (residual / grid_region / stage) | `activation_patching.json` |
 | What drives the storm core, and is it local? | `ig --functionals eye,box` | `integrated_gradients.json` (maps + coherence) |
@@ -30,6 +31,16 @@ cd ~/dev/downscaling-tools
 # locally (login node, CPU, smoke):
 python -m interp permutation --checkpoint $CKPT --output-dir /tmp/out \
     --event franklin_o96_o320_m4 --device cpu --sigmas 5.0 --n-repeats 1
+
+# exact TC min/max probe for one checkpoint (Franklin + Idalia; default selects top-20 input MSLP-min and top-20 input wind-max cases per TC):
+python -m interp tc_emergence --checkpoint $CKPT --output-dir /tmp/tc_emergence \
+    --case-preset o96_o320_idalia_franklin --sigmas 120 80 50 20 10 5 1 --modes free teacher
+
+# ladder comparison: TC-good cfec83a3 vs TC-poor 0c446b41, by-step checkpoints and the same strong-input TC case set:
+python -m interp tc_emergence_sweep --output-dir /tmp/tc_emergence_sweep \
+    --run good_cfec='/home/ecm5702/scratch/aifs/checkpoint/cfec83a3cd0644778e2bfcbacfa9f4fc/anemoi-by_step-*.ckpt' \
+    --run poor_0c446='/home/ecm5702/scratch/aifs/checkpoint/0c446b4118b94ec2bbec56c00409d664/anemoi-by_step-*.ckpt' \
+    --case-preset o96_o320_idalia_franklin --sigmas 120 80 50 20 10 5 1 --modes free teacher
 
 # on SLURM (GA100 + env_ref.sh by default):
 sbatch interp/slurm/run.sbatch tier1 $CKPT cfec_200k
