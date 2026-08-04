@@ -1,0 +1,6 @@
+# Fill the 2 files the 8h-walled screen missed (20230830 steps 096/120) so the ag arm
+# has the full 250 draws. Same ckpt/D_bad/sampler as tc_o320_o1280_rb_ag15.
+base: tc_o320_o1280_rb_ag15
+predict:
+  dates: ["20230830"]
+  steps: [96, 120]

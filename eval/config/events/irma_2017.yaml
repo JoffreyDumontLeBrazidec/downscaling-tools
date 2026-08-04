@@ -1,0 +1,12 @@
+name: irma_2017
+full_name: "Irma 2017"
+lat_min: 5.0
+lat_max: 35.0
+lon_min: -100.0
+lon_max: -40.0
+dates: ["02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+analysis_dates: ["20170905"]
+year: "2017"
+month: "09"
+pressure_threshold: 1013.25
+scoring_eligible: false

@@ -1,0 +1,30 @@
+# o320->o1280 REGIONAL (native 284,713-node graph) TC screen + AUTOGUIDANCE w=1.5.
+# strong = R2_scratch512_200k (step 200000); D_bad = scratch512_33576405_best (step 87048),
+# same scratch512 regional family, less trained -> a valid weaker model for
+# D_prime = w * D_strong - (w-1) * D_weak. Sampler = the o320_o1280 standard (sigma_max 1e5)
+# so the ctrl arm R2_scratch512_200k_fullinfer_20260712T0745 (250 draws) is comparable.
+# Owner rule: sampler screens on this lane run REGIONAL. Screening evidence only.
+base: tc_o320_o1280_regionalbundle
+
+predict:
+  # The base regionalbundle lane carries no input_root (the ctrl run passed it on the
+  # CLI), so it would default to $DATA_DIR and find 0 bundles. Pin the cropped set.
+  input_root: /home/ecm5702/hpcperm/lanes/tc_o320_o1280/data/tc_atlantic_mdr_west_aug26_30_bundles
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/hpcperm/lanes/tc_o320_o1280/checkpoints/scratch512_33576405_best/anemoi-by_epoch-epoch_061-step_087048.ckpt"
+    autoguide_weight: 1.5

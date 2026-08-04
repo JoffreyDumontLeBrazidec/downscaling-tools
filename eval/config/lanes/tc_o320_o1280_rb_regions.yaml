@@ -1,0 +1,18 @@
+# Region-plot lane for the o320->o1280 REGIONAL box (tc_atlantic_mdr_west 5-35N, 100-40W).
+# The parent o320_o1280 regions (Tibet/Andes/Hawaii/...) all fall OUTSIDE this domain, so
+# region_plot would render nothing. These four sit inside the cropped grid.
+base: tc_o320_o1280_regionalbundle
+
+regions:
+  interesting:
+    mdr_central:      [12.0, 22.0, -60.0, -45.0]
+    lesser_antilles:  [12.0, 20.0, -68.0, -58.0]
+    bahamas_sw_atl:   [22.0, 30.0, -80.0, -68.0]
+    gulf_approach:    [22.0, 32.0, -92.0, -80.0]
+
+region_plot:
+  region_names:
+    - mdr_central
+    - lesser_antilles
+    - bahamas_sw_atl
+    - gulf_approach
