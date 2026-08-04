@@ -1,0 +1,17 @@
+# CANONICAL anemoi-inference MARS input/output identity — keyed by INPUT grid.
+# eval/config/loader.py injects this into prepml.input/output so lane YAMLs CANNOT drift the stream.
+# Do NOT set class/stream/type/grid for prepml.input/output in lane YAMLs — this file is the source of truth.
+#
+# Family: o96 -> o320   (task: eefo -> enfo)
+# Provenance (verified 2026-07-01):
+#   - user canonical configs ~/dev/anemoi-inference-configs (e.g. cfec83a3...) : input.stream eefo, output.stream enfo
+#   - checkpoint anemoi.json training zarrs: input downscaling-od-cf-eefh-...-o96, target downscaling-od-cf-enfh-...-o320
+input:
+  class: od
+  stream: eefo
+  type: pf
+  grid: O96
+output:
+  class: rd
+  stream: enfo
+  type: pf

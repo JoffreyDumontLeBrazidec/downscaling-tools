@@ -1,0 +1,19 @@
+# CANONICAL anemoi-inference MARS input/output identity — keyed by INPUT grid.
+# eval/config/loader.py injects this into prepml.input/output so lane YAMLs CANNOT drift the stream.
+# Do NOT set class/stream/type/grid for prepml.input/output in lane YAMLs — this file is the source of truth.
+#
+# Family: o1280 -> o2560   (task: enfo -> iekm ; fine version of o48 -> o96)
+# Provenance (verified 2026-07-01):
+#   - user-confirmed: o1280->o2560 is enfo -> iekm
+#   - lane target grib: ...rd_fc_oper_i4ql_o2560_...-y.grib ; ckpt anemoi.json target downscaling-rd-fc-oper-i4ql-...-o2560 (iekm)
+#   - lane input grib: enfo_o1280_0001_...  (stream enfo)   [ckpt trained on od-fc-oper-0001 o1280; inference input is enfo]
+# output.stream = enfo is the written downscaled-ENS product label; NOT the target/truth stream (iekm).
+input:
+  class: od
+  stream: enfo
+  type: pf
+  grid: O1280
+output:
+  class: rd
+  stream: enfo
+  type: pf
