@@ -5,6 +5,7 @@ __pycache__/
 
 # Editor / backup files
 *.bak
+*.bak[._-]*
 *.swp
 *~
 
@@ -15,3 +16,8 @@ core.*
 
 # Legacy generated eval scripts (new flow writes under /home/ecm5702/perm/eval/<run>/jobs)
 eval/jobs/generated/
+
+# Generated lane variants (eval/jobs/ladder.py::derive_lane materialises these
+# from eval/config/ladder/*.yaml profiles; never hand-edit, never commit).
+eval/config/lanes/_ladder_*.yaml
+eval/config/lanes/_evoref_*.yaml
