@@ -10,7 +10,14 @@ import earthkit.data as ekd
 import numpy as np
 import xarray as xr
 
-from .data_types import BoundingBox, CurveVectors, FORECAST_STEP_COUNT, SupportMode, step_to_index
+from .data_types import (
+    BoundingBox,
+    CurveVectors,
+    FORECAST_STEP_COUNT,
+    SupportMode,
+    curve_support_signature,
+    step_to_index,
+)
 from .grid import normalize_lon, point_mask
 
 
@@ -140,9 +147,17 @@ def load_grib_curves(
                 )
                 for path in an_files
             ]
+            signatures = {curve.support_signature for curve in analysis_curves}
+            if len(signatures) != 1:
+                raise ValueError(
+                    "Native GRIB analysis files do not share one spatial support: "
+                    f"{sorted(signatures)}"
+                )
             curves[analysis_expid] = CurveVectors(
                 msl=np.concatenate([curve.msl for curve in analysis_curves]),
                 wind=np.concatenate([curve.wind for curve in analysis_curves]),
+                support_mode="native",
+                support_signature=analysis_curves[0].support_signature,
             )
         else:
             curves[analysis_expid] = _load_native_curve(
@@ -257,6 +272,10 @@ def _load_native_curve(
     # For per-date AN files, select 00Z only so each date contributes one frame.
     if per_date_an and "time" in ds.coords:
         ds = ds.isel(time=0)
+    lon = normalize_lon(np.asarray(ds["longitude"].values, dtype=np.float64))
+    lat = np.asarray(ds["latitude"].values, dtype=np.float64)
+    if lon.shape != lat.shape and lon.ndim == lat.ndim == 1:
+        lon, lat = np.meshgrid(lon, lat)
     return CurveVectors(
         msl=_extract_native_values(
             ds["msl"],
@@ -273,6 +292,8 @@ def _load_native_curve(
             step_indices=step_indices,
             max_pf_members=max_pf_members,
         ),
+        support_mode="native",
+        support_signature=curve_support_signature("native", lon, lat),
     )
 
 
@@ -338,6 +359,9 @@ def _load_regridded_curve(
 ) -> CurveVectors:
     mv = _import_metview()
     holders = [mv.read(path) for path in files]
+    target_lon, target_lat = regridded_target_points(
+        bbox, regrid_resolution, files[0]
+    )
     return CurveVectors(
         msl=_extract_regridded_values(
             holders,
@@ -358,6 +382,8 @@ def _load_regridded_curve(
             max_pf_members=max_pf_members,
             per_date_an=per_date_an,
         ),
+        support_mode="regridded",
+        support_signature=curve_support_signature("regridded", target_lon, target_lat),
     )
 
 

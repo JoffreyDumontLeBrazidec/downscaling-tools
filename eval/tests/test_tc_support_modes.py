@@ -14,6 +14,7 @@ from eval._backends.tc import loading_predictions as loading_pred_mod
 from eval._backends.tc import data_types as data_types_mod
 from eval._backends.tc import plot_config as plot_config_mod
 from eval._backends.tc import experiment_config as exp_config_mod
+from eval.evaluators.tc import runner as tc_runner_mod
 
 
 def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):
@@ -42,6 +43,40 @@ def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):
     workflows_mod.main()
 
     assert captured["support_mode"] == "regridded"
+
+
+def test_bundle_curves_share_regridded_analysis_support(monkeypatch):
+    event = events_mod.EVENTS["franklin"]
+    captured: dict[str, object] = {}
+
+    def _fake_target_points(bbox, resolution, sample_path):
+        captured.update({"bbox": bbox, "resolution": resolution, "sample_path": sample_path})
+        return np.array([1.0]), np.array([2.0])
+
+    monkeypatch.setattr(tc_runner_mod, "regridded_target_points", _fake_target_points)
+    kwargs = tc_runner_mod._bundle_curve_kwargs(
+        mode="regridded",
+        event=event,
+        grib_dir="/reference/tc",
+        analysis_expid="OPER_O1280_0001",
+        regrid_resolution=0.25,
+    )
+
+    assert kwargs["support_mode"] == "regridded"
+    np.testing.assert_array_equal(kwargs["target_lon"], np.array([1.0]))
+    np.testing.assert_array_equal(kwargs["target_lat"], np.array([2.0]))
+    assert captured["sample_path"].endswith(
+        f"franklin/surface_an_OPER_O1280_0001_{event.analysis_dates[0]}.grib"
+    )
+
+    native = tc_runner_mod._bundle_curve_kwargs(
+        mode="native",
+        event=event,
+        grib_dir=None,
+        analysis_expid=None,
+        regrid_resolution=0.25,
+    )
+    assert native == {"support_mode": "native", "target_lon": None, "target_lat": None}
 
 
 def test_workflows_pdf_main_passes_display_label(monkeypatch):

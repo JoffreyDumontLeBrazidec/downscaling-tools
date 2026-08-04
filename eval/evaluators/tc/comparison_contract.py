@@ -118,6 +118,46 @@ def build_prediction_contract(
     }
 
 
+def validate_curve_support_contract(curves: Mapping[str, object], declared_mode: str) -> None:
+    """Reject TC stats when loaded curves do not share one support geometry."""
+    if declared_mode not in {"native", "regridded"}:
+        raise ValueError(
+            "TC curve support contract requires one concrete mode per comparison; "
+            f"got {declared_mode!r}"
+        )
+    if not curves:
+        raise ValueError("TC curve support contract cannot validate an empty curve set")
+
+    missing = []
+    mode_mismatches = {}
+    signatures = {}
+    for name, curve in curves.items():
+        curve_mode = getattr(curve, "support_mode", "unknown")
+        curve_signature = getattr(curve, "support_signature", "unknown")
+        if curve_mode == "unknown" or curve_signature == "unknown":
+            missing.append(name)
+        if curve_mode != declared_mode:
+            mode_mismatches[name] = curve_mode
+        signatures.setdefault(curve_signature, []).append(name)
+
+    if missing:
+        raise ValueError(
+            "TC curve support contract is missing loader metadata for: "
+            + ", ".join(sorted(missing))
+        )
+    if mode_mismatches:
+        raise ValueError(
+            f"TC curve support contract declared {declared_mode!r}, but found "
+            f"other modes: {mode_mismatches}"
+        )
+    if len(signatures) != 1:
+        summary = {signature: sorted(names) for signature, names in signatures.items()}
+        raise ValueError(
+            "TC curve support contract found multiple spatial supports; "
+            f"all curves must use one geometry: {summary}"
+        )
+
+
 def require_lane_analysis_reference(lane_name: str, analysis_reference: str | None) -> None:
     """Apply the lane-specific analysis-reference invariant."""
     if lane_name == "o96_o320" and analysis_reference != _O96_O320_ANALYSIS:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -10,6 +11,7 @@ import xarray as xr
 from eval._backends.tc.events import EVENTS
 from eval.evaluators.tc.comparison_contract import (
     build_prediction_contract,
+    validate_curve_support_contract,
     validate_comparison_contracts,
 )
 
@@ -102,3 +104,22 @@ def test_validate_comparison_contracts_requires_oper_o320_for_o96_o320(tmp_path:
 
     with pytest.raises(ValueError, match="OPER_O320_0001"):
         validate_comparison_contracts({"candidate": contract}, lane_name="o96_o320")
+
+
+def test_validate_curve_support_contract_requires_one_mode_and_geometry():
+    curves = {
+        "model": SimpleNamespace(support_mode="regridded", support_signature="regridded:4:a"),
+        "target": SimpleNamespace(support_mode="regridded", support_signature="regridded:4:a"),
+    }
+    validate_curve_support_contract(curves, "regridded")
+
+    curves["input"] = SimpleNamespace(support_mode="native", support_signature="native:4:b")
+    with pytest.raises(ValueError, match="other modes"):
+        validate_curve_support_contract(curves, "regridded")
+
+    curves = {
+        "model": SimpleNamespace(support_mode="regridded", support_signature="regridded:4:a"),
+        "target": SimpleNamespace(support_mode="regridded", support_signature="regridded:5:c"),
+    }
+    with pytest.raises(ValueError, match="multiple spatial supports"):
+        validate_curve_support_contract(curves, "regridded")

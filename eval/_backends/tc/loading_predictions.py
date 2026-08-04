@@ -8,7 +8,7 @@ from typing import Iterable
 import numpy as np
 import xarray as xr
 
-from .data_types import BoundingBox, CurveVectors, SupportMode
+from .data_types import BoundingBox, CurveVectors, SupportMode, curve_support_signature
 from .grid import normalize_lon, point_mask, structured_grid_from_points, interp_structured, nearest_point_indices
 
 
@@ -304,6 +304,7 @@ def _load_prediction_curve_native(
 ) -> CurveVectors:
     msl_vals: list[np.ndarray] = []
     wind_vals: list[np.ndarray] = []
+    support_signatures: list[str] = []
     for path, _, _ in pred_files:
         with xr.open_dataset(path) as ds:
             weather_states = ds["weather_state"].values.tolist()
@@ -314,6 +315,7 @@ def _load_prediction_curve_native(
             mask = point_mask(lon, lat, bbox)
             if not np.any(mask):
                 continue
+            support_signatures.append(curve_support_signature("native", lon[mask], lat[mask]))
             y_pred = _prediction_values_by_point(ds, prediction_var=prediction_var)
             msl_vals.append((y_pred[:, mask, i_msl] / 100.0).reshape(-1))
             u10 = y_pred[:, mask, i_u10]
@@ -323,9 +325,17 @@ def _load_prediction_curve_native(
     if not msl_vals or not wind_vals:
         raise RuntimeError("No native prediction values extracted")
 
+    signatures = set(support_signatures)
+    if len(signatures) != 1:
+        raise ValueError(
+            "Native prediction files do not share one spatial support: "
+            f"{sorted(signatures)}"
+        )
     return CurveVectors(
         msl=np.concatenate(msl_vals),
         wind=np.concatenate(wind_vals),
+        support_mode="native",
+        support_signature=support_signatures[0],
     )
 
 
@@ -369,4 +379,6 @@ def _load_prediction_curve_regridded(
     return CurveVectors(
         msl=np.concatenate(msl_vals),
         wind=np.concatenate(wind_vals),
+        support_mode="regridded",
+        support_signature=curve_support_signature("regridded", target_lon, target_lat),
     )

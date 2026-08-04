@@ -23,9 +23,11 @@ from eval._backends.tc.loading_predictions import (
     load_prediction_curves,
     select_prediction_files_for_event,
 )
+from eval._backends.tc.loading_grib import regridded_target_points
 from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
 from eval.evaluators.tc.comparison_contract import (
     build_prediction_contract,
+    validate_curve_support_contract,
     validate_comparison_contracts,
 )
 from eval._backends.tc.workflows import (
@@ -117,6 +119,45 @@ def _pred_files_as_tuples(predictions_dir: Path):
     that the existing TC loading code expects."""
     preds = find_predictions(predictions_dir)
     return [(p.path, int(p.date), p.step) for p in preds]
+
+
+def _bundle_curve_kwargs(
+    *,
+    mode: str,
+    event: TCEvent,
+    grib_dir: str | None,
+    analysis_expid: str | None,
+    regrid_resolution: float,
+) -> dict:
+    """Return support arguments for bundle input/target curves.
+
+    In regridded TC mode the model and GRIB reference curves live on the regular
+    analysis grid. ``x_interp`` and ``y`` are stored on the native O1280 graph
+    grid, so loading them as native curves mixes supports and changes extremes.
+    Use the same target grid as ``load_curves_for_event`` for all bundle curves.
+    """
+    if mode != "regridded":
+        return {"support_mode": mode, "target_lon": None, "target_lat": None}
+    if not grib_dir or not analysis_expid:
+        raise ValueError(
+            "Regridded bundle curves require grib_dir and analysis_expid "
+            "to define the shared analysis grid"
+        )
+    sample_path = (
+        Path(grib_dir)
+        / event.name
+        / f"surface_an_{analysis_expid}_{event.analysis_dates[0]}.grib"
+    )
+    target_lon, target_lat = regridded_target_points(
+        event.bbox,
+        regrid_resolution,
+        str(sample_path),
+    )
+    return {
+        "support_mode": mode,
+        "target_lon": target_lon,
+        "target_lat": target_lat,
+    }
 
 
 def run(
@@ -278,6 +319,14 @@ def run(
                     f"reference GRIBs or matched predictions resolved. Refusing to skip."
                 )
 
+            bundle_curve_kwargs = _bundle_curve_kwargs(
+                mode=mode,
+                event=event,
+                grib_dir=grib_dir,
+                analysis_expid=analysis_expid,
+                regrid_resolution=plot_cfg.regrid_resolution,
+            )
+
             # Load input (x_interp) and target (y) curves directly from NetCDF files
             input_label = eval_config.get("input_label")
             if input_label and event_pred_files:
@@ -285,7 +334,7 @@ def run(
                     curves[input_label] = load_prediction_curves(
                         event_pred_files,
                         bbox=event.bbox,
-                        support_mode="native",
+                        **bundle_curve_kwargs,
                         prediction_var="x_interp",
                     )
                 except Exception:
@@ -297,7 +346,7 @@ def run(
                     curves[target_nc_label] = load_prediction_curves(
                         event_pred_files,
                         bbox=event.bbox,
-                        support_mode="native",
+                        **bundle_curve_kwargs,
                         prediction_var="y",
                     )
                 except Exception:
@@ -314,6 +363,11 @@ def run(
             if analysis_display_label and oper_key and oper_key in curves:
                 curves[analysis_display_label] = curves.pop(oper_key)
                 oper_key = analysis_display_label
+
+            # Every curve contributing to one comparison must carry the same,
+            # loader-derived support identity. This is deliberately before stats
+            # are computed so a mixed-support plot cannot become a scoreboard row.
+            validate_curve_support_contract(curves, mode)
 
             if oper_key:
                 plot_cfg = resolve_plot_config(event_name, eval_config)
@@ -333,6 +387,17 @@ def run(
 
             event_stats["event"] = event_name
             event_stats["support_mode"] = mode
+            event_stats["support_contract"] = {
+                "declared_mode": mode,
+                "validated": True,
+                "curve_supports": {
+                    name: {
+                        "mode": curve.support_mode,
+                        "signature": curve.support_signature,
+                    }
+                    for name, curve in curves.items()
+                },
+            }
             event_stats["comparison_contract"] = prediction_contract
             event_stats["reference_comparison_contract"] = reference_contract
             # Provenance for cross-run trust (2026-06-22): the per-event tail is pooled over
