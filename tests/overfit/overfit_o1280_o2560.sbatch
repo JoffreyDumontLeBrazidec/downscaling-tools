@@ -25,9 +25,9 @@ export OUTPUT=/ec/res4/scratch/ecm5702/aifs
 export GRID_DIR=/home/mlx/ai-ml/grids/
 export INTER_MAT_DIR=/home/ecm5702/hpcperm/data/inter_mat
 export RESIDUAL_STATISTICS_DIR=/home/ecm5702/hpcperm/data/residuals_statistics/
-export ANEMOI_CONFIG_DIR=/home/ecm5702/dev/anemoi-config
+export ANEMOI_CONFIG_DIR=/home/ecm5702/dev/pristine/anemoi-config
 export ANEMOI_CONFIG_NAME=o1280_o2560
-export ANEMOI_CONFIG_PATH=/home/ecm5702/dev/anemoi-config
+export ANEMOI_CONFIG_PATH=/home/ecm5702/dev/pristine/anemoi-config
 # Use pre-merge training code (compat with user config schema)
 export PYTHONPATH="/ec/res4/scratch/ecm5702/aifs/anemoi-core-compat-training/models/src:/ec/res4/scratch/ecm5702/aifs/anemoi-core-compat-training/training/src:${PYTHONPATH:-}"
 

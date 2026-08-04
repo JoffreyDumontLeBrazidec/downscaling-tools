@@ -33,9 +33,9 @@ export OUTPUT=/ec/res4/scratch/ecm5702/aifs
 export GRID_DIR=/home/mlx/ai-ml/grids/
 export INTER_MAT_DIR=/home/ecm5702/hpcperm/data/inter_mat
 export RESIDUAL_STATISTICS_DIR=/home/ecm5702/hpcperm/data/residuals_statistics/
-export ANEMOI_CONFIG_DIR=/home/ecm5702/dev/anemoi-config
+export ANEMOI_CONFIG_DIR=/home/ecm5702/dev/pristine/anemoi-config
 export ANEMOI_CONFIG_NAME=o48_o96
-export ANEMOI_CONFIG_PATH=/home/ecm5702/dev/anemoi-config
+export ANEMOI_CONFIG_PATH=/home/ecm5702/dev/pristine/anemoi-config
 
 # Dev anemoi-core for all modes (the code under validation)
 export PYTHONPATH="/home/ecm5702/dev/anemoi-core/models/src:/home/ecm5702/dev/anemoi-core/training/src:${PYTHONPATH:-}"
