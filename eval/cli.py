@@ -29,6 +29,7 @@ from eval.config.loader import (
 )
 from eval.paths import resolve_eval_root
 from eval.evaluators.tc.comparison_contract import require_lane_analysis_reference
+from eval import lean_layout
 
 LOG = logging.getLogger(__name__)
 
@@ -1028,60 +1029,23 @@ def _run_evaluators(
 
 
 def _resolve_run_root(output_dir: Path) -> Path:
-    """Resolve the run root from output_dir.
-
-    output_dir must be either the run root itself (containing evaluators/)
-    directly) or <run_root>/data (the canonical layout when evaluate is
-    called with --predictions-dir).  Any other structure raises ValueError
-    so callers cannot silently misplace outputs.
-    """
-    if output_dir.name == "data":
-        return output_dir.parent
-    if (output_dir / "evaluators").exists() or (output_dir / "predictions").exists():
-        return output_dir
-    raise ValueError(
-        f"Cannot resolve run root from output_dir={output_dir!r}. "
-        "Expected either <run_root>/data or a directory containing evaluators/ or predictions/."
-    )
+    """Resolve the run root from output_dir. See ``eval.lean_layout``."""
+    return lean_layout.resolve_run_root(output_dir)
 
 
 def _consolidate_plots(output_dir: Path) -> None:
-    """Copy all PDFs and PNGs from evaluators/* to <run_root>/plots/.
+    """Project the evaluator tree into the lean run-root bundle.
 
-    Always writes to <run_root>/plots/ regardless of how output_dir is
-    structured, so plots are never buried inside data/.
+    Delegates to ``eval.lean_layout.project_lean_layout``, which lays down the
+    top-level deliverables, ``plots/<name>/``, ``data/`` and an assembled
+    ``metrics.json`` as a non-destructive, idempotent symlink view over
+    ``evaluators/<name>/`` — replacing both the old flat plot copy here and the
+    standalone ``finalize_lean_eval_layout.sbatch`` reorg step.
 
-    C2: plotting/consolidation must NEVER fail the run. Metrics and the
-    completion marker are already written by the time this runs; a missing
-    source file (race/crash) previously surfaced as a copy2->copystat
-    FileNotFoundError that made the evaluate job exit nonzero AFTER metrics
-    were computed, cancelling the afterok scoreboard. Every step here is
-    therefore best-effort: log and continue instead of raising.
+    Best-effort: the projection never raises, so a hiccup can't fail a run whose
+    metrics and completion marker are already written.
     """
-    import contextlib
-    import shutil
-    try:
-        run_root = _resolve_run_root(output_dir)
-        plots_dir = run_root / "plots"
-        # Wipe and rebuild so stale files from previous runs or parallel
-        # evaluators never linger.  Each call produces a complete snapshot.
-        if plots_dir.exists():
-            shutil.rmtree(plots_dir, ignore_errors=True)
-        plots_dir.mkdir(parents=True, exist_ok=True)
-        evaluators_dir = output_dir / "evaluators"
-        if not evaluators_dir.exists():
-            return
-        copied = 0
-        for src in sorted(evaluators_dir.rglob("*.pdf")) + sorted(evaluators_dir.rglob("*.png")):  # type: ignore[operator]
-            # Use copyfile (data only, no copystat) + suppress OSError so a
-            # file vanishing mid-copy can never abort the run.
-            with contextlib.suppress(OSError):
-                shutil.copyfile(src, plots_dir / src.name)
-                copied += 1
-        LOG.info("Plots consolidated to %s (%d files)", plots_dir, copied)
-    except Exception:
-        # Last-resort guard: consolidation is cosmetic and must not fail the run.
-        LOG.warning("Plot consolidation failed (non-fatal)", exc_info=True)
+    lean_layout.project_lean_layout(output_dir)
 
 
 def _run_scoreboard(
