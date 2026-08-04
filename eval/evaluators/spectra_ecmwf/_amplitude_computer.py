@@ -33,6 +33,13 @@ CONFIGS: dict[str, SpectraConfig] = {
 }
 
 
+def positive_int(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {raw!r}")
+    return value
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute spectra amplitudes from actual spectral_harmonics outputs."
@@ -40,6 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spectral-harmonics-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--weather-states", default="10u,10v,2t,sp,t_850,z_500")
+    parser.add_argument(
+        "--truncation",
+        type=positive_int,
+        required=True,
+        help="Maximum total wavenumber for mv.spec_graph (for example 1279 for O1280).",
+    )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
 
@@ -63,7 +76,7 @@ def parse_components(path: Path) -> tuple[int, int, int]:
     )
 
 
-def read_curve(path: Path, cfg: SpectraConfig) -> tuple[np.ndarray, np.ndarray]:
+def read_curve(path: Path, cfg: SpectraConfig, *, truncation: int) -> tuple[np.ndarray, np.ndarray]:
     fs_in = mv.Fieldset()
     if cfg.level == "sfc":
         fs_in.append(mv.read(data=mv.read(str(path)), param=cfg.param))
@@ -73,7 +86,7 @@ def read_curve(path: Path, cfg: SpectraConfig) -> tuple[np.ndarray, np.ndarray]:
         raise RuntimeError(f"Expected exactly one field in {path}, got {len(fs_in)}")
     sp = mv.spec_graph(
         data=fs_in,
-        truncation=319,
+        truncation=truncation,
         x_axis_type="logartihmic",
         y_axis_type="logartihmic",
     )
@@ -97,7 +110,7 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in sorted(in_dir.glob("*_nopoles.grb_sh")):
             date_ymd, step_hours, member = parse_components(path)
-            wvn, ampl = read_curve(path, cfg)
+            wvn, ampl = read_curve(path, cfg, truncation=args.truncation)
             stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
             wvn_path = out_dir / f"wvn_{stem}.npy"
             ampl_path = out_dir / f"ampl_{stem}.npy"
@@ -112,6 +125,7 @@ def main() -> None:
                     "date": date_ymd,
                     "step_hours": step_hours,
                     "member": member,
+                    "truncation": args.truncation,
                 }
             )
 
@@ -122,6 +136,7 @@ def main() -> None:
         "spectral_harmonics_dir": str(sh_root),
         "out_dir": str(out_root),
         "weather_states": states,
+        "truncation": args.truncation,
         "written_count": len(written),
         "files": written,
     }

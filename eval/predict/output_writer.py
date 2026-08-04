@@ -42,6 +42,10 @@ def _metadata_from_ensemble(
         missing_target_policy=(
             "all_nan_due_to_allow_missing_target_unsafe" if ensemble.used_missing_target_unsafe else None
         ),
+        local_scope_json=config.local_scope_json,
+        local_scope_hres_node_count=(
+            int(len(ensemble.lon_hres)) if config.local_scope_json and ensemble.lon_hres is not None else 0
+        ),
     )
 
 
@@ -91,6 +95,15 @@ def write_predictions_file(
         if errors:
             raise ValueError("Invalid predictions dataset before write: " + "; ".join(errors))
 
+        # netCDF/HDF5 cannot serialize bfloat16 (arrives via a .bfloat16() model on some
+        # arrays, e.g. truth y). Coerce any bf16 var/coord to float32 before writing. y_pred
+        # is already genuine fp32 (its .numpy().astype(float32) upstream would have raised).
+        for _n, _v in list(dataset.data_vars.items()):
+            if "bfloat" in str(_v.dtype):
+                dataset[_n] = _v.astype("float32")
+        for _n, _c in list(dataset.coords.items()):
+            if "bfloat" in str(_c.dtype):
+                dataset = dataset.assign_coords({_n: _c.astype("float32")})
         writer.write_or_wait(dataset, out_path)
     except BaseException as exc:
         writer._mark_failed(out_path, exc)

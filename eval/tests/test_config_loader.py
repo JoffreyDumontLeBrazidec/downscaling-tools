@@ -124,3 +124,68 @@ def test_lane_configs_do_not_advertise_quaver_group():
         evaluator_groups = config["evaluator_groups"]
         for evaluators in evaluator_groups.values():
             assert "quaver" not in evaluators
+
+
+def test_tc_o320_o1280_fast_harness_contract():
+    config = load_lane("tc_o320_o1280")
+
+    predict = config["predict"]
+    assert predict["sampler"]["sigma_max"] == 100_000.0
+    assert predict["sampler"]["S_max"] == 100_000.0
+    assert predict["num_gpus_per_model"] == 1
+    assert predict["dates"] == [
+        "20230826", "20230827", "20230828", "20230829", "20230830"
+    ]
+    assert predict["local_scope"] == {
+        "mode": "bbox",
+        "cut_graph": True,
+        "hidden_halo_hops": 1,
+        "label": "franklin_idalia_full250_box",
+        "lat_min": 10.0,
+        "lat_max": 40.0,
+        "lon_min": -100.0,
+        "lon_max": -58.0,
+    }
+
+    tc = config["tc"]
+    assert tc["events"] == ["idalia", "franklin"]
+    assert tc["support_mode"] == "native"
+    assert tc["analysis_expid"] == "target O1280"
+    assert tc["target_nc_label"] == "target O1280"
+    assert tc.get("grib_dir") is None
+    assert tc["reference_expids"] == []
+
+    assert config["evaluator_groups"]["default"] == ["tc", "local_global"]
+    assert "spectra" not in config["evaluator_groups"]["default"]
+
+
+def test_o320_o1280_standard_sampler_uses_sigma100k():
+    for lane in [
+        "o320_o1280",
+        "tc_o320_o1280",
+        "tc_o320_o1280_regionalbundle",
+        "o320_o1280_b785bf12_unified",
+        "o320_o1280_b785bf12_unified_full",
+    ]:
+        sampler = load_lane(lane)["predict"]["sampler"]
+        assert sampler["sigma_max"] == 100_000.0
+        assert sampler["S_max"] == 100_000.0
+
+    assert load_lane("o320_o1280_s1k")["predict"]["sampler"]["sigma_max"] == 1_000.0
+    assert load_lane("o320_o1280_sigma10k")["predict"]["sampler"]["sigma_max"] == 10_000.0
+
+
+def test_load_lane_allows_tctracker_config(tmp_path, monkeypatch):
+    import eval.config.loader as loader
+
+    (tmp_path / "lanes").mkdir()
+    lane = {
+        "predict": {"members": [1], "steps": [24], "dates": ["20230826"]},
+        "evaluator_groups": {"default": ["tc"]},
+        "tctracker": {"grid": 320, "vorticity": False},
+    }
+    (tmp_path / "lanes" / "with_tracker.yaml").write_text(yaml.dump(lane))
+    monkeypatch.setattr(loader, "_CONFIG_DIR", tmp_path)
+
+    loaded = load_lane("with_tracker")
+    assert loaded["tctracker"]["grid"] == 320

@@ -16,6 +16,7 @@ _resolve_ckpt_path = _mi_predict._resolve_ckpt_path
 from .bundle_manager import discover_bundles, resolve_date_step_pairs
 from .distributed_io import Rank0FileWriter, _destroy_process_group, _distributed_barrier
 from .inference_engine import predict_ensemble_members
+from .local_scope import apply_local_output_scope
 from .model_loader import load_inference_model
 from .output_writer import prediction_output_path, write_predictions_file
 from .types import BundleKey, PredictionConfig
@@ -75,6 +76,15 @@ def create_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--extra-args-json", default=DEFAULT_EXTRA_ARGS_JSON)
+    parser.add_argument(
+        "--local-scope-json",
+        default="",
+        help=(
+            "JSON local output scope. Supported modes: "
+            "{\"mode\":\"bbox\",...} and {\"mode\":\"radius_km\",...}. "
+            "Crops exported hres arrays after prediction; it is not a model-internal graph cut."
+        ),
+    )
     parser.add_argument(
         "--output-weather-state-mode",
         choices=OUTPUT_WEATHER_STATE_MODE_CHOICES,
@@ -206,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         steps=parse_int_list(args.steps),
         dates=[token.strip() for token in args.dates.split(",") if token.strip()],
         bundle_pairs=args.bundle_pairs,
+        local_scope_json=args.local_scope_json,
     )
 
     recursive = config.input_root_mode != "lane_canonical_root"
@@ -269,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_weather_states=config.output_weather_states,
                     keep_outputs=(global_rank == 0),
                 )
+                if config.local_scope_json:
+                    ensemble = apply_local_output_scope(ensemble, config.local_scope_json)
                 write_predictions_file(ensemble, out_path, config, writer)
             except BaseException as exc:
                 # Publish a failure marker so peer ranks waiting in write_or_wait()

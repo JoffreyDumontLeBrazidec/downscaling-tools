@@ -82,6 +82,11 @@ def _gpu_submit_arguments(prepml: dict, num_gpus_per_model: int) -> dict[str, An
             raw_pragmas.insert(0, f"#SBATCH --gres=gpu:{num_gpus_per_model}")
         if not any("--nice" in pragma for pragma in raw_pragmas):
             raw_pragmas.append("#SBATCH --nice=100")
+        # prepml drops submit_arguments["time"] for the gpu flavour (atos.yaml default
+        # 0-00:18 wins -> healthy runs walltime-killed). RAW_PRAGMA #SBATCH lines DO
+        # reach the job script (gpu_debug j70e precedent); sbatch last-wins on --time.
+        if not any("--time" in pragma for pragma in raw_pragmas):
+            raw_pragmas.append(f"#SBATCH --time={gpu_cfg['time']}")
         submit_arguments["RAW_PRAGMA"] = raw_pragmas
 
     return submit_arguments
@@ -124,10 +129,16 @@ def _gpu_resources(prepml: dict, num_gpus_per_model: int) -> dict[str, Any]:
     (world_size == num_gpus_per_model).
     """
     gpu_cfg = prepml.get("platform", {}).get("gpu", {})
+    # Multi-node geometry: cap gpus_per_node at the node size (AC ga100 nodes have 4)
+    # and spread the remaining ranks over additional nodes. Single-node lanes
+    # (num_gpus_per_model <= node size) are byte-unchanged by this.
+    node_gpus = int(gpu_cfg.get("gpus_per_node", 4))
+    gpus_per_node = min(num_gpus_per_model, node_gpus)
+    total_nodes = -(-num_gpus_per_model // gpus_per_node)
     return {
-        "total_nodes": 1,
-        "tasks_per_node": num_gpus_per_model,
-        "gpus_per_node": num_gpus_per_model,
+        "total_nodes": total_nodes,
+        "tasks_per_node": gpus_per_node,
+        "gpus_per_node": gpus_per_node,
         "cpus_per_task": int(gpu_cfg.get("cpus_per_task", 32)),
         "memory_per_node": str(gpu_cfg.get("memory_per_node", "64G")),
     }
@@ -205,10 +216,25 @@ def generate_prepml_config(
             },
         },
         "resources": {
-            "inference": {"gpu": _gpu_resources(prepml, num_gpus_per_model)},
+            # custom_directives is prepml's sanctioned RAW_PRAGMA escape at the named-block
+            # level (resources/__init__.py). Needed for walltime: prepml strips both the
+            # platform-block time and a platform RAW_PRAGMA --time, so the atos.yaml gpu
+            # default 0-00:18 otherwise walltime-kills healthy multi-hour model tasks.
+            "inference": {
+                "custom_directives": [f"#SBATCH --time={prepml['platform']['gpu']['time']}"],
+                "gpu": _gpu_resources(prepml, num_gpus_per_model),
+            },
         },
         "evaluation": False,
     }
+    # prepml <0.110 (bundled anemoi-inference, e.g. 0.99 for ds-API ckpts) compat:
+    #  - it does NOT understand the 0.125+ resources.inference.gpu schema -> drop it;
+    #  - commands/inference.py ignore_blocks() DISCARDS the whole `platform` block if it has
+    #    >1 key (keeps only time) -> falls back to default gpu flavour gres=gpu:1. So the
+    #    platform block must be just {flavours: {...}} (drop the `name` key) for multi-GPU to work.
+    if prepml.get("prepml_099_compat", False):
+        config.pop("resources", None)
+        config.get("platform", {}).pop("name", None)
     predict_env = dict(predict.get("env") or {})
     if predict_env:
         config["model"]["env"] = predict_env

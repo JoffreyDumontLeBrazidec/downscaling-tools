@@ -31,3 +31,19 @@ environment_setup:
   # Sources the runtime selection layer: activates .ds-260612, sets PYTHONPATH, and
   # hard-asserts anemoi-core == multi-ds-unified@<sha>. See runtimes/_lib.sh.
   venv_activate: /home/ecm5702/dev/.ds-260612/bin/activate
+
+# Stage caveats surfaced by eval.cli (WARN only, never a gate).
+# 2026-08-04: the EDM2 ON/OFF 300k o96->o320 campaign was scored on this host and
+# came out at surf nMSE 0.391/0.358 vs 0.095 for the SAME ckpt family on
+# atos_ac_pristine -- the model scored WORSE than its own x_interp (0.426 vs 0.106).
+# This host runs the downscaling_unified forward on the full mesh, which is correct
+# for unified / multi-ds checkpoints but degrades GLOBAL single-model runs.
+stage_warnings:
+  run: &unified_global_caveat >-
+    host atos_ac_unified runs the downscaling_unified forward on the FULL mesh.
+    That is correct for unified / multi-ds checkpoints, but it DEGRADES global
+    single-model predictions (o96->o320 measured 0.391 nMSE here vs 0.095 on
+    atos_ac_pristine, 2026-08-04). For a global pristine checkpoint use
+    --host atos_ac_pristine. Verify either way with the free check:
+    nMSE(y_pred vs y) should be ~= nMSE(x_interp vs y); far above means broken.
+  predict: *unified_global_caveat

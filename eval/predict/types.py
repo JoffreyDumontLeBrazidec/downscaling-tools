@@ -55,6 +55,7 @@ class PredictionConfig:
     steps: list[int] = field(default_factory=lambda: list(DEFAULT_STEPS))
     dates: list[str] = field(default_factory=lambda: list(DEFAULT_DATES))
     bundle_pairs: str = ""
+    local_scope_json: str = ""
 
 
 @dataclass
@@ -77,11 +78,13 @@ class PredictionMetadata:
     x_interp_exported: bool
     slim_output: bool
     missing_target_policy: str | None = None
+    local_scope_json: str = ""
+    local_scope_hres_node_count: int = 0
 
     def to_attrs(self) -> dict[str, str | int]:
         """Return NetCDF-safe global attributes."""
 
-        return {
+        attrs = {
             "init_date": np.datetime_as_string(self.init_date.astype("datetime64[ns]"), unit="s"),
             "lead_step_hours": int(self.lead_step_hours),
             "member_ids": ",".join(str(member) for member in self.member_ids),
@@ -99,6 +102,10 @@ class PredictionMetadata:
             "slim_output": int(bool(self.slim_output)),
             "source_bundle_count": int(len(self.source_bundle_paths)),
         }
+        if self.local_scope_json:
+            attrs["local_scope_json"] = self.local_scope_json
+            attrs["local_scope_hres_node_count"] = int(self.local_scope_hres_node_count)
+        return attrs
 
 
 @dataclass

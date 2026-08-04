@@ -13,6 +13,9 @@ from typing import Any
 _VALID_QOS = {"nf", "ng"}
 _TIME_RE = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
 _MEM_RE = re.compile(r"^(\d+[GMKT]|0)$")
+_PREDICT_DEFAULT_TIME = "48:00:00"
+_EVALUATE_DEFAULT_TIME = "48:00:00"
+_FULL_CONTRACT_PREDICT_TIME_FLOOR = _PREDICT_DEFAULT_TIME
 
 
 def validate_resource_profile(profile: dict[str, Any]) -> list[str]:
@@ -34,6 +37,49 @@ def validate_resource_profile(profile: dict[str, Any]) -> list[str]:
         if not isinstance(profile["ntasks_per_node"], int) or profile["ntasks_per_node"] < 1:
             errors.append(f"ntasks_per_node must be int > 0, got {profile['ntasks_per_node']!r}")
     return errors
+
+
+def _time_to_seconds(value: str) -> int:
+    hours, minutes, seconds = (int(part) for part in value.split(":"))
+    return (hours * 3600) + (minutes * 60) + seconds
+
+
+def _default_time_for_stage(stage: str, scheduler: dict[str, Any]) -> str:
+    if stage == "predict":
+        return scheduler.get("default_predict_time", _PREDICT_DEFAULT_TIME)
+    if stage == "evaluate":
+        # Evaluate is a LONG stage: quaver / tc / spectra_ecmwf do heavy MARS
+        # reads + metview and routinely run many hours over a full month.
+        # Default it to the same conservative 48h wall as predict so a lane
+        # WITHOUT an explicit evaluate resource_profile can never inherit the
+        # short host default_time (4h) and get TIME_LIMIT-killed mid-run.
+        # (2026-07-06: the j7xn quaver month job died at an 8h wall; nf/ng
+        # both permit 48h.)  Host may still tune this via default_evaluate_time.
+        return scheduler.get("default_evaluate_time", _EVALUATE_DEFAULT_TIME)
+    return scheduler.get("default_time", "04:00:00")
+
+
+def _apply_predict_time_floor(lane_config: dict[str, Any], resources: dict[str, Any]) -> None:
+    """Protect full production predict jobs from underspecified walltimes.
+
+    The canonical full-eval contract is 5 dates x 5 lead steps x 10 members
+    = 250 predictions. A July 2026 pristine eval lane accidentally overrode
+    that contract down to a 2-hour AC predict budget and predict jobs timed
+    out with `TIME_LIMIT`. Once a lane is running the full 250 prediction
+    contract, force a very conservative walltime even if a custom lane
+    override drifts lower than the safe production floor.
+    """
+    predict = lane_config.get("predict") or {}
+    bundle_count = (
+        len(predict.get("members") or [])
+        * len(predict.get("dates") or [])
+        * len(predict.get("steps") or [])
+    )
+    if bundle_count < 250:
+        return
+
+    if _time_to_seconds(str(resources["time"])) < _time_to_seconds(_FULL_CONTRACT_PREDICT_TIME_FLOOR):
+        resources["time"] = _FULL_CONTRACT_PREDICT_TIME_FLOOR
 
 
 def resolve_resources(
@@ -66,7 +112,7 @@ def resolve_resources(
     # 1. Start with host scheduler defaults
     resources: dict[str, Any] = {
         "qos": scheduler["qos"],
-        "time": scheduler.get("default_time", "04:00:00"),
+        "time": _default_time_for_stage(stage, scheduler),
         "mem": scheduler.get("default_mem", "64G"),
         "cpus": scheduler.get("default_cpus", 16),
         "gpus": 0,
@@ -88,5 +134,8 @@ def resolve_resources(
         resources["qos"] = scheduler["qos"]
     else:
         resources["qos"] = "ng"
+
+    if stage == "predict":
+        _apply_predict_time_floor(lane_config, resources)
 
     return resources

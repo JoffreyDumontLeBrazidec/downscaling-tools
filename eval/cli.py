@@ -1412,6 +1412,16 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as exc:
         raise SystemExit(f"Failed to load host config '{host_name}': {exc}") from exc
 
+    # --- Surface host-declared stage caveats (WARN ONLY, never a gate) ---
+    # Hosts may declare `stage_warnings: {<stage-name>: "text"}`. A host can be perfectly
+    # valid for one checkpoint class and degrading for another, so this warns and
+    # continues rather than refusing (defaults-not-validators doctrine).
+    _stage_warning = (host_config.get("stage_warnings") or {}).get(args.subcommand)
+    if _stage_warning:
+        LOG.warning(
+            "host %r on stage %r: %s", host_name, args.subcommand, " ".join(str(_stage_warning).split())
+        )
+
     # --- Export host-declared env vars so subprocesses (predict.main, evaluators) see them ---
     # The host YAML's environment_setup.exports lists vars like DATA_DIR, GRID_DIR,
     # RESIDUAL_STATISTICS_DIR that OmegaConf interpolations and model loaders depend on.

@@ -9,6 +9,9 @@ spectra:
   lmax: 512
   steps:
   - 120
+tc:
+  member_maps:
+    enabled: false
 probabilistic:
   weather_states:
   - 2t

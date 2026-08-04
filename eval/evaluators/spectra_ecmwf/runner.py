@@ -12,7 +12,9 @@ for reuse across runs.  Only prediction spectra are recomputed each time.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 import socket
 import subprocess
 import sys
@@ -33,6 +35,64 @@ _WEATHER_STATE_TO_DIR = {
 }
 
 _DEFAULT_WEATHER_STATES = ["10u", "10v", "2t", "sp", "t_850", "z_500"]
+
+# ECMWF cubic-octahedral pairings: an O<N> target grid is conventionally
+# analysed at TCo<N-1>.  The lane config records the input grid, so keep the
+# complete downscaling-family mapping here and allow an explicit evaluator
+# override for non-standard experiments.
+_NOMINAL_SPECTRAL_GRID_BY_INPUT_GRID = {
+    "O48": ("O96", 95),
+    "O96": ("O320", 319),
+    "O320": ("O1280", 1279),
+    "O1280": ("O2560", 2559),
+}
+
+
+def _positive_truncation(value: object, *, source: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{source} must be a positive integer, got {value!r}")
+    if isinstance(value, int):
+        truncation = value
+    elif isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value.strip()):
+        truncation = int(value)
+    else:
+        raise ValueError(f"{source} must be a positive integer, got {value!r}")
+    if truncation <= 0:
+        raise ValueError(f"{source} must be a positive integer, got {value!r}")
+    return truncation
+
+
+def _normalise_octahedral_grid(value: object) -> str:
+    match = re.fullmatch(r"[oO]([1-9][0-9]*)", str(value).strip())
+    return f"O{int(match.group(1))}" if match else ""
+
+
+def _resolve_truncation(lane_config: dict, eval_config: dict) -> int:
+    """Resolve the requested total-wavenumber truncation for this lane."""
+    explicit = eval_config.get("truncation")
+    if explicit is not None:
+        return _positive_truncation(explicit, source="spectra_ecmwf.truncation")
+
+    input_grid = _normalise_octahedral_grid(
+        (lane_config.get("prepml", {}).get("input", {}) or {}).get("grid", "")
+    )
+    pairing = _NOMINAL_SPECTRAL_GRID_BY_INPUT_GRID.get(input_grid)
+    if pairing is None:
+        supported = ", ".join(sorted(_NOMINAL_SPECTRAL_GRID_BY_INPUT_GRID))
+        raise ValueError(
+            "Could not infer spectra_ecmwf truncation from "
+            f"prepml.input.grid={input_grid or '<missing>'!r}. "
+            f"Supported input grids: {supported}. Set spectra_ecmwf.truncation explicitly."
+        )
+
+    output_grid, truncation = pairing
+    LOG.info(
+        "spectra_ecmwf: inferred nominal TCo%d truncation for %s -> %s",
+        truncation,
+        input_grid,
+        output_grid,
+    )
+    return truncation
 
 
 def run(
@@ -65,6 +125,7 @@ def run(
     step_list = ",".join(str(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120])))
     member_list = ",".join(str(m) for m in eval_config.get("members", [])) or "ALL"
     reference_dir: str = eval_config.get("reference_dir", "")
+    truncation = _resolve_truncation(lane_config, eval_config)
 
     # --- Prediction spectra (always recomputed) ---
     _run_pipeline(
@@ -79,6 +140,7 @@ def run(
         date_list=date_list,
         step_list=step_list,
         member_list=member_list,
+        truncation=truncation,
     )
 
     # --- Reference spectra (truth + input): compute once, save to reference_dir ---
@@ -86,7 +148,7 @@ def run(
         ref_path = Path(reference_dir).expanduser().resolve()
         for var_name, var_label in [("y", "truth"), ("x_interp", "input")]:
             var_amp_dir = ref_path / var_label / "spectra"
-            if _has_amplitudes(var_amp_dir, weather_states):
+            if _has_amplitudes(var_amp_dir, weather_states, truncation=truncation):
                 LOG.info("spectra_ecmwf: %s reference cached at %s — skipping", var_label, var_amp_dir)
                 continue
             if not _has_var_in_predictions(predictions_dir, var_name):
@@ -115,6 +177,7 @@ def run(
                                 date_list=date_list,
                                 step_list=step_list,
                                 member_list=member_list,
+                                truncation=truncation,
                             )
                             continue
                 LOG.warning(
@@ -135,6 +198,7 @@ def run(
                 date_list=date_list,
                 step_list=step_list,
                 member_list=member_list,
+                truncation=truncation,
             )
 
     return output_dir
@@ -151,14 +215,33 @@ def _has_var_in_predictions(predictions_dir: Path, var_name: str) -> bool:
         return var_name in ds
 
 
-def _has_amplitudes(amp_dir: Path, weather_states: list[str]) -> bool:
-    """Check if amplitude directory already has npy files for all weather states."""
+def _has_amplitudes(amp_dir: Path, weather_states: list[str], *, truncation: int) -> bool:
+    """Check that a complete amplitude cache uses the requested truncation."""
     if not amp_dir.exists():
         return False
     for ws in weather_states:
         ws_dir = amp_dir / _WEATHER_STATE_TO_DIR.get(ws, ws)
         if not ws_dir.exists() or not list(ws_dir.glob("ampl_*.npy")):
             return False
+
+    summary_path = amp_dir.parent / "spectra_summary.json"
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        cached_truncation = int(summary["truncation"])
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+        LOG.info(
+            "spectra_ecmwf: cache at %s has no valid truncation metadata; recomputing",
+            amp_dir,
+        )
+        return False
+    if cached_truncation != truncation:
+        LOG.info(
+            "spectra_ecmwf: cache at %s uses T%d, requested T%d; recomputing",
+            amp_dir,
+            cached_truncation,
+            truncation,
+        )
+        return False
     return True
 
 
@@ -175,6 +258,7 @@ def _run_pipeline(
     date_list: str,
     step_list: str,
     member_list: str = "ALL",
+    truncation: int,
 ) -> None:
     """Run the full 3-stage pipeline for a single variable."""
     grb_dir = output_dir / "grb"
@@ -206,6 +290,7 @@ def _run_pipeline(
         amp_dir=amp_dir,
         weather_states=weather_states_str,
         summary_path=output_dir / "spectra_summary.json",
+        truncation=truncation,
     )
 
 
@@ -220,6 +305,7 @@ def _run_input_bundle_pipeline(
     date_list: str,
     step_list: str,
     member_list: str = "1",
+    truncation: int,
 ) -> None:
     """3-stage pipeline for O96 input bundles: stage GRIBs → gptosp → amplitudes."""
     grb_dir = output_dir / "grb"
@@ -259,6 +345,7 @@ def _run_input_bundle_pipeline(
         amp_dir=amp_dir,
         weather_states=weather_states_str,
         summary_path=output_dir / "spectra_summary.json",
+        truncation=truncation,
     )
 
 
@@ -344,17 +431,24 @@ def _compute_amplitudes(
     amp_dir: Path,
     weather_states: str,
     summary_path: Path,
+    truncation: int,
 ) -> None:
     venv_activate = Path(sys.prefix) / "bin" / "activate"
     script = "\n".join([
         "set -euo pipefail",
         "module unload ifs         2>/dev/null || true",
         "module load ecmwf-toolbox 2>/dev/null || true",
+        # metview startup needs a writable shared-scratch TMPDIR (node-local /tmp hangs) +
+        # a generous start timeout; else _amplitude_computer.py times out on `import metview`.
+        'export TMPDIR="${SCRATCH:-/tmp}/mvamp_$$"; mkdir -p "$TMPDIR"',
+        'export METVIEW_TMPDIR="$TMPDIR"',
+        'export METVIEW_PYTHON_START_TIMEOUT="${METVIEW_PYTHON_START_TIMEOUT:-900}"',
         f'source "{venv_activate}"',
         f'python "{_HERE / "_amplitude_computer.py"}"'
         f' --spectral-harmonics-dir "{sh_dir}"'
         f' --out-dir "{amp_dir}"'
         f' --weather-states "{weather_states}"'
+        f' --truncation "{truncation}"'
         f' --summary-path "{summary_path}"',
     ])
     subprocess.run(["bash", "-c", script], check=True)

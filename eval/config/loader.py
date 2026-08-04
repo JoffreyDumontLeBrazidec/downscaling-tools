@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +15,9 @@ _LANE_ALLOWED_KEYS = {
     "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
     "evaluator_groups", "sigma", "sigma_loss", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
-    "default_host", "allowed_hosts",
-    "precip_dist", "precip_events", "probabilistic",
+    "default_host", "allowed_hosts", "lineage",
+    "precip_dist", "precip_events", "probabilistic", "quaver", "local_global",
+    "tctracker",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
@@ -165,6 +167,51 @@ def _validate_event(config: dict[str, Any], path: Path) -> None:
         raise ConfigValidationError(f"{path}: 'dates' must be a list, got {type(config['dates']).__name__}")
 
 
+_ANEMOI_REF_DIR = _CONFIG_DIR / "anemoi_inference_reference"
+
+
+def _apply_canonical_anemoi_reference(config: dict, lane_name: str) -> None:
+    """Overwrite prepml.input/output MARS identity (class/stream/type/grid) from the
+    canonical per-input-grid reference in anemoi_inference_reference/<GRID>.yaml.
+
+    This is the single source of truth for downscaling input/output streams, so lane
+    YAMLs cannot silently drift them (see the eecdb127 eefo/enfo incident, 2026-07-01).
+    Keyed by prepml.input.grid because each downscaling input grid maps to exactly one
+    task family (O48/O96/O320/O1280). Warns loudly on any disagreement, then wins.
+    """
+    prepml = config.get("prepml")
+    if not isinstance(prepml, dict):
+        return
+    grid = (prepml.get("input") or {}).get("grid")
+    if not grid:
+        return
+    ref_path = _ANEMOI_REF_DIR / f"{grid}.yaml"
+    if not ref_path.exists():
+        print(
+            f"WARNING [load_lane {lane_name}]: no canonical anemoi-inference reference "
+            f"for input grid {grid} ({ref_path}); prepml.input/output taken from the lane "
+            f"YAML (stream-drift risk). Add {ref_path.name} to lock it down.",
+            file=sys.stderr,
+        )
+        return
+    ref = _load_yaml(ref_path)
+    for block in ("input", "output"):
+        canon = ref.get(block)
+        if not isinstance(canon, dict):
+            continue
+        cur = dict(prepml.get(block) or {})
+        for key, val in canon.items():
+            if key in cur and cur[key] != val:
+                print(
+                    f"WARNING [load_lane {lane_name}]: prepml.{block}.{key}={cur[key]!r} "
+                    f"disagrees with canonical {val!r} (input grid {grid}); using canonical. "
+                    f"Remove {block}.{key} from the lane YAML.",
+                    file=sys.stderr,
+                )
+        cur.update(canon)
+        prepml[block] = cur
+
+
 def load_lane(name: str, overrides: dict | None = None) -> dict:
     path = _CONFIG_DIR / "lanes" / f"{name}.yaml"
     if not path.exists():
@@ -175,6 +222,7 @@ def load_lane(name: str, overrides: dict | None = None) -> dict:
         config = _deep_merge(base_config, config)
     if overrides:
         config = _deep_merge(config, overrides)
+    _apply_canonical_anemoi_reference(config, name)
     _validate_lane(config, path)
     return config
 

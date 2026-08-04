@@ -13,6 +13,14 @@ python -m eval.cli <subcommand> [args]
 
 ### Subcommands
 
+### ECMWF tctracker expver archives
+
+Use python -m eval.cli tctracker when the source is a PrepML/FDB expver rather than local NetCDF predictions. It writes basin-track tars, manifests, structural verification, and Atlantic track summaries. Full operational runbook: /home/ecm5702/dev/docs/epics/tc_track/TCTRACKER_EVAL_CLI.md.
+
+Verified j761 inspection command:
+
+    python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761 --output-dir /home/ecm5702/scratch/eval/o96_o320/tctracker/j761 --verify-only
+
 **Full pipeline** (predict + evaluate + scoreboard):
 ```bash
 python -m eval.cli run \
@@ -75,6 +83,14 @@ Validation caveat: quaver surface scores are station-observation/FDB-backed, whi
 Use `--dry-run` on any subcommand to print the resolved config as JSON.
 
 Use `--include-diagnostics` to run the diagnostics group (sigma, mechanistic, intermediate) in addition to defaults.
+
+### Fast regional TC harness: `tc_o320_o1280`
+
+`tc_o320_o1280` is a fast local harness for the `o320 -> o1280` / `30 km -> 9 km` TC-extremes problem. It is intentionally not a public scoreboard lane. Use it to iterate cheaply on sampler, checkpoint, graph-cut, and inference choices over the Franklin+Idalia local box, then confirm promising changes with the standard global `o320_o1280` lane before making ranked or public claims.
+
+Data flow stays bundle-based: rebuild truth-aware NetCDF bundles into `<RUN_ROOT>/bundles_with_y`, then run prediction from those bundles. Do not switch this first-pass harness to zarr. Raw GRIBs are only the upstream source for `eval.cli prepare`; zarr remains a training/archive/data-prep surface unless a future task explicitly proves the bundle route cannot cover the selected TC events.
+
+The lane uses `predict.local_scope` with a bbox over lat `10..40`, lon `-100..-58`, `cut_graph: true`, and `num_gpus_per_model: 1`. TC stats are anchored to embedded `target O1280` bundle truth because `/home/ecm5702/perm/reference/o320_o1280/tc` currently contains no retrieved reference GRIBs.
 
 ## Pipeline Generation
 
@@ -174,3 +190,19 @@ See [`eval/predict/README.md`](predict/README.md) for full documentation.
 ## Archive (`eval/archive/`)
 
 Contains retired scripts and old templates. Not used in live workflows.
+
+### ECMWF tctracker expver archives
+
+Use this CLI surface when the source is a PrepML/FDB expver rather than local NetCDF predictions:
+
+```bash
+python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761
+```
+
+The command writes basin track tar files, logs, manifests, verification summaries, and an Atlantic track summary under the tctracker run root. For the verified j761 bundle, inspect existing artifacts without rerunning production:
+
+```bash
+python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761 --output-dir /home/ecm5702/scratch/eval/o96_o320/tctracker/j761 --verify-only
+```
+
+Use `--parse-only` for track parsing only, and `--slurm-script PATH` to render a single resumable nf job script.

@@ -522,3 +522,42 @@ def test_cli_predict_bundle_dir_rejects_truthless_prepare_lane(tmp_path, monkeyp
 
     with pytest.raises(RuntimeError, match="target_hres"):
         eval_cli.cmd_predict(args, lane_config, host_config, tmp_path)
+
+def test_cli_predict_tc_o320_o1280_fast_harness_dry_run():
+    """tc_o320_o1280 previews as a one-rank local TC harness, not a scoreboard lane."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "predict",
+            "--dry-run",
+            "--lane", "tc_o320_o1280",
+            "--checkpoint", "/tmp/test.ckpt",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert '"lane": "tc_o320_o1280"' in result.stdout
+    assert '"num_gpus_per_model": 1' in result.stdout
+    assert '"cut_graph": true' in result.stdout
+    assert '"label": "franklin_idalia_full250_box"' in result.stdout
+    assert '"analysis_expid": "target O1280"' in result.stdout
+    assert '"grib_dir": null' in result.stdout
+
+
+def test_cli_tctracker_dry_run():
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "tctracker",
+            "--dry-run",
+            "--lane", "o96_o320_unified_full",
+            "--host", "atos_ac",
+            "--expver", "j761",
+            "--dates", "20230826",
+            "--members", "1",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    assert '"subcommand", "tctracker"' not in result.stdout
+    assert '"target_count": 1' in result.stdout
+    assert '"expver": "j761"' in result.stdout
+    assert '"tag": "j761_20230826_00_m001_o320_tracks"' in result.stdout

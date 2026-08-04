@@ -202,7 +202,7 @@ def main() -> None:
         ),
     )
     ap.add_argument("--eval-qos", default="nf")
-    ap.add_argument("--eval-time", default="08:00:00")
+    ap.add_argument("--eval-time", default="48:00:00")
     ap.add_argument("--eval-cpus", default="8")
     ap.add_argument("--eval-mem", default="64G")
     ap.add_argument(
