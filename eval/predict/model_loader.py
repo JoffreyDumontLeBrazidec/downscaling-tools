@@ -35,13 +35,16 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     evals). Returns an info dict (or None when off)."""
     ckpt = extra_args.pop("autoguide_checkpoint", None)
     w = extra_args.pop("autoguide_weight", None)
+    w_map = extra_args.pop("autoguide_weight_map", None)
     sig_lo = float(extra_args.pop("autoguide_sigma_lo", 0.0))
     sig_hi = float(extra_args.pop("autoguide_sigma_hi", 1.0e9))
-    if w in (None, 0, 0.0):
+    if w in (None, 0, 0.0) and not w_map:
         return None
     if not ckpt:
-        raise SystemExit("autoguide_weight set but autoguide_checkpoint missing")
-    w = float(w)
+        raise SystemExit("autoguide_weight(_map) set but autoguide_checkpoint missing")
+    if w_map is not None and not isinstance(w_map, dict):
+        raise SystemExit("autoguide_weight_map must be a {variable: weight} mapping")
+    w = 1.0 if w is None else float(w)
     # load_objects() takes the BASE (training-format) path and loads "inference-"+name
     # itself; the main model path is normalized upstream, so normalize D_bad here too
     # (accept either format, as a user would expect).
@@ -87,6 +90,40 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     base_fn = strong_inner.fwd_with_preconditioning
     weak_fn = weak_inner.fwd_with_preconditioning
 
+    # Per-output-variable weights: gvecs[dataset_key] = (w_vec - 1) over the LAST (vars)
+    # dim of that dataset's output tensor, built from data_indices name_to_index.
+    gvecs = None
+    if w_map:
+        di = getattr(strong_inner, "data_indices", None)
+        if di is None:
+            raise SystemExit("autoguide_weight_map: model exposes no data_indices "
+                             "(ds-API models are unsupported; use scalar autoguide_weight)")
+        try:
+            di_items = dict(di).items()
+        except Exception:
+            raise SystemExit("autoguide_weight_map: cannot iterate data_indices (%r)" % type(di))
+        gvecs, seen = {}, set()
+        for dkey, idx in di_items:
+            nti = getattr(getattr(getattr(idx, "model", None), "output", None),
+                          "name_to_index", None)
+            if not nti:
+                continue
+            vec = torch.full((max(nti.values()) + 1,), w, dtype=torch.float32, device=device)
+            for name, wv in w_map.items():
+                if name in nti:
+                    vec[nti[name]] = float(wv)
+                    seen.add(name)
+            gvecs[dkey] = vec - 1.0
+        missing = set(w_map) - seen
+        if not gvecs:
+            raise SystemExit("autoguide_weight_map: no dataset in data_indices has "
+                             "model.output.name_to_index")
+        if missing:
+            names = sorted({n for _, idx in di_items for n in getattr(getattr(getattr(
+                idx, "model", None), "output", None), "name_to_index", {})})
+            raise SystemExit("autoguide_weight_map: unknown variables %s (available: %s)"
+                             % (sorted(missing), names))
+
     calls = {"n": 0, "in_band": 0}
 
     def _autoguided(*args, **kwargs):
@@ -102,7 +139,23 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
             calls["in_band"] += 1
             Dw = weak_fn(*args, **kwargs)
             if isinstance(D, dict):
+                if gvecs is not None:
+                    out = {}
+                    for k in D:
+                        g = gvecs.get(k)
+                        if g is None:
+                            raise SystemExit("autoguide_weight_map: no output index for "
+                                             "dataset %r (have %s)" % (k, sorted(gvecs)))
+                        if D[k].shape[-1] != g.numel():
+                            raise SystemExit("autoguide_weight_map: %r has %d channels, "
+                                             "weight vector has %d"
+                                             % (k, D[k].shape[-1], g.numel()))
+                        out[k] = D[k] + g.to(D[k].dtype) * (D[k] - Dw[k].to(D[k].dtype))
+                    return out
                 return {k: D[k] + (w - 1.0) * (D[k] - Dw[k].to(D[k].dtype)) for k in D}
+            if gvecs is not None:
+                raise SystemExit("autoguide_weight_map is dict-API only; this model returned "
+                                 "a bare tensor (ds-API)")
             Dwt = next(iter(Dw.values())) if isinstance(Dw, dict) else Dw
             return D + (w - 1.0) * (D - Dwt.to(D.dtype))
         except Exception:
@@ -113,11 +166,13 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     # Keep D_bad alive for the process lifetime (the wrapper closes over weak_fn).
     inference_model._autoguide_weak_model = weak_model
     info = {"autoguide_checkpoint": str(ckpt), "autoguide_weight": w,
+            "autoguide_weight_map": w_map,
             "autoguide_sigma_lo": sig_lo, "autoguide_sigma_hi": sig_hi}
     inference_model._autoguide_info = info
     inference_model._autoguide_calls = calls
-    print("[autoguidance] AUTOGUIDANCE ACTIVE w=%.3g D_bad=%s"
-          % (w, _Path(str(ckpt)).name), file=_sys.stderr, flush=True)
+    print("[autoguidance] AUTOGUIDANCE ACTIVE w=%.3g%s D_bad=%s"
+          % (w, "" if not w_map else " map=%s" % json.dumps(w_map, sort_keys=True),
+             _Path(str(ckpt)).name), file=_sys.stderr, flush=True)
 
     def _report():
         print("[autoguidance] denoiser calls total=%d guided_in_band=%d"
