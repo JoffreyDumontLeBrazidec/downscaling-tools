@@ -1,0 +1,32 @@
+# tc_o320_o1280_s397_d50k_pvw_msl -- s397434 PER-VARIABLE autoguidance probe: D_bad=50k,
+# PER-VARIABLE weight: msl guided at w=1.5, ALL other 67 channels unguided (w=1.0).
+# Decomposition probe: does msl-channel guidance alone drive coherent deepening?
+# depth commits in [20,400]. Derived from committed tc_o320_o1280_s397_d50k_w15 lane
+base: tc_o320_o1280
+
+predict:
+  dates: ["20230829"]
+  steps: [48]
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+  # 100 symlinked copies of the deepest-EEFO Franklin input (wave-3 probe set);
+  # the lane chain defines NO input_root -> pin it or $DATA_DIR is used (0 bundles).
+  input_root: /home/ecm5702/scratch/eval/sampler_seed_probe_franklin_20260728/probe_bundles
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.5}
