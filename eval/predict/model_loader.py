@@ -182,6 +182,106 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     return info
 
 
+
+def _activate_sigma_switch(inference_model, extra_args: dict, config: PredictionConfig,
+                           device, autoguide_active: bool = False) -> dict | None:
+    """Sigma-switched dual denoiser: use an ALTERNATE checkpoint inside given sigma bands.
+
+    Reads (and REMOVES) switch_* keys from extra_args so they never reach predict_step:
+      switch_checkpoint: path to the ALT ckpt (base or inference- format, as autoguide)
+      switch_alt_bands:  list of [lo, hi) sigma bands where the ALT denoiser is used;
+                         the primary checkpoint denoises everywhere else.
+    Additive: absent keys -> exact current behavior. Mutually exclusive with autoguidance
+    (both wrap fwd_with_preconditioning). Returns an info dict (or None when off)."""
+    ckpt = extra_args.pop("switch_checkpoint", None)
+    bands = extra_args.pop("switch_alt_bands", None)
+    if ckpt is None and bands is None:
+        return None
+    if autoguide_active:
+        raise SystemExit("sigma-switch and autoguidance are mutually exclusive")
+    if not ckpt or not bands:
+        raise SystemExit("sigma-switch needs BOTH switch_checkpoint and switch_alt_bands")
+    if isinstance(bands, str):
+        bands = [[float(x) for x in part.split(":")] for part in bands.split(",")]
+    try:
+        bands = [(float(lo), float(hi)) for lo, hi in bands]
+    except Exception:
+        raise SystemExit("switch_alt_bands must be [[lo, hi], ...] or 'lo:hi,lo:hi'")
+    for lo, hi in bands:
+        if not lo < hi:
+            raise SystemExit("switch_alt_bands: need lo < hi, got [%g, %g)" % (lo, hi))
+    # Same base/inference- normalization as autoguidance (load_objects prepends inference-).
+    ckpt_p = _Path(str(ckpt)).expanduser()
+    inference_only = None
+    if ckpt_p.name.startswith("inference-"):
+        base = ckpt_p.with_name(ckpt_p.name[len("inference-"):])
+        if base.exists():
+            ckpt = str(base)
+        else:
+            inference_only = ckpt_p
+    elif not ckpt_p.exists():
+        companion = ckpt_p.with_name("inference-" + ckpt_p.name)
+        if not companion.exists():
+            raise SystemExit("switch_checkpoint not found: %s (nor %s)" % (ckpt_p, companion))
+        inference_only = companion
+    print("[sigma-switch] loading ALT %s (alt bands %s)" % (ckpt, bands),
+          file=_sys.stderr, flush=True)
+    if inference_only is not None:
+        alt_model = torch.load(str(inference_only), map_location=device, weights_only=False)
+        try:
+            alt_model = alt_model.to(device)
+        except Exception:
+            pass
+    else:
+        alt_model, _, _, _ = _load_objects(
+            ckpt_path=str(ckpt),
+            device=device,
+            validation_frequency=config.validation_frequency,
+            precision=config.precision,
+            num_gpus_per_model_override=config.num_gpus_per_model,
+        )
+    if config.local_scope_json:
+        activate_local_graph_cut(alt_model, config.local_scope_json)
+    primary_inner = getattr(inference_model, "model", inference_model)
+    alt_inner = getattr(alt_model, "model", alt_model)
+    primary_fn = primary_inner.fwd_with_preconditioning
+    alt_fn = alt_inner.fwd_with_preconditioning
+
+    calls = {"n": 0, "alt": 0}
+
+    def _switched(*args, **kwargs):
+        calls["n"] += 1
+        try:
+            if args and isinstance(args[0], dict):   # unified dict-API: (x, y, sigma_dict, ...)
+                sig = float(next(iter(args[2].values())).reshape(-1)[0].item())
+            else:                                    # ds-API: (x_interp, x_hres, y_noised, sigma, ...)
+                sig = float(args[3].reshape(-1)[0].item())
+        except Exception:
+            LOG.exception("sigma-switch: could not read sigma; using primary denoiser")
+            return primary_fn(*args, **kwargs)
+        if any(lo <= sig < hi for lo, hi in bands):
+            calls["alt"] += 1
+            return alt_fn(*args, **kwargs)
+        return primary_fn(*args, **kwargs)
+
+    primary_inner.fwd_with_preconditioning = _switched
+    # Keep ALT alive for the process lifetime (the wrapper closes over alt_fn).
+    inference_model._sigma_switch_alt_model = alt_model
+    info = {"switch_checkpoint": str(ckpt),
+            "switch_alt_bands": [list(b) for b in bands]}
+    inference_model._sigma_switch_info = info
+    inference_model._sigma_switch_calls = calls
+    print("[sigma-switch] SIGMA-SWITCH ACTIVE alt=%s bands=%s"
+          % (_Path(str(ckpt)).name, bands), file=_sys.stderr, flush=True)
+
+    def _report():
+        print("[sigma-switch] denoiser calls total=%d alt_used=%d"
+              % (calls["n"], calls["alt"]), file=_sys.stderr, flush=True)
+
+    _atexit.register(_report)
+    return info
+
+
 def setup_distributed(config: PredictionConfig) -> tuple[str, object | None, int, int, int]:
     """Resolve device and initialize the model communication group."""
 
@@ -225,6 +325,10 @@ def load_inference_model(
     ag_info = _activate_autoguidance(inference_model, extra_args, config, device)
     if ag_info:
         LOG.info("autoguidance ACTIVE: %s", ag_info)
+    sw_info = _activate_sigma_switch(inference_model, extra_args, config, device,
+                                     autoguide_active=bool(ag_info))
+    if sw_info:
+        LOG.info("sigma-switch ACTIVE: %s", sw_info)
     return (
         inference_model,
         datamodule,
