@@ -432,7 +432,22 @@ def cmd_loss(args: argparse.Namespace) -> None:
     Nested metric names are supported and are where the useful metrics live -- an MLflow
     file store writes per-variable validation metrics as SUBDIRECTORIES, e.g.
     'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0'.
+
+    --baseline-lane <lane> loads the lane BASELINE's ARCHIVED store (mlflow-dir, run-id and
+    label 'baseline' resolved from the scoreboard's meta.baseline) so a live run and the
+    baseline overlay in one `ladder plot`. COARSE SANITY ONLY: train/val loss is not
+    cross-run-comparable skill -- judge progress on ladder/proxy metrics vs the baseline's
+    ladder card (evolution --ref baseline:<lane>), and use this overlay just to spot
+    divergence, stalls or NaNs.
     """
+    if args.baseline_lane:
+        from eval.baseline import baseline_mlflow
+        exp_dir, run_id = baseline_mlflow(args.baseline_lane)
+        args.mlflow_dir, args.run_id = exp_dir, run_id
+        args.run_name = None
+        args.label = args.label or "baseline"
+    if not args.mlflow_dir:
+        raise SystemExit("ladder loss: pass --mlflow-dir (or --baseline-lane)")
     if not (args.run_name or args.run_id):
         raise SystemExit("ladder loss: pass --run-name or --run-id")
     prof = load_profile(args.profile)
@@ -781,7 +796,11 @@ def main() -> None:
 
     s = sub.add_parser("loss")
     s.add_argument("--profile", required=True)
-    s.add_argument("--mlflow-dir", required=True)
+    s.add_argument("--mlflow-dir")
+    s.add_argument("--baseline-lane",
+                   help="load the lane BASELINE's archived MLflow store instead of "
+                        "--mlflow-dir/--run-id (label defaults to 'baseline'). Coarse sanity "
+                        "overlay only — loss is not cross-run-comparable skill.")
     s.add_argument("--run-name", help="EXACT mlflow.runName; use --run-id when the name is "
                                       "generic or reused")
     s.add_argument("--run-id", help="mlflow run id: merges that run AND every child whose "

@@ -166,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
     )
+    p_run.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="After the scoreboard step, diff this run against the lane BASELINE "
+             "(top of the lane scoreboard) and write scoreboard/vs_baseline.md.",
+    )
 
     # --- predict ---
     p_predict = subparsers.add_parser("predict", help="Generate predictions only.")
@@ -230,6 +235,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="PrepML/FDB expver of the run being evaluated. When set, the quaver "
              "probabilistic scorecard is run automatically (FDB-based).",
     )
+    p_eval.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="After evaluating, diff this run's scoreboard scores against the lane BASELINE "
+             "(top of the lane scoreboard) and write scoreboard/vs_baseline.md.",
+    )
 
     # --- scoreboard ---
     p_sb = subparsers.add_parser("scoreboard", help="Generate scoreboard from evaluation results.")
@@ -239,6 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root evaluation directory containing evaluator outputs.",
     )
     _add_evaluator_filter_args(p_sb)
+    p_sb.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="Also diff the scores against the lane BASELINE (top of the lane scoreboard) "
+             "and write scoreboard/vs_baseline.md.",
+    )
 
     # --- report ---
     p_report = subparsers.add_parser("report", help="Generate HTML report for an evaluation run.")
@@ -305,9 +320,13 @@ def build_parser() -> argparse.ArgumentParser:
              "ENFO target (one row per weather state, one column per metric family).",
     )
     p_evo.add_argument("--exp", action="append", required=True,
-                       help="LABEL=/path/to/ladder.json (repeatable)")
+                       help="LABEL=/path/to/ladder.json (repeatable). `baseline:<lane>` resolves "
+                            "to the lane baseline's archived ladder card.")
     p_evo.add_argument("--ref", default=None,
-                       help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve")
+                       help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve. "
+                            "`baseline:<lane>` (e.g. baseline:o96_o320) resolves to the lane "
+                            "BASELINE's archived ladder card — the standard during-run and "
+                            "end-of-run comparison.")
     p_evo.add_argument("--input", dest="input_ref", default=None,
                        help="LABEL=/path/to/flat.json -- the INPUT anchor (REQUIRED)")
     p_evo.add_argument("--target", dest="target_ref", default=None,
@@ -1342,11 +1361,22 @@ def main(argv: list[str] | None = None) -> None:
     # --- Evolution subcommand (reads ladder cards; no lane/host config needed) ---
     if args.subcommand == "evolution":
         from eval.jobs.evolution import main as evolution_main
+
+        def _resolve_card_spec(spec: str) -> str:
+            """`baseline:<lane>` or `LABEL=baseline:<lane>` -> the lane baseline's archived
+            ladder card (LABEL defaults to baseline-<ckpt8>)."""
+            label, _, path = spec.rpartition("=")
+            if path.startswith("baseline:"):
+                from eval.baseline import baseline_ladder_card
+                auto_label, card = baseline_ladder_card(path.split(":", 1)[1])
+                return f"{label or auto_label}={card}"
+            return spec
+
         forwarded: list[str] = ["--out", str(args.out), "--region", args.region]
         for e in args.exp:
-            forwarded += ["--exp", e]
+            forwarded += ["--exp", _resolve_card_spec(e)]
         if args.ref:
-            forwarded += ["--ref", args.ref]
+            forwarded += ["--ref", _resolve_card_spec(args.ref)]
         if args.input_ref:
             forwarded += ["--input", args.input_ref]
         if args.target_ref:
@@ -1575,6 +1605,16 @@ def main(argv: list[str] | None = None) -> None:
         _run_scoreboard(eval_dir, lane_config, evaluators, output_dir)
     elif args.subcommand == "tctracker":
         cmd_tctracker(args, lane_config, host_config, output_dir)
+
+    # --- vs-baseline: every score is read relative to the lane BASELINE (top of the
+    # lane scoreboard). Written AFTER the scoreboard step so scores.csv exists.
+    # Warn-only: a missing baseline/scores must not fail an otherwise-good eval. ---
+    if getattr(args, "vs_baseline", False):
+        from eval.baseline import write_vs_baseline
+        try:
+            write_vs_baseline(output_dir, lane_name, run_label=getattr(args, "run_label", ""))
+        except SystemExit as exc:
+            LOG.warning("--vs-baseline skipped: %s", exc)
 
 
 if __name__ == "__main__":
