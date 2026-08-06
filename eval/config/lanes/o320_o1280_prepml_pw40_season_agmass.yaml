@@ -1,0 +1,28 @@
+# o320_o1280_prepml_pw40_season_agmass -- AUTOGUIDANCE month campaign arm.
+# Identical to the season ctrl lane (j95y/j95z, pw40 sampler, s397434) plus
+# mass-only autoguidance at w=1.5 (msl+sp+z_* guided, all other channels 1.0),
+# D_bad = s397434 OWN-ANCESTOR step 50000 inference companion.
+# Operating point = epics/tc-perf-high-resolution/FINDINGS.md findings 25-26
+# (gate-2 PASSED 2026-08-05); this month = the weak-day/non-TC calibration set
+# (finding 27b). Guidance is injected in the prepml seam by
+# season-scale-tools/downscaling_unified_runner.py via CODEX_AUTOGUIDE_* env
+# (fail-loud: a wrap error kills the task rather than writing unguided fields).
+# NOTE: loader _deep_merge is 2-level only -> predict.env REPLACES the base env,
+# so the base lane env block is repeated here in full. Keep in sync.
+# Walltime doubled vs ctrl: guidance = 2 denoiser evals per sampler step.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_AUTOGUIDE_CHECKPOINT: /home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt
+    CODEX_AUTOGUIDE_WEIGHT_MAP: /home/ecm5702/dev/anemoi-inference-configs/autoguide_mass_w15.json
+
+prepml:
+  platform:
+    gpu:
+      time: "0-10:00"
