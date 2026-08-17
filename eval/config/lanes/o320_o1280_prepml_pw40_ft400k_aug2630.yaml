@@ -11,6 +11,17 @@
 #
 # Matched comparison arm: expver j95y (donor s397434, 2023 season) — byte-complete on
 # these five dates at 10,880 fields each. This run must gate on 5 x 10,880 = 54,400.
+#
+# ⚠ NUM_CHUNKS PROVENANCE (2026-08-17). Expver j9xm was produced with
+# ANEMOI_INFERENCE_NUM_CHUNKS=32, i.e. the value this file held BEFORE commit 2b718e7
+# flipped the o320_o1280 lanes to 1. The flip does not affect j9xm (prepml snapshots the
+# config at ingest), and the owner ruled 2026-08-17 to let j9xm finish at 32 so it stays
+# numerically matched to its comparison arm j95y, which is also 32.
+# ⇒ If you ever TOP UP or RE-RUN a date into j9xm, set the three NUM_CHUNKS back to 32
+#   first. Running a top-up at 1 would put two numerical paths inside one expver; the knob
+#   doc (docs/knowledge/anemoi-num-chunks-memory-knob.md, 2026-08-17) reports pointwise
+#   rmse/std 0.01-0.28 between them and asks for a paired parity gate before any scored
+#   lane adopts 1. A brand-new campaign should of course use 1 (2.9x faster under edges).
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ag]
