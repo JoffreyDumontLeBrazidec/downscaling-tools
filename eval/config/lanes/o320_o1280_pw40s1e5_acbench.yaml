@@ -13,3 +13,6 @@ allowed_hosts:
   run: []
   evaluate: [atos_ac]
   scoreboard: [atos_ac]
+
+predict:
+  input_root: /home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia
