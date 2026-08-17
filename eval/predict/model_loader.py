@@ -75,6 +75,13 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
             weak_model = weak_model.to(device)
         except Exception:
             pass
+        # Model-parallel: the serialized model pickles rank-0 halo/partition caches;
+        # reusing them per-rank OOBs halo_exchange (same invalidation as load_objects).
+        for _mod in weak_model.modules():
+            if hasattr(_mod, "_cached_halo_info"):
+                _mod._cached_halo_info = None
+            if hasattr(_mod, "_cached_partition"):
+                _mod._cached_partition = None
     else:
         weak_model, _, _, _ = _load_objects(
             ckpt_path=str(ckpt),
