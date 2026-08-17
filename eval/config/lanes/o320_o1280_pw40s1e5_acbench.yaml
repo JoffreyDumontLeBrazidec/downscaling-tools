@@ -1,0 +1,15 @@
+# o320_o1280_pw40s1e5_acbench -- NUM_CHUNKS/GPU-count TIMING BENCH lane (2026-08-17).
+# Identical sampler to the pw40/s1e5 campaign operating point; only change vs
+# o320_o1280_piecewise40_s1e5 is allowing manual predict on AC (atos_ac_pristine)
+# so the chunk sweep runs on the same 40 GB A100s as the prepml season campaigns.
+# BENCH ONLY: timing/memory-envelope smokes, always with --output-dir under
+# bench_* roots. Never use for scored/canonical runs (production floor stays
+# 4 GPU on the parent lanes).
+base: o320_o1280_piecewise40_s1e5
+
+allowed_hosts:
+  prepare: [atos_ag]
+  predict: [atos_ag, atos_ac_pristine]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
