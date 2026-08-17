@@ -235,6 +235,14 @@ def generate_prepml_config(
     if prepml.get("prepml_099_compat", False):
         config.pop("resources", None)
         config.get("platform", {}).pop("name", None)
+    # ecFlow-level knobs, passed straight through (prepml reads config.ecflow.limits in
+    # commands/suite/inference.py). Chief use: limits.gpu = max concurrent model tasks the
+    # suite will hold. prepml defaults to 10, which lets one long month-scale campaign
+    # monopolise -- and get culled by -- the shared account job budget; lanes that run for
+    # days should set a smaller value. Absent -> prepml default, so this is a no-op.
+    ecflow_cfg = prepml.get("ecflow")
+    if ecflow_cfg:
+        config["ecflow"] = dict(ecflow_cfg)
     predict_env = dict(predict.get("env") or {})
     if predict_env:
         config["model"]["env"] = predict_env

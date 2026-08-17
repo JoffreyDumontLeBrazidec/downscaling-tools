@@ -23,6 +23,13 @@ predict:
     CODEX_AUTOGUIDE_WEIGHT_MAP: /home/ecm5702/dev/anemoi-inference-configs/autoguide_mass_w15.json
 
 prepml:
+  # Cap concurrent model tasks at 3 (prepml default 10). At 10 this campaign filled the
+  # shared ecm5702 gpu/ng job budget and SLURM culled 8 in-flight tasks on 2026-08-11
+  # (AssocMaxJobsLimit), aborting the suite for 3 days. 3 keeps the month progressing
+  # without blocking the season suites or other work.
+  ecflow:
+    limits:
+      gpu: 3
   platform:
     gpu:
       time: "0-10:00"
