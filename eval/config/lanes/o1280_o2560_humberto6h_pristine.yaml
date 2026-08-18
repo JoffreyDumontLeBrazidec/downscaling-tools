@@ -1,0 +1,91 @@
+# o1280_o2560_humberto6h_pristine.yaml
+# Humberto (Sept 2025) evaluation of the PRISTINE o1280->o2560 rebaseline
+# ckpt fccc23dfb5de4dfbbb2ca0c0e0ce3fdf @ step 300,000 (epoch 456, run complete
+# 2026-08-15). FIRST inference ever run on a pristine o2560 checkpoint — every
+# prior o2560 lane targets the HALO ckpt 9d6f73 via atos_ac_unified.
+#
+# Owner direction 2026-08-17: manual inference on atos_ag (GH200); prepml on
+# 1 node x 4 AC GPUs. Both postures already tested.
+#
+# 6h step cadence (NOT the base lane's 24h [24,48,72,96,120]) because the ask is
+# precip: the staged Humberto inputs/targets are step006to120by006 and the target
+# GRIBs carry the _acc_wide accumulated fields.
+base: o1280_o2560
+
+default_host: atos_ag
+allowed_hosts:
+  prepare: [atos_ag, atos_ac]
+  predict: [atos_ag, atos_ac]     # ag = manual, ac = prepml (4 GPUs, 1 node)
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  # 20 steps at 6h — matches the staged bundles and the _acc_wide precip targets
+  steps: [6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120]
+  dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 4
+  # Reuse the existing 1000-bundle 6h set (5 dates x 10 members x 20 steps).
+  # Bundles are checkpoint-independent: input fields + embedded truth.
+  input_root: /home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/bundles_with_y
+
+prepml:
+  # j7a1 verified FREE via `fdb list --porcelain class=rd,expver=j7a1` (0 fields).
+  # NB the expver registry is stale (2026-06-23): j7a2 was absent from it yet holds
+  # 245k fields — always check FDB, not the registry.
+  debug_expvers: ["j9yw"]
+  # j9yk was minted with: prepml expver --create --force
+  # LESSON: an expver being FDB-free is NECESSARY BUT NOT SUFFICIENT. j7a1 had 0 FDB
+  # fields yet prepml rejected it with "No such experiment version: j7a1" — expvers must
+  # also exist in the prepml CATALOGUE. Always --create rather than picking a free name.
+  # DEVIATION FROM BASE LANE, and the one unverified axis here:
+  # base o1280_o2560 carries `runner: anemoi-dev` + ds-dyn-prepml-wrap, which serve
+  # the HALO 9d6f73 ckpt. This checkpoint is PRISTINE (c286c1a33, unified dict-API),
+  # so it needs the unified runner + pristine wrap, mirroring the pristine
+  # o320_o1280 lane. Validate via the FDB field-count gate, not job exit code.
+  # time_step drives the MARS step request, NOT predict.steps:
+  #   _input_step_request -> f"{offset}/to/{max(predict_steps)+offset}/by/{time_step}"
+  # Base lane has time_step: 24h, so overriding predict.steps to 6h alone produced
+  # "6/to/126/by/24" (24-HOURLY) — wrong cadence for precip. Must set it here too.
+  time_step: 6h
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  # 2026-08-18 FIX (j9yk/j9yw postmortem, both expvers failed identically):
+  # the base lane inherits input.step_offset_hours: 6, which yields a MARS request
+  # step=6/to/126/by/6 (j9yk: 6/to/126/by/24) — NO step 0. The unified runner
+  # builds its initial input state at the forecast BASE date (00:00,
+  # write_initial_state: true), and .sel(valid_datetime=00:00) matched 0 of the
+  # 1911 staged fields (91 vars x 21 steps, retrieval itself was complete):
+  #   "Expected (91 variables) x (1 date) = 91 fields, got 0"
+  # The halo-era DYN runner selected inputs per valid time and tolerated the
+  # offset; the pristine/unified runner mirrors the working o320_o1280 pristine
+  # lane (j9yd requests step=0/to/360/by/24) and REQUIRES step 0 in the file.
+  # All 91 input vars verified present at od/enfo/pf/O1280 step 0 via mars list
+  # (13 sfc + 78 pl, date 2025-09-26). Offset 0 -> step=0/to/120/by/6.
+  # NB the loader merge is only 2 levels deep, so this input block REPLACES the
+  # base lane prepml.input wholesale — every key must be restated here.
+  input:
+    class: od
+    stream: enfo
+    type: pf
+    grid: O1280
+    step_offset_hours: 0
+
+# --- dataset re-pointing: Jupiter-trained ckpt -> Atos-resident zarrs ---
+# The ckpt carries ABSOLUTE JUPITER paths (training used absolute paths because
+# anemoi-datasets on Jupiter ignores DATA_DIR for name lookup). On Atos those miss,
+# and anemoi-datasets falls back to BASENAME lookup across its search path:
+#   1. /home/ecm5702/scratch/data/zarr_mirror/   <- writable, searched FIRST
+#   2. /home/mlx/ai-ml/datasets/
+#   3. /home/mlx/ai-ml/datasets/stable/
+# That fallback succeeds for the o1280 input but FAILED for the o2560 target,
+# because training used obrien2's Jupiter-only "-16gridchunks" rechunked copy.
+# Atos holds the SAME data under the canonical name (O2560, 26,306,560 points,
+# 104 vars), so the fix is an ALIAS SYMLINK in zarr_mirror (1) rather than a lane
+# key -- the lane schema has no `system:` block:
+#   zarr_mirror/downscaling-rd-fc-oper-i4ql-mars-o2560-2023-2024-24h-v1-16gridchunks.zarr
+#     -> /home/mlx/ai-ml/datasets/downscaling-rd-fc-oper-i4ql-mars-o2560-2023-2024-24h-v1.zarr
+# Verified: open_dataset(...-16gridchunks) -> shape (9000, 104, 1, 26306560).
+# Symptom if the symlink is lost: zarr PathNotFoundError on /e/data1/... at
+# datamodule ds_train construction (smoke 50057179).
