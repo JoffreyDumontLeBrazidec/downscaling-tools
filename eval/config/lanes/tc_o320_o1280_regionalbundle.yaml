@@ -12,6 +12,18 @@
 # NO local_scope => no cut_graph (activate_local_graph_cut is only for running the
 # GLOBAL b785 checkpoint on a box; these models are already native-local).
 # Screening evidence only -- never a public scoreboard row.
+#
+# DOCTRINE (settled 2026-08, epics/tc-o320-o1280/FINDINGS.md):
+#  1. RUNTIME-MATCH: never score anything on this lane against a baseline row produced on a
+#     different inference route/runtime -- re-run b785 through THIS lane first. bf16<->fp32
+#     alone moves the TC eye ~7 hPa and fine-band wind power 3.5-4x; a stored b785 row
+#     differed 11.3 hPa from its same-runtime re-run (FINDINGS 8-9, 15).
+#  2. MASKED vs UNMASKED checkpoints: wind/fine-band verdicts are only valid for checkpoints
+#     fine-tuned with the ring-masked loss (area_weight_ring2); unmasked-trained checkpoints
+#     have eroded fine-band winds by construction and are deep-eye-screen evidence only
+#     (FINDINGS 13, 29-33).
+#  3. Single-event TC deltas carry ~5-7 hPa run-to-run noise -- two-event bars, and read any
+#     eye gain together with the spectra (FINDINGS 10, 36).
 base: o320_o1280
 
 default_host: atos_ac_pristine
