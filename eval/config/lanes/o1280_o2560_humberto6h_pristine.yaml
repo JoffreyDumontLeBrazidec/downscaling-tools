@@ -89,3 +89,15 @@ prepml:
 # Verified: open_dataset(...-16gridchunks) -> shape (9000, 104, 1, 26306560).
 # Symptom if the symlink is lost: zarr PathNotFoundError on /e/data1/... at
 # datamodule ds_train construction (smoke 50057179).
+
+# TC support contract (2026-08-18): the base lane anchors on OPER_O1280_0001
+# analysis (o1280 box) while predictions/IEKM live on the o2560 box — in the
+# default "native" mode the contract correctly refuses to mix them (the May
+# 811960e6 stats.json predates the contract and DID mix supports — trap).
+# "regridded" regrids every curve (model, refs, bundle x_interp/y) onto the
+# shared regular analysis grid = one geometry. Needs metview (ecmwf-toolbox
+# module) + the surface_an_OPER_O1280_0001_*.grib files (verified present).
+# TC also runs from data_tc24h/predictions (24h subset): the legacy kernel
+# step contract only supports 24/48/72/96/120 ("Unsupported step=6").
+tc:
+  support_mode: "regridded"
