@@ -1186,11 +1186,12 @@ def cmd_tctracker(args: argparse.Namespace, lane_config: dict, host_config: dict
     import dataclasses
 
     from eval._backends.tctracker import (
-        build_config, completeness_report, expand_months, parse_and_write,
-        parse_atlantic_tracks, parse_sources_arg, render_slurm_script,
-        resolve_source_configs, run_batch, verify_outputs,
-        write_atlantic_summary, write_verification_summary,
+        build_config, completeness_report, expand_months, parse_atlantic_tracks,
+        parse_sources_arg, render_slurm_script, resolve_source_configs,
+        run_batch, verify_outputs, write_atlantic_summary,
+        write_verification_summary,
     )
+    from eval._backends.tctracker.tables import parse_run_root
 
     if getattr(args, "months", None) and not getattr(args, "dates", None):
         args.dates = ",".join(expand_months(args.months))
@@ -1257,7 +1258,10 @@ def cmd_tctracker(args: argparse.Namespace, lane_config: dict, host_config: dict
         if verification["issues"] and not getattr(args, "parse_only", False):
             failures.append(f"{role}={source_id}: {len(verification['issues'])} verification issue(s); see {json_path}")
 
-        parsed_dir = parse_and_write(config, role=role, source_id=source_id)
+        # Parse the WHOLE run root, not just this invocation's targets:
+        # member-sliced production jobs run concurrently against one run root,
+        # and a per-config parse would leave whichever member finished last.
+        parsed_dir = parse_run_root(config.output_dir, role=role, source_id=source_id)
         LOG.info("parsed tables (%s=%s) written to %s", role, source_id, parsed_dir)
         if role == "model":  # keep the historical Atlantic summary artifacts
             tracks = parse_atlantic_tracks(config)
