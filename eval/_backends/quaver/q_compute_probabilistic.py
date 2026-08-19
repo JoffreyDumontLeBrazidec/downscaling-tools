@@ -44,6 +44,8 @@ parser.add_argument(
     "--class", dest="class_", type=str, default="rd", help="Class identifier"
 )
 parser.add_argument("--database", type=str, default="fdb", help="Database name")
+parser.add_argument("--skip_upperair", action="store_true",
+                    help="Skip pl scoring (for expvers whose pl fields are donors, not model output)")
 parser.add_argument("--stream", type=str, default="enfo", help="Ensemble stream: enfo (target/output), eefo (o320 input)")
 
 
@@ -262,12 +264,13 @@ for date in dates:
     for num in ensemble_number_list:
         observations_surface(DATETIME, preproc=[], numbers=int(num))
 
-    analysis_upperair(
-        DATETIME,
-        preproc=[
-            "mean",
-        ],
-        numbers=ensemble_number_list,
-    )
-    for num in ensemble_number_list:
-        analysis_upperair(DATETIME, preproc=[], numbers=int(num))
+    if not args.skip_upperair:
+        analysis_upperair(
+            DATETIME,
+            preproc=[
+                "mean",
+            ],
+            numbers=ensemble_number_list,
+        )
+        for num in ensemble_number_list:
+            analysis_upperair(DATETIME, preproc=[], numbers=int(num))

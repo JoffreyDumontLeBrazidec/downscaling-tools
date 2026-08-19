@@ -101,3 +101,8 @@ prepml:
 # step contract only supports 24/48/72/96/120 ("Unsupported step=6").
 tc:
   support_mode: "regridded"
+
+# Quaver: j9yw pl fields are ENFO DONORS for the hybrid tctracker, not model
+# output — upper-air scoring would mislabel ENFO skill as ML. Surface-only.
+quaver:
+  skip_upperair: true

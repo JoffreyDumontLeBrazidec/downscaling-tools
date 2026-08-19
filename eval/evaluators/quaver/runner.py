@@ -197,7 +197,7 @@ def _compute_args(params: dict) -> list[str]:
         # Ensemble stream: input=eefo (resolved.prepml.input.stream), reference/experiment=enfo.
         # Without this the compute hardcoded enfo -> the "eefo O320 input" curve was silently enfo.
         "--stream", str(params.get("stream", "enfo")),
-    ]
+    ] + (["--skip_upperair"] if params.get("skip_upperair") else [])
 
 
 def _run_quaver(script: Path, args: list[str], cwd: Path) -> None:
@@ -231,6 +231,8 @@ def run(predictions_dir, lane_config, eval_config, *, output_dir=None, overwrite
     eff = _load_effective_config(results_dir)
     eval_config = eval_config or {}
     params = resolve_params(eff, eval_config)
+    if params is not None and eval_config.get("skip_upperair"):
+        params["skip_upperair"] = True
     if params is None:
         reason = (
             "quaver needs a prepml run with an FDB expver (mode==prepml, expver set, "
@@ -252,6 +254,8 @@ def run(predictions_dir, lane_config, eval_config, *, output_dir=None, overwrite
     # Disable with quaver.three_curve: false to fall back to experiment-only scorecards.
     if eval_config.get("three_curve", True):
         input_params = resolve_input_params(eff, params, eval_config)
+        if input_params is not None and eval_config.get("skip_upperair"):
+            input_params["skip_upperair"] = True  # symmetric with the experiment pass
         if input_params is None:
             LOG.warning(
                 "quaver: could not resolve input baseline (no resolved.prepml.input grid) "
