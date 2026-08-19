@@ -327,6 +327,29 @@ def load_inference_model(
         precision=config.precision,
         num_gpus_per_model_override=config.num_gpus_per_model,
     )
+    # O1280-safe model-parallel inference. Checkpoints bake shard_strategy="heads" on the
+    # encoder/decoder mappers + processor; its all_to_all_transpose materialises full QKV over
+    # the ENTIRE grid on EVERY rank -> OOM on A100-40GB regardless of rank count AND regardless
+    # of ANEMOI_INFERENCE_NUM_CHUNKS (measured 3.15 GiB short for every chunks 32..1, numchunks
+    # bench 2026-08-17). "edges" shards the graph locally instead: numerically equivalent, only
+    # the work partition changes. The prepml/unified seam and interp/core/model.py already do
+    # exactly this; the manual predict path did not, which is why manual global o320->o1280
+    # could not run on 4xA100-40GB. Env switch CODEX_UNIFIED_SHARD_STRATEGY is retired, so this
+    # is unconditional whenever the model is actually sharded.
+    if (config.num_gpus_per_model or 1) > 1:
+        _n_edges = 0
+        for _m in inference_model.modules():
+            if getattr(_m, "shard_strategy", None) == "heads":
+                _m.shard_strategy = "edges"
+                _n_edges += 1
+            if hasattr(_m, "_cached_halo_info"):
+                _m._cached_halo_info = None
+            if hasattr(_m, "_cached_partition"):
+                _m._cached_partition = None
+        if _n_edges:
+            LOG.info("forced shard_strategy heads->edges on %d modules "
+                     "for O1280-safe model-parallel inference", _n_edges)
+
     if config.local_scope_json:
         activate_local_graph_cut(inference_model, config.local_scope_json)
     ag_info = _activate_autoguidance(inference_model, extra_args, config, device)
