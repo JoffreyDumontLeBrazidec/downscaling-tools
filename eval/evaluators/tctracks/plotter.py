@@ -65,6 +65,13 @@ def _footer_text(sources: dict[str, dict[str, Any]], support: dict[str, Any]) ->
             f"{role}={prov.get('source_id')} m{len(prov.get('members') or [])} "
             f"compl {compl_txt}"
         )
+    pinned = next(
+        (p.get("dates_pinned") for p in
+         ((s.get("provenance") or {}) for s in sources.values()) if p.get("dates_pinned")),
+        None,
+    )
+    if pinned:
+        parts.append(f"PINNED {len(pinned)} dates {pinned[0]}..{pinned[-1]}")
     if not support.get("consistent", True):
         parts.append("!! SUPPORT CONTRACT VIOLATIONS — see metrics json")
     return " | ".join(parts)

@@ -391,6 +391,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated role=value specs: rd expver (model=j9f3), ref class:stream:expver (target=od:enfo:0001), absolute run-root path, or a bare role resolved from lane defaults (target,input).",
     )
     p_tcc.add_argument("--months", required=True, help="Comma-separated YYYYMM months in scope.")
+    p_tcc.add_argument(
+        "--dates", default=None,
+        help=(
+            "Restrict ALL sources to these init dates (comma YYYYMMDD). Use for "
+            "paired-window comparisons when sources have unequal date coverage "
+            "(different weather in scope would confound the distributions)."
+        ),
+    )
     p_tcc.add_argument("--basins", default="atl", help="Comma-separated basins (default: atl).")
     p_tcc.add_argument("--label", default=None, help="Campaign label for the output dir (default: months joined).")
     p_tcc.add_argument("--out", default=None, help="Output dir (default: <scratch>/eval/<lane_short>/tctracks/<label>).")
@@ -1265,10 +1273,12 @@ def cmd_tccompare(args: argparse.Namespace, lane_config: dict, host_config: dict
 
     months = [m.strip() for m in str(args.months).split(",") if m.strip()]
     basins = [b.strip() for b in str(args.basins).split(",") if b.strip()]
+    dates = [d.strip() for d in str(args.dates).split(",") if d.strip()] if getattr(args, "dates", None) else None
     tccompare_run(
         sources_arg=args.sources,
         months=months,
         basins=basins,
+        dates=dates,
         lane_name=args.lane,
         lane_config=lane_config,
         host_config=host_config,

@@ -107,13 +107,27 @@ def run(
     lane_config: dict[str, Any],
     host_config: dict[str, Any],
     out_dir: Path,
+    dates: list[str] | None = None,
     reparse: bool = False,
     no_plots: bool = False,
     top_k_cases: int = 3,
 ) -> dict[str, Any]:
     roots = resolve_source_roots(sources_arg, lane_name, lane_config, host_config)
     sources = load_sources(roots, reparse=reparse)
+    if dates:
+        # Paired-window pinning: restrict every source to a common init-date
+        # set so the compared distributions sample the SAME weather.
+        pinned = set(str(d) for d in dates)
+        for role, src in sources.items():
+            for key in ("records", "summary", "forecasts"):
+                df = src[key]
+                if not df.empty:
+                    src[key] = df[df["init_date"].astype(str).isin(pinned)]
+            src["provenance"]["dates_pinned"] = sorted(pinned)
+            LOG.info("%s: pinned to %d dates -> %d track rows",
+                     role, len(pinned), len(src["records"]))
     metrics = scorer.score_sources(sources, months, basins)
+    metrics["dates_pinned"] = sorted(dates) if dates else None
     metrics["cases"] = {
         basin: scorer.select_cases(sources, months, basin, top_k=top_k_cases)
         for basin in basins
