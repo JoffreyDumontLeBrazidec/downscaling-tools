@@ -27,7 +27,7 @@
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ag]
-  predict: [atos_ag, atos_ac_unified]
+  predict: [atos_ag, atos_ac_unified, atos_ac_pristine]   # pristine ADDED 2026-08-19: 12dcefe is a GLOBAL PRISTINE ckpt; the unified host degrades it (0.391 vs 0.095 nMSE). unified stays only for the prepml path.
   run: []
   evaluate: [atos_ac]
   scoreboard: [atos_ac]
