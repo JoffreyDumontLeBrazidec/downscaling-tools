@@ -246,9 +246,13 @@ def build_grib_expand(
                     base_gids[pid] = gid  # keep handle; released at end of date
                 else:
                     codes_release(gid)
+        # A param absent from the template (e.g. 2d in the 4-param iekm y.grib)
+        # is cloned from ANY template message with paramId rewritten — the grid/
+        # packing sections are param-independent here.
+        fallback_gid = next(iter(base_gids.values()), None)
         missing = [pid for pid in pid2ws if pid not in base_gids]
-        if missing:
-            raise KeyError(f"template {template} lacks paramIds {missing}")
+        if missing and fallback_gid is None:
+            raise KeyError(f"template {template} lacks paramIds {missing} and has no fallback message")
 
         ncs = {s: xr.open_dataset(_prediction_nc(predictions_dir, date, s)) for s in steps}
         weather_states = [str(w) for w in ncs[steps[0]]["weather_state"].values]
@@ -266,8 +270,10 @@ def build_grib_expand(
                         )
                         if not np.isfinite(vals).all():
                             raise ValueError(f"non-finite y_pred {ws} mem{m} {date} step{s}")
-                        clone = codes_clone(base_gids[pid])
+                        clone = codes_clone(base_gids.get(pid, fallback_gid))
                         try:
+                            if pid not in base_gids:
+                                codes_set(clone, "paramId", pid)
                             codes_set(clone, "class", "rd")
                             codes_set(clone, "expver", expver)
                             codes_set(clone, "stream", "enfo")
