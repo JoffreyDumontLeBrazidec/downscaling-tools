@@ -236,6 +236,7 @@ def build_grib_expand(
 
         # One template gid per paramId (first message wins).
         base_gids: dict[int, int] = {}
+        first_gid: int | None = None
         with open(template, "rb") as f_in:
             while True:
                 gid = codes_grib_new_from_file(f_in)
@@ -244,12 +245,14 @@ def build_grib_expand(
                 pid = codes_get(gid, "paramId")
                 if pid in pid2ws and pid not in base_gids:
                     base_gids[pid] = gid  # keep handle; released at end of date
+                elif first_gid is None:
+                    first_gid = gid  # generic fallback for template-absent params
                 else:
                     codes_release(gid)
         # A param absent from the template (e.g. 2d in the 4-param iekm y.grib)
         # is cloned from ANY template message with paramId rewritten — the grid/
         # packing sections are param-independent here.
-        fallback_gid = next(iter(base_gids.values()), None)
+        fallback_gid = next(iter(base_gids.values()), first_gid)
         missing = [pid for pid in pid2ws if pid not in base_gids]
         if missing and fallback_gid is None:
             raise KeyError(f"template {template} lacks paramIds {missing} and has no fallback message")
@@ -287,6 +290,8 @@ def build_grib_expand(
                         n += 1
         for gid in base_gids.values():
             codes_release(gid)
+        if first_gid is not None:
+            codes_release(first_gid)
         for ds in ncs.values():
             ds.close()
         LOG.info("fdb_write(expand): %s -> %d messages (%s)", date, n, out_path)
