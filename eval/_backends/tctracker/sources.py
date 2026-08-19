@@ -173,11 +173,13 @@ def resolve_source_configs(
 # FDB completeness preflight (warn-only — correct defaults, never a gate)
 # ---------------------------------------------------------------------------
 
-def fdb_date_counts(config: Any) -> dict[str, int]:
-    """Per-init-date field counts from ``fdb list --porcelain`` for an rd
-    expver. Returns {} (with a warning) if fdb is unavailable."""
+def fdb_datemember_counts(config: Any) -> dict[tuple[str, int], int]:
+    """Per-(init-date, member) field counts from ``fdb list --porcelain`` for
+    an rd expver. Returns {} (with a warning) if fdb is unavailable."""
     key = f"class={config.fdb_class},expver={config.expver},stream={config.stream}"
-    counts: dict[str, int] = {date: 0 for date in config.dates}
+    counts: dict[tuple[str, int], int] = {
+        (date, member): 0 for date in config.dates for member in config.members
+    }
     try:
         proc = subprocess.run(
             ["bash", "-lc", f"fdb list --porcelain {key}"],
@@ -190,40 +192,53 @@ def fdb_date_counts(config: Any) -> dict[str, int]:
         LOG.warning("fdb preflight skipped (rc=%s): %s", proc.returncode, proc.stderr[:200])
         return {}
     for line in proc.stdout.splitlines():
-        if "date=" not in line:
+        if "date=" not in line or "number=" not in line:
             continue
         date = line.split("date=", 1)[1].split(",", 1)[0]
-        if date in counts:
-            counts[date] += 1
+        try:
+            member = int(line.split("number=", 1)[1].split(",", 1)[0])
+        except ValueError:
+            continue
+        if (date, member) in counts:
+            counts[(date, member)] += 1
     return counts
 
 
 def completeness_report(config: Any) -> dict[str, Any]:
-    """Classify requested dates as complete/partial/empty against the modal
-    per-date field count. Warn-only; the caller decides what to track."""
-    counts = fdb_date_counts(config)
+    """Classify requested (date, member) forecasts as complete/partial/empty
+    against the modal per-(date, member) field count, then report the dates
+    that are complete FOR EVERY REQUESTED MEMBER of this config. Member-level
+    granularity matters: an in-flight prepml campaign fills members unevenly,
+    and a per-date total cannot tell 'members 1-2 done' from 'all partial'.
+    Warn-only; the caller decides what to track."""
+    counts = fdb_datemember_counts(config)
     if not counts:
         return {"checked": False, "complete": list(config.dates), "partial": [], "empty": []}
     nonzero = sorted(v for v in counts.values() if v > 0)
     modal = max(set(nonzero), key=nonzero.count) if nonzero else 0
-    complete = [d for d, v in counts.items() if v == modal and v > 0]
-    partial = [d for d, v in counts.items() if 0 < v < modal]
-    over = [d for d, v in counts.items() if v > modal]
-    empty = [d for d, v in counts.items() if v == 0]
+    complete, partial, empty = [], [], []
+    for date in config.dates:
+        member_counts = [counts[(date, m)] for m in config.members]
+        if all(v >= modal and v > 0 for v in member_counts):
+            complete.append(date)
+        elif all(v == 0 for v in member_counts):
+            empty.append(date)
+        else:
+            partial.append(date)
     report = {
         "checked": True,
-        "modal_fields_per_date": modal,
-        "counts": counts,
-        "complete": sorted(complete + over),
+        "modal_fields_per_forecast": modal,
+        "counts": {f"{d}_m{m:03d}": v for (d, m), v in sorted(counts.items())},
+        "complete": sorted(complete),
         "partial": sorted(partial),
         "empty": sorted(empty),
     }
     if partial or empty:
         LOG.warning(
-            "FDB completeness for %s/%s: %d complete, %d partial %s, %d empty %s "
-            "(modal %d fields/date). Partial/empty dates will be SKIPPED for "
-            "tracking unless --track-incomplete.",
-            config.fdb_class, config.expver, len(report["complete"]),
-            len(partial), partial[:5], len(empty), empty[:5], modal,
+            "FDB completeness for %s/%s members %s: %d complete, %d partial %s, "
+            "%d empty %s (modal %d fields/forecast). Partial/empty dates will be "
+            "SKIPPED for tracking unless --track-incomplete.",
+            config.fdb_class, config.expver, list(config.members),
+            len(complete), len(partial), partial[:5], len(empty), empty[:5], modal,
         )
     return report
