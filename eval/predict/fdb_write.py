@@ -188,3 +188,101 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# o2560 (single-realization template) variant — 2026-08-19
+# ---------------------------------------------------------------------------
+# The o1280->o2560 lane has no ENFO ensemble GRIB on the TARGET grid: truth is
+# the single-realization rd/iekm (destine i4ql) forecast, GRIB edition 1 with
+# an ECMWF local section (so ``number`` is settable). ``build_grib_expand``
+# clones ONE template message per paramId and expands over (member, step),
+# rewriting the ensemble keys. Precision note: template packing is 16-bit
+# grid_simple — quantization ~range/65k per field, same class as the prepml
+# GRIB writeback.
+
+EXPAND_PARAMS: dict[int, str] = {165: "10u", 166: "10v", 167: "2t", 151: "msl"}
+
+
+def build_grib_expand(
+    predictions_dir: Path,
+    template_glob: str,
+    out_dir: Path,
+    expver: str,
+    dates: list[str],
+    steps: list[int],
+    members: list[int],
+    param_to_weather_state: dict[int, str] | None = None,
+) -> list[Path]:
+    """Write one model GRIB per date from a single-realization template.
+
+    template_glob: glob with a ``{date}`` placeholder resolving to the per-date
+    template GRIB on the SAME grid as y_pred (e.g. the iekm o2560 y.grib).
+    """
+    from eccodes import (
+        codes_grib_new_from_file, codes_clone, codes_release, codes_get,
+        codes_set, codes_set_values, codes_write,
+    )
+
+    pid2ws = param_to_weather_state or EXPAND_PARAMS
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+
+    for date in dates:
+        hits = sorted(glob.glob(template_glob.format(date=date)))
+        if not hits:
+            raise FileNotFoundError(f"no template GRIB for {date}: {template_glob}")
+        template = hits[0]
+
+        # One template gid per paramId (first message wins).
+        base_gids: dict[int, int] = {}
+        with open(template, "rb") as f_in:
+            while True:
+                gid = codes_grib_new_from_file(f_in)
+                if gid is None:
+                    break
+                pid = codes_get(gid, "paramId")
+                if pid in pid2ws and pid not in base_gids:
+                    base_gids[pid] = gid  # keep handle; released at end of date
+                else:
+                    codes_release(gid)
+        missing = [pid for pid in pid2ws if pid not in base_gids]
+        if missing:
+            raise KeyError(f"template {template} lacks paramIds {missing}")
+
+        ncs = {s: xr.open_dataset(_prediction_nc(predictions_dir, date, s)) for s in steps}
+        weather_states = [str(w) for w in ncs[steps[0]]["weather_state"].values]
+        out_path = out_dir / f"model_{date}.grib"
+
+        n = 0
+        with open(out_path, "wb") as f_out:
+            for pid, ws in pid2ws.items():
+                vi = weather_states.index(ws)  # by LABEL, never position (P3)
+                for s in steps:
+                    for m in members:
+                        vals = np.asarray(
+                            ncs[s]["y_pred"].isel(sample=0, ensemble_member=m - 1)[..., vi].values,
+                            dtype=np.float64,
+                        )
+                        if not np.isfinite(vals).all():
+                            raise ValueError(f"non-finite y_pred {ws} mem{m} {date} step{s}")
+                        clone = codes_clone(base_gids[pid])
+                        try:
+                            codes_set(clone, "class", "rd")
+                            codes_set(clone, "expver", expver)
+                            codes_set(clone, "stream", "enfo")
+                            codes_set(clone, "type", "pf")
+                            codes_set(clone, "number", m)
+                            codes_set(clone, "step", s)
+                            codes_set_values(clone, vals)
+                            codes_write(clone, f_out)
+                        finally:
+                            codes_release(clone)
+                        n += 1
+        for gid in base_gids.values():
+            codes_release(gid)
+        for ds in ncs.values():
+            ds.close()
+        LOG.info("fdb_write(expand): %s -> %d messages (%s)", date, n, out_path)
+        written.append(out_path)
+    return written
