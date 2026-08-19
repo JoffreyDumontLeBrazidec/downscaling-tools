@@ -52,6 +52,23 @@ predict:
     S_max: 100000.0
     S_noise: 1.05
 
+# tctracker: month-scale track production for this lane's FDB expvers and
+# their references. All sources track at ONE support (grid 320, 24h steps,
+# vorticity false) — the tccompare comparison contract. target/input reference
+# specs derive from the prepml blocks below (od/enfo and od/eefo, expver 0001);
+# name the ctrl expver per campaign: --track-sources model,ctrl=<expver>,target,input
+tctracker:
+  grid: 320
+  time: "00"
+  start_step: 0
+  end_step: 360
+  step_interval: 24
+  class: rd
+  type: pf
+  stream: enfo
+  vorticity: false
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
 # TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
 # AN-anchored ratio metrics emitted per event (mslp_p001, mslp_min, wind_p9999,
 # wind_max). Backfill old stats with `python -m eval.jobs.backfill_tc_extreme_percentiles`.
