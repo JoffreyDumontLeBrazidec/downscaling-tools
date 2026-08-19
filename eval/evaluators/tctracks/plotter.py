@@ -296,9 +296,9 @@ def plot_counts(metrics_rows, months, basins, out_dir, footer):
             pooled: dict[str, int] = {}
             for _, row in sub[sub["role"] == role].iterrows():
                 _cc = row.get("classification_counts")
-        if not isinstance(_cc, dict):  # empty (basin,month) buckets surface as NaN via pandas
-            _cc = {}
-        for k, v in _cc.items():
+                if not isinstance(_cc, dict):  # empty buckets surface as NaN via pandas
+                    _cc = {}
+                for k, v in _cc.items():
                     pooled[k] = pooled.get(k, 0) + int(v)
             total = sum(pooled.values()) or 1
             cls_rows.append({"role": role, **{k: v / total for k, v in pooled.items()}})
