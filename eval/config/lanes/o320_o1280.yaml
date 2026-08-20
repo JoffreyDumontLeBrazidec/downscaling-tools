@@ -34,6 +34,21 @@ predict:
     # Owner decision 2026-07-16: sigma_max=100000 is the o320->o1280 standard.
     # Same-epsilon probes show pure noise and target+noise are spectrally matched
     # at this ceiling; explicitly named s1k/sigma10k lanes remain as controls.
+    # CONFIRMED EMPIRICALLY 2026-08-19 (owner re-affirmed as standard): matrix7
+    # (s397434, 19 arms x 250 draws) + matrix8 (EDM2-ON 731d203a mirror) both show
+    # sigma_max=1000 is the WEAK axis on this lane -- pw30 franklin wmax_q90
+    # s1k 36.5/37.0 vs s10k 39.6/40.0 vs s100k 39.1/41.2 (m7/m8). Two independent
+    # checkpoints, same ordering => lane property, not ckpt quirk. The block below
+    # (pw30, 10/20 split, transition 10, s100k) IS the standard; the champion
+    # SCOREBOARD row predates it and was produced by the pinned control lane
+    # o320_o1280_piecewise21_s1k. Ledger tc-o320-o1280 T33.
+    # ⚠ UNTESTED INTERACTION: AUTOGUIDANCE has never been screened at this
+    # sigma_max. matrix7 ran both guidance arms (ag05 w=0.5; ag15band w=1.5,
+    # band sigma 2-80) at sigma_max=10000 only, so the "gentle guidance = null,
+    # strong banded guidance = grain" reads are s10k results. Raising the ceiling
+    # changes how many solver steps land inside a guidance sigma-band, i.e. the
+    # EFFECTIVE guidance dose can move at fixed weight. Do not carry the s10k
+    # guidance verdicts onto s100k runs without a screen.
     schedule_type: "experimental_piecewise"
     num_steps: 30
     sigma_max: 100000.0
