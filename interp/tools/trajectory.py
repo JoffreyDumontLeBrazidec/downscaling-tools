@@ -1043,10 +1043,14 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
     ‖e‖/‖g‖ — all in NORMALIZED residual space, the space guidance acts in.
     The mechanism predicts cos>0 concentrated in (box × mass) at mid/low σ, and
     w* = 1 + ratio as the guidance weight that lands on the elder (P3).
-    Single-GPU only (the agmech campaign runs on the regional storm box)."""
-    if world_size != 1:
-        raise SystemExit("--mode probe is single-GPU only (run it on the storm box / "
-                         "o96->o320; the sharded collinearity variant is not implemented)")
+    Sharded (world_size>1, dict-API): stats become rank-local partial sums
+    all-reduced over the model_comm_group — exact, no field gathers. Under
+    sharding the wrapper FAILS LOUD (a swallowed per-rank error would desync
+    the collectives into an NCCL hang); field dumps are single-GPU only."""
+    sharded = world_size > 1
+    if sharded and not is_dict_api(inner):
+        raise SystemExit("--mode probe sharded path is dict-API only (unified "
+                         "o320->o1280); ds-API probes run single-GPU")
     if not getattr(args, "probe_checkpoints", None):
         raise SystemExit("--mode probe requires --probe-checkpoints YOUNG [ELDER]")
     if len(args.probe_checkpoints) > 2:
@@ -1096,8 +1100,17 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         probe_keep.append(pb)                      # keep weights alive for process lifetime
 
     box_t = torch.from_numpy(box_np).to(device)
-    rest_t = ~box_t
-    masks = [("box", box_t), ("rest", rest_t)]
+    if sharded:
+        import torch.distributed as dist
+        sizes = [int(s) for s in gss_arg["out_hres"]]
+        offs = [0]
+        for s in sizes:
+            offs.append(offs[-1] + s)
+        box_m = box_t[offs[global_rank]:offs[global_rank + 1]]  # this rank's grid shard
+    else:
+        dist = None
+        box_m = box_t
+    masks = [("box", box_m), ("rest", ~box_m)]
     msl_out_idx = nti.get("msl")
 
     def _as_tensor(D):
@@ -1123,24 +1136,41 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             Dp = {lbl: _as_tensor(fn(*a, **k)).detach() for lbl, fn in probe_fns}
             g = Dm - Dp[labels[0]].to(Dm.dtype)
             e = (Dp[labels[1]].to(Dm.dtype) - Dm) if len(labels) > 1 else None
-            rec = {"seed": state["seed"], "sigma": sig, "stats": {}}
+            # Partial sums per (mask × group): [Σg·e, Σg², Σe², n]. Exact under
+            # sharding after an all_reduce over the model_comm_group; no gathers.
+            parts = []
             for mname, m in masks:
-                gm = g[0, 0, 0][m]                  # (Ncells, V)
+                gm = g[0, 0, 0][m]                  # (Ncells_local, V)
                 em = e[0, 0, 0][m] if e is not None else None
                 for gname, idx in groups:
                     gv = gm[:, idx].float().reshape(-1)
-                    st = {"rms_g": float(gv.pow(2).mean().sqrt())}
-                    if em is not None:
-                        ev = em[:, idx].float().reshape(-1)
-                        den = float(gv.norm()) * float(ev.norm())
-                        st["rms_e"] = float(ev.pow(2).mean().sqrt())
-                        st["cos_ge"] = (float((gv * ev).sum()) / den if den > 0
-                                        else float("nan"))
-                        st["ratio_e_over_g"] = (st["rms_e"] / st["rms_g"]
-                                                if st["rms_g"] > 0 else float("nan"))
-                    rec["stats"]["%s_%s" % (mname, gname)] = st
-            records.append(rec)
-            calls["recorded"] += 1
+                    zero = gv.new_zeros(())
+                    ev = em[:, idx].float().reshape(-1) if em is not None else None
+                    parts.append(torch.stack([
+                        (gv * ev).sum() if ev is not None else zero,
+                        gv.pow(2).sum(),
+                        ev.pow(2).sum() if ev is not None else zero,
+                        gv.new_tensor(float(gv.numel()))]))
+            pt = torch.stack(parts)                 # (n_combos, 4)
+            if sharded:
+                dist.all_reduce(pt, group=mcg)
+            if global_rank == 0:
+                rec = {"seed": state["seed"], "sigma": sig, "stats": {}}
+                i = 0
+                for mname, _m in masks:
+                    for gname, _idx in groups:
+                        s_ge, s_gg, s_ee, n = [float(x) for x in pt[i]]
+                        i += 1
+                        st = {"rms_g": (s_gg / n) ** 0.5 if n else float("nan")}
+                        if e is not None:
+                            den = (s_gg * s_ee) ** 0.5
+                            st["cos_ge"] = s_ge / den if den > 0 else float("nan")
+                            st["rms_e"] = (s_ee / n) ** 0.5 if n else float("nan")
+                            st["ratio_e_over_g"] = ((s_ee / s_gg) ** 0.5
+                                                    if s_gg > 0 else float("nan"))
+                        rec["stats"]["%s_%s" % (mname, gname)] = st
+                records.append(rec)
+                calls["recorded"] += 1
             if (msl_out_idx is not None and state["seed"] in dump):
                 row = {"sigma": sig,
                        "main": Dm[0, 0, 0][box_t][:, msl_out_idx].float().cpu().numpy()}
@@ -1149,13 +1179,15 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                                 .float().cpu().numpy())
                 dump[state["seed"]].append(row)
         except Exception:
+            if sharded:                             # a swallowed rank error = NCCL hang
+                raise
             LOGGER.exception("probe capture failed (continuing; run FAILS if none recorded)")
         return D
 
     finals = []
     for i, seed in enumerate(seeds):
         state["seed"] = int(seed)
-        if i < int(getattr(args, "probe_dump_fields", 0) or 0):
+        if not sharded and i < int(getattr(args, "probe_dump_fields", 0) or 0):
             dump[int(seed)] = []
         torch.manual_seed(int(seed))
         yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
@@ -1169,6 +1201,16 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         del yf
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    # Collectives done — tear down BEFORE any rank-0-only exit path, so a failed
+    # acceptance check can never strand other ranks at a barrier.
+    if mcg is not None:
+        import torch.distributed as _dist
+        if _dist.is_available() and _dist.is_initialized():
+            _dist.barrier()
+            _dist.destroy_process_group()
+    if global_rank != 0:
+        return None
 
     # Fail LOUD on an empty probe (a wrap bug must never write a hollow probe.json —
     # same acceptance logic as the guided-sharding banner fix 1b078e1).
