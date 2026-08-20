@@ -13,9 +13,13 @@ python -m eval.cli <subcommand> [args]
 
 ### Subcommands
 
-### ECMWF tctracker expver archives
+### ECMWF tctracker expver archives + month-scale track comparison
 
-Use python -m eval.cli tctracker when the source is a PrepML/FDB expver rather than local NetCDF predictions. It writes basin-track tars, manifests, structural verification, and Atlantic track summaries. Full operational runbook: /home/ecm5702/dev/docs/epics/tc_track/TCTRACKER_EVAL_CLI.md.
+Use python -m eval.cli tctracker when the source is a PrepML/FDB expver rather than local NetCDF predictions. It writes basin-track tars, manifests, structural verification, parsed tidy track tables (`parsed/`), and Atlantic track summaries. With `--track-sources model,ctrl=<expver>,target,input` the same tracker settings also run over the lane's references (target = operational ENFO, input = operational EEFO, both derived from the lane `prepml` blocks) so every track set shares ONE support; reference tars are cached under `<scratch>/eval/tcrefs/` and reused across campaigns. `--months 202509` expands to daily dates, and rd expvers get a warn-only per-(date,member) FDB completeness preflight.
+
+Compare the resulting track sets with `python -m eval.cli tccompare --sources model=<expver>,ctrl=<expver>,target=od:enfo:0001,input=od:eefo:0001 --months ... --dates <pinned window>` — it emits `tc_tracks_metrics.json` plus the figure suite (track maps, density vs target, intensity log-PDF + ratio, counts, step intensity, case panels). Pin `--dates` to the intersection of complete dates when sources have unequal coverage. This is the month-scale diagnostic panel; TC verdicts stay with the box-based raw-extremes `tc` evaluator.
+
+Full operational runbook (read before tracker work): /home/ecm5702/dev/docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md.
 
 Verified j761 inspection command:
 
@@ -199,7 +203,7 @@ Use this CLI surface when the source is a PrepML/FDB expver rather than local Ne
 python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761
 ```
 
-The command writes basin track tar files, logs, manifests, verification summaries, and an Atlantic track summary under the tctracker run root. For the verified j761 bundle, inspect existing artifacts without rerunning production:
+The command writes basin track tar files, logs, manifests, verification summaries, parsed tidy track tables, and an Atlantic track summary under the tctracker run root. For multi-source production (model plus ctrl/target/input references) and the `tccompare` comparison suite, see the "ECMWF tctracker expver archives + month-scale track comparison" section above and the runbook at /home/ecm5702/dev/docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md. For the verified j761 bundle, inspect existing artifacts without rerunning production:
 
 ```bash
 python -m eval.cli tctracker --lane o96_o320_unified_full --host atos_ac --expver j761 --output-dir /home/ecm5702/scratch/eval/o96_o320/tctracker/j761 --verify-only

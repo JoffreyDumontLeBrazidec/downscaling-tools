@@ -7,6 +7,17 @@ Subcommands:
     predict     Generate predictions only (subprocess call to eval.predict.main)
     evaluate    Run evaluators on existing predictions
     scoreboard  Generate scoreboard from existing evaluation results
+    tctracker   Produce ECMWF tctracker basin-track archives from a PrepML/FDB
+                expver AND its references (ctrl expver, target ENFO, input EEFO)
+                on one shared tracking support (--track-sources, --months)
+    tccompare   Compare tctracker track sets across those sources and render
+                the month-scale TC track figure suite + metrics JSON
+
+The tracker pair (tctracker + tccompare) is the month-scale, track-based TC
+diagnostic panel for prepml campaigns. It never feeds scoreboards: TC verdicts
+stay with the box-based raw-extremes `tc` evaluator on the canonical support.
+Operational runbook (read this before tracker work):
+/home/ecm5702/dev/docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md
 """
 from __future__ import annotations
 
@@ -345,7 +356,16 @@ def build_parser() -> argparse.ArgumentParser:
     # --- tctracker ---
     p_tctracker = subparsers.add_parser(
         "tctracker",
-        help="Produce and verify ECMWF tctracker basin track archives from a PrepML/FDB expver.",
+        help="Produce and verify ECMWF tctracker basin track archives from a PrepML/FDB expver and its references (--track-sources).",
+        description=(
+            "Produce, verify, and parse ECMWF tctracker basin-track archives. "
+            "Default: one rd expver. With --track-sources, the same tracker "
+            "settings also run over ctrl/target/input references so every "
+            "track set shares ONE support; operational references are cached "
+            "under <scratch>/eval/tcrefs/ and reused across campaigns. "
+            "Runbook: docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md "
+            "(month-scale section). Compare the results with `eval.cli tccompare`."
+        ),
     )
     _add_common_args(p_tctracker)
     _add_lane_override_args(p_tctracker)
@@ -384,6 +404,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_tcc = subparsers.add_parser(
         "tccompare",
         help="Compare tctracker track sets (model vs ctrl/target/input) and render the TC track figure suite.",
+        description=(
+            "Compare track sets produced by `eval.cli tctracker` and render the "
+            "month-scale TC figure suite (track maps, density vs target, "
+            "intensity log-PDF + ratio, counts, step intensity, case panels) "
+            "plus tc_tracks_metrics.json. Pin --dates to the intersection of "
+            "complete dates when sources have unequal coverage. Diagnostic "
+            "panel only — TC verdicts stay with the box-based raw-extremes tc "
+            "evaluator. Runbook: docs/epics/completed_epics/tc_track/"
+            "TCTRACKER_EVAL_CLI.md (month-scale section)."
+        ),
     )
     _add_common_args(p_tcc)
     p_tcc.add_argument(
