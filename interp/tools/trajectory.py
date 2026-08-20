@@ -446,7 +446,7 @@ def _build_sampler(inner, device):
     return sampler, sigma_min, float(nsc.get("sigma_max", 1000.0))
 
 
-def _guided_denoiser(base_fn, lam, sig_lo, sig_hi):
+def _guided_denoiser(base_fn, lam, sig_lo, sig_hi, lam_vec=None):
     """σ-banded score amplification (pure inference; no model/sampler/training change).
 
     The Heun sampler steps along the score d=(y−D)/σ where D=base_fn(...) is the denoised
@@ -454,9 +454,13 @@ def _guided_denoiser(base_fn, lam, sig_lo, sig_hi):
     in-band score exactly λ·d — amplifying the denoising pull and de-anchoring the shallow
     input-conditioned conditional mean (the lever for the o320→o1280 eye under-commitment).
     λ=1 is the identity (returns base_fn unchanged); outside [sig_lo, sig_hi], D is untouched.
+    `lam_vec` (per-output-channel λ over the LAST dim, dict-API only, validated by the
+    caller against name_to_index) makes the scaling PER-VARIABLE — the mass-only
+    "temperature" null for the autoguidance mechanism tests (agmech): same channel subset
+    as the guidance weight map, but a plain score knob instead of a model-pair direction.
     Handles both the ds-API call (x_interp, x_hres, y_noised, sigma, ...) and the unified
     dict-API call (x_dict, y_dict, sigma_dict, ...)."""
-    if float(lam) == 1.0:
+    if float(lam) == 1.0 and lam_vec is None:
         return base_fn
     lam = float(lam)
     sig_lo, sig_hi = float(sig_lo), float(sig_hi)
@@ -470,18 +474,62 @@ def _guided_denoiser(base_fn, lam, sig_lo, sig_hi):
                     return D
                 y = args[1]
                 if isinstance(D, dict):
+                    if lam_vec is not None:
+                        return {k: y[k].to(D[k].dtype)
+                                + lam_vec.to(D[k].dtype) * (D[k] - y[k].to(D[k].dtype))
+                                for k in D}
                     return {k: (1.0 - lam) * y[k].to(D[k].dtype) + lam * D[k] for k in D}
                 yt = next(iter(y.values())) if isinstance(y, dict) else y
+                if lam_vec is not None:
+                    return yt.to(D.dtype) + lam_vec.to(D.dtype) * (D - yt.to(D.dtype))
                 return (1.0 - lam) * yt.to(D.dtype) + lam * D
             sig = float(args[3].reshape(-1)[0].item())  # ds: (x_interp, x_hres, y_noised, sigma, ...)
             if not (sig_lo <= sig <= sig_hi):
                 return D
+            if lam_vec is not None:                    # caller guards ds-API out at build time
+                raise RuntimeError("per-variable guidance map reached a ds-API call")
             return (1.0 - lam) * args[2].to(D.dtype) + lam * D
         except Exception:
             LOGGER.exception("guidance wrap failed (returning unguided D)")
             return D
 
     return guided
+
+
+def _output_name_to_index(inner):
+    """{output variable name: channel index} for the model's LAST output dim, from
+    data_indices (mirrors eval/predict/model_loader gvecs). dict-API: the out_hres
+    dataset (or the first dataset exposing name_to_index). Returns None when the
+    model exposes no usable index (ds-API without data_indices)."""
+    di = getattr(inner, "data_indices", None)
+    if di is None:
+        return None
+    try:
+        items = list(dict(di).items())
+    except Exception:
+        items = [(None, di)]
+    named = {}
+    for dkey, idx in items:
+        nti = getattr(getattr(getattr(idx, "model", None), "output", None),
+                      "name_to_index", None)
+        if nti:
+            named[dkey] = dict(nti)
+    if not named:
+        return None
+    return named.get("out_hres", next(iter(named.values())))
+
+
+def _build_channel_vec(nti, mapping, default):
+    """Per-output-channel float vector from {name: value}; unmapped channels get
+    `default`. Unknown names fail LOUD (never a silent partial map)."""
+    unknown = sorted(set(mapping) - set(nti))
+    if unknown:
+        raise SystemExit("channel map: unknown variables %s (available: %s)"
+                         % (unknown, sorted(nti)))
+    vec = torch.full((max(nti.values()) + 1,), float(default), dtype=torch.float32)
+    for name, val in mapping.items():
+        vec[nti[name]] = float(val)
+    return vec
 
 
 def _autoguided_denoiser(strong_fn, weak_fn, w, sig_lo, sig_hi):
@@ -824,8 +872,20 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
     lam = float(args.guidance_lambda)
-    band = (lam, float(args.guidance_sigma_lo), float(args.guidance_sigma_hi))
-    guidance = band if lam != 1.0 else None
+    lam_map, lam_vec = None, None
+    if getattr(args, "guidance_map", None):
+        if not is_dict_api(inner):
+            raise SystemExit("--guidance-map is dict-API only (per-variable λ needs "
+                             "data_indices name_to_index)")
+        nti = _output_name_to_index(inner)
+        if not nti:
+            raise SystemExit("--guidance-map: model exposes no output name_to_index")
+        with open(args.guidance_map) as fh:
+            lam_map = json.load(fh)
+        # default 1.0 = identity on unmapped channels (gmass mass-only convention)
+        lam_vec = _build_channel_vec(nti, lam_map, default=1.0).to(device)
+    band = (lam, float(args.guidance_sigma_lo), float(args.guidance_sigma_hi), lam_vec)
+    guidance = band if (lam != 1.0 or lam_vec is not None) else None
     skw = {}
     if args.s_churn is not None:
         skw["S_churn"] = float(args.s_churn)
@@ -920,7 +980,8 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         result = {
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
             "mode": "guidance", "units": "physical", "world_size": world_size,
-            "config": {"guidance_lambda": lam, "guidance_sigma_lo": band[1],
+            "config": {"guidance_lambda": lam, "guidance_map": lam_map,
+                       "guidance_sigma_lo": band[1],
                        "guidance_sigma_hi": band[2], "sampler_kwargs": skw, "free": True,
                        "autoguide": ag_info},
             "metric_rule": {"msl": "box-min (hPa)", "wind10m": "box p99 speed (m/s)",
@@ -956,6 +1017,244 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
             dist.destroy_process_group()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# probe: passive multi-checkpoint denoiser probe (autoguidance mechanism test)
+# ---------------------------------------------------------------------------
+
+# σ-bin edges for the probe summary (log-decade-ish, spanning the pw30 s100k ladder).
+_PROBE_SIGMA_EDGES = (0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1.0e3,
+                      1.0e4, 1.0e5, float("inf"))
+
+
+def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
+               target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
+               metrics_of, references, clat, clon, box_np, window, eb, out_path):
+    """Karras-autoguidance MECHANISM probe (agmech pre-registration P2/P3). Runs the FREE
+    sampler of the MAIN checkpoint COMPLETELY UNGUIDED and, at every denoiser call,
+    passively evaluates 1–2 probe checkpoints of the SAME lineage on the SAME noisy
+    state (probe outputs never steer the trajectory). With probes = (young, elder):
+      g = D_main − D_young   — the direction autoguidance would extrapolate along;
+      e = D_elder − D_main   — the direction more training actually moved the denoiser.
+    Per call it records σ and, per channel group (mass map / other / msl alone) ×
+    region (storm box / rest of domain), cos(g,e), RMS norms and the ratio
+    ‖e‖/‖g‖ — all in NORMALIZED residual space, the space guidance acts in.
+    The mechanism predicts cos>0 concentrated in (box × mass) at mid/low σ, and
+    w* = 1 + ratio as the guidance weight that lands on the elder (P3).
+    Single-GPU only (the agmech campaign runs on the regional storm box)."""
+    if world_size != 1:
+        raise SystemExit("--mode probe is single-GPU only (run it on the storm box / "
+                         "o96->o320; the sharded collinearity variant is not implemented)")
+    if not getattr(args, "probe_checkpoints", None):
+        raise SystemExit("--mode probe requires --probe-checkpoints YOUNG [ELDER]")
+    if len(args.probe_checkpoints) > 2:
+        raise SystemExit("--mode probe takes at most 2 probe checkpoints (young, elder)")
+    labels = list(args.probe_labels or ["young", "elder"][:len(args.probe_checkpoints)])
+    if len(labels) != len(args.probe_checkpoints):
+        raise SystemExit("--probe-labels must match --probe-checkpoints in length")
+
+    device = y_residual_cond.device
+    sampler, sigma_min, sigma_max = _build_sampler(inner, device)
+    seeds = (list(args.seeds) if args.seeds
+             else list(range(args.seed_base, args.seed_base + args.n_seeds)))
+
+    # --- channel groups (dict-API name_to_index; fail loud, never a silent subset) ---
+    nti = _output_name_to_index(inner)
+    if not nti:
+        raise SystemExit("--mode probe needs output name_to_index (dict-API models)")
+    if getattr(args, "probe_mass_json", None):
+        with open(args.probe_mass_json) as fh:
+            blob = json.load(fh)
+        mass_names = sorted(blob if isinstance(blob, list) else blob.keys())
+        unknown = sorted(set(mass_names) - set(nti))
+        if unknown:
+            raise SystemExit("--probe-mass-json: unknown variables %s (available: %s)"
+                             % (unknown, sorted(nti)))
+    else:  # default = the gmass mass-only convention: msl + sp + geopotential levels
+        mass_names = sorted(n for n in nti
+                            if n in ("msl", "sp") or n.startswith("z_"))
+        if not mass_names:
+            raise SystemExit("--mode probe: no mass channels found by the default rule "
+                             "(msl/sp/z_*); pass --probe-mass-json explicitly")
+    other_names = sorted(set(nti) - set(mass_names))
+    groups = [("mass", torch.tensor([nti[n] for n in mass_names], device=device))]
+    if other_names:
+        groups.append(("other", torch.tensor([nti[n] for n in other_names], device=device)))
+    if "msl" in nti:
+        groups.append(("msl", torch.tensor([nti["msl"]], device=device)))
+
+    # --- probe models (same loader/runtime as the weak model in guidance mode) ---
+    from interp.core.model import load_model as _load_probe
+    probe_fns, probe_keep = [], []
+    for lbl, ck in zip(labels, args.probe_checkpoints):
+        LOGGER.info("probe: loading %s checkpoint %s", lbl, ck)
+        pb = _load_probe(ck, device=str(device), precision=args.precision,
+                         num_gpus_per_model=world_size)
+        probe_fns.append((lbl, pb.inner_model.fwd_with_preconditioning))
+        probe_keep.append(pb)                      # keep weights alive for process lifetime
+
+    box_t = torch.from_numpy(box_np).to(device)
+    rest_t = ~box_t
+    masks = [("box", box_t), ("rest", rest_t)]
+    msl_out_idx = nti.get("msl")
+
+    def _as_tensor(D):
+        if isinstance(D, dict):
+            return D["out_hres"] if "out_hres" in D else next(iter(D.values()))
+        return D
+
+    records = []
+    dump = {}                                       # seed -> per-call field rows
+    calls = {"n": 0, "recorded": 0}
+    state = {"seed": None}
+    base_fn = inner.fwd_with_preconditioning
+
+    def probe_fn(*a, **k):
+        D = base_fn(*a, **k)
+        calls["n"] += 1
+        try:
+            if a and isinstance(a[0], dict):        # unified: (x_dict, y_dict, sigma_dict, ...)
+                sig = float(next(iter(a[2].values())).reshape(-1)[0].item())
+            else:                                   # ds: (x_interp, x_hres, y_noised, sigma, ...)
+                sig = float(a[3].reshape(-1)[0].item())
+            Dm = _as_tensor(D).detach()
+            Dp = {lbl: _as_tensor(fn(*a, **k)).detach() for lbl, fn in probe_fns}
+            g = Dm - Dp[labels[0]].to(Dm.dtype)
+            e = (Dp[labels[1]].to(Dm.dtype) - Dm) if len(labels) > 1 else None
+            rec = {"seed": state["seed"], "sigma": sig, "stats": {}}
+            for mname, m in masks:
+                gm = g[0, 0, 0][m]                  # (Ncells, V)
+                em = e[0, 0, 0][m] if e is not None else None
+                for gname, idx in groups:
+                    gv = gm[:, idx].float().reshape(-1)
+                    st = {"rms_g": float(gv.pow(2).mean().sqrt())}
+                    if em is not None:
+                        ev = em[:, idx].float().reshape(-1)
+                        den = float(gv.norm()) * float(ev.norm())
+                        st["rms_e"] = float(ev.pow(2).mean().sqrt())
+                        st["cos_ge"] = (float((gv * ev).sum()) / den if den > 0
+                                        else float("nan"))
+                        st["ratio_e_over_g"] = (st["rms_e"] / st["rms_g"]
+                                                if st["rms_g"] > 0 else float("nan"))
+                    rec["stats"]["%s_%s" % (mname, gname)] = st
+            records.append(rec)
+            calls["recorded"] += 1
+            if (msl_out_idx is not None and state["seed"] in dump):
+                row = {"sigma": sig,
+                       "main": Dm[0, 0, 0][box_t][:, msl_out_idx].float().cpu().numpy()}
+                for lbl in labels:
+                    row[lbl] = (Dp[lbl][0, 0, 0][box_t][:, msl_out_idx]
+                                .float().cpu().numpy())
+                dump[state["seed"]].append(row)
+        except Exception:
+            LOGGER.exception("probe capture failed (continuing; run FAILS if none recorded)")
+        return D
+
+    finals = []
+    for i, seed in enumerate(seeds):
+        state["seed"] = int(seed)
+        if i < int(getattr(args, "probe_dump_fields", 0) or 0):
+            dump[int(seed)] = []
+        torch.manual_seed(int(seed))
+        yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
+                            x_interp_cond, x_hres_cond, y_residual_cond, sigma_max,
+                            seed, mcg, gss_arg, free=True, denoise_fn=probe_fn)
+        m = metrics_of(yf)
+        if m is not None:
+            finals.append({"seed": int(seed), **m})
+            LOGGER.info("probe seed %d: %d calls recorded so far, final msl=%.1f hPa",
+                        seed, calls["recorded"], m.get("msl", float("nan")))
+        del yf
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # Fail LOUD on an empty probe (a wrap bug must never write a hollow probe.json —
+    # same acceptance logic as the guided-sharding banner fix 1b078e1).
+    if not records:
+        raise SystemExit("probe recorded 0/%d denoiser calls — probe wrap is broken"
+                         % calls["n"])
+
+    # --- σ-binned summary (medians; the JSON keeps every record for offline analysis) ---
+    def _bin_label(lo, hi):
+        return "%g-%g" % (lo, hi)
+
+    summary = {}
+    for key in sorted({k for r in records for k in r["stats"]}):
+        rows = {}
+        for lo, hi in zip(_PROBE_SIGMA_EDGES[:-1], _PROBE_SIGMA_EDGES[1:]):
+            sel = [r["stats"][key] for r in records
+                   if key in r["stats"] and lo <= r["sigma"] < hi]
+            if not sel:
+                continue
+            row = {"n": len(sel),
+                   "rms_g_med": float(np.nanmedian([s["rms_g"] for s in sel]))}
+            if "cos_ge" in sel[0]:
+                row["cos_ge_med"] = float(np.nanmedian([s["cos_ge"] for s in sel]))
+                row["ratio_med"] = float(np.nanmedian([s["ratio_e_over_g"] for s in sel]))
+            rows[_bin_label(lo, hi)] = row
+        summary[key] = rows
+
+    # Headline: the pre-registered P3 quantity — median ratio over ALL calls in (box, mass)
+    # (per-σ-bin values above let the analysis pick a band without re-running).
+    p3 = [r["stats"]["box_mass"] for r in records if "box_mass" in r["stats"]]
+    headline = {}
+    if p3 and "cos_ge" in p3[0]:
+        headline = {
+            "box_mass_cos_med_all_sigma": float(np.nanmedian([s["cos_ge"] for s in p3])),
+            "box_mass_ratio_med_all_sigma": float(np.nanmedian([s["ratio_e_over_g"] for s in p3])),
+            "w_star_all_sigma": 1.0 + float(np.nanmedian([s["ratio_e_over_g"] for s in p3])),
+        }
+
+    result = {
+        "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
+        "mode": "probe", "units": "normalized_residual", "world_size": world_size,
+        "probe_checkpoints": {lbl: str(ck) for lbl, ck
+                              in zip(labels, args.probe_checkpoints)},
+        "mass_channels": mass_names, "other_channels": other_names,
+        "bundle_paths": [str(p) for p in eb.paths],
+        "num_steps": args.num_steps, "fp32_sampler": bool(args.fp32_sampler),
+        "seeds": [int(s) for s in seeds],
+        "denoiser_calls_total": calls["n"], "denoiser_calls_recorded": calls["recorded"],
+        "box": {"name": "storm", "lat": clat, "lon": clon % 360.0,
+                "radius_km": args.eye_radius_km, "n_cells": int(box_np.sum())},
+        "window": list(window), "references": references,
+        "finals": finals, "headline": headline, "summary": summary, "records": records,
+    }
+    out_path.mkdir(parents=True, exist_ok=True)
+    with open(out_path / "probe.json", "w") as f:
+        json.dump(result, f, indent=2)
+    write_run_meta(out_path, "trajectory_probe", args)
+    if dump:
+        arrs = {}
+        for seed, rows in dump.items():
+            if not rows:
+                continue
+            arrs["s%d_sigma" % seed] = np.array([r["sigma"] for r in rows])
+            arrs["s%d_main" % seed] = np.stack([r["main"] for r in rows])
+            for lbl in labels:
+                arrs["s%d_%s" % (seed, lbl)] = np.stack([r[lbl] for r in rows])
+        np.savez_compressed(out_path / "probe_fields.npz", **arrs)
+        LOGGER.info("probe msl box fields dumped for %d seeds", len(dump))
+    LOGGER.info("Results saved to %s", out_path / "probe.json")
+
+    print("\n" + "=" * 78)
+    print("PROBE — cos(D_main−D_%s, D_%s−D_main) / norm ratio, per σ bin (box × mass)"
+          % (labels[0], labels[-1]))
+    print("=" * 78)
+    for blabel, row in summary.get("box_mass", {}).items():
+        cos_s = ("cos=%.3f" % row["cos_ge_med"]) if "cos_ge_med" in row else "cos=n/a"
+        rat_s = ("ratio=%.3f" % row["ratio_med"]) if "ratio_med" in row else ""
+        print("  σ %12s  n=%3d  %s  %s  rms_g=%.4g"
+              % (blabel, row["n"], cos_s, rat_s, row["rms_g_med"]))
+    if headline:
+        print("  HEADLINE (all σ, box × mass): cos=%.3f  ratio=%.3f  ⇒ w*=%.3f"
+              % (headline["box_mass_cos_med_all_sigma"],
+                 headline["box_mass_ratio_med_all_sigma"],
+                 headline["w_star_all_sigma"]))
+    print("  calls recorded: %d/%d" % (calls["recorded"], calls["n"]))
+
     return result
 
 
@@ -1166,6 +1465,11 @@ def run_trajectory(args):
                              target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
                              metrics_of, references, clat, clon, box_np, window, eb, out_path, fields_of=fields_of)
 
+    if args.mode == "probe":
+        return _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
+                          target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
+                          metrics_of, references, clat, clon, box_np, window, eb, out_path)
+
     # Teacher-forced ceiling: feed the TRUE residual + noise at each sigma.
     ceiling = []
     for sigma in args.ceiling_sigmas:
@@ -1288,13 +1592,17 @@ def main(argv=None):
                    help="P1: capture per-call box fields and emit per-variable lock-in "
                         "(pattern-correlation vs own final / vs target) curves")
     p.add_argument("--mode", default="trajectory",
-                   choices=["trajectory", "seeding", "residual_diag", "guidance"],
+                   choices=["trajectory", "seeding", "residual_diag", "guidance", "probe"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
                         "seeding = A2 sweep: plant the TRUE storm at σ_seed, sample free below, "
                         "and report final storm depth vs σ_seed (the critical-window test); "
                         "guidance = FIX SCREEN: free sampler + σ-banded score amplification "
                         "(--guidance-lambda in [--guidance-sigma-lo,-hi]) and/or --s-churn, "
-                        "report the storm-core eye-depth distribution vs the unguided baseline")
+                        "report the storm-core eye-depth distribution vs the unguided baseline; "
+                        "probe = agmech MECHANISM probe: unguided free sampler of the MAIN "
+                        "ckpt + passive per-call evaluation of --probe-checkpoints "
+                        "(young [elder]) — per-σ cos/norms of (D_main−D_young) vs "
+                        "(D_elder−D_main), storm box vs rest, mass vs other channels")
     p.add_argument("--seed-sigmas", nargs="+", type=float,
                    default=[2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 300.0],
                    help="[seeding] σ_seed grid — plant the true storm at each, then sample free below")
@@ -1352,6 +1660,26 @@ def main(argv=None):
     p.add_argument("--dump-fields", type=int, default=0,
                    help="[guidance] save box physical fields (surface targets) for the first "
                         "N seeds + truth to guidance_fields.npz (for offline box-FFT spectra)")
+    p.add_argument("--guidance-map", default=None,
+                   help="[guidance] JSON file {variable: λ} for PER-VARIABLE σ-banded "
+                        "score scaling (dict-API only; unlisted variables get λ=1.0 = "
+                        "identity). The mass-only 'temperature' null of the agmech "
+                        "mechanism tests — same channel subset as the autoguidance mass "
+                        "map, but a plain score knob instead of a model-pair direction")
+    p.add_argument("--probe-checkpoints", nargs="+", default=None,
+                   help="[probe] 1-2 SAME-LINEAGE checkpoints evaluated passively at every "
+                        "denoiser call of the unguided main-model sampler: YOUNG (the "
+                        "would-be guide) and optionally ELDER (the more-trained stand-in). "
+                        "Same loader as --autoguide-checkpoint (training-format path)")
+    p.add_argument("--probe-labels", nargs="+", default=None,
+                   help="[probe] labels for --probe-checkpoints (default: young elder)")
+    p.add_argument("--probe-mass-json", default=None,
+                   help="[probe] JSON {var: _} or [var, ...] defining the MASS channel "
+                        "group (default rule: msl, sp, z_*) — pass the production "
+                        "autoguide mass map to pin the exact gmass subset")
+    p.add_argument("--probe-dump-fields", type=int, default=0,
+                   help="[probe] for the first N seeds, dump per-call msl box fields of "
+                        "main+probes (normalized residual space) to probe_fields.npz")
     p.add_argument("--autoguide-checkpoint", default=None,
                    help="[guidance] D_bad checkpoint for autoguidance (same lane + API family; "
                         "loaded in-process). Karras 2024: D' = w*D_strong - (w-1)*D_weak")
