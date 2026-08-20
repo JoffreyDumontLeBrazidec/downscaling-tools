@@ -1060,7 +1060,6 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
         raise SystemExit("--probe-labels must match --probe-checkpoints in length")
 
     device = y_residual_cond.device
-    sampler, sigma_min, sigma_max = _build_sampler(inner, device)
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
@@ -1184,15 +1183,32 @@ def _run_probe(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             LOGGER.exception("probe capture failed (continuing; run FAILS if none recorded)")
         return D
 
+    # Instance-level wrap (mirrors capture_denoiser): sample_full drives the model's
+    # own fwd_with_preconditioning, which is the PROVEN sharded o1280 path — the
+    # _seeded_sample dict-API branch is not sharded-validated (agmech smoke 35618647:
+    # full-grid internal tensors met shard-sized inputs in _assemble_input).
+    @contextlib.contextmanager
+    def _probe_wrap():
+        inner.fwd_with_preconditioning = probe_fn
+        try:
+            yield
+        finally:
+            try:
+                del inner.fwd_with_preconditioning          # restore class method
+            except AttributeError:
+                inner.fwd_with_preconditioning = base_fn
+
     finals = []
     for i, seed in enumerate(seeds):
         state["seed"] = int(seed)
         if not sharded and i < int(getattr(args, "probe_dump_fields", 0) or 0):
             dump[int(seed)] = []
         torch.manual_seed(int(seed))
-        yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
-                            x_interp_cond, x_hres_cond, y_residual_cond, sigma_max,
-                            seed, mcg, gss_arg, free=True, denoise_fn=probe_fn)
+        with _probe_wrap():
+            yf = sample_full(bundle, x_interp_cond, x_hres_cond,
+                             num_steps=args.num_steps, seed=int(seed),
+                             model_comm_group=mcg, grid_shard_shapes=gss_arg,
+                             sigma_min=SAMPLER_SIGMA_MIN)
         m = metrics_of(yf)
         if m is not None:
             finals.append({"seed": int(seed), **m})
