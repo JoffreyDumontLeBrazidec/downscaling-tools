@@ -1,10 +1,25 @@
-"""Figure suite for track-based TC comparison (F1..F6).
+"""Figure suite for track-based TC comparison — page-oriented report.
 
-Every figure carries a provenance footer (support contract + member sets +
-completeness) and an explicit completeness annotation when any source is
-below 100%. Role colors are fixed so the same role reads the same across
+The report is a small set of dense landscape pages instead of one figure per
+statistic:
+
+  P1  overview     — headline table (all basins/roles) + focus-basin lifetime
+                     min-MSLP log-PDF with a ratio-vs-target inset
+  P2  focus basin  — consolidated grid: density diffs vs target, intensity vs
+                     lead time, lifetime max-wind PDF, counts, classification
+  P3  other basins — the same grid, one compact row per remaining basin
+  P4+ case pages   — one page per selected storm (deepest reference tracks):
+                     single map with every role's associated tracks, MSLP
+                     spaghetti, per-member deepest-MSLP strip plot, stats box
+
+Every page carries a provenance footer (support contract + member sets +
+completeness). Role colors are fixed so the same role reads the same across
 every figure: target black, input blue, ctrl grey, model red; extra roles
-cycle tab10.
+cycle a fallback palette. Diagnostic panel only: pages show distributions and
+references side by side and never verdict language.
+
+Multi-month runs default to pooled ("all") pages; per-month focus-basin pages
+only render behind ``per_month=True``.
 """
 from __future__ import annotations
 
@@ -15,6 +30,7 @@ from typing import Any
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -45,6 +61,8 @@ BASIN_EXTENTS = {
 
 MSLP_BINS = np.arange(890.0, 1021.0, 5.0)
 WIND_BINS = np.arange(0.0, 82.5, 2.5)
+PAGE_SIZE = (11.69, 8.27)  # A4 landscape
+_VALID_TIME_FMT = "%Y/%m/%d/%H"
 
 
 def role_color(role: str, index: int = 0) -> str:
@@ -77,39 +95,6 @@ def _footer_text(sources: dict[str, dict[str, Any]], support: dict[str, Any]) ->
     return " | ".join(parts)
 
 
-def _finish(fig, out_path: Path, footer: str) -> Path:
-    fig.text(0.01, 0.005, footer, fontsize=6, color="0.35", ha="left", va="bottom")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
-
-
-def _map_axes(fig, nrows: int, ncols: int, extent: tuple[float, float, float, float]):
-    """Cartopy axes when available, plain lat/lon axes otherwise."""
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-        proj = ccrs.PlateCarree(central_longitude=(extent[0] + extent[1]) / 2 % 360)
-        axes = []
-        for i in range(nrows * ncols):
-            ax = fig.add_subplot(nrows, ncols, i + 1, projection=proj)
-            ax.set_extent(extent, crs=ccrs.PlateCarree())
-            ax.coastlines(linewidth=0.4, color="0.4")
-            ax.add_feature(cfeature.LAND, facecolor="0.93", zorder=0)
-            axes.append(ax)
-        return axes, ccrs.PlateCarree()
-    except Exception:  # cartopy unavailable — degrade to plain axes
-        axes = []
-        for i in range(nrows * ncols):
-            ax = fig.add_subplot(nrows, ncols, i + 1)
-            ax.set_xlim(extent[0], extent[1])
-            ax.set_ylim(extent[2], extent[3])
-            ax.set_aspect("auto")
-            axes.append(ax)
-        return axes, None
-
-
 def _scoped_records(src: dict[str, Any], months, basin) -> pd.DataFrame:
     rec = src["records"]
     if rec.empty:
@@ -117,50 +102,50 @@ def _scoped_records(src: dict[str, Any], months, basin) -> pd.DataFrame:
     return rec[scope_mask(rec, months, [basin])]
 
 
-# ---------------------------------------------------------------------------
-# F1 track maps
-# ---------------------------------------------------------------------------
+def _fmt_latlon(lat: float, lon_e: float) -> str:
+    lon = lon_e % 360.0
+    lon_txt = f"{360 - lon:.0f}W" if lon > 180 else f"{lon:.0f}E"
+    lat_txt = f"{abs(lat):.0f}{'N' if lat >= 0 else 'S'}"
+    return f"{lat_txt} {lon_txt}"
 
-def plot_track_maps(sources, months, basin, scope_name, out_dir, footer, max_tracks=300):
-    extent = BASIN_EXTENTS.get(basin, (0, 360, -60, 60))
-    roles = list(sources)
-    ncols = min(2, len(roles))
-    nrows = int(np.ceil(len(roles) / ncols))
-    fig = plt.figure(figsize=(7.5 * ncols, 4.0 * nrows + 0.6))
-    axes, transform = _map_axes(fig, nrows, ncols, extent)
-    for idx, role in enumerate(roles):
-        ax = axes[idx]
-        rec = _scoped_records(sources[role], months, basin)
-        n_total = rec.groupby(["init_date", "member", "track_id"]).ngroups if not rec.empty else 0
-        subtitle = f"{role} — {n_total} tracks"
-        if not rec.empty:
-            groups = list(rec.groupby(["init_date", "member", "track_id"]))
-            if len(groups) > max_tracks:
-                stride = int(np.ceil(len(groups) / max_tracks))
-                groups = groups[::stride]
-                subtitle += f" (drawn 1/{stride})"
-            kwargs = {"transform": transform} if transform is not None else {}
-            for _, g in groups:
-                lon = g["lon_e"].to_numpy() % 360.0
-                lon = np.where(lon < extent[0] - 10, lon + 360, lon)
-                ax.plot(lon, g["lat"], lw=0.5, alpha=0.35, color=role_color(role, idx), **kwargs)
-                ax.plot(lon[:1], g["lat"].to_numpy()[:1], ".", ms=2.5,
-                        color=role_color(role, idx), alpha=0.7, **kwargs)
-        ax.set_title(subtitle, fontsize=10)
-    for ax in axes[len(roles):]:
-        ax.set_visible(False)
-    fig.suptitle(f"TC tracks — {basin.upper()} — {scope_name}", fontsize=12)
-    return _finish(fig, out_dir / f"track_maps_{basin}_{scope_name}.png", footer)
+
+def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    r = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dp = p2 - p1
+    dl = np.radians((lon2 - lon1 + 180.0) % 360.0 - 180.0)
+    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
+    return float(2 * r * np.arcsin(np.sqrt(a)))
 
 
 # ---------------------------------------------------------------------------
-# F2 density maps (+ diff vs target)
+# Axes-level building blocks (each draws into a provided axes)
 # ---------------------------------------------------------------------------
 
-def plot_density_maps(sources, months, basin, scope_name, out_dir, footer):
-    extent = BASIN_EXTENTS.get(basin, (0, 360, -60, 60))
+def _add_map_ax(fig, spec, extent):
+    """One map axes on a gridspec slot; cartopy when available."""
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        proj = ccrs.PlateCarree(central_longitude=(extent[0] + extent[1]) / 2 % 360)
+        ax = fig.add_subplot(spec, projection=proj)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        ax.coastlines(linewidth=0.4, color="0.4")
+        ax.add_feature(cfeature.LAND, facecolor="0.93", zorder=0)
+        return ax, ccrs.PlateCarree()
+    except Exception:  # cartopy unavailable — degrade to plain axes
+        ax = fig.add_subplot(spec)
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+        ax.set_aspect("auto")
+        return ax, None
+
+
+def _density_per_forecast(sources, months, basin):
+    """{role: track points / forecast on the 2° grid} + bin centres."""
     grids: dict[str, np.ndarray] = {}
     n_fc: dict[str, int] = {}
+    edges = None
     for role, src in sources.items():
         rec = _scoped_records(src, months, basin)
         grid = density_grid(rec)
@@ -172,155 +157,52 @@ def plot_density_maps(sources, months, basin, scope_name, out_dir, footer):
         grids[role] = grid["hist"] / n
         n_fc[role] = n
         edges = (grid["lat_edges"], grid["lon_edges"])
-    roles = list(sources)
-    has_target = "target" in grids
-    diff_roles = [r for r in roles if r != "target"] if has_target else []
-    ncols = max(len(roles), len(diff_roles)) or 1
-    nrows = 1 + (1 if diff_roles else 0)
-    fig = plt.figure(figsize=(5.5 * ncols, 3.2 * nrows + 0.8))
-    axes, transform = _map_axes(fig, nrows, ncols, extent)
     lat_c = (edges[0][:-1] + edges[0][1:]) / 2
     lon_c = (edges[1][:-1] + edges[1][1:]) / 2
-    vmax = max(g.max() for g in grids.values()) or 1.0
-    kwargs = {"transform": transform} if transform is not None else {}
-    for idx, role in enumerate(roles):
-        ax = axes[idx]
-        pcm = ax.pcolormesh(lon_c, lat_c, np.where(grids[role] > 0, grids[role], np.nan),
-                            vmin=0, vmax=vmax, cmap="viridis", **kwargs)
-        ax.set_title(f"{role} (n_fc={n_fc[role]})", fontsize=9)
-    fig.colorbar(pcm, ax=axes[:len(roles)], shrink=0.8, label="track points / forecast / 2°")
-    if diff_roles:
-        dmax = max(abs(grids[r] - grids["target"]).max() for r in diff_roles) or 1.0
-        for j, role in enumerate(diff_roles):
-            ax = axes[ncols + j]
+    return grids, n_fc, lat_c, lon_c
+
+
+def _draw_density_diffs(fig, specs, sources, months, basin, *, title_size=9):
+    """Density difference maps vs target (or absolute maps without a target).
+
+    Returns the list of map axes; one spec is consumed per drawn panel.
+    """
+    extent = BASIN_EXTENTS.get(basin, (0, 360, -60, 60))
+    grids, n_fc, lat_c, lon_c = _density_per_forecast(sources, months, basin)
+    axes = []
+    if "target" in grids:
+        roles = [r for r in grids if r != "target"][: len(specs)]
+        dmax = max((abs(grids[r] - grids["target"]).max() for r in roles), default=0) or 1.0
+        pcm = None
+        for spec, role in zip(specs, roles):
+            ax, transform = _add_map_ax(fig, spec, extent)
+            kwargs = {"transform": transform} if transform is not None else {}
             pcm = ax.pcolormesh(lon_c, lat_c, grids[role] - grids["target"],
                                 vmin=-dmax, vmax=dmax, cmap="RdBu_r", **kwargs)
-            ax.set_title(f"{role} − target", fontsize=9)
-        fig.colorbar(pcm, ax=axes[ncols:ncols + len(diff_roles)], shrink=0.8, label="Δ density")
-    for ax in axes[len(roles):ncols]:
-        ax.set_visible(False)
-    if diff_roles:
-        for ax in axes[ncols + len(diff_roles):]:
-            ax.set_visible(False)
-    fig.suptitle(f"Track density — {basin.upper()} — {scope_name}", fontsize=12)
-    return _finish(fig, out_dir / f"density_{basin}_{scope_name}.png", footer)
+            ax.set_title(f"{role} − target track density", fontsize=title_size)
+            axes.append(ax)
+        if axes:
+            fig.colorbar(pcm, ax=axes, shrink=0.85, pad=0.015,
+                         label="Δ track points / forecast / 2°")
+    else:  # no target — absolute densities
+        roles = list(grids)[: len(specs)]
+        vmax = max((grids[r].max() for r in roles), default=0) or 1.0
+        pcm = None
+        for spec, role in zip(specs, roles):
+            ax, transform = _add_map_ax(fig, spec, extent)
+            kwargs = {"transform": transform} if transform is not None else {}
+            pcm = ax.pcolormesh(lon_c, lat_c,
+                                np.where(grids[role] > 0, grids[role], np.nan),
+                                vmin=0, vmax=vmax, cmap="viridis", **kwargs)
+            ax.set_title(f"{role} track density (n_fc={n_fc[role]})", fontsize=title_size)
+            axes.append(ax)
+        if axes:
+            fig.colorbar(pcm, ax=axes, shrink=0.85, pad=0.015,
+                         label="track points / forecast / 2°")
+    return axes
 
 
-# ---------------------------------------------------------------------------
-# F3 intensity distributions (log-PDF + ratio vs target)
-# ---------------------------------------------------------------------------
-
-def plot_intensity_pdfs(sources, months, basin, scope_name, out_dir, footer):
-    paths = []
-    for stat, bins, label in (
-        ("mslp_min_hpa", MSLP_BINS, "lifetime min MSLP [hPa]"),
-        ("wind_max_ms", WIND_BINS, "lifetime max wind [m/s]"),
-    ):
-        hists: dict[str, np.ndarray] = {}
-        counts: dict[str, int] = {}
-        for role, src in sources.items():
-            summ = src["summary"]
-            vals = (summ[scope_mask(summ, months, [basin])][stat].dropna().to_numpy(dtype=float)
-                    if not summ.empty else np.array([]))
-            hist, _ = np.histogram(vals, bins=bins, density=True)
-            hists[role] = hist
-            counts[role] = len(vals)
-        centers = (bins[:-1] + bins[1:]) / 2
-        has_target = counts.get("target", 0) > 0
-        ncols = 2 if has_target else 1
-        fig, axs = plt.subplots(1, ncols, figsize=(6.2 * ncols, 4.2), squeeze=False)
-        ax = axs[0][0]
-        for idx, (role, hist) in enumerate(hists.items()):
-            ax.semilogy(centers, np.where(hist > 0, hist, np.nan), lw=1.6,
-                        color=role_color(role, idx), label=f"{role} (n={counts[role]})")
-        ax.set_xlabel(label)
-        ax.set_ylabel("PDF (log)")
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.25)
-        if has_target:
-            axr = axs[0][1]
-            tgt = hists["target"]
-            for idx, (role, hist) in enumerate(hists.items()):
-                if role == "target":
-                    continue
-                ratio = np.where(tgt > 0, hist / np.where(tgt > 0, tgt, np.nan), np.nan)
-                axr.plot(centers, ratio, lw=1.6, color=role_color(role, idx), label=role)
-            axr.axhline(1.0, color="k", lw=0.8)
-            axr.set_xlabel(label)
-            axr.set_ylabel("PDF ratio vs target")
-            axr.set_ylim(0, 3.5)
-            axr.legend(fontsize=8)
-            axr.grid(alpha=0.25)
-        fig.suptitle(f"{label} — {basin.upper()} — {scope_name}", fontsize=12)
-        stem = "mslp" if "MSLP" in label else "wind"
-        paths.append(_finish(fig, out_dir / f"intensity_pdf_{stem}_{basin}_{scope_name}.png", footer))
-    return paths
-
-
-# ---------------------------------------------------------------------------
-# F4 counts
-# ---------------------------------------------------------------------------
-
-def plot_counts(metrics_rows, months, basins, out_dir, footer):
-    df = pd.DataFrame(metrics_rows)
-    df = df[df["scope"].isin(months)]
-    if df.empty:
-        return []
-    paths = []
-    for basin in basins:
-        sub = df[df["basin"] == basin]
-        if sub.empty:
-            continue
-        roles = list(dict.fromkeys(sub["role"]))
-        fig, axs = plt.subplots(1, 2, figsize=(12.5, 4.2))
-        width = 0.8 / max(1, len(roles))
-        x = np.arange(len(months))
-        for idx, role in enumerate(roles):
-            rsub = sub[sub["role"] == role].set_index("scope").reindex(months)
-            vals = rsub["tracks_per_forecast"].astype(float).to_numpy()
-            cis = rsub["tracks_per_forecast_ci"]
-            err = np.array([
-                [v - ci[0], ci[1] - v] if isinstance(ci, (list, tuple)) and v == v else [0, 0]
-                for v, ci in zip(vals, cis)
-            ]).T
-            axs[0].bar(x + idx * width, np.nan_to_num(vals), width,
-                       yerr=err, capsize=2, color=role_color(role, idx), label=role)
-        axs[0].set_xticks(x + 0.4 - width / 2)
-        axs[0].set_xticklabels(months)
-        axs[0].set_ylabel("tracks / forecast")
-        axs[0].legend(fontsize=8)
-        axs[0].grid(alpha=0.25, axis="y")
-        # classification mix pooled over scope months
-        cls_rows = []
-        for role in roles:
-            pooled: dict[str, int] = {}
-            for _, row in sub[sub["role"] == role].iterrows():
-                _cc = row.get("classification_counts")
-                if not isinstance(_cc, dict):  # empty buckets surface as NaN via pandas
-                    _cc = {}
-                for k, v in _cc.items():
-                    pooled[k] = pooled.get(k, 0) + int(v)
-            total = sum(pooled.values()) or 1
-            cls_rows.append({"role": role, **{k: v / total for k, v in pooled.items()}})
-        cls_df = pd.DataFrame(cls_rows).set_index("role").fillna(0.0)
-        order = [c for c in ["HR3", "HR2", "HR1", "TS", "TD", "ET", "SSD", "unknown"] if c in cls_df]
-        bottom = np.zeros(len(cls_df))
-        for cat in order:
-            axs[1].bar(cls_df.index, cls_df[cat], bottom=bottom, label=cat)
-            bottom += cls_df[cat].to_numpy()
-        axs[1].set_ylabel("classification fraction")
-        axs[1].legend(fontsize=7, ncol=2)
-        fig.suptitle(f"Track counts & classification — {basin.upper()}", fontsize=12)
-        paths.append(_finish(fig, out_dir / f"counts_{basin}.png", footer))
-    return paths
-
-
-# ---------------------------------------------------------------------------
-# F5 step-conditional intensity
-# ---------------------------------------------------------------------------
-
-def plot_step_intensity(sources, months, basin, scope_name, out_dir, footer):
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+def _draw_step_intensity(ax, sources, months, basin, *, label_size=8):
     drew = False
     for idx, (role, src) in enumerate(sources.items()):
         rec = _scoped_records(src, months, basin)
@@ -332,100 +214,506 @@ def plot_step_intensity(sources, months, basin, scope_name, out_dir, footer):
         q10 = grp.quantile(0.10).reindex(steps)
         q90 = grp.quantile(0.90).reindex(steps)
         color = role_color(role, idx)
-        ax.plot(steps, med, lw=1.8, color=color, label=role)
+        ax.plot(steps, med, lw=1.6, color=color, label=role)
         ax.fill_between(steps, q10, q90, color=color, alpha=0.12)
         drew = True
-    if not drew:
-        plt.close(fig)
-        return None
-    ax.set_xlabel("forecast step [h]")
-    ax.set_ylabel("track-point MSLP [hPa] (median, q10–q90)")
+    ax.set_xlabel("forecast step [h]", fontsize=label_size)
+    ax.set_ylabel("track MSLP [hPa]\n(median, q10–q90)", fontsize=label_size)
     ax.invert_yaxis()
-    ax.legend(fontsize=8)
+    ax.tick_params(labelsize=label_size - 1)
+    if drew:
+        ax.legend(fontsize=label_size - 1)
     ax.grid(alpha=0.25)
-    fig.suptitle(f"Intensity vs lead time — {basin.upper()} — {scope_name}", fontsize=12)
-    return _finish(fig, out_dir / f"step_intensity_{basin}_{scope_name}.png", footer)
+    return drew
 
 
-# ---------------------------------------------------------------------------
-# F6 case panels
-# ---------------------------------------------------------------------------
+def _lifetime_values(sources, months, basin, stat):
+    out: dict[str, np.ndarray] = {}
+    for role, src in sources.items():
+        summ = src["summary"]
+        vals = (summ[scope_mask(summ, months, [basin])][stat].dropna().to_numpy(dtype=float)
+                if not summ.empty else np.array([]))
+        out[role] = vals
+    return out
 
-def plot_cases(sources, months, basin, scope_name, out_dir, footer, top_k=3):
-    cases = select_cases(sources, months, basin, top_k=top_k)
-    paths = []
-    for case in cases:
-        fig, ax = plt.subplots(figsize=(8.0, 4.5))
-        for idx, (role, src) in enumerate(sources.items()):
-            rec = src["records"]
-            if rec.empty:
+
+def _draw_intensity_pdf(ax, sources, months, basin, stat, bins, xlabel,
+                        *, ratio_inset=True, label_size=8):
+    """Log-PDF of a lifetime statistic per role, ratio-vs-target inset."""
+    values = _lifetime_values(sources, months, basin, stat)
+    centers = (bins[:-1] + bins[1:]) / 2
+    hists = {}
+    for idx, (role, vals) in enumerate(values.items()):
+        hist, _ = np.histogram(vals, bins=bins, density=True)
+        hists[role] = hist
+        ax.semilogy(centers, np.where(hist > 0, hist, np.nan), lw=1.6,
+                    color=role_color(role, idx), label=f"{role} (n={len(vals)})")
+    ax.set_xlabel(xlabel, fontsize=label_size)
+    ax.set_ylabel("PDF (log)", fontsize=label_size)
+    ax.tick_params(labelsize=label_size - 1)
+    # bulk of both distributions sits at the benign end: MSLP right, wind left
+    ax.legend(fontsize=label_size - 1,
+              loc=("lower left" if stat == "wind_max_ms" else "upper left"))
+    ax.grid(alpha=0.25)
+    if ratio_inset and len(values.get("target", ())) > 0:
+        loc = [0.58, 0.64, 0.39, 0.32] if stat == "wind_max_ms" else [0.55, 0.66, 0.42, 0.30]
+        axr = ax.inset_axes(loc)
+        tgt = hists["target"]
+        for idx, (role, hist) in enumerate(hists.items()):
+            if role == "target":
                 continue
-            members = case["members"].get(role) or []
-            color = role_color(role, idx)
-            labelled = False
-            for m in members:
-                tr = rec[(rec["init_date"] == str(m["init_date"]))
-                         & (rec["member"] == m["member"])
-                         & (rec["track_id"] == m["track_id"])]
-                if tr.empty:
-                    continue
-                t = pd.to_datetime(tr["valid_time"], format="%Y/%m/%d/%H")
-                ax.plot(t, tr["mslp_hpa"], lw=0.9, alpha=0.6, color=color,
-                        label=(None if labelled else f"{role} ({len(members)} tracks)"))
-                labelled = True
-        ax.invert_yaxis()
-        ax.set_ylabel("MSLP [hPa]")
-        ax.grid(alpha=0.25)
-        ax.legend(fontsize=8)
-        at = case["at"]
-        fig.suptitle(
-            f"Case {case['case_id']} — deepest {case['reference_role']} "
-            f"{case['mslp_min_hpa']:.0f} hPa @ ({at['lat']:.1f}, {at['lon_e']:.1f}) {at['valid_time']}",
-            fontsize=11,
-        )
-        fig.autofmt_xdate()
-        paths.append(_finish(fig, out_dir / f"case_{case['case_id']}_{scope_name}.png", footer))
-    return paths
+            ratio = np.where(tgt > 0, hist / np.where(tgt > 0, tgt, np.nan), np.nan)
+            axr.plot(centers, ratio, lw=1.2, color=role_color(role, idx))
+        axr.axhline(1.0, color="k", lw=0.7)
+        axr.set_ylim(0, 3.5)
+        axr.tick_params(labelsize=label_size - 3)
+        axr.set_title("ratio vs target", fontsize=label_size - 2)
+        axr.grid(alpha=0.2)
+
+
+def _reserve_footer(fig):
+    """Keep constrained-layout axes clear of the provenance footer line."""
+    try:
+        fig.get_layout_engine().set(rect=(0.0, 0.03, 1.0, 0.97))
+    except Exception:
+        pass
+
+
+def _basin_metric_rows(metrics, basin, scope):
+    return {row["role"]: row for row in metrics.get("metrics", [])
+            if row.get("basin") == basin and row.get("scope") == scope}
+
+
+def _headline_scope(metrics) -> str:
+    scopes = metrics.get("scopes") or []
+    return "all" if "all" in scopes else (scopes[0] if scopes else "all")
+
+
+def _draw_counts(ax, metrics, basin, scope, *, label_size=8):
+    """Grouped per-forecast count bars (tracks + TC-days) per role."""
+    rows = _basin_metric_rows(metrics, basin, scope)
+    roles = list(rows)
+    if not roles:
+        ax.axis("off")
+        return
+    width = 0.8 / len(roles)
+    x = np.arange(2)
+    for idx, role in enumerate(roles):
+        row = rows[role]
+        vals = [row.get("tracks_per_forecast") or 0.0,
+                row.get("tc_days_per_forecast") or 0.0]
+        ci = row.get("tracks_per_forecast_ci")
+        yerr = None
+        if isinstance(ci, (list, tuple)) and vals[0]:
+            yerr = np.array([[vals[0] - ci[0], 0.0], [ci[1] - vals[0], 0.0]])
+        ax.bar(x + idx * width, vals, width, yerr=yerr, capsize=2,
+               color=role_color(role, idx), label=role)
+    ax.set_xticks(x + 0.4 - width / 2)
+    ax.set_xticklabels(["tracks/fc", "TC-days/fc"], fontsize=label_size)
+    ax.tick_params(labelsize=label_size - 1)
+    ax.grid(alpha=0.25, axis="y")
+    ymax = ax.get_ylim()[1]
+    ax.set_ylim(0, ymax * 1.25)  # headroom so the legend clears the bars
+    ax.legend(fontsize=label_size - 2)
+
+
+def _draw_classification(ax, metrics, basin, scope, *, label_size=8):
+    rows = _basin_metric_rows(metrics, basin, scope)
+    cls_rows = []
+    for role, row in rows.items():
+        counts = row.get("classification_counts")
+        if not isinstance(counts, dict):
+            counts = {}
+        total = sum(counts.values()) or 1
+        cls_rows.append({"role": role, **{k: v / total for k, v in counts.items()}})
+    if not cls_rows:
+        ax.axis("off")
+        return
+    cls_df = pd.DataFrame(cls_rows).set_index("role").fillna(0.0)
+    order = [c for c in ["HR5", "HR4", "HR3", "HR2", "HR1", "TS", "TD", "ET", "SSD", "unknown"]
+             if c in cls_df]
+    bottom = np.zeros(len(cls_df))
+    for cat in order:
+        ax.bar(cls_df.index, cls_df[cat], bottom=bottom, label=cat)
+        bottom += cls_df[cat].to_numpy()
+    ax.set_ylabel("classification fraction", fontsize=label_size)
+    ax.tick_params(labelsize=label_size - 1)
+    ax.tick_params(axis="x", rotation=45)
+    if order:
+        ax.legend(fontsize=label_size - 3, loc="center left", bbox_to_anchor=(1.0, 0.5))
+
+
+# ---------------------------------------------------------------------------
+# P1 overview
+# ---------------------------------------------------------------------------
+
+def _fmt_ci(value, ci, fmt="{:.1f}") -> str:
+    if value is None:
+        return "—"
+    txt = fmt.format(value)
+    if isinstance(ci, (list, tuple)) and len(ci) == 2:
+        txt += f" [{fmt.format(ci[0])}, {fmt.format(ci[1])}]"
+    return txt
+
+
+def page_overview(sources, metrics, months, basins, focus_basin) -> plt.Figure:
+    fig = plt.figure(figsize=PAGE_SIZE)
+    fig.text(0.04, 0.94, "TC track comparison report", fontsize=17, weight="bold")
+    scope = _headline_scope(metrics)
+    subtitle = (f"months {', '.join(months)} — basins {', '.join(b.upper() for b in basins)}"
+                f" — scope {scope} — diagnostic panel (distributions vs references)")
+    fig.text(0.04, 0.905, subtitle, fontsize=9, color="0.25")
+    footer = _footer_text(sources, metrics.get("support", {}))
+    fig.text(0.04, 0.885, footer.replace(" | ", "\n"), fontsize=6.5, color="0.35", va="top")
+
+    # headline table, one row per (basin, role)
+    col_labels = ["basin", "role", "fc", "tracks/fc [95% CI]",
+                  "min MSLP p5 [95% CI]\n[hPa]", "deepest\n[hPa]",
+                  "wind p95\n[m/s]", "TC-days\n/fc"]
+    cells, row_colors = [], []
+    for basin in basins:
+        rows = _basin_metric_rows(metrics, basin, scope)
+        for role, row in rows.items():
+            cells.append([
+                basin.upper(), role,
+                str(row.get("n_forecasts", "—")),
+                _fmt_ci(row.get("tracks_per_forecast"), row.get("tracks_per_forecast_ci"), "{:.2f}"),
+                _fmt_ci(row.get("mslp_p5"), row.get("mslp_p5_ci"), "{:.1f}"),
+                f"{row['mslp_min']:.0f}" if row.get("mslp_min") is not None else "—",
+                f"{row['wind_p95']:.1f}" if row.get("wind_p95") is not None else "—",
+                f"{row['tc_days_per_forecast']:.2f}" if row.get("tc_days_per_forecast") is not None else "—",
+            ])
+            row_colors.append("#f3f3f3" if (basins.index(basin) % 2) else "white")
+    ax_tab = fig.add_axes([0.03, 0.06, 0.52, 0.72])
+    ax_tab.axis("off")
+    if cells:
+        col_widths = [0.08, 0.09, 0.05, 0.21, 0.23, 0.10, 0.10, 0.09]
+        table = ax_tab.table(cellText=cells, colLabels=col_labels,
+                             colWidths=col_widths, cellLoc="center", loc="upper center")
+        table.auto_set_font_size(False)
+        table.set_fontsize(7)
+        table.scale(1.0, 1.55)
+        for (r, c), cell in table.get_celld().items():
+            cell.set_edgecolor("0.8")
+            if r == 0:
+                cell.set_text_props(weight="bold", fontsize=7)
+                cell.set_height(cell.get_height() * 1.6)
+            else:
+                cell.set_facecolor(row_colors[r - 1])
+                if c == 1:
+                    cell.set_text_props(color=role_color(cells[r - 1][1]), weight="bold")
+    ax_tab.set_title(f"headline statistics — scope {scope}", fontsize=10)
+
+    # focus-basin deep-tail PDF with ratio inset
+    ax_pdf = fig.add_axes([0.62, 0.12, 0.35, 0.64])
+    _draw_intensity_pdf(ax_pdf, sources, months, focus_basin,
+                        "mslp_min_hpa", MSLP_BINS, "lifetime min MSLP [hPa]",
+                        label_size=9)
+    ax_pdf.set_title(f"{focus_basin.upper()} lifetime min MSLP — the deep tail",
+                     fontsize=10)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# P2 focus-basin consolidated grid
+# ---------------------------------------------------------------------------
+
+def _scope_display(scope_name, months) -> str:
+    if scope_name != "all":
+        return scope_name
+    return months[0] if len(months) == 1 else f"all months ({', '.join(months)})"
+
+
+def page_basin_grid(sources, metrics, months, basin, scope_name) -> plt.Figure:
+    fig = plt.figure(figsize=PAGE_SIZE, layout="constrained")
+    _reserve_footer(fig)
+    gs = fig.add_gridspec(2, 6, height_ratios=[1.25, 1.0])
+    n_diffs = min(3, max(1, len([r for r in sources if r != "target"]) or len(sources)))
+    specs = [gs[0, 2 * i:2 * i + 2] for i in range(n_diffs)]
+    _draw_density_diffs(fig, specs, sources, months, basin)
+
+    ax_step = fig.add_subplot(gs[1, 0:2])
+    _draw_step_intensity(ax_step, sources, months, basin)
+    ax_step.set_title("intensity vs lead time", fontsize=9)
+
+    ax_wind = fig.add_subplot(gs[1, 2:4])
+    _draw_intensity_pdf(ax_wind, sources, months, basin,
+                        "wind_max_ms", WIND_BINS, "lifetime max wind [m/s]")
+    ax_wind.set_title("lifetime max wind", fontsize=9)
+
+    scope = scope_name if scope_name in (metrics.get("scopes") or []) else _headline_scope(metrics)
+    ax_counts = fig.add_subplot(gs[1, 4])
+    _draw_counts(ax_counts, metrics, basin, scope)
+    ax_counts.set_title("counts per forecast", fontsize=9)
+    ax_cls = fig.add_subplot(gs[1, 5])
+    _draw_classification(ax_cls, metrics, basin, scope)
+    ax_cls.set_title("classification mix", fontsize=9)
+
+    fig.suptitle(f"{basin.upper()} — all TCs — {_scope_display(scope_name, months)}",
+                 fontsize=13)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# P3 other basins, one compact row each
+# ---------------------------------------------------------------------------
+
+def page_other_basins(sources, metrics, months, other_basins, scope_name) -> plt.Figure:
+    nrows = len(other_basins)
+    fig = plt.figure(figsize=PAGE_SIZE, layout="constrained")
+    _reserve_footer(fig)
+    gs = fig.add_gridspec(nrows, 4)
+    for i, basin in enumerate(other_basins):
+        ax_pdf = fig.add_subplot(gs[i, 0])
+        _draw_intensity_pdf(ax_pdf, sources, months, basin,
+                            "mslp_min_hpa", MSLP_BINS, "lifetime min MSLP [hPa]",
+                            ratio_inset=False, label_size=7)
+        ax_pdf.set_title(f"{basin.upper()} — min MSLP", fontsize=9)
+        _draw_density_diffs(fig, [gs[i, 1], gs[i, 2]], sources, months, basin,
+                            title_size=8)
+        ax_step = fig.add_subplot(gs[i, 3])
+        _draw_step_intensity(ax_step, sources, months, basin, label_size=7)
+        ax_step.set_title(f"{basin.upper()} — vs lead time", fontsize=9)
+    fig.suptitle(
+        f"Other basins (context) — {', '.join(b.upper() for b in other_basins)}"
+        f" — {_scope_display(scope_name, months)}",
+        fontsize=13,
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# P4+ case pages (one storm per page)
+# ---------------------------------------------------------------------------
+
+def _case_member_tracks(sources, case):
+    """{role: list of (member_meta, records_df)} for a case's associations."""
+    out: dict[str, list[tuple[dict, pd.DataFrame]]] = {}
+    for role, src in sources.items():
+        rec, summ = src["records"], src["summary"]
+        entries = []
+        for m in case["members"].get(role) or []:
+            key = ((summ["init_date"] == str(m["init_date"]))
+                   & (summ["member"] == m["member"])
+                   & (summ["track_id"] == m["track_id"])) if not summ.empty else None
+            meta = dict(m)
+            if key is not None and key.any():  # enrich from summary when fields absent
+                srow = summ[key].iloc[0]
+                for col in ("mslp_min_hpa", "mslp_min_lat", "mslp_min_lon_e",
+                            "mslp_min_valid_time", "wind_max_ms"):
+                    meta.setdefault(col, srow.get(col))
+            tr = rec[(rec["init_date"] == str(m["init_date"]))
+                     & (rec["member"] == m["member"])
+                     & (rec["track_id"] == m["track_id"])] if not rec.empty else pd.DataFrame()
+            entries.append((meta, tr))
+        out[role] = entries
+    return out
+
+
+def case_label(case) -> str:
+    at = case["at"]
+    try:
+        date_txt = pd.to_datetime(str(at["valid_time"]), format=_VALID_TIME_FMT).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        date_txt = str(at["valid_time"])
+    basin = str(case.get("basin") or case["case_id"].split("_")[0]).upper()
+    return (f"{basin}, deepest {date_txt} {case['mslp_min_hpa']:.0f} hPa "
+            f"near {_fmt_latlon(at['lat'], at['lon_e'])}")
+
+
+def _case_map_extent(members_by_role, at):
+    ref_lon = float(at["lon_e"]) % 360.0
+    lons, lats = [ref_lon], [float(at["lat"])]
+    for entries in members_by_role.values():
+        for _, tr in entries:
+            if tr.empty:
+                continue
+            lon = tr["lon_e"].to_numpy(dtype=float) % 360.0
+            lon = np.where(lon < ref_lon - 180, lon + 360,
+                           np.where(lon > ref_lon + 180, lon - 360, lon))
+            lons.extend(lon.tolist())
+            lats.extend(tr["lat"].to_numpy(dtype=float).tolist())
+    pad = 4.0
+    return (min(lons) - pad, max(lons) + pad, min(lats) - pad, max(lats) + pad), ref_lon
+
+
+def page_case(sources, case, months) -> plt.Figure:
+    fig = plt.figure(figsize=PAGE_SIZE, layout="constrained")
+    _reserve_footer(fig)
+    # top row: MSLP spaghetti + deepest-MSLP strip; bottom row: wide map + stats
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 0.9],
+                          height_ratios=[1.0, 0.95])
+    members_by_role = _case_member_tracks(sources, case)
+    at = case["at"]
+    try:
+        ref_time = pd.to_datetime(str(at["valid_time"]), format=_VALID_TIME_FMT)
+    except (ValueError, TypeError):
+        ref_time = None
+
+    # --- single map, all roles overlaid, color = role ---
+    extent, ref_lon = _case_map_extent(members_by_role, at)
+    ax_map, transform = _add_map_ax(fig, gs[1, 0:2], extent)
+    kwargs = {"transform": transform} if transform is not None else {}
+    for idx, role in enumerate(sources):
+        color = role_color(role, idx)
+        labelled = False
+        for _, tr in members_by_role.get(role, []):
+            if tr.empty:
+                continue
+            lon = tr["lon_e"].to_numpy(dtype=float) % 360.0
+            lon = np.where(lon < ref_lon - 180, lon + 360,
+                           np.where(lon > ref_lon + 180, lon - 360, lon))
+            ax_map.plot(lon, tr["lat"], lw=0.9, alpha=0.55, color=color,
+                        label=(None if labelled else role), **kwargs)
+            ax_map.plot(lon[:1], tr["lat"].to_numpy()[:1], ".", ms=3,
+                        color=color, alpha=0.8, **kwargs)
+            labelled = True
+    ax_map.plot([ref_lon], [float(at["lat"])], marker="*", ms=14,
+                color=role_color(case.get("reference_role", "target")),
+                mec="white", mew=0.6, zorder=5, **kwargs)
+    ax_map.legend(fontsize=8, loc="upper left")
+    ax_map.set_title("associated tracks (★ = reference deepest point)", fontsize=9)
+
+    # --- MSLP spaghetti vs time ---
+    ax_ts = fig.add_subplot(gs[0, 0:2])
+    for idx, role in enumerate(sources):
+        color = role_color(role, idx)
+        entries = members_by_role.get(role, [])
+        labelled = False
+        for _, tr in entries:
+            if tr.empty:
+                continue
+            t = pd.to_datetime(tr["valid_time"], format=_VALID_TIME_FMT)
+            ax_ts.plot(t, tr["mslp_hpa"], lw=0.9, alpha=0.6, color=color,
+                       label=(None if labelled else f"{role} ({len(entries)} tracks)"))
+            labelled = True
+    if ref_time is not None:
+        ax_ts.axvline(ref_time, color="0.5", lw=0.8, ls="--")
+    ax_ts.invert_yaxis()
+    ax_ts.set_ylabel("MSLP [hPa]")
+    ax_ts.grid(alpha=0.25)
+    ax_ts.legend(fontsize=8)
+    ax_ts.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    ax_ts.tick_params(axis="x", rotation=30, labelsize=8)
+    ax_ts.set_title("associated-track MSLP vs valid time", fontsize=9)
+
+    # --- per-member deepest MSLP strip plot ---
+    ax_strip = fig.add_subplot(gs[0, 2])
+    roles = list(sources)
+    for idx, role in enumerate(roles):
+        vals = np.array([float(meta["mslp_min_hpa"])
+                         for meta, _ in members_by_role.get(role, [])
+                         if meta.get("mslp_min_hpa") is not None and
+                         meta["mslp_min_hpa"] == meta["mslp_min_hpa"]])
+        if not len(vals):
+            continue
+        jitter = np.linspace(-0.18, 0.18, len(vals)) if len(vals) > 1 else np.array([0.0])
+        ax_strip.plot(idx + jitter, vals, "o", ms=4, alpha=0.65,
+                      color=role_color(role, idx))
+        ax_strip.hlines(np.median(vals), idx - 0.28, idx + 0.28,
+                        color=role_color(role, idx), lw=1.8)
+    ax_strip.axhline(case["mslp_min_hpa"], color="0.5", lw=0.8, ls="--")
+    ax_strip.set_xticks(range(len(roles)))
+    ax_strip.set_xticklabels(roles, fontsize=8)
+    ax_strip.invert_yaxis()
+    ax_strip.set_ylabel("track deepest MSLP [hPa]", fontsize=8)
+    ax_strip.grid(alpha=0.25, axis="y")
+    ax_strip.set_title("deepest MSLP per associated track\n(median bar; -- = reference deepest)",
+                       fontsize=8)
+
+    # --- stats box ---
+    ax_stats = fig.add_subplot(gs[1, 2])
+    ax_stats.axis("off")
+    lines = ["per-role association stats", ""]
+    for role in roles:
+        entries = members_by_role.get(role, [])
+        vals, dts, dists = [], [], []
+        for meta, _ in entries:
+            v = meta.get("mslp_min_hpa")
+            if v is not None and v == v:
+                vals.append(float(v))
+            try:
+                t = pd.to_datetime(str(meta.get("mslp_min_valid_time")), format=_VALID_TIME_FMT)
+                if ref_time is not None:
+                    dts.append((t - ref_time).total_seconds() / 3600.0)
+            except (ValueError, TypeError):
+                pass
+            la, lo = meta.get("mslp_min_lat"), meta.get("mslp_min_lon_e")
+            if la is not None and lo is not None and la == la and lo == lo:
+                dists.append(_haversine_km(float(la), float(lo),
+                                           float(at["lat"]), float(at["lon_e"])))
+        if not entries:
+            lines.append(f"{role}: no associated track")
+            continue
+        txt = f"{role}: n={len(entries)}"
+        if vals:
+            txt += f", deepest {min(vals):.0f}, median {np.median(vals):.0f} hPa"
+        lines.append(txt)
+        off = "    deepest-point offset vs target:"
+        if dts:
+            off += f" Δt med {np.median(dts):+.0f} h"
+        if dists:
+            off += f", Δx med {np.median(dists):.0f} km"
+        if dts or dists:
+            lines.append(off)
+    ax_stats.text(0.0, 0.98, "\n".join(lines), fontsize=8, family="monospace",
+                  va="top", ha="left", transform=ax_stats.transAxes)
+
+    months_txt = ", ".join(months) if months else "all"
+    fig.suptitle(f"Case {case['case_id']} — {case_label(case)} — scope {months_txt}",
+                 fontsize=12)
+    return fig
 
 
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
 
-def render_all(sources, metrics, months, basins, out_dir: Path) -> list[Path]:
+def render_all(
+    sources,
+    metrics,
+    months,
+    basins,
+    out_dir: Path,
+    *,
+    per_month: bool = False,
+    case_basins: list[str] | None = None,
+    top_k_cases: int = 3,
+) -> list[Path]:
     from matplotlib.backends.backend_pdf import PdfPages
 
     figures_dir = out_dir / "figures"
-    footer = _footer_text(sources, metrics["support"])
-    paths: list[Path] = []
-    scopes: list[tuple[str, list[str]]] = [(m, [m]) for m in months]
-    if len(months) != 1:
-        scopes.append(("all", months))
-    for basin in basins:
-        for scope_name, scope_months in scopes:
-            paths.append(plot_track_maps(sources, scope_months, basin, scope_name, figures_dir, footer))
-            paths.append(plot_density_maps(sources, scope_months, basin, scope_name, figures_dir, footer))
-            paths.extend(plot_intensity_pdfs(sources, scope_months, basin, scope_name, figures_dir, footer))
-            p = plot_step_intensity(sources, scope_months, basin, scope_name, figures_dir, footer)
-            if p:
-                paths.append(p)
-        paths.extend(plot_cases(sources, months, basin, "all", figures_dir, footer))
-    paths.extend(plot_counts(metrics["metrics"], months, basins, figures_dir, footer))
-    paths = [p for p in paths if p]
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    footer = _footer_text(sources, metrics.get("support", {}))
+    focus = "atl" if "atl" in basins else basins[0]
+    others = [b for b in basins if b != focus]
+    if case_basins is None:
+        case_basins = [focus]
+    case_basins = [b for b in case_basins if b in basins] or [focus]
 
+    pages: list[tuple[str, plt.Figure]] = []
+    pages.append(("page1_overview", page_overview(sources, metrics, months, basins, focus)))
+    pages.append((f"page2_{focus}_all_tcs", page_basin_grid(sources, metrics, months, focus, "all")))
+    if others:
+        pages.append(("page3_other_basins",
+                      page_other_basins(sources, metrics, months, others, "all")))
+    if per_month and len(months) > 1:
+        for month in months:
+            pages.append((f"month_{focus}_{month}",
+                          page_basin_grid(sources, metrics, [month], focus, month)))
+    for basin in case_basins:
+        for case in select_cases(sources, months, basin, top_k=top_k_cases):
+            pages.append((f"case_{case['case_id']}", page_case(sources, case, months)))
+
+    paths: list[Path] = []
     pdf_path = out_dir / "tc_tracks_report.pdf"
     with PdfPages(pdf_path) as pdf:
-        fig = plt.figure(figsize=(11, 8.5))
-        fig.text(0.06, 0.9, "TC track comparison report", fontsize=18, weight="bold")
-        fig.text(0.06, 0.84, footer.replace(" | ", "\n"), fontsize=9, va="top")
-        pdf.savefig(fig)
-        plt.close(fig)
-        for path in paths:
-            image = plt.imread(path)
-            fig = plt.figure(figsize=(11, 11 * image.shape[0] / image.shape[1]))
-            ax = fig.add_axes([0, 0, 1, 1])
-            ax.imshow(image)
-            ax.axis("off")
+        for stem, fig in pages:
+            fig.text(0.01, 0.005, footer, fontsize=6, color="0.35", ha="left", va="bottom")
+            png = figures_dir / f"{stem}.png"
+            fig.savefig(png, dpi=150)
             pdf.savefig(fig)
             plt.close(fig)
+            paths.append(png)
+    LOG.info("report: %d pages -> %s", len(pages), pdf_path)
     return paths + [pdf_path]

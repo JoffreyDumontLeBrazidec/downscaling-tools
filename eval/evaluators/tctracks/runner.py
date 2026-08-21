@@ -111,6 +111,9 @@ def run(
     reparse: bool = False,
     no_plots: bool = False,
     top_k_cases: int = 3,
+    plot_only: bool = False,
+    per_month_pages: bool = False,
+    case_basins: list[str] | None = None,
 ) -> dict[str, Any]:
     roots = resolve_source_roots(sources_arg, lane_name, lane_config, host_config)
     sources = load_sources(roots, reparse=reparse)
@@ -126,23 +129,36 @@ def run(
             src["provenance"]["dates_pinned"] = sorted(pinned)
             LOG.info("%s: pinned to %d dates -> %d track rows",
                      role, len(pinned), len(src["records"]))
-    metrics = scorer.score_sources(sources, months, basins)
-    metrics["dates_pinned"] = sorted(dates) if dates else None
-    metrics["cases"] = {
-        basin: scorer.select_cases(sources, months, basin, top_k=top_k_cases)
-        for basin in basins
-    }
     out_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = out_dir / "tc_tracks_metrics.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2, default=str) + "\n", encoding="utf-8")
-    LOG.info("metrics written to %s", metrics_path)
+    if plot_only and metrics_path.exists():
+        # Re-render figures from the cached parsed tables + existing metrics
+        # (fast iteration on the report layout; nothing is recomputed).
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        LOG.info("plot-only: reusing metrics from %s", metrics_path)
+    else:
+        if plot_only:
+            LOG.warning("plot-only requested but %s is missing — scoring anyway", metrics_path)
+        metrics = scorer.score_sources(sources, months, basins)
+        metrics["dates_pinned"] = sorted(dates) if dates else None
+        metrics["cases"] = {
+            basin: scorer.select_cases(sources, months, basin, top_k=top_k_cases)
+            for basin in basins
+        }
+        metrics_path.write_text(json.dumps(metrics, indent=2, default=str) + "\n", encoding="utf-8")
+        LOG.info("metrics written to %s", metrics_path)
 
-    import pandas as pd
-    flat = pd.DataFrame(metrics["metrics"]).drop(columns=["step_intensity"], errors="ignore")
-    flat.to_csv(out_dir / "tc_tracks_metrics.csv", index=False)
+        import pandas as pd
+        flat = pd.DataFrame(metrics["metrics"]).drop(columns=["step_intensity"], errors="ignore")
+        flat.to_csv(out_dir / "tc_tracks_metrics.csv", index=False)
 
     if not no_plots:
         from . import plotter
-        paths = plotter.render_all(sources, metrics, months, basins, out_dir)
+        paths = plotter.render_all(
+            sources, metrics, months, basins, out_dir,
+            per_month=per_month_pages,
+            case_basins=case_basins,
+            top_k_cases=top_k_cases,
+        )
         LOG.info("rendered %d figures under %s", len(paths), out_dir)
     return metrics

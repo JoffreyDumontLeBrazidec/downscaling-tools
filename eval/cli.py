@@ -434,7 +434,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_tcc.add_argument("--out", default=None, help="Output dir (default: <scratch>/eval/<lane_short>/tctracks/<label>).")
     p_tcc.add_argument("--reparse", action="store_true", default=False, help="Re-parse source tars even if parsed tables exist.")
     p_tcc.add_argument("--no-plots", action="store_true", default=False, help="Metrics only; skip figure rendering.")
-    p_tcc.add_argument("--top-k-cases", type=int, default=3, help="Deepest-target case panels per basin (default: 3).")
+    p_tcc.add_argument("--top-k-cases", type=int, default=3, help="Deepest-target case pages per case basin (default: 3).")
+    p_tcc.add_argument("--case-basins", default="atl", help="Comma-separated basins that get per-storm case pages (default: atl).")
+    p_tcc.add_argument("--plot-only", action="store_true", default=False, help="Re-render the report from cached parsed tables + existing tc_tracks_metrics.json (no re-scoring).")
+    p_tcc.add_argument("--per-month-pages", action="store_true", default=False, help="Also render one focus-basin stats page per month (default: pooled pages only).")
 
     return parser
 
@@ -1320,6 +1323,9 @@ def cmd_tccompare(args: argparse.Namespace, lane_config: dict, host_config: dict
         reparse=getattr(args, "reparse", False),
         no_plots=getattr(args, "no_plots", False),
         top_k_cases=getattr(args, "top_k_cases", 3),
+        plot_only=getattr(args, "plot_only", False),
+        per_month_pages=getattr(args, "per_month_pages", False),
+        case_basins=[b.strip() for b in str(getattr(args, "case_basins", "") or "").split(",") if b.strip()] or None,
     )
 
 def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:

@@ -259,10 +259,17 @@ def select_cases(
         if any(_close(row, p, match_deg, match_hours) for p in picked):
             continue
         picked.append(row)
+    member_cols = [
+        "init_date", "member", "track_id",
+        # extra per-track fields (new, backward-compatible) for case pages
+        "mslp_min_hpa", "mslp_min_lat", "mslp_min_lon_e",
+        "mslp_min_valid_time", "wind_max_ms",
+    ]
     cases = []
     for i, ref_row in enumerate(picked):
         case = {
             "case_id": f"{basin}_case{i + 1}_{ref_row['init_date']}",
+            "basin": basin,
             "reference_role": reference_role,
             "mslp_min_hpa": float(ref_row["mslp_min_hpa"]),
             "at": {
@@ -279,7 +286,13 @@ def select_cases(
                 continue
             in_scope = summ[scope_mask(summ, months, [basin])].dropna(subset=["mslp_min_hpa"])
             matched = in_scope[[_close(r, ref_row, match_deg, match_hours) for _, r in in_scope.iterrows()]]
-            case["members"][role] = matched[["init_date", "member", "track_id"]].to_dict(orient="records")
+            cols = [c for c in member_cols if c in matched.columns]
+            records = matched[cols].to_dict(orient="records")
+            for rec in records:  # NaN -> None so the metrics JSON stays strict
+                for key, value in rec.items():
+                    if isinstance(value, float) and value != value:
+                        rec[key] = None
+            case["members"][role] = records
         cases.append(case)
     return cases
 
