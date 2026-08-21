@@ -1,7 +1,10 @@
-"""Figure suite for track-based TC comparison — page-oriented report.
+"""Figure suite for track-based TC comparison — two page-oriented reports.
 
-The report is a small set of dense landscape pages instead of one figure per
-statistic:
+Report 1 (``tc_tracks_report.pdf``) — one page per basin, in the standard
+``eval.cli tc`` PDF style (two log-density panels, MSLP inverted + wind),
+pooling ALL track points of all TCs of the basin.
+
+Report 2 (``tc_tracks_diagnostics.pdf``) — the remaining diagnostics:
 
   P1  overview     — headline table (all basins/roles) + focus-basin lifetime
                      min-MSLP log-PDF with a ratio-vs-target inset
@@ -344,7 +347,94 @@ def _draw_classification(ax, metrics, basin, scope, *, label_size=8):
 
 
 # ---------------------------------------------------------------------------
-# P1 overview
+# Report 1: per-basin TC distributions in the eval.cli `tc` PDF style
+# ---------------------------------------------------------------------------
+
+# Styling mirrors eval/_backends/tc/pdf_plot.py (plot_pdf_log): two log-density
+# panels (MSLP left with inverted x so intensity increases rightward, wind
+# right), log-floor instead of gaps, reference drawn black/solid/thick. Role
+# colors stay the tctracks fixed palette.
+ROLE_LINESTYLES = {"target": "-", "input": "--", "ctrl": "-.", "model": "-"}
+ROLE_LINEWIDTHS = {"target": 3.0, "input": 2.3, "ctrl": 2.3, "model": 2.8}
+
+MSLP_POINT_BINS = np.arange(890.0, 1032.5, 2.5)
+WIND_POINT_BINS = np.arange(0.0, 81.0, 1.0)
+
+
+def _log_floor(series) -> float:
+    positive = [s[np.isfinite(s) & (s > 0)] for s in series]
+    positive = [s for s in positive if s.size]
+    if not positive:
+        return 1e-12
+    return max(float(np.min(np.concatenate(positive))) * 0.1, 1e-12)
+
+
+def page_basin_distributions(sources, months, basin, scope_label, dist_stat="records") -> plt.Figure:
+    """One tc-style page: pooled MSLP + wind PDFs over all TCs of one basin.
+
+    ``dist_stat='records'`` pools every 24-hourly track point of every TC in
+    scope (the all-TC analogue of the box `tc` evaluator's field PDFs).
+    """
+    data: dict[str, dict[str, np.ndarray]] = {}
+    for role, src in sources.items():
+        rec = _scoped_records(src, months, basin)
+        data[role] = {
+            "mslp": rec["mslp_hpa"].dropna().to_numpy(dtype=float) if not rec.empty else np.array([]),
+            "wind": rec["wind_ms"].dropna().to_numpy(dtype=float) if not rec.empty else np.array([]),
+        }
+
+    with plt.rc_context({"font.family": "DejaVu Sans"}):
+        fig, axs = plt.subplots(1, 2, figsize=(13.8, 5.6))
+        panels = [
+            ("mslp", MSLP_POINT_BINS, "Mean Sea Level Pressure (hPa)",
+             "Mean sea level pressure (PDF)"),
+            ("wind", WIND_POINT_BINS, "10m wind speed (m/s)", "Wind speed (PDF)"),
+        ]
+        for ax, (var, bins, xlabel, title) in zip(axs, panels):
+            mids = (bins[:-1] + bins[1:]) / 2
+            hists = {}
+            for role in data:
+                hist, _ = np.histogram(data[role][var], bins=bins, density=True)
+                hists[role] = hist
+            floor = _log_floor(list(hists.values()))
+            # reference (target) first, black and thick, like OPER AN in `tc`
+            order = (["target"] if "target" in data else []) + [r for r in data if r != "target"]
+            for idx, role in enumerate(order):
+                prov = sources[role].get("provenance") or {}
+                sid = prov.get("source_id") or role
+                n = len(data[role][var])
+                ax.plot(mids, np.where(np.isfinite(hists[role]) & (hists[role] > 0),
+                                       hists[role], floor),
+                        label=f"{role} {sid} (n={n})",
+                        color=role_color(role, idx),
+                        linestyle=ROLE_LINESTYLES.get(role, "-"),
+                        linewidth=ROLE_LINEWIDTHS.get(role, 2.3), alpha=0.96)
+            ax.set_yscale("log")
+            ax.set_ylim(bottom=floor)
+            ax.grid(False)
+            ax.set_xlabel(xlabel, fontsize=14)
+            ax.set_ylabel("Probability Density", fontsize=14)
+            ax.set_title(title, fontsize=14)
+            ax.legend(fontsize=9)
+            # data-range crop; MSLP inverted so TC intensity increases rightward
+            pooled = np.concatenate([v[var] for v in data.values() if v[var].size]) \
+                if any(v[var].size for v in data.values()) else np.array([0.0, 1.0])
+            if var == "mslp":
+                ax.set_xlim(min(bins[-1], pooled.max() + 5.0),
+                            max(bins[0], pooled.min() - 5.0))
+            else:
+                ax.set_xlim(0, min(bins[-1], pooled.max() + 2.0))
+        fig.suptitle(
+            f"{basin.upper()} — TC track distributions (all track points, all TCs)"
+            f" — {scope_label}",
+            fontsize=16,
+        )
+        fig.subplots_adjust(left=0.06, right=0.985, bottom=0.16, top=0.85, wspace=0.22)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics report: overview page
 # ---------------------------------------------------------------------------
 
 def _fmt_ci(value, ci, fmt="{:.1f}") -> str:
@@ -690,30 +780,42 @@ def render_all(
     if case_basins is None:
         case_basins = [focus]
     case_basins = [b for b in case_basins if b in basins] or [focus]
+    scope_label = _scope_display("all", months)
 
-    pages: list[tuple[str, plt.Figure]] = []
-    pages.append(("page1_overview", page_overview(sources, metrics, months, basins, focus)))
-    pages.append((f"page2_{focus}_all_tcs", page_basin_grid(sources, metrics, months, focus, "all")))
+    # Report 1 — the headline product: one tc-style distribution page per basin.
+    dist_pages: list[tuple[str, plt.Figure]] = [
+        (f"dist_{basin}", page_basin_distributions(sources, months, basin, scope_label))
+        for basin in basins
+    ]
+
+    # Report 2 — everything else (overview table, consolidated grids, cases).
+    diag_pages: list[tuple[str, plt.Figure]] = []
+    diag_pages.append(("page1_overview", page_overview(sources, metrics, months, basins, focus)))
+    diag_pages.append((f"page2_{focus}_all_tcs", page_basin_grid(sources, metrics, months, focus, "all")))
     if others:
-        pages.append(("page3_other_basins",
-                      page_other_basins(sources, metrics, months, others, "all")))
+        diag_pages.append(("page3_other_basins",
+                           page_other_basins(sources, metrics, months, others, "all")))
     if per_month and len(months) > 1:
         for month in months:
-            pages.append((f"month_{focus}_{month}",
-                          page_basin_grid(sources, metrics, [month], focus, month)))
+            diag_pages.append((f"month_{focus}_{month}",
+                               page_basin_grid(sources, metrics, [month], focus, month)))
     for basin in case_basins:
         for case in select_cases(sources, months, basin, top_k=top_k_cases):
-            pages.append((f"case_{case['case_id']}", page_case(sources, case, months)))
+            diag_pages.append((f"case_{case['case_id']}", page_case(sources, case, months)))
 
     paths: list[Path] = []
-    pdf_path = out_dir / "tc_tracks_report.pdf"
-    with PdfPages(pdf_path) as pdf:
-        for stem, fig in pages:
-            fig.text(0.01, 0.005, footer, fontsize=6, color="0.35", ha="left", va="bottom")
-            png = figures_dir / f"{stem}.png"
-            fig.savefig(png, dpi=150)
-            pdf.savefig(fig)
-            plt.close(fig)
-            paths.append(png)
-    LOG.info("report: %d pages -> %s", len(pages), pdf_path)
-    return paths + [pdf_path]
+    reports = [
+        (out_dir / "tc_tracks_report.pdf", dist_pages),
+        (out_dir / "tc_tracks_diagnostics.pdf", diag_pages),
+    ]
+    for pdf_path, pages in reports:
+        with PdfPages(pdf_path) as pdf:
+            for stem, fig in pages:
+                fig.text(0.01, 0.005, footer, fontsize=6, color="0.35", ha="left", va="bottom")
+                png = figures_dir / f"{stem}.png"
+                fig.savefig(png, dpi=150)
+                pdf.savefig(fig)
+                plt.close(fig)
+                paths.append(png)
+        LOG.info("%s: %d pages", pdf_path, len(pages))
+    return paths + [p for p, _ in reports]

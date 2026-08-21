@@ -42,9 +42,12 @@ def test_render_all_page_report(tmp_path):
     metrics = scorer.score_sources(sources, months=["202509"], basins=["atl"])
     paths = plotter.render_all(sources, metrics, ["202509"], ["atl"], tmp_path,
                                top_k_cases=2)
-    pdf = tmp_path / "tc_tracks_report.pdf"
-    assert pdf.exists() and pdf.stat().st_size > 0
+    # report 1 = per-basin tc-style distribution pages; report 2 = diagnostics
+    for pdf_name in ("tc_tracks_report.pdf", "tc_tracks_diagnostics.pdf"):
+        pdf = tmp_path / pdf_name
+        assert pdf.exists() and pdf.stat().st_size > 0
     names = {p.name for p in paths}
+    assert "dist_atl.png" in names
     assert "page1_overview.png" in names
     assert "page2_atl_all_tcs.png" in names
     # single basin -> no other-basins page; 2 case pages
@@ -69,6 +72,7 @@ def test_render_all_multi_basin_and_per_month(tmp_path):
     paths = plotter.render_all(sources, metrics, months, ["atl", "wnp"], tmp_path,
                                per_month=True, top_k_cases=1)
     names = {p.name for p in paths}
+    assert {"dist_atl.png", "dist_wnp.png"} <= names
     assert "page3_other_basins.png" in names
     assert {"month_atl_202509.png", "month_atl_202510.png"} <= names
     # case pages come only from the default case basin (atl)
