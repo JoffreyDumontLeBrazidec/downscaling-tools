@@ -1,0 +1,58 @@
+# o320_o1280_prepml_pw30_season_ft400k_ctrl -- UNGUIDED CONTROL month arm on the
+# cycle-2 fine-tune checkpoint (family 12dcefeafa92457aab286d4931ffe63f, step 400000;
+# inference companion inference-anemoi-by_epoch-epoch_172-step_400000.ckpt, supplied
+# on the CLI as always). Cumulative training on this checkpoint is ~800k steps
+# (397,434-step pretraining + a fresh 400,000-step fine-tune cycle), which is what the
+# owner means by "the 800k checkpoint".
+#
+# This lane is the STRICTLY MATCHED CONTROL for the autoguidance arm
+# o320_o1280_prepml_pw30_season_ft400k_gmass_w13 (expver ja6g, live since 2026-08-21).
+# It is that lane with the guidance switched off and nothing else changed:
+#   - same checkpoint, same September-2025 month, same 10 members, same 15 steps;
+#   - same sampler (piecewise 30 steps, 10 high / 20 low, sigma_max=1e5);
+#   - same ecflow gpu limit of 4 (owner 2026-08-21: leave node headroom);
+#   - the two CODEX_AUTOGUIDE_* environment variables are ABSENT, so the runner takes
+#     the plain unguided path (the guidance seam in season-scale-tools/
+#     downscaling_unified_runner.py only activates when both are set).
+# Acceptance for this arm is therefore the MIRROR of the guided one: the job log must
+# NOT print the "AUTOGUIDANCE ACTIVE" banner, and the field count must hit the gate.
+#
+# NOTE: the lane loader merges only two levels deep, so predict.env and predict.sampler
+# REPLACE the base blocks wholesale and must both be restated here in full. Keep in
+# sync with the w13 lane except for the deliberate guidance difference.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+
+prepml:
+  ecflow:
+    limits:
+      gpu: 4
+  # Unguided runs one denoiser evaluation per sampler step instead of two, so this arm
+  # is roughly half the cost of the guided one (~45 min per member-date against the
+  # ~1h30 measured on ja6g). A 6-hour cap still leaves a wide margin.
+  platform:
+    gpu:
+      time: "0-06:00"
