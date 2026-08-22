@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from eval._backends.env.toolchain import render_module_block
+
 LOG = logging.getLogger(__name__)
 
 _HERE = Path(__file__).resolve().parent
@@ -448,11 +450,10 @@ def _run_gptosp(
 
     lines = [
         "set -euo pipefail",
-        "module unload ecmwf-toolbox 2>/dev/null || true",
-        "module load eclib   2>/dev/null || true",
-        "module load pifsenv 2>/dev/null || true",
-        "module load ifs     2>/dev/null || true",
-        "export DR_HOOK_ASSERT_MPI_INITIALIZED=0",
+        # Rendered from eval/config/toolchains.yaml so the repo and the
+        # hand-written job scripts cannot drift apart, and so a missing
+        # gptosp.ser is reported here rather than as an empty stage 2 later.
+        render_module_block("gptosp"),
         # Short symlinks to avoid gptosp ~128-char path-length truncation
         'SHORT_TMP="$(mktemp -d)"',
         f'ln -s "{grb_dir}" "$SHORT_TMP/g"',
@@ -491,13 +492,10 @@ def _compute_amplitudes(
     venv_activate = Path(sys.prefix) / "bin" / "activate"
     script = "\n".join([
         "set -euo pipefail",
-        "module unload ifs         2>/dev/null || true",
-        "module load ecmwf-toolbox 2>/dev/null || true",
-        # metview startup needs a writable shared-scratch TMPDIR (node-local /tmp hangs) +
-        # a generous start timeout; else _amplitude_computer.py times out on `import metview`.
-        'export TMPDIR="${SCRATCH:-/tmp}/mvamp_$$"; mkdir -p "$TMPDIR"',
-        'export METVIEW_TMPDIR="$TMPDIR"',
-        'export METVIEW_PYTHON_START_TIMEOUT="${METVIEW_PYTHON_START_TIMEOUT:-900}"',
+        # Rendered from eval/config/toolchains.yaml.  That recipe carries the
+        # shared-scratch TMPDIR and the generous start timeout that metview
+        # startup needs; without them `import metview` hangs or times out.
+        render_module_block("metview"),
         f'source "{venv_activate}"',
         f'python "{_HERE / "_amplitude_computer.py"}"'
         f' --spectral-harmonics-dir "{sh_dir}"'

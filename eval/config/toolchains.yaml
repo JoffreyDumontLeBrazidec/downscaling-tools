@@ -1,0 +1,53 @@
+# Single definition of how to obtain the external binaries the eval pipeline
+# needs.  Both eval/_backends/env/toolchain.py and the hand-written job scripts
+# under ~/dev/jobscripts read this file, so there is exactly one place to change
+# when a module version moves.
+#
+# Every recipe ends in a positive probe.  Before this file existed, each caller
+# wrote `module load X 2>/dev/null || true`, which hid the real reason a module
+# failed and let the failure surface three stages later as a confusing
+# downstream error such as "No spectra amplitudes were written".
+#
+# `module unload` keeps its `|| true`: unloading something that is not loaded is
+# genuinely harmless.  `module load` does not, so a failure stops the script.
+
+metview:
+  description: >
+    Metview. Used for tropical-cyclone GRIB regridding, and for spectra
+    amplitudes until the eccodes computation replaces that call.
+  # ecmwf-toolbox is pinned. Only one version is installed today
+  # (2026.04.0.0, carrying Metview 5.26.5), so pinning costs nothing now and
+  # stops the Metview version drifting silently underneath cached spectra.
+  module_unloads: [ifs]
+  module_loads: [ecmwf-toolbox/2026.04.0.0]
+  shell_post:
+    # Metview startup hangs on a node-local /tmp and needs a generous timeout,
+    # or `import metview` times out before it ever returns.
+    - 'export TMPDIR="${SCRATCH:-/tmp}/mv_$$"; mkdir -p "$TMPDIR"'
+    - 'export METVIEW_TMPDIR="$TMPDIR"'
+    - 'export METVIEW_PYTHON_START_TIMEOUT="${METVIEW_PYTHON_START_TIMEOUT:-900}"'
+  probe: metview
+  version_env: METVIEW_VERSION
+  notes: >
+    metview is an lmod *extension* provided by ecmwf-toolbox, not a loadable
+    module: `module avail metview` reports it as an extension that "cannot be
+    loaded directly". So `module load metview/<version>` has never worked, and
+    any recipe written that way silently fell through to its fallback.
+
+gptosp:
+  description: >
+    gptosp.ser, the IFS grid-point to spectral-harmonics transform used by
+    stage 2 of the spectra_ecmwf evaluator. Atos AC only.
+  # ifs is deliberately left unpinned. Cycles are retired regularly, and the
+  # transform is verified independently: the runner reads the achieved
+  # truncation back off every file it produces. The resolved path is recorded
+  # in the run summary so drift stays visible.
+  module_unloads: [ecmwf-toolbox]
+  module_loads: [eclib, pifsenv, ifs]
+  shell_post:
+    - 'export DR_HOOK_ASSERT_MPI_INITIALIZED=0'
+  probe: gptosp.ser
+  version_env: ""
+  notes: >
+    gptosp.ser has a Fortran CHARACTER path buffer of about 128 characters, so
+    callers pass it short symlinked paths rather than full scratch paths.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,6 +178,9 @@ def main() -> None:
         "requested_truncation": args.truncation,
         "achieved_truncation": sorted(achieved_truncations),
         "truncation_convention": "cubic_octahedral_TCo",
+        # Which binaries produced these curves. Metview is unpinned no more,
+        # but recording the resolved version keeps older caches interpretable.
+        "metview_version": os.environ.get("METVIEW_VERSION", ""),
         "written_count": len(written),
         "files": written,
     }
