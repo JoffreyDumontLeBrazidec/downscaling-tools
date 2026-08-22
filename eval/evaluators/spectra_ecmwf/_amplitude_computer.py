@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,6 +130,7 @@ def main() -> None:
 
     written = []
     achieved_truncations: set[int] = set()
+    warned: set[int] = set()
     for state in states:
         cfg = CONFIGS[state]
         in_dir = sh_root / cfg.dir_name
@@ -136,16 +138,21 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in sorted(in_dir.glob("*_nopoles.grb_sh")):
             date_ymd, step_hours, member = parse_components(path)
-            achieved = read_truncation(path)
-            if achieved != args.truncation:
-                raise RuntimeError(
-                    f"{path} carries T{achieved} but T{args.truncation} was requested. "
-                    "Stage 2 (gptosp -T) and stage 3 must agree; refusing to write a "
-                    "spectrum whose truncation differs from the one recorded in the "
-                    "summary."
+            source_truncation = read_truncation(path)
+            achieved_truncations.add(source_truncation)
+            # The curve can only ever be as long as the shorter of the two.
+            curve_truncation = min(args.truncation, source_truncation)
+            if source_truncation != args.truncation and source_truncation not in warned:
+                warned.add(source_truncation)
+                print(
+                    f"WARNING: {path.parent} carries T{source_truncation} but "
+                    f"T{args.truncation} was requested, so curves are cut at "
+                    f"T{curve_truncation}. Pass -T {args.truncation} to gptosp so the two "
+                    f"stages agree; the cut itself is exact, but nothing downstream can "
+                    f"tell it happened unless it is recorded.",
+                    file=sys.stderr,
                 )
-            achieved_truncations.add(achieved)
-            wvn, ampl = read_curve(path, cfg, truncation=achieved)
+            wvn, ampl = read_curve(path, cfg, truncation=curve_truncation)
             stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
             wvn_path = out_dir / f"wvn_{stem}.npy"
             ampl_path = out_dir / f"ampl_{stem}.npy"
@@ -161,7 +168,8 @@ def main() -> None:
                     "step_hours": step_hours,
                     "member": member,
                     "truncation": args.truncation,
-                    "achieved_truncation": achieved,
+                    "source_truncation": source_truncation,
+                    "curve_truncation": curve_truncation,
                 }
             )
 
@@ -176,7 +184,9 @@ def main() -> None:
         # validation already reads it; the two explicit keys below say which is which.
         "truncation": args.truncation,
         "requested_truncation": args.truncation,
-        "achieved_truncation": sorted(achieved_truncations),
+        # The truncation the harmonics files actually carried. Equal to the
+        # requested value when stage 2 was given -T; larger when it was not.
+        "source_truncation": sorted(achieved_truncations),
         "truncation_convention": "cubic_octahedral_TCo",
         # Which binaries produced these curves. Metview is unpinned no more,
         # but recording the resolved version keeps older caches interpretable.

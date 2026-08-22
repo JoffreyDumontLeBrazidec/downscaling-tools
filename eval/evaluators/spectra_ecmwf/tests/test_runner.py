@@ -225,3 +225,137 @@ def test_pipeline_uses_one_truncation_for_both_stages(tmp_path: Path) -> None:
         mock_gptosp.call_args.kwargs["truncation"]
         == mock_amplitudes.call_args.kwargs["truncation"]
     )
+
+
+# --- reference cache: window addressing and validation -----------------------
+
+
+def _make_cache(root: Path, *, truncation: int | None, files: list[dict] | None) -> Path:
+    """Build a minimal reference cache directory and return its spectra dir."""
+    amp_dir = root / "spectra"
+    (amp_dir / "2t_sfc").mkdir(parents=True)
+    (amp_dir / "2t_sfc" / "ampl_20230826_120_2t_n1.npy").touch()
+    summary: dict = {}
+    if truncation is not None:
+        summary["truncation"] = truncation
+    if files is not None:
+        summary["files"] = files
+    (root / "spectra_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    return amp_dir
+
+
+def _entries(dates: list[str], step: int = 120, member: int = 1) -> list[dict]:
+    return [
+        {"date": int(d), "step_hours": step, "member": member, "weather_state": "2t"}
+        for d in dates
+    ]
+
+
+def test_cache_is_valid_for_the_window_it_was_computed_from(tmp_path: Path) -> None:
+    amp = _make_cache(tmp_path, truncation=1279, files=_entries(["20230826", "20230827"]))
+
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20230826"], steps=[120], members=[1]
+        )
+        == runner.CACHE_VALID
+    )
+
+
+def test_cache_is_stale_for_a_different_month(tmp_path: Path) -> None:
+    """The bug this replaces: an Idalia-2023 cache scored a 2025 evaluation."""
+    amp = _make_cache(tmp_path, truncation=1279, files=_entries(["20230826", "20230827"]))
+
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20250901"], steps=[120], members=[1]
+        )
+        == runner.CACHE_STALE
+    )
+
+
+def test_cache_is_stale_for_an_uncovered_step_or_member(tmp_path: Path) -> None:
+    amp = _make_cache(tmp_path, truncation=1279, files=_entries(["20230826"]))
+
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20230826"], steps=[240], members=[1]
+        )
+        == runner.CACHE_STALE
+    )
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20230826"], steps=[120], members=[7]
+        )
+        == runner.CACHE_STALE
+    )
+
+
+def test_cache_without_date_metadata_is_never_valid(tmp_path: Path) -> None:
+    """An unverifiable cache must not be presented as truth, even at the right T."""
+    amp = _make_cache(tmp_path, truncation=1279, files=None)
+
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20230826"], steps=[120], members=[1]
+        )
+        == runner.CACHE_UNVERIFIABLE
+    )
+
+
+def test_cache_without_truncation_metadata_is_unverifiable(tmp_path: Path) -> None:
+    amp = _make_cache(tmp_path, truncation=None, files=_entries(["20230826"]))
+
+    assert (
+        runner._validated_cache(
+            amp, ["2t"], truncation=1279, dates=["20230826"], steps=[120], members=[1]
+        )
+        == runner.CACHE_UNVERIFIABLE
+    )
+
+
+def test_unknown_window_falls_back_to_the_truncation_only_check(tmp_path: Path) -> None:
+    amp = _make_cache(tmp_path, truncation=1279, files=None)
+
+    assert runner._validated_cache(amp, ["2t"], truncation=1279) == runner.CACHE_VALID
+    assert runner._has_amplitudes(amp, ["2t"], truncation=1279)
+    assert not runner._has_amplitudes(amp, ["2t"], truncation=319)
+
+
+def test_window_key_is_stable_and_order_insensitive() -> None:
+    a = runner._window_key(
+        dates=["20230826", "20230830"], steps=[120], members=[1], truncation=1279
+    )
+    b = runner._window_key(
+        dates=["20230830", "20230826"], steps=[120], members=[1], truncation=1279
+    )
+
+    assert a == b
+    assert a.startswith("d20230826-20230830_s120_m1_T1279_")
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"dates": ["20250901", "20250902"]},
+        {"steps": [240]},
+        {"members": [2]},
+        {"truncation": 2559},
+    ],
+)
+def test_window_key_separates_different_windows(changed: dict) -> None:
+    """Two windows must never share a directory, or they end up mixed."""
+    base = {
+        "dates": ["20230826", "20230830"],
+        "steps": [120],
+        "members": [1],
+        "truncation": 1279,
+    }
+
+    assert runner._window_key(**base) != runner._window_key(**{**base, **changed})
+
+
+def test_unspecified_members_are_marked_in_the_key() -> None:
+    key = runner._window_key(dates=["20230826"], steps=[120], members=[], truncation=1279)
+
+    assert "_mALL_" in key

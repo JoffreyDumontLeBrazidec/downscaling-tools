@@ -12,6 +12,7 @@ for reuse across runs.  Only prediction spectra are recomputed each time.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -123,9 +124,12 @@ def run(
     template_root: str = eval_config.get("template_root", "")
     template_grib_root: str = eval_config.get("template_grib_root", "")
     predict_cfg = lane_config.get("predict", {})
-    date_list = ",".join(str(d) for d in eval_config.get("dates", predict_cfg.get("dates", [])))
-    step_list = ",".join(str(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120])))
-    member_list = ",".join(str(m) for m in eval_config.get("members", [])) or "ALL"
+    dates = [str(d) for d in eval_config.get("dates", predict_cfg.get("dates", []))]
+    steps = [int(s) for s in eval_config.get("steps", predict_cfg.get("steps", [120]))]
+    members = [int(m) for m in eval_config.get("members", [])]
+    date_list = ",".join(dates)
+    step_list = ",".join(str(s) for s in steps)
+    member_list = ",".join(str(m) for m in members) or "ALL"
     reference_dir: str = eval_config.get("reference_dir", "")
     truncation = _resolve_truncation(lane_config, eval_config)
 
@@ -148,9 +152,22 @@ def run(
     # --- Reference spectra (truth + input): compute once, save to reference_dir ---
     if reference_dir:
         ref_path = Path(reference_dir).expanduser().resolve()
+        window_key = _window_key(
+            dates=dates, steps=steps, members=members, truncation=truncation
+        )
+        LOG.info("spectra_ecmwf: reference window key = %s", window_key)
         for var_name, var_label in [("y", "truth"), ("x_interp", "input")]:
-            var_amp_dir = ref_path / var_label / "spectra"
-            if _has_amplitudes(var_amp_dir, weather_states, truncation=truncation):
+            var_ref_dir = ref_path / var_label / window_key
+            var_amp_dir = var_ref_dir / "spectra"
+            status = _validated_cache(
+                var_amp_dir,
+                weather_states,
+                truncation=truncation,
+                dates=dates,
+                steps=steps,
+                members=members,
+            )
+            if status == CACHE_VALID:
                 LOG.info("spectra_ecmwf: %s reference cached at %s — skipping", var_label, var_amp_dir)
                 continue
             if not _has_var_in_predictions(predictions_dir, var_name):
@@ -172,7 +189,7 @@ def run(
                             LOG.info("spectra_ecmwf: computing input reference from native bundles at %s", bundles_dir)
                             _run_input_bundle_pipeline(
                                 bundles_dir=Path(bundles_dir).expanduser().resolve(),
-                                output_dir=ref_path / "input",
+                                output_dir=var_ref_dir,
                                 template_grib=template_grib,
                                 weather_states=weather_states,
                                 weather_states_str=weather_states_str,
@@ -187,11 +204,11 @@ def run(
                     var_name, var_label,
                 )
                 continue
-            LOG.info("spectra_ecmwf: computing %s reference spectra → %s", var_label, ref_path / var_label)
+            LOG.info("spectra_ecmwf: computing %s reference spectra → %s", var_label, var_ref_dir)
             _run_pipeline(
                 label=var_label,
                 predictions_dir=predictions_dir,
-                output_dir=ref_path / var_label,
+                output_dir=var_ref_dir,
                 prediction_var=var_name,
                 weather_states=weather_states,
                 weather_states_str=weather_states_str,
@@ -217,25 +234,100 @@ def _has_var_in_predictions(predictions_dir: Path, var_name: str) -> bool:
         return var_name in ds
 
 
-def _has_amplitudes(amp_dir: Path, weather_states: list[str], *, truncation: int) -> bool:
-    """Check that a complete amplitude cache uses the requested truncation."""
+# A reference cache is only reusable for the window it was actually computed
+# from.  Before window addressing, one directory per lane held whichever window
+# happened to be computed first, and every later evaluation silently reused it:
+# the o320_o1280 reference holds 2023-08-26..30 (Hurricane Idalia), so a
+# September-2025 run was scored against 2023 truth.  Recomputing into the same
+# directory would be no better, because the two windows would then be mixed and
+# the next run would reuse the mixture.  So the window is part of the path.
+CACHE_VALID = "VALID"
+CACHE_STALE = "STALE"
+CACHE_UNVERIFIABLE = "UNVERIFIABLE"
+
+
+def _window_key(
+    *,
+    dates: list[str],
+    steps: list[int],
+    members: list[int],
+    truncation: int,
+) -> str:
+    """Deterministic directory name for one reference window.
+
+    The readable prefix is for eyeballing a directory listing; the hash suffix
+    is what actually makes the key injective, so two different windows can never
+    land in the same directory and be mixed.
+    """
+    d = sorted(str(x) for x in dates)
+    s = sorted(int(x) for x in steps)
+    m = sorted(int(x) for x in members)
+
+    date_part = f"d{d[0]}-{d[-1]}" if len(d) > 1 else (f"d{d[0]}" if d else "dNONE")
+    step_part = f"s{s[0]}-{s[-1]}" if len(s) > 1 else (f"s{s[0]}" if s else "sNONE")
+    member_part = (f"m{m[0]}-{m[-1]}" if len(m) > 1 else f"m{m[0]}") if m else "mALL"
+
+    canonical = repr((d, s, m, int(truncation)))
+    digest = hashlib.blake2b(canonical.encode("utf-8"), digest_size=4).hexdigest()
+    return f"{date_part}_{step_part}_{member_part}_T{truncation}_{digest}"
+
+
+def _cache_coverage(summary: dict) -> tuple[set[str], set[int], set[int]]:
+    """Dates, steps and members a spectra_summary.json says it actually holds."""
+    dates: set[str] = set()
+    steps: set[int] = set()
+    members: set[int] = set()
+    for entry in summary.get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("date") is not None:
+            dates.add(str(entry["date"]))
+        if entry.get("step_hours") is not None:
+            steps.add(int(entry["step_hours"]))
+        if entry.get("member") is not None:
+            members.add(int(entry["member"]))
+    return dates, steps, members
+
+
+def _validated_cache(
+    amp_dir: Path,
+    weather_states: list[str],
+    *,
+    truncation: int,
+    dates: list[str] | None = None,
+    steps: list[int] | None = None,
+    members: list[int] | None = None,
+) -> str:
+    """Decide whether a cached reference may be used as truth for this request.
+
+    Returns CACHE_VALID, CACHE_STALE or CACHE_UNVERIFIABLE.  Both of the latter
+    mean "recompute": this is a correct default rather than a validator that
+    refuses to run.  The distinction matters because an UNVERIFIABLE cache must
+    never be presented as truth, whereas a STALE one is simply the wrong window.
+
+    Passing dates/steps/members as None skips the window check, which is what
+    callers that genuinely do not know the window want.
+    """
     if not amp_dir.exists():
-        return False
+        return CACHE_STALE
     for ws in weather_states:
         ws_dir = amp_dir / _WEATHER_STATE_TO_DIR.get(ws, ws)
         if not ws_dir.exists() or not list(ws_dir.glob("ampl_*.npy")):
-            return False
+            return CACHE_STALE
 
     summary_path = amp_dir.parent / "spectra_summary.json"
     try:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         cached_truncation = int(summary["truncation"])
     except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
-        LOG.info(
-            "spectra_ecmwf: cache at %s has no valid truncation metadata; recomputing",
+        LOG.warning(
+            "spectra_ecmwf: cache at %s holds amplitude files but no readable truncation "
+            "metadata, so what it represents cannot be established. Not usable as truth; "
+            "recomputing.",
             amp_dir,
         )
-        return False
+        return CACHE_UNVERIFIABLE
+
     if cached_truncation != truncation:
         LOG.info(
             "spectra_ecmwf: cache at %s uses T%d, requested T%d; recomputing",
@@ -243,8 +335,66 @@ def _has_amplitudes(amp_dir: Path, weather_states: list[str], *, truncation: int
             cached_truncation,
             truncation,
         )
-        return False
-    return True
+        return CACHE_STALE
+
+    if dates is None and steps is None and members is None:
+        return CACHE_VALID
+
+    have_dates, have_steps, have_members = _cache_coverage(summary)
+    if not have_dates and not have_steps:
+        LOG.warning(
+            "spectra_ecmwf: cache at %s records no per-file date or step metadata, so it "
+            "cannot be matched against the requested window. Not usable as truth; "
+            "recomputing.",
+            amp_dir,
+        )
+        return CACHE_UNVERIFIABLE
+
+    if dates is not None:
+        missing = sorted({str(d) for d in dates} - have_dates)
+        if missing:
+            LOG.info(
+                "spectra_ecmwf: cache at %s covers dates %s but %s were requested; recomputing",
+                amp_dir,
+                ",".join(sorted(have_dates)) or "(none)",
+                ",".join(missing),
+            )
+            return CACHE_STALE
+    if steps is not None:
+        missing_steps = sorted({int(s) for s in steps} - have_steps)
+        if missing_steps:
+            LOG.info(
+                "spectra_ecmwf: cache at %s covers steps %s but %s were requested; recomputing",
+                amp_dir,
+                ",".join(str(x) for x in sorted(have_steps)) or "(none)",
+                ",".join(str(x) for x in missing_steps),
+            )
+            return CACHE_STALE
+    if members:
+        missing_members = sorted({int(m) for m in members} - have_members)
+        if missing_members:
+            LOG.info(
+                "spectra_ecmwf: cache at %s covers members %s but %s were requested; recomputing",
+                amp_dir,
+                ",".join(str(x) for x in sorted(have_members)) or "(none)",
+                ",".join(str(x) for x in missing_members),
+            )
+            return CACHE_STALE
+    else:
+        LOG.info(
+            "spectra_ecmwf: no member list requested, so member coverage is unchecked; "
+            "cache at %s holds members %s",
+            amp_dir,
+            ",".join(str(x) for x in sorted(have_members)) or "(none)",
+        )
+    return CACHE_VALID
+
+
+def _has_amplitudes(amp_dir: Path, weather_states: list[str], *, truncation: int) -> bool:
+    """Truncation-only cache check, kept for callers that have no window."""
+    return (
+        _validated_cache(amp_dir, weather_states, truncation=truncation) == CACHE_VALID
+    )
 
 
 def _run_pipeline(
