@@ -713,3 +713,76 @@ def test_bundle_main_forwards_channel_subset_overrides(monkeypatch, tmp_path):
     assert captured["lres_pl_channels"] is None
     assert captured["target_sfc_channels"] == ["10u", "10v", "2t", "msl"]
     assert captured["target_pl_channels"] is None
+
+
+# --- de-accumulation of accumulated low-res surface inputs -------------------
+# Regression cover for the defect that invalidated the o1280->o2560 Humberto
+# campaign: ssrd/strd arrive accumulated since forecast start, and feeding the
+# raw running total put the model about 15 sigma out of distribution from the
+# second lead time onward. The correction now decides per field from the data,
+# so these tests pin both halves of that decision.
+
+
+def test_deaccumulation_defaults_to_automatic_detection(monkeypatch):
+    monkeypatch.delenv("MI_DEACCUMULATE_LRES", raising=False)
+    assert bundle.deaccumulate_mode_from_env() == ("auto", None)
+
+
+@pytest.mark.parametrize(
+    "value, expected_mode",
+    [("auto", "auto"), ("off", "off"), ("none", "off"), ("ssrd,strd", "forced")],
+)
+def test_deaccumulation_escape_hatch_is_honoured(monkeypatch, value, expected_mode):
+    monkeypatch.setenv("MI_DEACCUMULATE_LRES", value)
+    mode, names = bundle.deaccumulate_mode_from_env()
+    assert mode == expected_mode
+    if expected_mode == "forced":
+        assert names == ("ssrd", "strd")
+
+
+def test_running_total_is_recognised_as_accumulated():
+    previous = np.linspace(0.0, 100.0, 500)
+    current = previous + np.linspace(1.0, 9.0, 500)  # every point grew
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert accumulated
+    assert fraction == pytest.approx(1.0)
+
+
+def test_field_constant_in_time_is_not_zeroed_out():
+    """A constant field is non-decreasing everywhere, so monotonicity alone
+    would wrongly mark it accumulated and subtracting would zero a real input."""
+    constant = np.full(500, 3.75)
+    accumulated, _ = bundle.looks_accumulated(constant, constant)
+    assert not accumulated
+
+
+def test_per_step_field_is_left_alone():
+    rng = np.random.default_rng(0)
+    previous = rng.normal(size=5000)
+    current = rng.normal(size=5000)
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert not accumulated
+    assert 0.3 < fraction < 0.7
+
+
+def test_mismatched_or_non_finite_input_is_never_deaccumulated():
+    assert bundle.looks_accumulated(np.zeros(10), np.zeros(11))[0] is False
+    with_nan = np.arange(10, dtype=float)
+    with_nan[3] = np.nan
+    assert bundle.looks_accumulated(with_nan, np.zeros(10))[0] is False
+
+
+def test_first_step_has_no_previous_bundle(tmp_path):
+    """At the first step the accumulation window already equals one increment,
+    so nothing may be subtracted."""
+    first = tmp_path / "case_step006h_input_bundle.nc"
+    first.write_bytes(b"")
+    assert bundle.previous_step_bundle_path(first) is None
+
+
+def test_later_step_resolves_its_predecessor(tmp_path):
+    earlier = tmp_path / "case_step018h_input_bundle.nc"
+    later = tmp_path / "case_step024h_input_bundle.nc"
+    earlier.write_bytes(b"")
+    later.write_bytes(b"")
+    assert bundle.previous_step_bundle_path(later) == earlier

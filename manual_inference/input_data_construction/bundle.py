@@ -518,13 +518,62 @@ def fill_hres_features(
 # the input further out of distribution with every lead time. Measured on the
 # o1280->o2560 pristine run: 4x the training mean by step 24 and ~20x (about
 # +15 sigma) by step 120, which invalidated every step past 006.
-# Opt-in, default OFF: set MI_DEACCUMULATE_LRES="ssrd,strd".
+# ON BY DEFAULT, decided per field from the data rather than from a name list.
+# An accumulated field is a running total, so it cannot decrease between two
+# consecutive steps; a per-step field can and does. Measured on real o1280
+# bundles the separation is absolute: ssrd and strd are non-decreasing at
+# 1.0000 of 26.3M points with a x4.0 growth by step 024, while every other
+# single-level field sits between 0.43 and 0.69. Deciding from the data means a
+# lane whose archive already delivers increments is left alone automatically,
+# which a hard-coded variable list could not guarantee.
+#
+# MI_DEACCUMULATE_LRES remains as an escape hatch for deliberate experiments:
+#   unset / "auto"  -> detect per field (the default)
+#   "off" / "none"  -> never de-accumulate (the pre-2026-08-22 behaviour)
+#   "ssrd,strd"     -> force exactly these, skipping detection
 _BUNDLE_STEP_RE = _re.compile(r"_step(\d{3})h_input_bundle\.nc$")
+
+# Fraction of points that must be non-decreasing before a field is called a
+# running total. Real accumulations score exactly 1.0; the highest-scoring
+# non-accumulated field measured was 0.69, so this is a wide margin.
+_ACCUMULATION_MONOTONE_FRACTION = 0.999
+
+
+def deaccumulate_mode_from_env():
+    """Resolve the escape hatch into ("auto", None) or ("forced", names)."""
+    raw = _os.environ.get("MI_DEACCUMULATE_LRES", "").strip()
+    if not raw or raw.lower() == "auto":
+        return "auto", None
+    if raw.lower() in {"off", "none", "0", "false"}:
+        return "off", ()
+    return "forced", tuple(v.strip() for v in raw.split(",") if v.strip())
 
 
 def deaccumulate_vars_from_env():
-    raw = _os.environ.get("MI_DEACCUMULATE_LRES", "").strip()
-    return tuple(v.strip() for v in raw.split(",") if v.strip()) if raw else ()
+    """Backwards-compatible view of the escape hatch used by older callers."""
+    _mode, names = deaccumulate_mode_from_env()
+    return names or ()
+
+
+def looks_accumulated(current, previous):
+    """True when `current` behaves like a total accumulated since forecast start.
+
+    Two conditions, both necessary. The field must be non-decreasing almost
+    everywhere, which is what makes a running total a running total. And its
+    mean must have actually grown, which excludes a field that is constant in
+    time - that would also pass the first test, and subtracting it would zero
+    out a legitimate input.
+    """
+    cur = np.asarray(current, dtype=np.float64).ravel()
+    prev = np.asarray(previous, dtype=np.float64).ravel()
+    if cur.shape != prev.shape or cur.size == 0:
+        return False, 0.0
+    if not (np.all(np.isfinite(cur)) and np.all(np.isfinite(prev))):
+        return False, 0.0
+    scale = max(float(np.max(np.abs(cur))), 1.0)
+    fraction = float(np.mean(cur >= prev - 1e-9 * scale))
+    grew = float(cur.mean()) > float(prev.mean())
+    return (fraction >= _ACCUMULATION_MONOTONE_FRACTION and grew), fraction
 
 
 def previous_step_bundle_path(bundle_path, step_hours=None):
@@ -560,11 +609,23 @@ def load_inputs_from_bundle_numpy(
     deaccumulate_vars=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
-    _deaccum = (tuple(deaccumulate_vars) if deaccumulate_vars is not None
-                else deaccumulate_vars_from_env())
+    if deaccumulate_vars is not None:
+        _deaccum_mode, _deaccum = "forced", tuple(deaccumulate_vars)
+    else:
+        _deaccum_mode, _deaccum = deaccumulate_mode_from_env()
+        _deaccum = _deaccum or ()
     _prev_bundle, _prev_close = None, False
-    if _deaccum and prev_bundle is not None:
+    if _deaccum_mode != "off" and prev_bundle is not None:
         _prev_bundle, _prev_close = _borrow_or_open_bundle_dataset(prev_bundle)
+    # Visibility, never refusal: say out loud what was resolved, so an accidental
+    # drift back to raw accumulations is seen in the log rather than discovered
+    # months later in the scores.
+    logger.info(
+        "lres de-accumulation: mode=%s%s, previous-step bundle %s",
+        _deaccum_mode,
+        f" ({', '.join(_deaccum)})" if _deaccum else "",
+        "available" if prev_bundle is not None else "NOT available",
+    )
     try:
         n_lres = int(bundle.sizes["point_lres"])
         n_hres = int(bundle.sizes["point_hres"])
@@ -685,17 +746,50 @@ def load_inputs_from_bundle_numpy(
                             )
                     else:
                         raw = candidate.values.astype(np.float32)
-                        if name in _deaccum:
-                            if _prev_bundle is not None and field_name in _prev_bundle:
-                                raw = raw - _prev_bundle[field_name].values.astype(np.float32)
+                        if _deaccum_mode != "off":
+                            _has_prev = (
+                                _prev_bundle is not None and field_name in _prev_bundle
+                            )
+                            _prev_raw = (
+                                _prev_bundle[field_name].values.astype(np.float32)
+                                if _has_prev
+                                else None
+                            )
+                            if _deaccum_mode == "forced":
+                                _accumulated = name in _deaccum
+                                _fraction = float("nan")
+                            elif _has_prev:
+                                _accumulated, _fraction = looks_accumulated(raw, _prev_raw)
+                            else:
+                                _accumulated, _fraction = False, float("nan")
+
+                            if _accumulated and _has_prev:
+                                raw = raw - _prev_raw
                                 logger.info(
-                                    "de-accumulated '%s' against the previous step's bundle",
+                                    "de-accumulated '%s' against the previous step "
+                                    "(non-decreasing fraction %.4f, mean %.4g -> %.4g)",
+                                    name, _fraction,
+                                    float(np.asarray(candidate.values, dtype=np.float64).mean()),
+                                    float(np.asarray(raw, dtype=np.float64).mean()),
+                                )
+                            elif _accumulated:
+                                # Forced on for a field we cannot correct. Passing the
+                                # raw running total on is what put the o2560 campaign
+                                # ~15 sigma out of distribution, so say so loudly - but
+                                # do not refuse, the caller may know better.
+                                logger.warning(
+                                    "'%s' is marked accumulated but the previous step's "
+                                    "bundle is unavailable, so the RAW RUNNING TOTAL is "
+                                    "being fed to the model. Past the first lead time this "
+                                    "is far out of distribution and the predictions should "
+                                    "not be trusted.",
                                     name,
                                 )
-                            else:
-                                # First step: the accumulation window already IS a
-                                # single increment, so the raw value is correct.
-                                logger.info(
+                            elif not _has_prev and _deaccum_mode == "auto":
+                                # No earlier bundle. At the first step that is the correct
+                                # answer, because the accumulation window already equals a
+                                # single increment.
+                                logger.debug(
                                     "'%s' left as-is (no earlier bundle: first step)", name
                                 )
             else:
