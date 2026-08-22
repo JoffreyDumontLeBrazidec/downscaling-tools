@@ -819,3 +819,100 @@ def test_forced_cadence_overrides_detection(tmp_path, monkeypatch):
     assert bundle.previous_step_bundle_path(later).name == "case_step012h_input_bundle.nc"
     monkeypatch.delenv("MI_DEACCUM_STEP_HOURS")
     assert bundle.previous_step_bundle_path(later).name == "case_step018h_input_bundle.nc"
+
+
+# --- input distribution guard ------------------------------------------------
+# General cover: nothing looked at whether the numbers reaching the model
+# resembled the numbers it was trained on, which let accumulated radiation
+# inputs sit far out of distribution unnoticed. The guard compares against the
+# checkpoint's own normaliser, so it catches any drift, not only accumulation.
+
+
+class _BufferModel:
+    """Stand-in exposing named_buffers() the way a checkpoint does, including the
+    inverse and tendency copies that the selector has to reject."""
+
+    def __init__(self, n_channels=4, mean=0.0, std=1.0, with_decoys=True):
+        import torch
+
+        mul = torch.full((n_channels,), 1.0 / std)
+        add = torch.full((n_channels,), -mean / std)
+        self._b = {
+            "model.pre_processors.in_lres.processors.normalizer._norm_mul": mul,
+            "model.pre_processors.in_lres.processors.normalizer._norm_add": add,
+        }
+        if with_decoys:
+            self._b.update({
+                "model.post_processors.in_lres.processors.normalizer._norm_mul": mul * 7,
+                "model.post_processors.in_lres.processors.normalizer._norm_add": add * 7,
+                "model.pre_processors_tendencies.in_lres.processors.normalizer._norm_mul": mul * 3,
+                "model.pre_processors_tendencies.in_lres.processors.normalizer._norm_add": add * 3,
+            })
+
+    def named_buffers(self, *args, **kwargs):
+        return iter(self._b.items())
+
+
+def test_guard_picks_the_forward_normaliser_not_its_inverse():
+    stem, mul, add = bundle._find_input_normalizer(_BufferModel(), 4)
+    assert "pre_processors." in stem
+    assert "post_processors" not in stem and "tendencies" not in stem
+
+
+def test_guard_accepts_an_in_distribution_input():
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == []
+
+
+def test_guard_flags_a_field_shifted_out_of_distribution():
+    """The signature of the accumulated-radiation defect: one channel's centre
+    displaced by many training sigma while the rest are fine."""
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 2] += 15.0 * 2.0  # +15 sigma, as ssrd was by step 120
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == ["c"]
+
+
+def test_guard_flags_a_zero_filled_channel():
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 1] = 5.0  # right centre, no spread at all
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert "b" in bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3})
+
+
+def test_guard_can_be_silenced(monkeypatch):
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(1000, 4))
+    x[:, 0] += 100.0
+    model = _BufferModel(mean=5.0, std=2.0)
+    monkeypatch.setenv("MI_INPUT_GUARD", "off")
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == []
+
+
+def test_guard_threshold_is_tunable(monkeypatch):
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 0] += 2.0 * 2.0  # +2 sigma
+    model = _BufferModel(mean=5.0, std=2.0)
+    idx = {"a": 0, "b": 1, "c": 2, "d": 3}
+    assert "a" in bundle.check_input_distribution(model, x, idx)
+    monkeypatch.setenv("MI_INPUT_GUARD_SIGMA", "5")
+    assert bundle.check_input_distribution(model, x, idx) == []
+
+
+@pytest.mark.parametrize("junk", [None, "not an array", 12345])
+def test_guard_never_raises_whatever_it_is_handed(junk):
+    """It is a convenience, never a precondition: a fault inside it must not be
+    able to take down an inference run."""
+    assert bundle.check_input_distribution(_BufferModel(), junk, {"a": 0}) == []
+
+
+def test_guard_is_silent_when_no_matching_normaliser_exists():
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(100, 9))  # 9 channels, model has 4
+    assert bundle.check_input_distribution(_BufferModel(), x, {"a": 0}) == []
+    assert bundle.check_input_distribution(object(), x, {"a": 0}) == []

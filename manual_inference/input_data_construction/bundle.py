@@ -626,6 +626,179 @@ def previous_step_bundle_path(bundle_path, step_hours=None):
     return best_path
 
 
+# --- input distribution guard -----------------------------------------------
+# Nothing used to check that the numbers fed to the model resembled the numbers
+# it was trained on, which is why accumulated radiation inputs could sit ~15
+# sigma out of distribution for months without anyone noticing. This checks that
+# directly, and knows nothing about accumulation specifically, so it also catches
+# unit changes, zero-fills, stale caches and wrong fields.
+#
+# The training statistics are already in the checkpoint. Its normaliser holds
+# norm_mul = 1/std and norm_add = -mean/std per channel, so raw*mul + add is the
+# z-score against training. Thresholds are advisory and tunable:
+#   MI_INPUT_GUARD_SIGMA    displacement of the field mean, in training sigma
+#   MI_INPUT_GUARD_SPREAD   how far the field spread may stray, as a factor
+#   MI_INPUT_GUARD=off      silence it entirely
+#
+# The one-sigma default is calibrated, not guessed. Measured on the real o1280
+# Humberto bundles against this checkpoint's own training statistics, the field
+# mean sits at (ssrd / strd, in training sigma):
+#   step 006  -0.02 / +0.04     <- the clean step, comfortably inside
+#   step 012  +0.76 / +4.88     <- corruption begins; strd trips the guard
+#   step 024  +2.31 / +14.53
+#   step 120  +14.90 / +91.67
+# So one sigma passes a healthy input and fires at the exact step where this
+# defect first bites. Raising it to five would have missed step 012 entirely.
+_INPUT_GUARD_DEFAULT_SIGMA = 1.0
+_INPUT_GUARD_DEFAULT_SPREAD = 3.0
+
+
+def _find_input_normalizer(model, n_channels, dataset_hint="in_lres"):
+    """Locate (norm_mul, norm_add) for the low-res input, or None.
+
+    Returns None rather than raising for any model whose layout we do not
+    recognise: the guard is a convenience, never a precondition.
+    """
+    try:
+        buffers = dict(model.named_buffers())
+    except Exception:
+        return None
+    pairs = {}
+    for name, tensor in buffers.items():
+        for suffix in ("_norm_mul", "_norm_add"):
+            if name.endswith(suffix):
+                try:
+                    size = int(tensor.reshape(-1).shape[0])
+                except Exception:
+                    continue
+                pairs.setdefault(name[: -len(suffix)], {})[suffix] = tensor
+    candidates = [
+        (stem, d["_norm_mul"], d["_norm_add"])
+        for stem, d in pairs.items()
+        if "_norm_mul" in d and "_norm_add" in d
+        and int(d["_norm_mul"].reshape(-1).shape[0]) == n_channels
+    ]
+    if not candidates:
+        return None
+    # A checkpoint carries both the forward normaliser (pre_processors) and its
+    # inverse (post_processors), and separate ones for tendencies, all with the
+    # same channel count. Only the forward one turns a raw field into a z-score,
+    # so pick it explicitly rather than taking whichever comes first.
+    def _rank(stem):
+        return (
+            0 if "pre_processors." in stem and "tendencies" not in stem else 1,
+            0 if dataset_hint in stem else 1,
+            stem,
+        )
+
+    usable = [c for c in candidates
+              if "post_processors" not in c[0] and "tendencies" not in c[0]]
+    if not usable:
+        return None
+    stem, mul, add = sorted(usable, key=lambda c: _rank(c[0]))[0]
+    if dataset_hint not in stem:
+        return None
+    return stem, mul, add
+
+
+def check_input_distribution(model, x_lres, name_to_idx, *, label="", logger_=None):
+    """Report, per input channel, how far it sits from the training distribution.
+
+    Never raises and never refuses. Returns the list of channels judged to be out
+    of range, which is empty when everything is fine or when the check could not
+    run.
+    """
+    log = logger_ or logger
+    try:
+        if _os.environ.get("MI_INPUT_GUARD", "").strip().lower() in {"off", "0", "none", "false"}:
+            return []
+        try:
+            sigma_limit = float(_os.environ.get("MI_INPUT_GUARD_SIGMA", "")
+                                or _INPUT_GUARD_DEFAULT_SIGMA)
+            spread_limit = float(_os.environ.get("MI_INPUT_GUARD_SPREAD", "")
+                                 or _INPUT_GUARD_DEFAULT_SPREAD)
+        except ValueError:
+            sigma_limit, spread_limit = _INPUT_GUARD_DEFAULT_SIGMA, _INPUT_GUARD_DEFAULT_SPREAD
+
+        values = np.asarray(x_lres)
+        if values.ndim > 2:
+            values = values.reshape(-1, values.shape[-1])
+        n_channels = values.shape[-1]
+        found = _find_input_normalizer(model, n_channels)
+        if found is None:
+            log.debug("input guard: no normaliser with %d channels found; skipping",
+                      n_channels)
+            return []
+        _stem, mul_t, add_t = found
+        mul = np.asarray(mul_t.detach().float().cpu(), dtype=np.float64).ravel()
+        add = np.asarray(add_t.detach().float().cpu(), dtype=np.float64).ravel()
+
+        idx_to_name = {i: n for n, i in dict(name_to_idx).items()}
+        offenders = []
+        rows = []
+        for i in range(n_channels):
+            column = np.asarray(values[:, i], dtype=np.float64)
+            if not np.all(np.isfinite(column)):
+                rows.append((idx_to_name.get(i, f"#{i}"), float("nan"), float("nan")))
+                offenders.append((idx_to_name.get(i, f"#{i}"), float("nan"), float("nan")))
+                continue
+            if mul[i] == 1.0 and add[i] == 0.0:
+                # Channel carries the identity normaliser, which anemoi uses for
+                # inputs it deliberately leaves alone (the periodic forcings, for
+                # instance). There is no training distribution to compare against.
+                continue
+            centre = float(column.mean()) * mul[i] + add[i]
+            spread = float(column.std()) * abs(mul[i])
+            rows.append((idx_to_name.get(i, f"#{i}"), centre, spread))
+            too_far = abs(centre) > sigma_limit
+            # Only the high side of the spread test is a range check. The low
+            # side exists to catch a channel that is flat - a zero-fill or a
+            # stale constant - so it is set near zero rather than at 1/limit,
+            # which would fire on plenty of legitimately narrow fields.
+            too_wide = spread > spread_limit
+            too_flat = spread < 0.01
+            if too_far or too_wide or too_flat:
+                offenders.append((idx_to_name.get(i, f"#{i}"), centre, spread))
+
+        # The full table is DEBUG: 91 lines per bundle would drown a run log.
+        # INFO gets one line saying whether anything is off and by how much.
+        log.debug(
+            "input distribution%s, z-scores against the training statistics "
+            "(centre near 0, spread near 1):",
+            f" [{label}]" if label else "",
+        )
+        for name, centre, spread in rows:
+            log.debug("    %-24s centre %+8.2f sigma   spread %6.2f x", name, centre, spread)
+
+        worst = max(rows, key=lambda r: abs(r[1])) if rows else None
+        if not offenders:
+            if worst is not None:
+                log.info(
+                    "input distribution%s: all %d channels in range "
+                    "(largest displacement %+.2f sigma on %s)",
+                    f" [{label}]" if label else "", len(rows), worst[1], worst[0],
+                )
+        else:
+            detail = ", ".join(
+                f"{name} ({centre:+.2f} sigma, spread {spread:.2f}x)"
+                for name, centre, spread in offenders[:8]
+            )
+            if len(offenders) > 8:
+                detail += f", and {len(offenders) - 8} more"
+            log.warning(
+                "INPUT OUT OF RANGE%s: %s. These channels do not look like the data "
+                "the checkpoint was trained on, so predictions from this step should "
+                "not be trusted until the inputs are understood. A field accumulated "
+                "since forecast start being fed as a per-step increment produces "
+                "exactly this signature, and so does a zero-fill or a unit change.",
+                f" [{label}]" if label else "", detail,
+            )
+        return [name for name, _c, _s in offenders]
+    except Exception as exc:  # never let the guard break a run
+        log.debug("input guard skipped after an internal error: %r", exc)
+        return []
+
+
 def load_inputs_from_bundle_numpy(
     bundle_nc: str | Path | xr.Dataset,
     name_to_idx_lres: Mapping[str, int],

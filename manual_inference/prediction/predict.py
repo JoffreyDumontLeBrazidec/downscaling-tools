@@ -27,6 +27,7 @@ from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 # Re-export for backward compatibility — external callers import these from here.
 __all__ = ["DEFAULT_EXTRA_ARGS_JSON"]
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
+from manual_inference.input_data_construction.bundle import check_input_distribution
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
 from manual_inference.input_data_construction.bundle import previous_step_bundle_path
 from manual_inference.input_data_construction.bundle import open_bundle_dataset
@@ -428,6 +429,14 @@ def predict_from_bundle(
             # De-accumulation needs the previous step's bundle, a sibling file;
             # `bundle` is already an open Dataset, so resolve it from the path.
             prev_bundle=previous_step_bundle_path(bundle_nc),
+        )
+        # Sanity-check the inputs against the training distribution before spending
+        # a GPU-hour on them. Advisory only: it logs and never refuses.
+        check_input_distribution(
+            inference_model,
+            x_lres_np,
+            name_to_idx_lres,
+            label=Path(str(bundle_nc)).name if bundle_nc is not None else "",
         )
         x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
         x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
