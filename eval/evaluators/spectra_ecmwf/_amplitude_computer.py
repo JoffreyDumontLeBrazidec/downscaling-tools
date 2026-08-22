@@ -13,6 +13,15 @@ import eccodes as ec
 import metview as mv
 import numpy as np
 
+# This script is also invoked by absolute path from hand-written job scripts,
+# where the repository root is not on PYTHONPATH. Bootstrap it so the shared
+# naming helper imports the same way under both invocation styles.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from eval._backends.spectra import naming  # noqa: E402
+
 
 FILE_RE = re.compile(r".*_(?P<date>\d{8})_(?P<step>\d{2,3})_(?P<member>\d+)_nopoles\.grb_sh$")
 
@@ -59,6 +68,17 @@ def parse_args() -> argparse.Namespace:
             "O1280). This is asserted against the truncation actually stored in each "
             "spectral-harmonics file, not used as an upper clamp."
         ),
+    )
+    parser.add_argument(
+        "--expid",
+        default=naming.DEFAULT_TOKEN,
+        help="Experiment token in the curve filename (the scoreboard calls it a token).",
+    )
+    parser.add_argument(
+        "--reference-spectra-dir",
+        default="",
+        help="Where the reference curves for these predictions live. Recorded in "
+             "the summary so the scoreboard need not guess.",
     )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
@@ -153,9 +173,12 @@ def main() -> None:
                     file=sys.stderr,
                 )
             wvn, ampl = read_curve(path, cfg, truncation=curve_truncation)
-            stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
-            wvn_path = out_dir / f"wvn_{stem}.npy"
-            ampl_path = out_dir / f"ampl_{stem}.npy"
+            key = dict(
+                date=date_ymd, step=step_hours, field_dir=cfg.dir_name,
+                token=args.expid, member=member,
+            )
+            wvn_path = out_dir / naming.canonical_name("wvn", **key)
+            ampl_path = out_dir / naming.canonical_name("ampl", **key)
             np.save(wvn_path, wvn)
             np.save(ampl_path, ampl)
             written.append(
@@ -191,6 +214,7 @@ def main() -> None:
         # Which binaries produced these curves. Metview is unpinned no more,
         # but recording the resolved version keeps older caches interpretable.
         "metview_version": os.environ.get("METVIEW_VERSION", ""),
+        "reference_spectra_dir": args.reference_spectra_dir,
         "written_count": len(written),
         "files": written,
     }

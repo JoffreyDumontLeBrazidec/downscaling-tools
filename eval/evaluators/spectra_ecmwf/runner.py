@@ -133,6 +133,21 @@ def run(
     reference_dir: str = eval_config.get("reference_dir", "")
     truncation = _resolve_truncation(lane_config, eval_config)
 
+    # Resolve the reference location up front so the prediction summary can
+    # record it. Without this the scoreboard falls back to guessing from
+    # template_root, which for this evaluator is the GRIB template directory,
+    # not the reference spectra directory.
+    ref_path: Path | None = None
+    window_key = ""
+    reference_spectra_dir = ""
+    if reference_dir:
+        ref_path = Path(reference_dir).expanduser().resolve()
+        window_key = _window_key(
+            dates=dates, steps=steps, members=members, truncation=truncation
+        )
+        reference_spectra_dir = str(ref_path / "truth" / window_key / "spectra")
+        LOG.info("spectra_ecmwf: reference window key = %s", window_key)
+
     # --- Prediction spectra (always recomputed) ---
     _run_pipeline(
         label="prediction",
@@ -147,15 +162,11 @@ def run(
         step_list=step_list,
         member_list=member_list,
         truncation=truncation,
+        reference_spectra_dir=reference_spectra_dir,
     )
 
     # --- Reference spectra (truth + input): compute once, save to reference_dir ---
-    if reference_dir:
-        ref_path = Path(reference_dir).expanduser().resolve()
-        window_key = _window_key(
-            dates=dates, steps=steps, members=members, truncation=truncation
-        )
-        LOG.info("spectra_ecmwf: reference window key = %s", window_key)
+    if ref_path is not None:
         for var_name, var_label in [("y", "truth"), ("x_interp", "input")]:
             var_ref_dir = ref_path / var_label / window_key
             var_amp_dir = var_ref_dir / "spectra"
@@ -411,6 +422,7 @@ def _run_pipeline(
     step_list: str,
     member_list: str = "ALL",
     truncation: int,
+    reference_spectra_dir: str = "",
 ) -> None:
     """Run the full 3-stage pipeline for a single variable."""
     grb_dir = output_dir / "grb"
@@ -445,6 +457,7 @@ def _run_pipeline(
         weather_states=weather_states_str,
         summary_path=output_dir / "spectra_summary.json",
         truncation=truncation,
+        reference_spectra_dir=reference_spectra_dir,
     )
 
 
@@ -638,6 +651,7 @@ def _compute_amplitudes(
     weather_states: str,
     summary_path: Path,
     truncation: int,
+    reference_spectra_dir: str = "",
 ) -> None:
     venv_activate = Path(sys.prefix) / "bin" / "activate"
     script = "\n".join([
@@ -652,6 +666,7 @@ def _compute_amplitudes(
         f' --out-dir "{amp_dir}"'
         f' --weather-states "{weather_states}"'
         f' --truncation "{truncation}"'
-        f' --summary-path "{summary_path}"',
+        + (f' --reference-spectra-dir "{reference_spectra_dir}"' if reference_spectra_dir else "")
+        + f' --summary-path "{summary_path}"',
     ])
     subprocess.run(["bash", "-c", script], check=True)
