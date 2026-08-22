@@ -656,10 +656,10 @@ def _compute_amplitudes(
     venv_activate = Path(sys.prefix) / "bin" / "activate"
     script = "\n".join([
         "set -euo pipefail",
-        # Rendered from eval/config/toolchains.yaml.  That recipe carries the
-        # shared-scratch TMPDIR and the generous start timeout that metview
-        # startup needs; without them `import metview` hangs or times out.
-        render_module_block("metview"),
+        # No module block: amplitudes are computed from the GRIB coefficients
+        # with the venv's eccodes. This stage used to load metview, which cost a
+        # 900 second startup timeout and a shared-scratch TMPDIR workaround, and
+        # left the result at the mercy of whichever metview version resolved.
         f'source "{venv_activate}"',
         f'python "{_HERE / "_amplitude_computer.py"}"'
         f' --spectral-harmonics-dir "{sh_dir}"'
