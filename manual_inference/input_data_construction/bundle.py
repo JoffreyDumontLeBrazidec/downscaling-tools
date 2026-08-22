@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os as _os
+import re as _re
+
 import logging
 import re
 from datetime import datetime
@@ -508,6 +511,44 @@ def fill_hres_features(
             ).to(device)
 
 
+# --- accumulated low-res surface inputs -------------------------------------
+# ssrd/strd arrive from the archive ACCUMULATED FROM FORECAST START, while a model
+# trained on per-step increments expects one step's worth. The two coincide at the
+# first step and diverge linearly after it, so feeding the raw accumulation drives
+# the input further out of distribution with every lead time. Measured on the
+# o1280->o2560 pristine run: 4x the training mean by step 24 and ~20x (about
+# +15 sigma) by step 120, which invalidated every step past 006.
+# Opt-in, default OFF: set MI_DEACCUMULATE_LRES="ssrd,strd".
+_BUNDLE_STEP_RE = _re.compile(r"_step(\d{3})h_input_bundle\.nc$")
+
+
+def deaccumulate_vars_from_env():
+    raw = _os.environ.get("MI_DEACCUMULATE_LRES", "").strip()
+    return tuple(v.strip() for v in raw.split(",") if v.strip()) if raw else ()
+
+
+def previous_step_bundle_path(bundle_path, step_hours=None):
+    """Sibling bundle one accumulation window earlier, or None.
+
+    None is the correct answer at the first step: there the accumulation window
+    already equals a single increment, so nothing may be subtracted.
+    """
+    if bundle_path is None:
+        return None
+    if step_hours is None:
+        step_hours = int(_os.environ.get("MI_DEACCUM_STEP_HOURS", "6"))
+    text = str(bundle_path)
+    m = _BUNDLE_STEP_RE.search(text)
+    if not m:
+        return None
+    step = int(m.group(1))
+    prev = step - step_hours
+    if prev <= 0:
+        return None
+    candidate = Path(text.replace(f"_step{step:03d}h_", f"_step{prev:03d}h_"))
+    return candidate if candidate.exists() else None
+
+
 def load_inputs_from_bundle_numpy(
     bundle_nc: str | Path | xr.Dataset,
     name_to_idx_lres: Mapping[str, int],
@@ -515,8 +556,15 @@ def load_inputs_from_bundle_numpy(
     *,
     valid_time_override=None,
     constant_forcings_npz: str | Path | None = DEFAULT_CONSTANT_FORCINGS_NPZ,
+    prev_bundle=None,
+    deaccumulate_vars=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
+    _deaccum = (tuple(deaccumulate_vars) if deaccumulate_vars is not None
+                else deaccumulate_vars_from_env())
+    _prev_bundle, _prev_close = None, False
+    if _deaccum and prev_bundle is not None:
+        _prev_bundle, _prev_close = _borrow_or_open_bundle_dataset(prev_bundle)
     try:
         n_lres = int(bundle.sizes["point_lres"])
         n_hres = int(bundle.sizes["point_hres"])
@@ -637,6 +685,19 @@ def load_inputs_from_bundle_numpy(
                             )
                     else:
                         raw = candidate.values.astype(np.float32)
+                        if name in _deaccum:
+                            if _prev_bundle is not None and field_name in _prev_bundle:
+                                raw = raw - _prev_bundle[field_name].values.astype(np.float32)
+                                logger.info(
+                                    "de-accumulated '%s' against the previous step's bundle",
+                                    name,
+                                )
+                            else:
+                                # First step: the accumulation window already IS a
+                                # single increment, so the raw value is correct.
+                                logger.info(
+                                    "'%s' left as-is (no earlier bundle: first step)", name
+                                )
             else:
                 field_name = f"in_lres_{base}"
                 if field_name not in bundle:
@@ -683,6 +744,11 @@ def load_inputs_from_bundle_numpy(
 
         return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
     finally:
+        if _prev_close and _prev_bundle is not None:
+            try:
+                _prev_bundle.close()
+            except Exception:
+                pass
         if should_close:
             try:
                 bundle.close()

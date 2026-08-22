@@ -28,6 +28,7 @@ from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 __all__ = ["DEFAULT_EXTRA_ARGS_JSON"]
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
+from manual_inference.input_data_construction.bundle import previous_step_bundle_path
 from manual_inference.input_data_construction.bundle import open_bundle_dataset
 from manual_inference.input_data_construction.bundle import parse_channel_subset_csv as _parse_channel_subset_csv
 from manual_inference.prediction.dataset import build_predictions_dataset
@@ -424,6 +425,9 @@ def predict_from_bundle(
             bundle,
             name_to_idx_lres,
             name_to_idx_hres,
+            # De-accumulation needs the previous step's bundle, a sibling file;
+            # `bundle` is already an open Dataset, so resolve it from the path.
+            prev_bundle=previous_step_bundle_path(bundle_nc),
         )
         x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
         x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
