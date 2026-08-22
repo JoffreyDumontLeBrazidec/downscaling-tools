@@ -142,3 +142,86 @@ def test_amplitude_computer_passes_truncation_to_metview(monkeypatch: pytest.Mon
     assert np.array_equal(wavenumbers, np.array([1.0, 2.0]))
     assert np.array_equal(amplitudes, np.array([3.0, 4.0]))
     assert fake_metview.spec_graph.call_args.kwargs["truncation"] == 1279
+
+
+def test_run_gptosp_passes_explicit_truncation(tmp_path: Path) -> None:
+    """Stage 2 must be told the truncation, not left to derive its own.
+
+    Without -T, gptosp derives the truncation from the staged grid's latitude
+    count, which on a pole-masked grid disagrees with what stage 3 is told.
+    """
+    with (
+        patch.object(runner.subprocess, "run") as mock_run,
+        patch.object(runner, "_verify_truncation") as mock_verify,
+    ):
+        runner._run_gptosp(
+            grb_dir=tmp_path / "grb",
+            sh_dir=tmp_path / "spectral_harmonics",
+            weather_states=["2t"],
+            truncation=1279,
+        )
+
+    command = mock_run.call_args.args[0]
+    assert command[:3] == ["bash", "--login", "-c"]
+    script = command[3] if len(command) > 3 else command[2]
+    assert "gptosp.ser -T 1279 -g" in script
+    assert "gptosp.ser -l" not in script
+    assert mock_verify.call_args.kwargs["truncation"] == 1279
+
+
+def test_verify_truncation_accepts_matching_files(tmp_path: Path) -> None:
+    sh_dir = tmp_path / "spectral_harmonics"
+    (sh_dir / "2t_sfc").mkdir(parents=True)
+    (sh_dir / "2t_sfc" / "1_20230826_120_1_nopoles.grb_sh").touch()
+
+    with patch.object(runner, "_read_achieved_truncation", return_value=1279):
+        runner._verify_truncation(sh_dir, ["2t_sfc"], truncation=1279)
+
+
+def test_verify_truncation_rejects_mismatch(tmp_path: Path) -> None:
+    """A stage-2/stage-3 disagreement is a wrong number, so it must stop."""
+    sh_dir = tmp_path / "spectral_harmonics"
+    (sh_dir / "2t_sfc").mkdir(parents=True)
+    (sh_dir / "2t_sfc" / "1_20230826_120_1_nopoles.grb_sh").touch()
+
+    with patch.object(runner, "_read_achieved_truncation", return_value=2531):
+        with pytest.raises(RuntimeError, match="requested T1279, file carries T2531"):
+            runner._verify_truncation(sh_dir, ["2t_sfc"], truncation=1279)
+
+
+def test_verify_truncation_rejects_empty_output(tmp_path: Path) -> None:
+    """An empty stage 2 must be reported here, not three stages later."""
+    sh_dir = tmp_path / "spectral_harmonics"
+    (sh_dir / "2t_sfc").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="produced no harmonics"):
+        runner._verify_truncation(sh_dir, ["2t_sfc"], truncation=1279)
+
+
+def test_pipeline_uses_one_truncation_for_both_stages(tmp_path: Path) -> None:
+    """The gptosp argument and the amplitude argument are the same integer."""
+    with (
+        patch.object(runner, "_stage_gribs"),
+        patch.object(runner, "_run_gptosp") as mock_gptosp,
+        patch.object(runner, "_compute_amplitudes") as mock_amplitudes,
+    ):
+        runner._run_pipeline(
+            label="truth",
+            predictions_dir=tmp_path / "predictions",
+            output_dir=tmp_path / "out",
+            prediction_var="y",
+            weather_states=["2t"],
+            weather_states_str="2t",
+            template_root="",
+            template_grib_root="",
+            date_list="20230826",
+            step_list="120",
+            truncation=1279,
+        )
+
+    assert mock_gptosp.call_args.kwargs["truncation"] == 1279
+    assert mock_amplitudes.call_args.kwargs["truncation"] == 1279
+    assert (
+        mock_gptosp.call_args.kwargs["truncation"]
+        == mock_amplitudes.call_args.kwargs["truncation"]
+    )

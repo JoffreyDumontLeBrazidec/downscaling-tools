@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import eccodes as ec
 import metview as mv
 import numpy as np
 
@@ -51,7 +52,11 @@ def parse_args() -> argparse.Namespace:
         "--truncation",
         type=positive_int,
         required=True,
-        help="Maximum total wavenumber for mv.spec_graph (for example 1279 for O1280).",
+        help=(
+            "Total wavenumber truncation this run must produce (for example 1279 for "
+            "O1280). This is asserted against the truncation actually stored in each "
+            "spectral-harmonics file, not used as an upper clamp."
+        ),
     )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
@@ -76,6 +81,18 @@ def parse_components(path: Path) -> tuple[int, int, int]:
     )
 
 
+def read_truncation(path: Path) -> int:
+    """Total wavenumber truncation actually stored in a spectral GRIB."""
+    with open(path, "rb") as handle:
+        msg = ec.codes_grib_new_from_file(handle)
+    if msg is None:
+        raise RuntimeError(f"No GRIB message in {path}")
+    try:
+        return int(ec.codes_get(msg, "pentagonalResolutionParameterJ"))
+    finally:
+        ec.codes_release(msg)
+
+
 def read_curve(path: Path, cfg: SpectraConfig, *, truncation: int) -> tuple[np.ndarray, np.ndarray]:
     fs_in = mv.Fieldset()
     if cfg.level == "sfc":
@@ -84,6 +101,13 @@ def read_curve(path: Path, cfg: SpectraConfig, *, truncation: int) -> tuple[np.n
         fs_in.append(mv.read(data=mv.read(str(path)), levelist=cfg.level, param=cfg.param))
     if len(fs_in) != 1:
         raise RuntimeError(f"Expected exactly one field in {path}, got {len(fs_in)}")
+    # The two axis_type values below are misspelled, and deliberately left as they
+    # are: mv.spec_graph reads the true truncation from the file and returns raw
+    # INPUT_*_VALUES, so the axis keywords never touch the numbers.  This was
+    # confirmed by reproducing every cached curve from the GRIB coefficients with
+    # eccodes to ~5e-12.  Correcting the spelling would activate a plot definition
+    # that is never rendered, so it is a behaviour change for no gain.  This whole
+    # call is replaced by the eccodes path in a later step.
     sp = mv.spec_graph(
         data=fs_in,
         truncation=truncation,
@@ -103,6 +127,7 @@ def main() -> None:
     states = parse_weather_states(args.weather_states)
 
     written = []
+    achieved_truncations: set[int] = set()
     for state in states:
         cfg = CONFIGS[state]
         in_dir = sh_root / cfg.dir_name
@@ -110,7 +135,16 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in sorted(in_dir.glob("*_nopoles.grb_sh")):
             date_ymd, step_hours, member = parse_components(path)
-            wvn, ampl = read_curve(path, cfg, truncation=args.truncation)
+            achieved = read_truncation(path)
+            if achieved != args.truncation:
+                raise RuntimeError(
+                    f"{path} carries T{achieved} but T{args.truncation} was requested. "
+                    "Stage 2 (gptosp -T) and stage 3 must agree; refusing to write a "
+                    "spectrum whose truncation differs from the one recorded in the "
+                    "summary."
+                )
+            achieved_truncations.add(achieved)
+            wvn, ampl = read_curve(path, cfg, truncation=achieved)
             stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
             wvn_path = out_dir / f"wvn_{stem}.npy"
             ampl_path = out_dir / f"ampl_{stem}.npy"
@@ -126,6 +160,7 @@ def main() -> None:
                     "step_hours": step_hours,
                     "member": member,
                     "truncation": args.truncation,
+                    "achieved_truncation": achieved,
                 }
             )
 
@@ -136,7 +171,12 @@ def main() -> None:
         "spectral_harmonics_dir": str(sh_root),
         "out_dir": str(out_root),
         "weather_states": states,
+        # "truncation" is kept under its original name because the runner cache
+        # validation already reads it; the two explicit keys below say which is which.
         "truncation": args.truncation,
+        "requested_truncation": args.truncation,
+        "achieved_truncation": sorted(achieved_truncations),
+        "truncation_convention": "cubic_octahedral_TCo",
         "written_count": len(written),
         "files": written,
     }

@@ -282,7 +282,9 @@ def _run_pipeline(
     )
 
     LOG.info("=== spectra_ecmwf [%s] 2/3: gptosp transforms ===", label)
-    _run_gptosp(grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states)
+    _run_gptosp(
+        grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states, truncation=truncation
+    )
 
     LOG.info("=== spectra_ecmwf [%s] 3/3: compute amplitudes ===", label)
     _compute_amplitudes(
@@ -337,7 +339,9 @@ def _run_input_bundle_pipeline(
     subprocess.run(cmd, check=True)
 
     LOG.info("=== spectra_ecmwf [input] 2/3: gptosp transforms ===")
-    _run_gptosp(grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states)
+    _run_gptosp(
+        grb_dir=grb_dir, sh_dir=sh_dir, weather_states=weather_states, truncation=truncation
+    )
 
     LOG.info("=== spectra_ecmwf [input] 3/3: compute amplitudes ===")
     _compute_amplitudes(
@@ -380,8 +384,57 @@ def _stage_gribs(
     subprocess.run(cmd, check=True)
 
 
-def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> None:
+def _read_achieved_truncation(sh_path: Path) -> int:
+    """Return the spectral truncation actually stored in a harmonics GRIB."""
+    import eccodes as ec
+
+    with open(sh_path, "rb") as handle:
+        msg = ec.codes_grib_new_from_file(handle)
+    if msg is None:
+        raise RuntimeError(f"spectra_ecmwf: no GRIB message in {sh_path}")
+    try:
+        return int(ec.codes_get(msg, "pentagonalResolutionParameterJ"))
+    finally:
+        ec.codes_release(msg)
+
+
+def _verify_truncation(sh_dir: Path, param_dirs: list[str], *, truncation: int) -> None:
+    """Fail loudly if any produced harmonics file is not at the requested T.
+
+    Stage 2 (gptosp) and stage 3 (amplitudes) must agree on the truncation.
+    A silent disagreement produces a wrong scientific number rather than a
+    missing one, so this earns a hard stop rather than a warning.
+    """
+    checked = 0
+    for pd in param_dirs:
+        for sh_path in sorted((sh_dir / pd).glob("*.grb_sh")):
+            achieved = _read_achieved_truncation(sh_path)
+            if achieved != truncation:
+                raise RuntimeError(
+                    "spectra_ecmwf: gptosp produced the wrong truncation for "
+                    f"{sh_path}: requested T{truncation}, file carries T{achieved}. "
+                    "Stage 2 and stage 3 would disagree; refusing to continue."
+                )
+            checked += 1
+    if not checked:
+        raise RuntimeError(
+            f"spectra_ecmwf: gptosp produced no harmonics under {sh_dir}. "
+            "Check that staging wrote GRIBs and that gptosp.ser was on PATH."
+        )
+    LOG.info("spectra_ecmwf: verified T%d on %d harmonics files", truncation, checked)
+
+
+def _run_gptosp(
+    *, grb_dir: Path, sh_dir: Path, weather_states: list[str], truncation: int
+) -> None:
     """Run gptosp.ser for all GRIBs; skip existing harmonics (resumable).
+
+    The truncation is passed explicitly with -T so stage 2 and stage 3 use the
+    same number by construction.  Without -T, gptosp derives its own truncation
+    from the staged grid's latitude count, which on a pole-masked grid is
+    neither the cubic truncation nor anything the amplitude stage knows about.
+    -l is deliberately not passed: it only selects the derivation rule used when
+    -T is absent, and both of its options are wrong for an octahedral grid.
 
     gptosp.ser has a ~128-char path limit (Fortran CHARACTER buffer).
     We work around this by creating a short /tmp symlink to sh_dir and
@@ -414,7 +467,7 @@ def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> No
             f'  sh_out="$SHORT_TMP/s/{pd}/${{grb_base}}_sh"',
             '  [[ -f "$sh_out" ]] && [[ -s "$sh_out" ]] && continue',
             '  echo "[gptosp] $grb_base"',
-            '  gptosp.ser -l -g "$grb_file" -S "$sh_out"',
+            f'  gptosp.ser -T {truncation} -g "$grb_file" -S "$sh_out"',
             'done',
         ]
     lines += ['rm "$SHORT_TMP/g" "$SHORT_TMP/s"', 'rmdir "$SHORT_TMP"']
@@ -423,6 +476,8 @@ def _run_gptosp(*, grb_dir: Path, sh_dir: Path, weather_states: list[str]) -> No
         ["bash", "--login", "-c", "\n".join(lines)],
         check=True,
     )
+
+    _verify_truncation(sh_dir, param_dirs, truncation=truncation)
 
 
 def _compute_amplitudes(
