@@ -1,0 +1,36 @@
+# o320_o1280_ft400k_gmass_w12 -- mass-only autoguidance w1.2 on the ft400k cycle-2 checkpoint
+# (family 12dcefea..., step-400000: the s397434 champion fine-tuned for a fresh 400k-step LR
+# cycle, EDM2 OFF). Question (owner 2026-08-22): does a GENTLER weight keep the w1.3 TC depth
+# gain while pulling the spectra_ecmwf amplitude ratio-to-truth back toward 1.0? On s397434 the
+# z_500 fine-band ratio went 1.00 (truth/ctrl) -> 1.13 (w1.3) -> 1.25 (w1.5); w1.5 was rejected
+# for overshooting idalia. w1.2 is the next step down the same axis.
+# IDENTICAL to o320_o1280_ft400k_gmass_w13.yaml except the 12 map values (1.3 -> 1.2), so the
+# arm is ctrl-matched AND w13-matched by construction: same strong ckpt, same D_bad, same
+# pw30 10/20 s1e5 chunks=1 operating point, same 5 dates / 10 members / bundles.
+# D_bad = 34fdb91e d50k (inference-anemoi-by_step-epoch_021-step_050000): the EARLIEST TRUE
+# ANCESTOR of the ft400k weight lineage (ft400k warm-started FROM s397434, so the finetune
+# own-50k is s397434+50k = NOT weak; the original-run 50k is). Same D_bad file as the
+# validated gmass campaign -- already on Atos, sha-verified, halo-fix 1b078e1 exercised.
+# Sampler block restated in full (lane merge is shallow at the sampler key).
+base: o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.2, sp: 1.2, z_100: 1.2, z_1000: 1.2, z_200: 1.2, z_300: 1.2, z_400: 1.2, z_50: 1.2, z_500: 1.2, z_700: 1.2, z_850: 1.2, z_925: 1.2}
