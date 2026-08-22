@@ -46,11 +46,13 @@ predict:
     S_noise: 1.05
 
 prepml:
-  # Owner 2026-08-21: cap concurrent model tasks at 4 so this campaign leaves node
-  # headroom (j9f3 history: 10 tripped AssocMaxJobsLimit; it finished on 8).
+  # Owner 2026-08-22: cap concurrent model tasks at 2 for EVERY o320->o1280 prepml
+  # lane, so that several arms running at once cannot occupy the shared nodes and
+  # lock other users out of compute. This supersedes the earlier per-campaign caps
+  # of 3, 4 and 8. Applied live to the running ja6g and ja6y suites as well.
   ecflow:
     limits:
-      gpu: 4
+      gpu: 2
   # Guidance = 2 denoiser evals per sampler step; pw30 guided at chunks=1 projects to
   # ~1h30 per member-date (j9f3 pw40 guided measured 1h53). 10h cap keeps margin.
   platform:

@@ -47,9 +47,13 @@ predict:
     S_noise: 1.05
 
 prepml:
+  # Owner 2026-08-22: cap concurrent model tasks at 2 for EVERY o320->o1280 prepml
+  # lane, so that several arms running at once cannot occupy the shared nodes and
+  # lock other users out of compute. This supersedes the earlier per-campaign caps
+  # of 3, 4 and 8. Applied live to the running ja6g and ja6y suites as well.
   ecflow:
     limits:
-      gpu: 4
+      gpu: 2
   # Unguided runs one denoiser evaluation per sampler step instead of two, so this arm
   # is roughly half the cost of the guided one (~45 min per member-date against the
   # ~1h30 measured on ja6g). A 6-hour cap still leaves a wide margin.

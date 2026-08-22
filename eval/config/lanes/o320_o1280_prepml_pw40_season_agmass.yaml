@@ -26,12 +26,13 @@ prepml:
   # Concurrent model tasks. prepml defaults to 10; at 10 this campaign filled the shared
   # mlx/ecaifs/ng budget and SLURM culled 8 in-flight tasks on 2026-08-11
   # (AssocMaxJobsLimit), aborting the suite for 3 days. Dropped to 3, raised to 8 on
-  # 2026-08-19 for throughput: the real shared cap is the mlx association (MaxJobs=30
-  # in ng, shared across every user prepml suite), and fleet usage was only 10/30, so 8
-  # has headroom. Revisit if other campaigns ramp up.
+  # Owner 2026-08-22: cap concurrent model tasks at 2 for EVERY o320->o1280 prepml
+  # lane, so that several arms running at once cannot occupy the shared nodes and
+  # lock other users out of compute. This supersedes the earlier per-campaign caps
+  # of 3, 4 and 8. Applied live to the running ja6g and ja6y suites as well.
   ecflow:
     limits:
-      gpu: 8
+      gpu: 2
   platform:
     gpu:
       time: "0-10:00"

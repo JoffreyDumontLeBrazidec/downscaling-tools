@@ -37,14 +37,14 @@ predict:
     # Same-epsilon probes show pure noise and target+noise are spectrally matched
     # at this ceiling; explicitly named s1k/sigma10k lanes remain as controls.
     schedule_type: "experimental_piecewise"
-    num_steps: 40
+    num_steps: 30
     sigma_max: 100000.0
     sigma_transition: 10.0
     sigma_min: 0.03
     high_schedule_type: "exponential"
     low_schedule_type: "karras"
-    num_steps_high: 13
-    num_steps_low: 27
+    num_steps_high: 10
+    num_steps_low: 20
     rho: 7.0
     sampler: "heun"
     S_churn: 2.5
@@ -229,8 +229,6 @@ prepml:
     root: /home/ecm5702/perm/reference/o320_o1280
   time_step: 24h
   lead_time: 360h
-  # Owner 2026-08-22: 2 concurrent model tasks is the DEFAULT for every o320->o1280
-  # prepml lane, so that several arms at once cannot lock other users out of compute.
   ecflow:
     limits:
       gpu: 2
