@@ -786,3 +786,36 @@ def test_later_step_resolves_its_predecessor(tmp_path):
     earlier.write_bytes(b"")
     later.write_bytes(b"")
     assert bundle.previous_step_bundle_path(later) == earlier
+
+
+def test_predecessor_is_found_at_a_non_six_hour_cadence(tmp_path):
+    """The o320->o1280 regional bundles are staged 24-hourly. Assuming six hours
+    would find no file and silently skip the correction."""
+    for step in (24, 48, 72):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step072h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(later).name == "case_step048h_input_bundle.nc"
+
+
+def test_earliest_step_has_no_predecessor_at_any_cadence(tmp_path):
+    for step in (24, 48):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    first = tmp_path / "case_step024h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(first) is None
+
+
+def test_nearest_earlier_step_wins_when_the_cadence_is_irregular(tmp_path):
+    for step in (6, 12, 36):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step036h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(later).name == "case_step012h_input_bundle.nc"
+
+
+def test_forced_cadence_overrides_detection(tmp_path, monkeypatch):
+    for step in (6, 12, 18, 24):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step024h_input_bundle.nc"
+    monkeypatch.setenv("MI_DEACCUM_STEP_HOURS", "12")
+    assert bundle.previous_step_bundle_path(later).name == "case_step012h_input_bundle.nc"
+    monkeypatch.delenv("MI_DEACCUM_STEP_HOURS")
+    assert bundle.previous_step_bundle_path(later).name == "case_step018h_input_bundle.nc"

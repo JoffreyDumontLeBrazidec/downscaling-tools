@@ -579,23 +579,51 @@ def looks_accumulated(current, previous):
 def previous_step_bundle_path(bundle_path, step_hours=None):
     """Sibling bundle one accumulation window earlier, or None.
 
-    None is the correct answer at the first step: there the accumulation window
-    already equals a single increment, so nothing may be subtracted.
+    None is the correct answer at the genuine first step: there the accumulation
+    window already equals a single increment, so nothing may be subtracted.
+
+    The cadence is read off the files on disk rather than assumed. Lanes are
+    staged at different cadences - the o1280->o2560 Humberto set is 6-hourly and
+    the o320->o1280 regional set is 24-hourly - and subtracting a hard-coded six
+    hours would find no file on the latter and silently skip the correction,
+    which is the same silent failure the correction exists to prevent. Pass
+    step_hours, or set MI_DEACCUM_STEP_HOURS, to force a fixed cadence instead.
     """
     if bundle_path is None:
         return None
-    if step_hours is None:
-        step_hours = int(_os.environ.get("MI_DEACCUM_STEP_HOURS", "6"))
     text = str(bundle_path)
     m = _BUNDLE_STEP_RE.search(text)
     if not m:
         return None
     step = int(m.group(1))
-    prev = step - step_hours
-    if prev <= 0:
+
+    if step_hours is None:
+        env_step_hours = _os.environ.get("MI_DEACCUM_STEP_HOURS", "").strip()
+        step_hours = int(env_step_hours) if env_step_hours else None
+
+    if step_hours is not None:
+        prev = step - int(step_hours)
+        if prev <= 0:
+            return None
+        candidate = Path(text.replace(f"_step{step:03d}h_", f"_step{prev:03d}h_"))
+        return candidate if candidate.exists() else None
+
+    # Cadence unknown: take the nearest earlier step that actually exists.
+    here = Path(text)
+    pattern = _BUNDLE_STEP_RE.sub("_step[0-9][0-9][0-9]h_input_bundle.nc", here.name)
+    best_step, best_path = None, None
+    try:
+        siblings = sorted(here.parent.glob(pattern))
+    except OSError:
         return None
-    candidate = Path(text.replace(f"_step{step:03d}h_", f"_step{prev:03d}h_"))
-    return candidate if candidate.exists() else None
+    for sibling in siblings:
+        sm = _BUNDLE_STEP_RE.search(sibling.name)
+        if sm is None:
+            continue
+        s = int(sm.group(1))
+        if s < step and (best_step is None or s > best_step):
+            best_step, best_path = s, sibling
+    return best_path
 
 
 def load_inputs_from_bundle_numpy(
