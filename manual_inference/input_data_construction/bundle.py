@@ -538,6 +538,21 @@ _BUNDLE_STEP_RE = _re.compile(r"_step(\d{3})h_input_bundle\.nc$")
 # non-accumulated field measured was 0.69, so this is a wide margin.
 _ACCUMULATION_MONOTONE_FRACTION = 0.999
 
+# How far a point may go BACKWARDS and still count as non-decreasing, as a
+# fraction of the field maximum. Archived fields are packed with limited
+# precision, so a quantity that is genuinely constant across a step - accumulated
+# solar radiation over the night hemisphere - can be stored very slightly smaller
+# at the later step. Measured on a real failing case: 6.3% of ssrd points came
+# back lower, by up to 512 J/m2 out of 4.9e7, which is one quantum of 16-bit
+# packing over that range. A tolerance of 1e-9 (the original value) is five
+# orders of magnitude too tight to absorb that and dropped the fraction to 0.937,
+# so ssrd was judged not accumulated while strd, which never has a zero
+# increment, passed. 1e-3 is about sixty times the packing quantum and still five
+# thousand times smaller than one step's increment, so a per-step field cannot be
+# rescued by it: those score near 0.5 whatever the tolerance, because half their
+# point-to-point changes are genuinely negative.
+_ACCUMULATION_DECREASE_TOLERANCE = 1e-3
+
 
 def deaccumulate_mode_from_env():
     """Resolve the escape hatch into ("auto", None) or ("forced", names)."""
@@ -571,7 +586,7 @@ def looks_accumulated(current, previous):
     if not (np.all(np.isfinite(cur)) and np.all(np.isfinite(prev))):
         return False, 0.0
     scale = max(float(np.max(np.abs(cur))), 1.0)
-    fraction = float(np.mean(cur >= prev - 1e-9 * scale))
+    fraction = float(np.mean(cur >= prev - _ACCUMULATION_DECREASE_TOLERANCE * scale))
     grew = float(cur.mean()) > float(prev.mean())
     return (fraction >= _ACCUMULATION_MONOTONE_FRACTION and grew), fraction
 

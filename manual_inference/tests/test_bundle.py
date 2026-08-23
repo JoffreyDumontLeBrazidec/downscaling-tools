@@ -916,3 +916,49 @@ def test_guard_is_silent_when_no_matching_normaliser_exists():
     x = rng.normal(size=(100, 9))  # 9 channels, model has 4
     assert bundle.check_input_distribution(_BufferModel(), x, {"a": 0}) == []
     assert bundle.check_input_distribution(object(), x, {"a": 0}) == []
+
+
+def test_packing_noise_does_not_hide_an_accumulation():
+    """Found in production 2026-08-22. Archived fields are packed with limited
+    precision, so a quantity that is genuinely constant across a step - solar
+    radiation over the night hemisphere - can be stored very slightly SMALLER at
+    the later step. Real failing case: 6.3% of ssrd points came back lower, by up
+    to 512 J/m2 out of 4.9e7, one quantum of 16-bit packing. The original 1e-9
+    tolerance dropped the non-decreasing fraction to 0.937 and the field was
+    judged not accumulated, so it was fed to the model as a raw running total."""
+    rng = np.random.default_rng(0)
+    n = 200000
+    previous = rng.uniform(0.0, 4.0e7, size=n)
+    increment = np.where(rng.random(n) < 0.6, 0.0, rng.uniform(0.0, 8.0e6, size=n))
+    current = previous + increment
+    # packing quantum of the observed size, applied to the zero-increment points
+    night = increment == 0.0
+    current[night] -= rng.uniform(0.0, 512.0, size=int(night.sum()))
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert accumulated, "packing noise must not hide a real accumulation"
+    assert fraction == pytest.approx(1.0)
+
+
+def test_tolerance_cannot_rescue_a_per_step_field():
+    """The loosened tolerance must not blur the distinction it exists to make.
+    A per-step field's point-to-point changes are genuinely negative about half
+    the time, which no small tolerance can repair."""
+    rng = np.random.default_rng(1)
+    previous = rng.normal(loc=0.0, scale=5.0, size=200000)
+    current = rng.normal(loc=0.0, scale=5.0, size=200000)
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert not accumulated
+    assert 0.3 < fraction < 0.7
+
+
+def test_a_real_decrease_still_rejects():
+    """A field that falls by far more than the packing quantum is not a running
+    total, and must not be treated as one."""
+    rng = np.random.default_rng(2)
+    previous = rng.uniform(0.0, 1.0e6, size=50000)
+    current = previous.copy()
+    drop = rng.random(50000) < 0.05
+    current[drop] -= 1.0e5  # 10% of the field maximum, far above any tolerance
+    current[~drop] += 1.0e4
+    accumulated, _ = bundle.looks_accumulated(current, previous)
+    assert not accumulated
