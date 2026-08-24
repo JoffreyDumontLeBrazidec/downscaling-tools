@@ -99,8 +99,15 @@ prepml:
 # module) + the surface_an_OPER_O1280_0001_*.grib files (verified present).
 # TC also runs from data_tc24h/predictions (24h subset): the legacy kernel
 # step contract only supports 24/48/72/96/120 ("Unsupported step=6").
+# 2026-08-23: "both" instead of "regridded". Regridded alone put this run on a
+# support the LANE SCOREBOARD does not use (its declared support is native
+# o2560, model vs IEKM native truth), so the row could not be compared with any
+# other row and its wind-max ranking was meaningless. "both" runs regridded
+# first (one shared geometry for model vs IEKM vs OPER analysis) and then native
+# (board-comparable), so we get the internally consistent three-curve view AND
+# numbers that can sit on the board. Read each set only against its own support.
 tc:
-  support_mode: "regridded"
+  support_mode: "both"
 
 # Quaver: j9yw pl fields are ENFO DONORS for the hybrid tctracker, not model
 # output — upper-air scoring would mislabel ENFO skill as ML. Surface-only.
