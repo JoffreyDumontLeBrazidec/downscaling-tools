@@ -31,6 +31,29 @@ _BACKEND = Path(__file__).resolve().parent.parent.parent / "_backends" / "quaver
 _Q_COMPUTE = _BACKEND / "q_compute_probabilistic.py"
 _PL_GRID = "1.5/1.5"  # upper-air scores are always computed on the regridded 1.5deg grid
 
+# Owner decision 2026-08-24: quaver must score out to 10 forecast days by default.
+# It used to inherit its lead range from predict.steps, which several lanes pin to
+# 24-120h because that is all the NetCDF *bundles* cover. Quaver does not read the
+# bundles -- it reads FDB, which holds every step the forecast actually produced
+# (e.g. 360h on the o320->o1280 season lanes), so that inheritance silently threw
+# away two thirds of every scorecard. The range now comes from the real forecast
+# length (resolved.prepml.lead_time) capped here; a lane may override any of
+# first_lead_time / last_lead_time / lead_time_step in its `quaver:` block.
+_DEFAULT_LAST_LEAD_TIME = 240
+
+
+def _hours(value, default=None):
+    """Parse a lead-time/step spec into whole hours. Accepts 360, "360", "360h", "15d"."""
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return int(value)
+    m = re.fullmatch(r"\s*(\d+)\s*([hd]?)\s*", str(value), flags=re.IGNORECASE)
+    if not m:
+        return default
+    n = int(m.group(1))
+    return n * 24 if m.group(2).lower() == "d" else n
+
 
 def _load_effective_config(results_dir: Path) -> dict:
     # results_dir == <run_root>/evaluators/quaver ; effective_config.json sits at <run_root>.
@@ -75,6 +98,34 @@ def _derive_input_grid(lane_name: str) -> str:
     return f"O{nums[0]}" if nums else "O320"
 
 
+def _resolve_lead_range(eff: dict, eval_config: dict, steps: list[int]) -> tuple[int, int, int]:
+    """Return (first_lead_time, last_lead_time, lead_time_step) in hours for quaver.
+
+    Priority per field: explicit `quaver:` lane override, then the real forecast
+    length recorded in resolved.prepml, then predict.steps. The upper end is capped
+    at _DEFAULT_LAST_LEAD_TIME and can never fall below what predict.steps already
+    implied, so this only ever widens an existing window, never narrows one.
+    """
+    prepml = (eff.get("resolved") or {}).get("prepml") or {}
+    step = (
+        _hours(eval_config.get("lead_time_step"))
+        or _hours(prepml.get("time_step"))
+        or _infer_step(steps)
+    )
+    step = max(1, int(step))
+    first = _hours(eval_config.get("first_lead_time"), steps[0]) or steps[0]
+
+    override_last = _hours(eval_config.get("last_lead_time"))
+    if override_last is not None:
+        last = override_last
+    else:
+        produced = _hours(prepml.get("lead_time"), steps[-1]) or steps[-1]
+        last = min(_DEFAULT_LAST_LEAD_TIME, produced)
+    last = max(last, steps[-1])                       # never narrow an existing window
+    last = first + ((last - first) // step) * step    # land on the step grid
+    return int(first), int(last), int(step)
+
+
 def resolve_params(eff: dict, eval_config: dict) -> dict | None:
     """Return quaver compute params for the experiment, or None if not a prepml/FDB run."""
     if not eff.get("expver"):
@@ -85,15 +136,16 @@ def resolve_params(eff: dict, eval_config: dict) -> dict | None:
     steps = [s for s in _sorted_ints(predict.get("steps") or []) if s > 0]
     if not (dates and members and steps):
         return None
+    first_lt, last_lt, lt_step = _resolve_lead_range(eff, eval_config, steps)
     return {
         "expver": str(eff["expver"]),
         "nmem": max(members),
         "first_reference_date": dates[0],
         "last_reference_date": dates[-1],
         "date_step": _date_step_hours(dates),
-        "first_lead_time": steps[0],
-        "last_lead_time": steps[-1],
-        "lead_time_step": _infer_step(steps),
+        "first_lead_time": first_lt,
+        "last_lead_time": last_lt,
+        "lead_time_step": lt_step,
         "grid": str(eval_config.get("grid") or _derive_grid(eff.get("lane", ""))),
         "class_": str(eval_config.get("class", eval_config.get("class_", "rd"))),
         "database": str(eval_config.get("database", "fdb")),
