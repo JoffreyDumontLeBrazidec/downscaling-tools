@@ -31,6 +31,18 @@ PAYLOAD = ("grb", "spectral_harmonics", "spectra")
 SUMMARIES = ("staging_summary.json", "spectra_summary.json")
 KEY_RE = re.compile(r"^d\S*_s\S*_m\S*_T\S+_[0-9a-f]{8}$")
 
+SUPERSEDED_NOTE = """This is the legacy top-level reference cache, parked on {when}.
+
+Window : {window}
+Recorded truncation : {truncation}
+Curve length stored : {length}
+
+The window directory {key} already held a reference for the same window,
+recomputed after the runner became window-addressed. This copy is therefore
+redundant. It is kept rather than removed because nothing here is ever deleted;
+it is parked out of the way so it cannot be mistaken for a live cache.
+"""
+
 TOMBSTONE = """This reference cache was migrated under a window key on {when}.
 
 Recorded window : {window}
@@ -123,9 +135,35 @@ def migrate(ref_dir: Path, *, apply: bool, when: str) -> str:
 
     key = _key_for(desc)
     target = ref_dir / key
+    occupied = target.is_dir() and any((target / name).exists() for name in PAYLOAD)
     print(f"    window   : {','.join(desc['dates'])} steps={desc['steps']} "
           f"members={desc['members'] or 'unrecorded'}")
     print(f"    truncation: {desc['truncation']}   stored curve length: {desc['length']}")
+    if occupied:
+        park = ref_dir / f"_superseded_{when.replace('-', '')}"
+        print(f"    -> {target.name}/ already holds this window; parking the legacy copy")
+        print(f"    -> {park.name}/")
+        if not apply:
+            return "dry run (would park a superseded copy)"
+        if any((park / name).exists() for name in PAYLOAD):
+            return f"already parked ({park.name})"
+        park.mkdir(exist_ok=True)
+        for name in PAYLOAD + SUMMARIES:
+            source = ref_dir / name
+            if source.exists():
+                source.rename(park / name)
+        (park / "README.superseded.txt").write_text(
+            SUPERSEDED_NOTE.format(
+                when=when,
+                window=",".join(desc["dates"]),
+                truncation=desc["truncation"] if desc["truncation"] is not None else "not recorded",
+                length=desc["length"],
+                key=key,
+            ),
+            encoding="utf-8",
+        )
+        return "parked as superseded"
+
     print(f"    -> {target.name}/")
     if not apply:
         return "dry run"
