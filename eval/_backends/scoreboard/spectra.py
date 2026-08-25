@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from pathlib import Path
 from typing import Any
 
 from eval._backends.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
+from eval._backends.spectra import naming
 import numpy as np
+
+LOG = logging.getLogger(__name__)
 
 SPECTRA_FIELDS = ("10u", "10v", "2t", "msl", "t_850", "z_500")
 RAW_FIELD_DIRS = {
@@ -169,17 +173,34 @@ def _load_spectra_metadata(spectra_dir: Path) -> dict[str, Any]:
 
 
 def _infer_spectra_token(spectra_dir: Path) -> str:
+    """Find the experiment token used by the curves in a directory.
+
+    Curves written in the short convention carry no token.  Saying so out loud
+    matters: the previous silent fallback to "1" made a directory full of
+    unreadable names look like a directory of token-1 names, and every lookup
+    then missed without explanation.
+    """
     seen: set[str] = set()
+    short_form_seen = False
     for field in SPECTRA_FIELDS:
         for field_dir in spectra_field_dir_candidates(field):
             if field_dir in seen:
                 continue
             seen.add(field_dir)
             for ampl_path in spectra_field_root(spectra_dir, field_dir).glob("ampl_*.npy"):
-                match = AMP_FILE_RE.match(ampl_path.name)
-                if match:
-                    return match.group(5)
-    return "1"
+                parsed = naming.parse(ampl_path.name)
+                if parsed is None:
+                    continue
+                if parsed["token"] is not None:
+                    return str(parsed["token"])
+                short_form_seen = True
+    if short_form_seen:
+        LOG.debug(
+            "spectra: %s holds short-form curve names, which carry no token; "
+            "using the default when looking for canonical names",
+            spectra_dir,
+        )
+    return naming.DEFAULT_TOKEN
 
 
 def _has_raw_spectra_arrays(spectra_dir: Path) -> bool:
@@ -195,8 +216,10 @@ def _has_raw_spectra_arrays(spectra_dir: Path) -> bool:
 
 
 def _load_curve_wavenumbers(root: Path, *, date: int, step: int, field_dir: str, token: str, member: int) -> np.ndarray | None:
-    path = root / f"wvn_{date}_{step}_{field_dir}_{token}_n{member}.npy"
-    if not path.exists():
+    path = naming.find(
+        root, "wvn", date=date, step=step, field_dir=field_dir, member=member, token=token
+    )
+    if path is None:
         return None
     return np.asarray(np.load(path), dtype=np.float64)
 
@@ -292,11 +315,17 @@ def _load_raw_spectra_metrics(spectra_dir: Path, reference_root: Path, metadata:
         for date in dates:
             for step in steps:
                 for member in members:
-                    exp_file = exp_dir / f"ampl_{date}_{step}_{exp_field_dir}_{token}_n{member}.npy"
-                    ref_file = ref_dir / f"ampl_{date}_{step}_{ref_field_dir}_{ref_token}_n{member}.npy"
-                    if not exp_file.exists():
+                    exp_file = naming.find(
+                        exp_dir, "ampl", date=date, step=step,
+                        field_dir=exp_field_dir, member=member, token=token,
+                    )
+                    ref_file = naming.find(
+                        ref_dir, "ampl", date=date, step=step,
+                        field_dir=ref_field_dir, member=member, token=ref_token,
+                    )
+                    if exp_file is None:
                         continue
-                    if not ref_file.exists():
+                    if ref_file is None:
                         misses += 1
                         continue
                     exp_curves.append(np.load(exp_file))
@@ -603,12 +632,24 @@ def load_spectra_metrics(spectra_dir: Path, *, reference_root: Path | None = Non
     metadata = _load_spectra_metadata(spectra_dir)
     ref_path: Path | None = reference_root
     if ref_path is None:
+        # Written by the evaluator itself, so this is a fact rather than a guess.
+        recorded = str(summary_data.get("reference_spectra_dir", "")).strip()
+        if recorded:
+            ref_path = Path(recorded)
+    if ref_path is None:
         relative_to = str(summary_data.get("relative_to", "")).strip()
         if relative_to:
             ref_path = Path(relative_to)
     if ref_path is None:
+        # Last resort, and only a guess: for spectra_ecmwf, template_root is the
+        # GRIB template directory, not a directory of reference curves.
         template_root = str(metadata.get("template_root", "")).strip()
         if template_root:
+            LOG.debug(
+                "spectra: no reference directory recorded for %s; guessing from "
+                "template_root=%s, which is often not a spectra directory",
+                spectra_dir, template_root,
+            )
             ref_path = Path(template_root)
     if ref_path is not None and ref_path.exists() and _has_raw_spectra_arrays(spectra_dir):
         raw_metrics = _load_raw_spectra_metrics(spectra_dir, ref_path, metadata)

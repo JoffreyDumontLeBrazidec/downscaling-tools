@@ -118,22 +118,28 @@ def test_compute_amplitudes_forwards_truncation(tmp_path: Path) -> None:
     assert '--truncation "1279"' in command[2]
 
 
-def test_amplitude_computer_passes_truncation_to_metview(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_metview = MagicMock()
-    fake_metview.Fieldset.return_value = []
-    fake_metview.spec_graph.return_value = [
-        None,
-        {"INPUT_X_VALUES": [1.0, 2.0], "INPUT_Y_VALUES": [3.0, 4.0]},
-    ]
-    monkeypatch.setitem(sys.modules, "metview", fake_metview)
+def test_amplitude_computer_reads_curves_with_eccodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """read_curve now goes through the harmonics module, not Metview.
 
+    The parameter and level are forwarded so a curve staged into the wrong
+    parameter directory is caught rather than silently scored.
+    """
     module_name = "eval.evaluators.spectra_ecmwf._amplitude_computer"
     sys.modules.pop(module_name, None)
     amplitude_computer = importlib.import_module(module_name)
+    seen: dict = {}
+
+    def fake_amplitude_curve(path, *, truncation, param=None, level=None):
+        seen.update(path=path, truncation=truncation, param=param, level=level)
+        return np.array([1.0, 2.0]), np.array([3.0, 4.0])
+
+    monkeypatch.setattr(
+        amplitude_computer.harmonics, "amplitude_curve", fake_amplitude_curve
+    )
     try:
         wavenumbers, amplitudes = amplitude_computer.read_curve(
             Path("field_20230829_120_1_nopoles.grb_sh"),
-            amplitude_computer.CONFIGS["2t"],
+            amplitude_computer.CONFIGS["t_850"],
             truncation=1279,
         )
     finally:
@@ -141,7 +147,66 @@ def test_amplitude_computer_passes_truncation_to_metview(monkeypatch: pytest.Mon
 
     assert np.array_equal(wavenumbers, np.array([1.0, 2.0]))
     assert np.array_equal(amplitudes, np.array([3.0, 4.0]))
-    assert fake_metview.spec_graph.call_args.kwargs["truncation"] == 1279
+    assert seen["truncation"] == 1279
+    assert seen["param"] == "t"
+    assert seen["level"] == "850"
+
+
+def test_spectra_path_no_longer_imports_metview() -> None:
+    """The whole point of the eccodes switch: no Metview in this path."""
+    source = (
+        Path(runner.__file__).parent / "_amplitude_computer.py"
+    ).read_text(encoding="utf-8")
+
+    assert "import metview" not in source
+    # The prose above the function still names spec_graph to explain the
+    # history, so look for a call rather than a mention.
+    assert "mv.spec_graph(" not in source
+    assert "mv.read(" not in source
+
+
+def test_stage_three_needs_no_module_block(tmp_path: Path) -> None:
+    """Stage 3 runs on the venv alone now, so it loads no modules at all."""
+    with patch.object(runner.subprocess, "run") as mock_run:
+        runner._compute_amplitudes(
+            sh_dir=tmp_path / "sh",
+            amp_dir=tmp_path / "amp",
+            weather_states="2t",
+            summary_path=tmp_path / "s.json",
+            truncation=1279,
+        )
+
+    script = mock_run.call_args.args[0][2]
+    assert "module load" not in script
+    assert "METVIEW" not in script
+
+
+def test_coefficient_walk_matches_the_definition() -> None:
+    """power[n] = sum over m<=n of Re^2 + Im^2, with m>0 counted once."""
+    from eval._backends.spectra import harmonics
+
+    truncation = 3
+    n_coefficients = (truncation + 1) * (truncation + 2) // 2
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=2 * n_coefficients)
+
+    power = harmonics.power_from_coefficients(values, truncation)
+
+    coefficients = values.reshape(n_coefficients, 2)
+    expected = np.zeros(truncation + 1)
+    index = 0
+    for m in range(truncation + 1):
+        for n in range(m, truncation + 1):
+            expected[n] += coefficients[index, 0] ** 2 + coefficients[index, 1] ** 2
+            index += 1
+    assert np.allclose(power, expected)
+
+
+def test_coefficient_walk_rejects_a_wrong_sized_array() -> None:
+    from eval._backends.spectra import harmonics
+
+    with pytest.raises(ValueError, match="expected 20 coefficient values for T3"):
+        harmonics.power_from_coefficients(np.zeros(19), 3)
 
 
 def test_run_gptosp_passes_explicit_truncation(tmp_path: Path) -> None:

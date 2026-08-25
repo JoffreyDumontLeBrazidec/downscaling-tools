@@ -9,9 +9,16 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import eccodes as ec
-import metview as mv
 import numpy as np
+
+# This script is also invoked by absolute path from hand-written job scripts,
+# where the repository root is not on PYTHONPATH. Bootstrap it so the shared
+# naming helper imports the same way under both invocation styles.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from eval._backends.spectra import harmonics, naming  # noqa: E402
 
 
 FILE_RE = re.compile(r".*_(?P<date>\d{8})_(?P<step>\d{2,3})_(?P<member>\d+)_nopoles\.grb_sh$")
@@ -60,6 +67,17 @@ def parse_args() -> argparse.Namespace:
             "spectral-harmonics file, not used as an upper clamp."
         ),
     )
+    parser.add_argument(
+        "--expid",
+        default=naming.DEFAULT_TOKEN,
+        help="Experiment token in the curve filename (the scoreboard calls it a token).",
+    )
+    parser.add_argument(
+        "--reference-spectra-dir",
+        default="",
+        help="Where the reference curves for these predictions live. Recorded in "
+             "the summary so the scoreboard need not guess.",
+    )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
 
@@ -85,40 +103,22 @@ def parse_components(path: Path) -> tuple[int, int, int]:
 
 def read_truncation(path: Path) -> int:
     """Total wavenumber truncation actually stored in a spectral GRIB."""
-    with open(path, "rb") as handle:
-        msg = ec.codes_grib_new_from_file(handle)
-    if msg is None:
-        raise RuntimeError(f"No GRIB message in {path}")
-    try:
-        return int(ec.codes_get(msg, "pentagonalResolutionParameterJ"))
-    finally:
-        ec.codes_release(msg)
+    return harmonics.read_truncation(path)
 
 
 def read_curve(path: Path, cfg: SpectraConfig, *, truncation: int) -> tuple[np.ndarray, np.ndarray]:
-    fs_in = mv.Fieldset()
-    if cfg.level == "sfc":
-        fs_in.append(mv.read(data=mv.read(str(path)), param=cfg.param))
-    else:
-        fs_in.append(mv.read(data=mv.read(str(path)), levelist=cfg.level, param=cfg.param))
-    if len(fs_in) != 1:
-        raise RuntimeError(f"Expected exactly one field in {path}, got {len(fs_in)}")
-    # The two axis_type values below are misspelled, and deliberately left as they
-    # are: mv.spec_graph reads the true truncation from the file and returns raw
-    # INPUT_*_VALUES, so the axis keywords never touch the numbers.  This was
-    # confirmed by reproducing every cached curve from the GRIB coefficients with
-    # eccodes to ~5e-12.  Correcting the spelling would activate a plot definition
-    # that is never rendered, so it is a behaviour change for no gain.  This whole
-    # call is replaced by the eccodes path in a later step.
-    sp = mv.spec_graph(
-        data=fs_in,
-        truncation=truncation,
-        x_axis_type="logartihmic",
-        y_axis_type="logartihmic",
+    """Wavenumbers and amplitudes for one spectral-harmonics file.
+
+    This used to call mv.spec_graph.  The eccodes computation reproduces it to
+    about 5e-12 across all four lanes, so the numbers are unchanged, but the
+    Metview startup, its unpinned version and the positional index into its
+    return value are all gone.  The param and level are now checked against the
+    file rather than used to filter a fieldset, which catches a curve staged
+    into the wrong parameter directory.
+    """
+    return harmonics.amplitude_curve(
+        path, truncation=truncation, param=cfg.param, level=cfg.level
     )
-    wvn = np.array(sp[1]["INPUT_X_VALUES"])
-    ampl = np.array(sp[1]["INPUT_Y_VALUES"])
-    return wvn, ampl
 
 
 def main() -> None:
@@ -153,9 +153,12 @@ def main() -> None:
                     file=sys.stderr,
                 )
             wvn, ampl = read_curve(path, cfg, truncation=curve_truncation)
-            stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
-            wvn_path = out_dir / f"wvn_{stem}.npy"
-            ampl_path = out_dir / f"ampl_{stem}.npy"
+            key = dict(
+                date=date_ymd, step=step_hours, field_dir=cfg.dir_name,
+                token=args.expid, member=member,
+            )
+            wvn_path = out_dir / naming.canonical_name("wvn", **key)
+            ampl_path = out_dir / naming.canonical_name("ampl", **key)
             np.save(wvn_path, wvn)
             np.save(ampl_path, ampl)
             written.append(
@@ -190,7 +193,11 @@ def main() -> None:
         "truncation_convention": "cubic_octahedral_TCo",
         # Which binaries produced these curves. Metview is unpinned no more,
         # but recording the resolved version keeps older caches interpretable.
+        "amplitude_backend": "eccodes",
+        # Retained so caches written while Metview was still in use stay
+        # interpretable; empty for anything computed by the eccodes path.
         "metview_version": os.environ.get("METVIEW_VERSION", ""),
+        "reference_spectra_dir": args.reference_spectra_dir,
         "written_count": len(written),
         "files": written,
     }
