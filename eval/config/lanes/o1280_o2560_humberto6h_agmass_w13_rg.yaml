@@ -1,0 +1,19 @@
+# o1280_o2560_humberto6h_agmass_w13_rg.yaml
+# The autoguidance arm pinned to the REGRIDDED tropical-cyclone support, so that
+# arm and control are scored on one geometry and against the pre-registration.
+# See the sibling control lane for why this is a derived lane rather than an
+# edit to the shared base.
+base: o1280_o2560_humberto6h_agmass_w13
+
+tc:
+  support_mode: "regridded"
+  # Draw the model's actual INPUT as a curve, from x_interp in the prediction
+  # files. Without this key the tropical-cyclone input curve is silently absent,
+  # and absent in a way that is easy to miss: the lane lists
+  # reference_expids: ["ENFO_O1280_0001"], the runner de-duplicates it on the
+  # grounds that it is "already drawn as 'input'" from the bundle, and then the
+  # drawing itself is gated on this key, which this lane family has never set.
+  # (The input_label in the base lane belongs to the spectra_ecmwf block.) Net
+  # effect: the reference is dropped AND never drawn, so the one curve that says
+  # how much intensity downscaling actually adds goes missing.
+  input_label: "ENFO O1280 (model input)"
