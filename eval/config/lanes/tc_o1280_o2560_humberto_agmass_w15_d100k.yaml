@@ -1,0 +1,37 @@
+# tc_o1280_o2560_humberto_agmass_w15_d100k.yaml
+# Arm of the 2026-08-26 weight x weak-checkpoint autoguidance matrix on the
+# tc_o1280_o2560 boxed Humberto screening lane. Mass-only map {msl: 1.5},
+# weak checkpoint (D_bad) = fccc23df step 100k (inference-format file, no base
+# companion on purpose -> model_loader inference-only branch; cut with the same
+# local_scope as the strong model). Dose (w-1)*ln(300k/100k) = 0.55.
+# Matched control = the gate-4 boxed control (same ckpt/sampler/support):
+#   ~/scratch/eval/tc_o1280_o2560/humberto_boxed_ctrl_20260826T122854Z
+# Design + pre-registration:
+#   ~/dev/docs/epics/tc-o1280-o2560/in-progress/20260826_agmatrix_weight_ckpt_screen.md
+# SCREENING EVIDENCE ONLY: box rows never enter a full-lane board; winners
+# confirm globally (no spectral verdict from the box).
+base: tc_o1280_o2560_humberto
+
+predict:
+  # Loader merge is 2 levels deep: this sampler block REPLACES the inherited one
+  # wholesale, so the FULL base sampler (o1280_o2560.yaml) is restated verbatim,
+  # then the autoguide_* keys (the ONLY deltas vs the boxed control).
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 1000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000.0
+    S_noise: 1.05
+    # --- autoguidance (the only deltas vs the boxed control) ---
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/fccc23dfb5de4dfbbb2ca0c0e0ce3fdf/inference-anemoi-by_step-epoch_152-step_100000.ckpt"
+    autoguide_weight_map: {msl: 1.5}
