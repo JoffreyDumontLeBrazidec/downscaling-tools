@@ -81,9 +81,9 @@ def run(
         cmd += ["--baseline-grib-tpl", baseline_grib_tpl]
     if interp_index_cache:
         cmd += ["--interp-index-cache", interp_index_cache]
-    run_label = eval_config.get("run_label", "")
+    run_label = str(eval_config.get("run_label") or kwargs.get("run_label") or "")
     if run_label:
-        cmd += ["--run-label", str(run_label)]
+        cmd += ["--run-label", run_label]
 
     LOG.info("precip_events subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)

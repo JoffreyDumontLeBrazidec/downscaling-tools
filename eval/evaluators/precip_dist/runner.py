@@ -40,7 +40,7 @@ def run(
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     out_pdf = plots_dir / "tp_histograms.pdf"
-    run_label = eval_config.get("run_label", "")
+    run_label = str(eval_config.get("run_label") or kwargs.get("run_label") or "")
     ensemble_member_index = int(eval_config.get("ensemble_member_index", 0))
     style = str(eval_config.get("style", "compact"))
     precip_cfg = dict(lane_config.get("precip", {}))

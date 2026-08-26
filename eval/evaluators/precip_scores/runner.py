@@ -215,48 +215,8 @@ def run(
             baseline_src.release()
 
     # ---- aggregate ----------------------------------------------------------
-    def agg_series(selector) -> dict:
-        per_step: dict[int, list[float]] = defaultdict(list)
-        for row in rows:
-            v = selector(row)
-            if v is not None:
-                per_step[row["step"]].append(v)
-        return {str(s): M.nanmean(vs) for s, vs in sorted(per_step.items())}
-
-    def mem_mean(row, series, key):
-        vals = [m.get(series, {}).get(key) for m in row["members"]]
-        vals = [v for v in vals if v is not None]
-        return M.nanmean(vals) if vals else None
-
-    per_step = {
-        "model_rmse_mm": agg_series(lambda r: mem_mean(r, "model", "rmse_mm")),
-        "model_bias_mm": agg_series(lambda r: mem_mean(r, "model", "bias_mm")),
-        "model_corr": agg_series(lambda r: mem_mean(r, "model", "corr")),
-        "model_ens_rmse_mm": agg_series(lambda r: r["model_ens_mean"].get("rmse_mm")),
-        "model_p999_mm": agg_series(lambda r: mem_mean(r, "model", "p999_mm")),
-        "model_max_mm": agg_series(lambda r: mem_mean(r, "model", "max_mm")),
-        "model_wet_frac": agg_series(lambda r: mem_mean(r, "model", "wet_frac")),
-        "model_neg_frac": agg_series(lambda r: mem_mean(r, "model", "neg_frac")),
-        "truth_p999_mm": agg_series(lambda r: r["truth"].get("p999_mm")),
-        "truth_max_mm": agg_series(lambda r: r["truth"].get("max_mm")),
-        "truth_wet_frac": agg_series(lambda r: r["truth"].get("wet_frac")),
-        "baseline_rmse_mm": agg_series(lambda r: mem_mean(r, "baseline", "rmse_mm")),
-        "baseline_corr": agg_series(lambda r: mem_mean(r, "baseline", "corr")),
-        "baseline_ens_rmse_mm": agg_series(
-            lambda r: r.get("baseline_ens_mean", {}).get("rmse_mm")),
-        "baseline_p999_mm": agg_series(lambda r: mem_mean(r, "baseline", "p999_mm")),
-        "baseline_max_mm": agg_series(lambda r: mem_mean(r, "baseline", "max_mm")),
-        "baseline_wet_frac": agg_series(lambda r: mem_mean(r, "baseline", "wet_frac")),
-    }
-
-    def overall(key):
-        vals = [v for v in per_step[key].values() if v is not None]
-        return M.nanmean(vals) if vals else None
-
-    summary = {k: overall(k) for k in per_step}
-    if summary.get("baseline_rmse_mm") and summary.get("model_rmse_mm"):
-        summary["model_over_baseline_rmse_ratio"] = (
-            summary["model_rmse_mm"] / summary["baseline_rmse_mm"])
+    per_step = aggregate_rows(rows)
+    summary = summarize(per_step)
 
     payload = {
         "meta": {
@@ -277,12 +237,69 @@ def run(
         "summary": summary,
         "rows": rows,
     }
+    run_label = str(eval_config.get("run_label") or kwargs.get("run_label")
+                    or predictions_dir.parent.name)
     (output_dir / "scores.json").write_text(json.dumps(payload, indent=2))
     _write_csv(output_dir / "scores_rows.csv", rows)
     _render_pdf(output_dir / "plots" / "precip_scores.pdf", payload,
-                run_label=str(eval_config.get("run_label", predictions_dir.parent.name)))
+                run_label=run_label)
     LOG.info("precip_scores: %d slices scored -> %s", len(rows), output_dir)
     return output_dir
+
+
+def aggregate_rows(rows: list[dict]) -> dict:
+    """Per-step aggregates over (date, step) rows in the run() row schema.
+
+    Shared with the GRIB-route scorer (eval._backends.precip.score_gribs), so
+    manual-inference NetCDF runs and prepml/FDB GRIB runs report identical
+    metric definitions.
+    """
+    def agg_series(selector) -> dict:
+        per_step: dict[int, list[float]] = defaultdict(list)
+        for row in rows:
+            v = selector(row)
+            if v is not None:
+                per_step[row["step"]].append(v)
+        return {str(s): M.nanmean(vs) for s, vs in sorted(per_step.items())}
+
+    def mem_mean(row, series, key):
+        vals = [m.get(series, {}).get(key) for m in row["members"]]
+        vals = [v for v in vals if v is not None]
+        return M.nanmean(vals) if vals else None
+
+    return {
+        "model_rmse_mm": agg_series(lambda r: mem_mean(r, "model", "rmse_mm")),
+        "model_bias_mm": agg_series(lambda r: mem_mean(r, "model", "bias_mm")),
+        "model_corr": agg_series(lambda r: mem_mean(r, "model", "corr")),
+        "model_ens_rmse_mm": agg_series(lambda r: r["model_ens_mean"].get("rmse_mm")),
+        "model_p999_mm": agg_series(lambda r: mem_mean(r, "model", "p999_mm")),
+        "model_max_mm": agg_series(lambda r: mem_mean(r, "model", "max_mm")),
+        "model_wet_frac": agg_series(lambda r: mem_mean(r, "model", "wet_frac")),
+        "model_neg_frac": agg_series(lambda r: mem_mean(r, "model", "neg_frac")),
+        "truth_p999_mm": agg_series(lambda r: r["truth"].get("p999_mm")),
+        "truth_max_mm": agg_series(lambda r: r["truth"].get("max_mm")),
+        "truth_wet_frac": agg_series(lambda r: r["truth"].get("wet_frac")),
+        "baseline_rmse_mm": agg_series(lambda r: mem_mean(r, "baseline", "rmse_mm")),
+        "baseline_corr": agg_series(lambda r: mem_mean(r, "baseline", "corr")),
+        "baseline_ens_rmse_mm": agg_series(
+            lambda r: r.get("baseline_ens_mean", {}).get("rmse_mm")),
+        "baseline_p999_mm": agg_series(lambda r: mem_mean(r, "baseline", "p999_mm")),
+        "baseline_max_mm": agg_series(lambda r: mem_mean(r, "baseline", "max_mm")),
+        "baseline_wet_frac": agg_series(lambda r: mem_mean(r, "baseline", "wet_frac")),
+    }
+
+
+def summarize(per_step: dict) -> dict:
+    """Overall (all steps) summary of aggregate_rows() output."""
+    def overall(key):
+        vals = [v for v in per_step[key].values() if v is not None]
+        return M.nanmean(vals) if vals else None
+
+    summary = {k: overall(k) for k in per_step}
+    if summary.get("baseline_rmse_mm") and summary.get("model_rmse_mm"):
+        summary["model_over_baseline_rmse_ratio"] = (
+            summary["model_rmse_mm"] / summary["baseline_rmse_mm"])
+    return summary
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
