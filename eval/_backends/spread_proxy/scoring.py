@@ -387,10 +387,18 @@ def compute_spread_proxy(
             lat, lon = _lat_lon(ds, n_points)
 
         if enfo.shape[0] < 2 or ml.shape[0] < 2:
-            raise ValueError(
-                f"{pred.path}: need >=2 members in both ensembles "
-                f"(ml={ml.shape[0]}, enfo={enfo.shape[0]})"
+            # Single-member files (e.g. leftover smoke-test runs inside a
+            # campaign tree) carry no spread; skip them rather than fail.
+            LOG.warning(
+                "spread_proxy: skipping %s — need >=2 members in both ensembles "
+                "(ml=%d, enfo=%d)", pred.path, ml.shape[0], enfo.shape[0],
             )
+            skipped.append({
+                "path": str(pred.path), "date": pred.date, "step": pred.step,
+                "reason": f"<2 members (ml={ml.shape[0]}, enfo={enfo.shape[0]})",
+            })
+            del ml, enfo, inp
+            continue
         keep = _select_enfo_members(
             enfo.shape[0], exclude=exclude, n_members=enfo_n_members,
             seed=enfo_subsample_seed,
