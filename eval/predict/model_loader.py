@@ -349,26 +349,6 @@ def load_inference_model(
         if _n_edges:
             LOG.info("forced shard_strategy heads->edges on %d modules "
                      "for O1280-safe model-parallel inference", _n_edges)
-    else:
-        # Single-rank inference: edges-sharding checkpoints (e.g. the pristine
-        # o2560 fccc23df class) route mappers/processor through the edge-sharding
-        # path, which calls torch.distributed collectives with group=None and
-        # crashes when no default process group exists (probe job 38172551).
-        # heads<->edges are numerically equivalent (only the work partition
-        # differs), and at one rank the heads path performs no communication —
-        # it is the path every ngpm=1 lane already runs.
-        _n_heads = 0
-        for _m in inference_model.modules():
-            if getattr(_m, "shard_strategy", None) == "edges":
-                _m.shard_strategy = "heads"
-                _n_heads += 1
-            if hasattr(_m, "_cached_halo_info"):
-                _m._cached_halo_info = None
-            if hasattr(_m, "_cached_partition"):
-                _m._cached_partition = None
-        if _n_heads:
-            LOG.info("forced shard_strategy edges->heads on %d modules "
-                     "for single-rank inference", _n_heads)
 
     if config.local_scope_json:
         activate_local_graph_cut(inference_model, config.local_scope_json)
