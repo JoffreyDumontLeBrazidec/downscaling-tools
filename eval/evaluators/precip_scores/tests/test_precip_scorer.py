@@ -16,7 +16,9 @@ def test_score_reads_summary_and_emits_baseline_row(tmp_path):
         "model_over_baseline_rmse_ratio": 1.25,
     }}
     (tmp_path / "scores.json").write_text(json.dumps(payload))
-    records = score(tmp_path, {}, {})
+    # eval.cli passes predictions_dir as an extra keyword; the scoreboard
+    # aggregator does not — score() must accept both call shapes.
+    records = score(tmp_path, {}, {}, predictions_dir="/tmp/x")
     by_metric = {r["metric"]: r for r in records}
     assert by_metric["tp_rmse_mm"]["value"] == 1.5
     assert by_metric["tp_p999_ratio"]["value"] == 0.8

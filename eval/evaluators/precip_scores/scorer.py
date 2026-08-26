@@ -14,7 +14,10 @@ from pathlib import Path
 LOG = logging.getLogger(__name__)
 
 
-def score(results_dir: Path, lane_config: dict, eval_config: dict) -> list[dict]:
+def score(results_dir: Path, lane_config: dict, eval_config: dict,
+          **kwargs) -> list[dict]:
+    # **kwargs absorbs extra call-site keywords: eval.cli passes
+    # predictions_dir=..., the scoreboard aggregator passes nothing.
     payload_path = Path(results_dir) / "scores.json"
     if not payload_path.exists():
         LOG.warning("precip_scores: no scores.json in %s", results_dir)
