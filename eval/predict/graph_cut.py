@@ -80,6 +80,57 @@ def _subset_provider(provider, src_mask: torch.Tensor, dst_mask: torch.Tensor) -
     provider._edges_sorted_by_dst = False
 
 
+def _subset_interpolation(model, data_mask: torch.Tensor) -> dict[str, int] | None:
+    """Row-cut the lres->hres interpolation projection matrix to the data mask.
+
+    The residual connection's ProjectionGraphProvider bakes a sparse matrix of
+    shape (n_hres_full, n_lres_full). At o2560 the full-grid product tensor of
+    torch.sparse.mm is ~9 GiB (26.3M nodes x 91 channels) — too large a
+    transient on a 40 GB card. Keeping only the masked rows makes the
+    interpolation produce box-sized output directly; the crop-after-interp hook
+    is then skipped for x_interp. Falls back to None (crop-after behavior kept)
+    whenever the module layout or shapes do not match — behavior for models
+    without this residual layout is unchanged.
+    """
+
+    residual = getattr(model, "residual", None)
+    if residual is None:
+        return None
+    try:
+        conn = residual["in_lres"]
+    except (KeyError, TypeError):
+        return None
+    provider = getattr(conn, "provider", None)
+    matrix = getattr(provider, "projection_matrix", None)
+    if matrix is None or not matrix.is_sparse:
+        return None
+    if int(matrix.shape[0]) != int(data_mask.numel()):
+        return None
+
+    matrix = matrix.coalesce()
+    indices = matrix.indices()
+    values = matrix.values()
+    mask_dev = data_mask.to(indices.device)
+    keep = mask_dev[indices[0]]
+    if not bool(keep.any()):
+        raise ValueError("local graph cut removed all interpolation matrix rows")
+    relabel = _mask_to_index(mask_dev)
+    new_indices = torch.stack((relabel[indices[0, keep]], indices[1, keep]), dim=0)
+    new_matrix = torch.sparse_coo_tensor(
+        new_indices,
+        values[keep],
+        size=(int(mask_dev.sum()), int(matrix.shape[1])),
+        device=matrix.device,
+        dtype=values.dtype,
+    ).coalesce()
+    stats = {
+        "interp_nnz_before": int(values.numel()),
+        "interp_nnz_after": int(new_matrix._nnz()),
+    }
+    provider.projection_matrix = new_matrix
+    return stats
+
+
 def _replace_node_attributes(model, dataset: str, graph, data_mask: torch.Tensor, hidden_mask: torch.Tensor) -> None:
     from anemoi.models.layers.graph import NamedNodesAttributes
 
@@ -138,7 +189,7 @@ def _cut_graph_data(model, dataset: str, scope: dict[str, Any]) -> tuple[torch.T
     }
 
 
-def _patch_sampling_hooks(model, data_mask: torch.Tensor) -> None:
+def _patch_sampling_hooks(model, data_mask: torch.Tensor, interp_precut: bool) -> None:
     mask_device_cache: dict[torch.device, torch.Tensor] = {}
 
     def mask_for(device: torch.device) -> torch.Tensor:
@@ -155,12 +206,15 @@ def _patch_sampling_hooks(model, data_mask: torch.Tensor) -> None:
         before, grid_shard_sizes = original_before(batch, pre_processors, n_step_input, model_comm_group, **kwargs)
         x_interp, x_hres = before
         m = mask_for(x_interp.device)
-        x_interp = x_interp[..., m, :]
+        if not interp_precut:
+            x_interp = x_interp[..., m, :]
         x_hres = x_hres[..., m, :]
         return (x_interp, x_hres), grid_shard_sizes
 
     def _apply_interpolate_local(self, x, grid_shard_sizes=None, model_comm_group=None):
         out = original_interp(x, grid_shard_sizes=grid_shard_sizes, model_comm_group=model_comm_group)
+        if interp_precut:
+            return out
         return out[..., mask_for(out.device), :]
 
     model._before_sampling = MethodType(_before_sampling_local, model)
@@ -173,7 +227,9 @@ def activate_local_graph_cut(inference_model, raw_scope: str | dict[str, Any] | 
     The cut is opt-in via ``local_scope.cut_graph: true``. It reduces the
     ``out_hres`` data graph to the requested local support, keeps hidden nodes
     connected to that support plus an optional processor halo, slices graph
-    providers/node attributes, and crops sampling tensors to the same hres mask.
+    providers/node attributes, row-cuts the baked lres->hres interpolation
+    matrix where the layout allows it (falling back to cropping the full-grid
+    interpolation output), and crops sampling tensors to the same hres mask.
     """
 
     scope = load_local_scope(raw_scope)
@@ -193,10 +249,16 @@ def activate_local_graph_cut(inference_model, raw_scope: str | dict[str, Any] | 
     _subset_provider(model.encoder_graph_provider[dataset], data_mask, hidden_mask)
     _subset_provider(model.decoder_graph_provider[dataset], hidden_mask, data_mask)
     _subset_provider(model.processor_graph_provider, hidden_mask, hidden_mask)
-    _patch_sampling_hooks(model, data_mask)
+    interp_stats = _subset_interpolation(model, data_mask)
+    if interp_stats:
+        stats.update(interp_stats)
+    _patch_sampling_hooks(model, data_mask, interp_precut=interp_stats is not None)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     inference_model._local_graph_cut_scope_json = json.dumps(scope, sort_keys=True)
     inference_model._local_graph_cut_data_mask = data_mask
     inference_model._local_graph_cut_stats = stats
     stats["mode"] = "cut_graph"
+    stats["interp_precut"] = bool(interp_stats)
     return stats
