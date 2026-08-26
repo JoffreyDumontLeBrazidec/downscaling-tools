@@ -303,6 +303,23 @@ def setup_distributed(config: PredictionConfig) -> tuple[str, object | None, int
     if str(device).startswith("cuda"):
         torch.cuda.set_device(int(str(device).split(":")[1]))
 
+    if world_size == 1:
+        import torch.distributed as _dist
+
+        if not _dist.is_initialized():
+            # Edges-sharding checkpoints (e.g. the pristine o2560 fccc23df class)
+            # call torch.distributed collectives with group=None even at one rank,
+            # which crashes without a default process group (probe job 38172551).
+            # A 1-rank default group makes every such collective short-circuit on
+            # comm_size == 1; helpers that branch on model_comm_group=None are
+            # unaffected. Chunking (ANEMOI_INFERENCE_NUM_CHUNKS_*) keeps working
+            # on the edges path, which is why we do NOT flip the ckpt to the
+            # heads strategy at one rank (probe job 38176640: heads OOMs unchunked).
+            _dist.init_process_group(
+                backend="gloo", store=_dist.HashStore(), rank=0, world_size=1
+            )
+            LOG.info("initialized 1-rank default process group (gloo) for single-rank inference")
+
     if config.num_gpus_per_model > 1 and world_size != config.num_gpus_per_model:
         raise SystemExit(
             f"Expected world_size={config.num_gpus_per_model} for model-parallel inference, "
