@@ -1,0 +1,31 @@
+# tc_o320_o1280_ft400k_gmass_w130_humberto -- Humberto arm of the ft400k gmass weight
+# sweep (owner 2026-08-26: calibrate the weight on Franklin/Idalia plus further storms).
+#
+# Inherits the ENTIRE sampler and autoguidance block from the Franklin/Idalia sibling
+# tc_o320_o1280_ft400k_gmass_w130, so the weight axis is identical across the two storms
+# and only the storm changes. Overrides exactly three things: dates, cut-graph box and
+# tc.events, all taken from eval/config/events/humberto.yaml.
+#
+# ⚠ Humberto is 26-30 September 2025 and every checkpoint on this lane was trained on data
+# through 2023, so this storm is strictly OUT OF THE TRAINING WINDOW. It is a generalisation
+# test as much as an extra sample, and the two roles are reported separately.
+#
+# SCREENING ONLY -- never a scoreboard row, and never compared across inference routes.
+# The box carries no spherical-harmonic transform, so this decides TC DEPTH AND 10m WIND
+# only; the spectral cost of the winning weight is confirmed on the global lane afterwards.
+base: tc_o320_o1280_ft400k_gmass_w130
+
+predict:
+  dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
+  local_scope:
+    mode: bbox
+    cut_graph: true
+    hidden_halo_hops: 1
+    label: humberto_box
+    lat_min: 15.0
+    lat_max: 45.0
+    lon_min: -90.0
+    lon_max: -50.0
+
+tc:
+  events: ["humberto"]
