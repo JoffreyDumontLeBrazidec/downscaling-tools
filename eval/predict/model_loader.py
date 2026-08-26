@@ -67,7 +67,11 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
         # inference-only D_bad: the serialized interface already carries the weights;
         # config/datamodule are irrelevant for a denoiser-only role.
         import torch as _torch
-        print("[autoguidance] inference-only D_bad: %s" % inference_only.name,
+        # Print run-id/filename rather than the bare filename: several training runs
+        # contain a file with the IDENTICAL basename, so a bare name leaves the logs
+        # unable to say WHICH weak model was loaded. Log text only, no numerics.
+        print("[autoguidance] inference-only D_bad: %s"
+              % "/".join(inference_only.parts[-2:]),
               file=_sys.stderr, flush=True)
         weak_model = _torch.load(str(inference_only), map_location=device,
                                  weights_only=False)
@@ -179,7 +183,7 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     inference_model._autoguide_calls = calls
     print("[autoguidance] AUTOGUIDANCE ACTIVE w=%.3g%s D_bad=%s"
           % (w, "" if not w_map else " map=%s" % json.dumps(w_map, sort_keys=True),
-             _Path(str(ckpt)).name), file=_sys.stderr, flush=True)
+             "/".join(_Path(str(ckpt)).parts[-2:])), file=_sys.stderr, flush=True)
 
     def _report():
         print("[autoguidance] denoiser calls total=%d guided_in_band=%d"
