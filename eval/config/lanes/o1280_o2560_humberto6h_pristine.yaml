@@ -113,3 +113,74 @@ tc:
 # output — upper-air scoring would mislabel ENFO skill as ML. Surface-only.
 quaver:
   skip_upperair: true
+
+# --- Precipitation (definitive-tp fix, 2026-08-26) --------------------------
+# Why: the staged 6h bundles never embedded tp truth (every prediction NC has
+# y[tp] = all NaN), and tp/cp are OUTPUT-ONLY channels on this ckpt family
+# (in_lres has no tp/cp) so the exported x_interp tp is identically zero. The
+# precip evaluators fall back to these GRIB sources whenever the embedded
+# channels are missing/degenerate, logging the substitution loudly. The truth
+# gribs are grid-identical to the predictions hres grid (gate 2026-08-26:
+# max |dlat| 4e-6 deg over 26,306,560 points). Files hold metres per 6h
+# window; all evaluator output is mm per 6h window.
+precip:
+  truth_grib_tpl: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib"
+  baseline_lres_grib_tpl: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o1280_inputs/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_input_tp_dea.grib"
+  interp_index_cache: "/home/ecm5702/perm/reference/o1280_o2560/interp_o1280_to_o2560_nn.npz"
+
+precip_dist:
+  style: compact
+
+precip_events:
+  n_events: 3
+  dlat: 2.0
+  dlon: 2.5
+  rank_by: truth
+
+precip_scores:
+  wet_threshold_mm: 0.1
+
+# Own prepare block (2026-08-26): the base lane's prepare points at the
+# retired 24h destine paths; this reproduces the verified _6h staging AND adds
+# tp to the target channels via the _tp_dea sidecar, so bundles built from
+# here embed target_hres_tp natively and the precip GRIB fallbacks above stop
+# being load-bearing. The EXISTING 1000-bundle set predates this and stays
+# as-is (evaluators inject truth for it).
+prepare:
+  bundle_filename_tpl: enfo_o1280_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc
+  args:
+    lres_sfc_grib: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_input.grib"
+    lres_pl_grib: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_pl.grib"
+    hres_grib: /home/ecm5702/perm/reference/o1280_o2560/unified_91var/o2560-z-lsm.grib
+    target_sfc_grib: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y.grib
+    lres_sfc_channels: 10u,10v,2d,2t,msl,skt,tcw,tcc,hcc,lcc,mcc,ssrd,strd
+    lres_pl_channels: q,t,u,v,w,z
+    target_sfc_channels: 10u,10v,2t,msl,tp
+    target_pl_channels: NONE
+  optional_sidecars:
+    - file: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_sfc_wide.grib"
+      arg: lres_sfc_extra_grib
+    - file: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_acc_wide.grib"
+      arg: lres_sfc_extra_grib
+    - file: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib"
+      arg: target_sfc_extra_grib
+
+# Restated IN FULL: the config merge is 2 levels deep, so this list REPLACES
+# the base lane's default group. Base default + the three precip evaluators.
+evaluator_groups:
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot, precip_scores, precip_dist, precip_events]
+  diagnostics: [sigma, mechanistic, intermediate, mlflow]
+
+resource_profiles:
+  evaluate_precip_scores:
+    time: "10:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_precip_dist:
+    time: "08:00:00"
+    mem: 32G
+    cpus: 4
+  evaluate_precip_events:
+    time: "04:00:00"
+    mem: 32G
+    cpus: 4

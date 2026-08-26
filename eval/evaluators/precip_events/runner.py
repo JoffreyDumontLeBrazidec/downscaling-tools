@@ -1,6 +1,9 @@
 """precip_events evaluator — find heavy-precip events and render canonical plots.
 
-Reads lane_config[precip_events]: n_events / dlat / dlon / rank_by.
+Reads lane_config[precip_events]: n_events / dlat / dlon / rank_by, and
+lane_config[precip] for the truth/baseline GRIB fallbacks (used when the
+predictions embed no tp truth / no usable x_interp tp — the o1280->o2560
+main-lane case).
 Uses eval._backends.region_plotting.plot_precip_events to produce tight,
 event-centered local pages.
 """
@@ -46,9 +49,15 @@ def run(
     dlat = float(eval_config.get("dlat", 2.0))
     dlon = float(eval_config.get("dlon", 2.5))
     rank_by = eval_config.get("rank_by", "truth")
+    var = str(eval_config.get("var", "tp"))
+    precip_cfg = dict(lane_config.get("precip", {}))
+    truth_grib_tpl = str(precip_cfg.get("truth_grib_tpl", ""))
+    baseline_grib_tpl = str(precip_cfg.get("baseline_lres_grib_tpl", ""))
+    interp_index_cache = str(precip_cfg.get("interp_index_cache", ""))
 
     events = find_precip_events(
-        predictions_dir, n_events=n_events, dlat=dlat, dlon=dlon, rank_by=rank_by
+        predictions_dir, n_events=n_events, dlat=dlat, dlon=dlon,
+        rank_by=rank_by, var=var, truth_grib_tpl=truth_grib_tpl,
     )
 
     (output_dir / "events.json").write_text(
@@ -60,12 +69,18 @@ def run(
         sys.executable, "-m", "eval._backends.region_plotting.plot_precip_events",
         "--predictions-dir", str(predictions_dir),
         "--out", str(out_pdf),
-        "--var", "tp",
+        "--var", var,
         "--n-top", str(n_events),
         "--dlat", f"{dlat:g}",
         "--dlon", f"{dlon:g}",
         "--rank-by", str(rank_by),
     ]
+    if truth_grib_tpl:
+        cmd += ["--truth-grib-tpl", truth_grib_tpl]
+    if baseline_grib_tpl:
+        cmd += ["--baseline-grib-tpl", baseline_grib_tpl]
+    if interp_index_cache:
+        cmd += ["--interp-index-cache", interp_index_cache]
     run_label = eval_config.get("run_label", "")
     if run_label:
         cmd += ["--run-label", str(run_label)]

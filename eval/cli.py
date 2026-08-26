@@ -47,8 +47,8 @@ ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
     "sigma", "sigma_loss", "mechanistic", "intermediate",
     "spectra_ecmwf", "mlflow",
-    "precip_dist", "precip_events",
-    "interp", "probabilistic",
+    "precip_dist", "precip_events", "precip_scores",
+    "interp", "probabilistic", "spread_proxy",
     "quaver", "local_global",
 ]
 

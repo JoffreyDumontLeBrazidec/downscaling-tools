@@ -1,7 +1,8 @@
 """precip_dist evaluator subprocess wrapper around tp_histogram_comparison.
 
-Reads lane_config[precip_dist] for tunables. The current bespoke script exposes
---predictions-dir, --out-pdf, --run-label, and --ensemble-member-index.
+Reads lane_config[precip_dist] for tunables and lane_config[precip] for the
+truth/baseline GRIB fallbacks (used when the predictions embed no tp truth /
+no usable x_interp tp — the o1280->o2560 main-lane case).
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ def run(
     run_label = eval_config.get("run_label", "")
     ensemble_member_index = int(eval_config.get("ensemble_member_index", 0))
     style = str(eval_config.get("style", "compact"))
+    precip_cfg = dict(lane_config.get("precip", {}))
 
     cmd = [
         sys.executable, "-m", "eval._backends.precip.tp_histogram_comparison",
@@ -50,6 +52,12 @@ def run(
         "--ensemble-member-index", str(ensemble_member_index),
         "--style", style,
     ]
+    if precip_cfg.get("truth_grib_tpl"):
+        cmd += ["--truth-grib-tpl", str(precip_cfg["truth_grib_tpl"])]
+    if precip_cfg.get("baseline_lres_grib_tpl"):
+        cmd += ["--baseline-grib-tpl", str(precip_cfg["baseline_lres_grib_tpl"])]
+    if precip_cfg.get("interp_index_cache"):
+        cmd += ["--interp-index-cache", str(precip_cfg["interp_index_cache"])]
     if run_label:
         cmd += ["--run-label", str(run_label)]
 
