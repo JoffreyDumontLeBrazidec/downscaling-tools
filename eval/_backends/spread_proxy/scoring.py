@@ -205,6 +205,7 @@ class _SpectraAccumulator:
         self.sum_enfo: dict[tuple[str, int], np.ndarray] = {}
         self.sum_input: dict[tuple[str, int], np.ndarray] = {}
         self.n_dates: dict[tuple[str, int], int] = {}
+        self.skipped_low_coverage = False
         self._pix: np.ndarray | None = None
         self._sig: tuple[int, float, float] | None = None
 
@@ -239,6 +240,19 @@ class _SpectraAccumulator:
         if input_members is not None:
             finite &= np.all(np.isfinite(input_members), axis=0)
         pix = self._pixels(lat, lon)[finite]
+        # anafast needs near-global coverage; a regional box fills a few % of
+        # the sphere and the zero-filled remainder turns C_ell into a window
+        # artifact. Warn once and skip rather than emit a biased spectrum.
+        occupancy = np.unique(pix).size / self._hp.nside2npix(self.nside)
+        if occupancy < 0.5:
+            if not self.skipped_low_coverage:
+                LOG.warning(
+                    "spread_proxy spectra: grid covers %.1f%% of the sphere "
+                    "(< 50%%) — skipping the spectral readout for this run.",
+                    100.0 * occupancy,
+                )
+            self.skipped_low_coverage = True
+            return
         key = (field, int(step))
         cl_ml = self._mean_deviation_cl(ml_members[:, finite], pix)
         cl_enfo = self._mean_deviation_cl(enfo_members[:, finite], pix)
@@ -364,6 +378,7 @@ def compute_spread_proxy(
     skipped: list[dict[str, Any]] = []
     enfo_members_used: list[int] | None = None
     file_attrs: dict[str, Any] = {}
+    grid_info: dict[str, Any] = {}
 
     for pred in pred_files:
         LOG.info("spread_proxy: %s", pred.path)
@@ -385,6 +400,19 @@ def compute_spread_proxy(
             n_points = ml.shape[1]
             weights = _area_weights(ds, n_points)
             lat, lon = _lat_lon(ds, n_points)
+            if not grid_info:
+                grid_info = {
+                    "n_points": int(n_points),
+                    "lat_min": float(lat.min()), "lat_max": float(lat.max()),
+                    "lon_min": float(lon.min()), "lon_max": float(lon.max()),
+                }
+                if n_points < 3_000_000:
+                    LOG.warning(
+                        "spread_proxy: grid has %d points — this looks REGIONAL, "
+                        "not global (lat %.1f..%.1f, lon %.1f..%.1f). The 'global' "
+                        "domain then means the whole box.",
+                        n_points, lat.min(), lat.max(), lon.min(), lon.max(),
+                    )
 
         if enfo.shape[0] < 2 or ml.shape[0] < 2:
             # Single-member files (e.g. leftover smoke-test runs inside a
@@ -501,6 +529,7 @@ def compute_spread_proxy(
         "enfo_exclude_members": exclude,
         "enfo_n_members": enfo_n_members,
         "include_input": bool(include_input),
+        "grid": grid_info,
         "source_attrs": file_attrs,
         "headline_metrics": _headline_metrics(summary_rows),
     }
