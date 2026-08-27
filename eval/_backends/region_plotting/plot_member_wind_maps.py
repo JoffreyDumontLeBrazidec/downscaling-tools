@@ -187,24 +187,29 @@ def _render(
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
 
-    proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
-    fig = plt.figure(figsize=(11, 7.5))
-    ax = plt.axes(projection=proj)
-    ax.set_extent(extent, crs=ccrs.PlateCarree())
-    mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap="viridis",
-                         vmin=0.0, vmax=vmax, shading="auto", rasterized=True)
-    ax.coastlines(resolution="50m", linewidth=1.0)
-    ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.4)
-    ax.set_title(
-        f"{title}\n10 m wind speed · member {member}\n"
-        f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
-        fontsize=13,
-    )
-    cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40, extend="max")
-    cbar.set_label("10 m wind speed (m/s)")
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=RENDER_DPI)
-    plt.close(fig)
+    # Render under matplotlib's default rcParams so the output is identical no
+    # matter what the importing context (e.g. eval.cli's import chain) has
+    # tweaked — keeps these maps reproducible pixel-for-pixel across entry
+    # points.
+    with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}):
+        proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+        fig = plt.figure(figsize=(11, 7.5))
+        ax = plt.axes(projection=proj)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
+        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap="viridis",
+                             vmin=0.0, vmax=vmax, shading="auto", rasterized=True)
+        ax.coastlines(resolution="50m", linewidth=1.0)
+        ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.4)
+        ax.set_title(
+            f"{title}\n10 m wind speed · member {member}\n"
+            f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
+            fontsize=13,
+        )
+        cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40, extend="max")
+        cbar.set_label("10 m wind speed (m/s)")
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=RENDER_DPI)
+        plt.close(fig)
 
 
 def run(args: argparse.Namespace) -> int:
