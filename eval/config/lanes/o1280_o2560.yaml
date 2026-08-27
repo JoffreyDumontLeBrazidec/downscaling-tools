@@ -22,21 +22,31 @@ predict:
     ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 32
     ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
     PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+  # DEFAULT SAMPLER CHANGED 2026-08-27 (owner adoption): pw40 sigma_max=1e6,
+  # cloned from o320_o1280_piecewise40_s1e5.yaml (sigma 1e5 -> 1e6). The old
+  # default (pw30 sigma_max=1000, below) served every o1280_o2560 row scored
+  # before 2026-08-27 — NEVER compare pre/post rows across this change; the
+  # lane baseline was measured at pw30/s1000 and needs explicit re-derivation
+  # (baseline.py promote) on the new sampler before any --vs-baseline read.
+  # Old block for provenance:
+  #   pw30: num_steps 30 (10 high exp / 20 low karras), sigma_max=S_max=1000.0,
+  #   sigma_transition 10.0, sigma_min 0.03, rho 7.0, heun,
+  #   S_churn 2.5, S_min 0.75, S_noise 1.05
   sampler:
     schedule_type: "experimental_piecewise"
-    num_steps: 30
-    sigma_max: 1000.0
+    num_steps: 40
+    sigma_max: 1000000.0
     sigma_transition: 10.0
     sigma_min: 0.03
     high_schedule_type: "exponential"
     low_schedule_type: "karras"
-    num_steps_high: 10
-    num_steps_low: 20
+    num_steps_high: 13
+    num_steps_low: 27
     rho: 7.0
     sampler: "heun"
     S_churn: 2.5
     S_min: 0.75
-    S_max: 1000.0
+    S_max: 1000000.0
     S_noise: 1.05
 
 # TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
