@@ -439,6 +439,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_tcc.add_argument("--plot-only", action="store_true", default=False, help="Re-render the report from cached parsed tables + existing tc_tracks_metrics.json (no re-scoring).")
     p_tcc.add_argument("--per-month-pages", action="store_true", default=False, help="Also render one focus-basin stats page per month (default: pooled pages only).")
 
+    # --- membermaps ---
+    from eval._backends.region_plotting.plot_member_wind_maps import build_arg_parser as _membermaps_parser
+    subparsers.add_parser(
+        "membermaps",
+        parents=[_membermaps_parser(add_help=False)],
+        help="Render single-member 10 m wind-speed cutout maps (EEFO input / ENFO truth / prediction arms) from predictions_*.nc or GRIB files.",
+        description=(
+            "Render the single-member 10 m wind-speed map set used for "
+            "member-level case inspection: EEFO input, operational ENFO truth "
+            "and one prediction panel per --run, all with a shared colour "
+            "scale, projection and title style. Sources are the retrieved "
+            "predictions_*.nc files (which embed x/y/y_pred); --grib panels "
+            "cover steps absent from predictions (e.g. step 0 read from "
+            "FDB/MARS). Diagnostic maps only — no scoring. Sits alongside the "
+            "TC contour suite (plot_tc_contours_from_predictions)."
+        ),
+    )
+
     return parser
 
 
@@ -1488,6 +1506,11 @@ def main(argv: list[str] | None = None) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
+
+    # --- membermaps subcommand (no lane/host config needed) ---
+    if args.subcommand == "membermaps":
+        from eval._backends.region_plotting.plot_member_wind_maps import run as membermaps_run
+        raise SystemExit(membermaps_run(args))
 
     # --- Report subcommand (no config needed) ---
     if args.subcommand == "report":
