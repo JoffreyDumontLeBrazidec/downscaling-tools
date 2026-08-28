@@ -1,7 +1,8 @@
 """Single-member field cutout maps: EEFO input / ENFO truth / prediction arms.
 
-Renders 10 m wind speed by default; ``--variable msl`` renders mean sea level
-pressure from the same files. See ``VARIABLES`` for the field table.
+Renders 10 m wind speed by default; ``--variable`` also takes ``msl`` (mean
+sea level pressure) and ``2t`` (2 m temperature) from the same files. See
+``VARIABLES`` for the field table.
 
 Renders the member-level case-inspection map set (one PNG per panel, shared
 colour scale, projection and title style) that used to be produced by ad-hoc
@@ -64,6 +65,7 @@ VARIABLES: dict[str, dict] = {
         "combine": "hypot",
         "token": "10mwind",
         "scale": 1.0,
+        "offset": 0.0,
         "cmap": "viridis",
         "vmin": 0.0,
         "vmax": DEFAULT_VMAX,
@@ -76,12 +78,29 @@ VARIABLES: dict[str, dict] = {
         "combine": "single",
         "token": "msl",
         "scale": 0.01,  # Pa -> hPa
+        "offset": 0.0,
         "cmap": "RdBu_r",
         "vmin": 960.0,
         "vmax": 1040.0,
         "extend": "both",
         "subtitle": "Mean sea level pressure",
         "cbar_label": "Mean sea level pressure (hPa)",
+    },
+    "2t": {
+        "states": ("2t",),
+        "combine": "single",
+        "token": "2t",
+        "scale": 1.0,
+        "offset": -273.15,  # K -> degC
+        "cmap": "RdYlBu_r",
+        # The bulk of the field over these regions sits between about -13 and
+        # +32 degC; the ends saturate over ice sheets and desert, which is why
+        # extend is "both".
+        "vmin": -20.0,
+        "vmax": 35.0,
+        "extend": "both",
+        "subtitle": "2 m temperature",
+        "cbar_label": "2 m temperature (degC)",
     },
 }
 
@@ -185,7 +204,7 @@ def _member_slice(da, member: int) -> np.ndarray:
 def _combine(cols: list[np.ndarray], spec: dict) -> np.ndarray:
     """Reduce the spec's source states to one field, in the spec's own units."""
     val = np.hypot(cols[0], cols[1]) if spec["combine"] == "hypot" else cols[0]
-    return val * spec["scale"]
+    return val * spec["scale"] + spec["offset"]
 
 
 def _field(arr: np.ndarray, states: list[str], spec: dict) -> np.ndarray:

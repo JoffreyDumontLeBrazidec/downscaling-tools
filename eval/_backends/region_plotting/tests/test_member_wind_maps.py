@@ -70,6 +70,31 @@ def test_field_converts_pressure_to_hectopascals():
     assert val[0] == pytest.approx(1013.25)
 
 
+def test_2t_variable_resolves_its_own_scale_and_token():
+    args = build_arg_parser().parse_args(
+        ["--date", "20250926", "--step", "24", "--member", "2", "--output-dir", "/tmp/x",
+         "--variable", "2t"]
+    )
+    spec, vmin, vmax = resolve_scale(args)
+    assert (spec["token"], vmin, vmax) == ("2t", -20.0, 35.0)
+    assert spec["states"] == ("2t",)
+
+
+def test_field_converts_temperature_to_celsius():
+    arr = np.array([[0.0, 0.0, 273.15, 0.0]])
+    val = _field(arr, ["10u", "10v", "2t", "msl"], VARIABLES["2t"])
+    assert val[0] == pytest.approx(0.0)
+
+
+def test_every_variable_declares_a_complete_spec():
+    keys = {"states", "combine", "token", "scale", "offset", "cmap",
+            "vmin", "vmax", "extend", "subtitle", "cbar_label"}
+    for name, spec in VARIABLES.items():
+        assert set(spec) == keys, name
+        assert spec["combine"] in ("hypot", "single"), name
+        assert spec["vmin"] < spec["vmax"], name
+
+
 def test_field_wind_speed_matches_the_hypotenuse():
     arr = np.array([[3.0, 4.0, 0.0, 0.0]])
     val = _field(arr, ["10u", "10v", "2t", "msl"], VARIABLES["wind10m"])
