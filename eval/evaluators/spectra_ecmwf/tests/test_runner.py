@@ -424,3 +424,54 @@ def test_unspecified_members_are_marked_in_the_key() -> None:
     key = runner._window_key(dates=["20230826"], steps=[120], members=[], truncation=1279)
 
     assert "_mALL_" in key
+
+
+# --- plotter: finding the reference now that references are window-addressed ---
+
+
+def test_plotter_uses_the_recorded_reference_directory(tmp_path: Path) -> None:
+    """References moved under a window key, which the plotter cannot reconstruct.
+
+    It previously built reference_dir/truth/spectra, which stopped existing, so
+    the PDF silently lost its truth and input curves.
+    """
+    from eval.evaluators.spectra_ecmwf import plotter
+
+    results = tmp_path / "run"
+    (results / "spectra" / "2t_sfc").mkdir(parents=True)
+    recorded = tmp_path / "ref" / "truth" / "dWINDOW_T1279_abcd1234" / "spectra"
+    (results / "spectra_summary.json").write_text(
+        json.dumps({"reference_spectra_dir": str(recorded)}), encoding="utf-8"
+    )
+
+    with patch.object(plotter, "__name__", plotter.__name__):
+        with patch(
+            "eval.evaluators.spectra_ecmwf._plotter.build_pdf_ecmwf_with_references"
+        ) as mock_build:
+            mock_build.return_value = 1
+            plotter.plot(results, {}, {"reference_dir": str(tmp_path / "ref")})
+
+    kwargs = mock_build.call_args.kwargs
+    assert kwargs["truth_amp_dir"] == recorded
+    # input sits beside truth under the same window key
+    assert kwargs["input_amp_dir"] == Path(str(recorded).replace("/truth/", "/input/", 1))
+
+
+def test_plotter_falls_back_to_the_old_layout(tmp_path: Path) -> None:
+    """A summary written before the window key still has to plot."""
+    from eval.evaluators.spectra_ecmwf import plotter
+
+    results = tmp_path / "run"
+    (results / "spectra" / "2t_sfc").mkdir(parents=True)
+    (results / "spectra_summary.json").write_text(json.dumps({}), encoding="utf-8")
+    ref = tmp_path / "ref"
+
+    with patch(
+        "eval.evaluators.spectra_ecmwf._plotter.build_pdf_ecmwf_with_references"
+    ) as mock_build:
+        mock_build.return_value = 1
+        plotter.plot(results, {}, {"reference_dir": str(ref)})
+
+    kwargs = mock_build.call_args.kwargs
+    assert kwargs["truth_amp_dir"] == ref / "truth" / "spectra"
+    assert kwargs["input_amp_dir"] == ref / "input" / "spectra"
