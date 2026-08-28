@@ -143,7 +143,11 @@ def run(
     if reference_dir:
         ref_path = Path(reference_dir).expanduser().resolve()
         window_key = _window_key(
-            dates=dates, steps=steps, members=members, truncation=truncation
+            dates=dates,
+            steps=steps,
+            members=members,
+            truncation=truncation,
+            staging_source=template_grib_root or template_root,
         )
         reference_spectra_dir = str(ref_path / "truth" / window_key / "spectra")
         LOG.info("spectra_ecmwf: reference window key = %s", window_key)
@@ -263,12 +267,20 @@ def _window_key(
     steps: list[int],
     members: list[int],
     truncation: int,
+    staging_source: str = "",
 ) -> str:
     """Deterministic directory name for one reference window.
 
     The readable prefix is for eyeballing a directory listing; the hash suffix
     is what actually makes the key injective, so two different windows can never
     land in the same directory and be mixed.
+
+    ``staging_source`` is the template the fields are staged onto, and it belongs
+    in the key because it decides the grid the spectral transform sees. The
+    pole-masked and full-grid templates give the same dates, steps, members and
+    truncation but different curves, so without this a full-grid run would
+    silently reuse a pole-masked reference. Note the limitation: this tracks the
+    template *location*, so editing a template in place is not detected.
     """
     d = sorted(str(x) for x in dates)
     s = sorted(int(x) for x in steps)
@@ -278,7 +290,7 @@ def _window_key(
     step_part = f"s{s[0]}-{s[-1]}" if len(s) > 1 else (f"s{s[0]}" if s else "sNONE")
     member_part = (f"m{m[0]}-{m[-1]}" if len(m) > 1 else f"m{m[0]}") if m else "mALL"
 
-    canonical = repr((d, s, m, int(truncation)))
+    canonical = repr((d, s, m, int(truncation), str(staging_source)))
     digest = hashlib.blake2b(canonical.encode("utf-8"), digest_size=4).hexdigest()
     return f"{date_part}_{step_part}_{member_part}_T{truncation}_{digest}"
 
