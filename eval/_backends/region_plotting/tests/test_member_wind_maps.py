@@ -5,9 +5,12 @@ import numpy as np
 import pytest
 
 from eval._backends.region_plotting.plot_member_wind_maps import (
+    VARIABLES,
+    _field,
     _parse_kv,
     build_arg_parser,
     nearest_grid,
+    resolve_scale,
 )
 
 
@@ -26,9 +29,51 @@ def test_build_arg_parser_defaults():
         ["--date", "20250926", "--step", "24", "--member", "2", "--output-dir", "/tmp/x"]
     )
     assert args.extent == [-45.0, 55.0, 27.0, 72.0]
-    assert args.vmax == 25.0
     assert args.proj_lon == 5.0 and args.proj_lat == 50.0
     assert args.region_tag == "europe-cutout"
+    # The default variable and its resolved colour scale must stay exactly what
+    # the tool did before --variable existed.
+    assert args.variable == "wind10m"
+    spec, vmin, vmax = resolve_scale(args)
+    assert (spec["token"], vmin, vmax) == ("10mwind", 0.0, 25.0)
+
+
+def test_msl_variable_resolves_its_own_scale_and_token():
+    args = build_arg_parser().parse_args(
+        ["--date", "20250926", "--step", "24", "--member", "2", "--output-dir", "/tmp/x",
+         "--variable", "msl"]
+    )
+    spec, vmin, vmax = resolve_scale(args)
+    assert (spec["token"], vmin, vmax) == ("msl", 960.0, 1040.0)
+    assert spec["states"] == ("msl",)
+
+
+def test_explicit_scale_overrides_the_variable_default():
+    args = build_arg_parser().parse_args(
+        ["--date", "20250926", "--step", "24", "--member", "2", "--output-dir", "/tmp/x",
+         "--variable", "msl", "--vmin", "980", "--vmax", "1020"]
+    )
+    _, vmin, vmax = resolve_scale(args)
+    assert (vmin, vmax) == (980.0, 1020.0)
+
+
+def test_field_rejects_a_missing_weather_state():
+    spec = VARIABLES["msl"]
+    arr = np.zeros((4, 2))
+    with pytest.raises(SystemExit):
+        _field(arr, ["10u", "10v"], spec)
+
+
+def test_field_converts_pressure_to_hectopascals():
+    arr = np.array([[1.0, 2.0, 3.0, 101325.0]])
+    val = _field(arr, ["10u", "10v", "2t", "msl"], VARIABLES["msl"])
+    assert val[0] == pytest.approx(1013.25)
+
+
+def test_field_wind_speed_matches_the_hypotenuse():
+    arr = np.array([[3.0, 4.0, 0.0, 0.0]])
+    val = _field(arr, ["10u", "10v", "2t", "msl"], VARIABLES["wind10m"])
+    assert val[0] == pytest.approx(5.0)
 
 
 def test_nearest_grid_fills_every_cell_with_nearest_value():

@@ -1,4 +1,7 @@
-"""Single-member 10 m wind-speed cutout maps: EEFO input / ENFO truth / prediction arms.
+"""Single-member field cutout maps: EEFO input / ENFO truth / prediction arms.
+
+Renders 10 m wind speed by default; ``--variable msl`` renders mean sea level
+pressure from the same files. See ``VARIABLES`` for the field table.
 
 Renders the member-level case-inspection map set (one PNG per panel, shared
 colour scale, projection and title style) that used to be produced by ad-hoc
@@ -51,6 +54,45 @@ DEFAULT_TITLES = {
     "guided": "Guided · O1280",
 }
 
+# Renderable fields. Each entry fixes the source weather states, the filename
+# token, the colour scale and the labels, so adding a field is a table entry
+# rather than a new code path. "wind10m" reproduces the original hard-wired
+# behaviour exactly, including its colour scale and filename token.
+VARIABLES: dict[str, dict] = {
+    "wind10m": {
+        "states": ("10u", "10v"),
+        "combine": "hypot",
+        "token": "10mwind",
+        "scale": 1.0,
+        "cmap": "viridis",
+        "vmin": 0.0,
+        "vmax": DEFAULT_VMAX,
+        "extend": "max",
+        "subtitle": "10 m wind speed",
+        "cbar_label": "10 m wind speed (m/s)",
+    },
+    "msl": {
+        "states": ("msl",),
+        "combine": "single",
+        "token": "msl",
+        "scale": 0.01,  # Pa -> hPa
+        "cmap": "RdBu_r",
+        "vmin": 960.0,
+        "vmax": 1040.0,
+        "extend": "both",
+        "subtitle": "Mean sea level pressure",
+        "cbar_label": "Mean sea level pressure (hPa)",
+    },
+}
+
+
+def resolve_scale(args: argparse.Namespace) -> tuple[dict, float, float]:
+    """(spec, vmin, vmax) for the requested variable, honouring explicit overrides."""
+    spec = VARIABLES[args.variable]
+    vmin = spec["vmin"] if args.vmin is None else args.vmin
+    vmax = spec["vmax"] if args.vmax is None else args.vmax
+    return spec, vmin, vmax
+
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -78,7 +120,10 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
     p.add_argument("--no-truth", action="store_true", default=False, help="Skip the enfo (embedded truth) panel.")
     p.add_argument("--extent", nargs=4, type=float, default=list(DEFAULT_EXTENT), metavar=("LONMIN", "LONMAX", "LATMIN", "LATMAX"), help=f"Map extent (default: {DEFAULT_EXTENT}).")
-    p.add_argument("--vmax", type=float, default=DEFAULT_VMAX, help=f"Colour-scale maximum in m/s (default: {DEFAULT_VMAX}).")
+    p.add_argument("--variable", choices=sorted(VARIABLES), default="wind10m",
+                   help="Field to render (default: wind10m, the 10 m wind speed).")
+    p.add_argument("--vmin", type=float, default=None, help="Colour-scale minimum (default: the variable's own).")
+    p.add_argument("--vmax", type=float, default=None, help=f"Colour-scale maximum (default: the variable's own; {DEFAULT_VMAX} m/s for wind10m).")
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
     p.add_argument("--proj-lon", type=float, default=5.0, help="Lambert conformal central longitude (default: 5.0).")
@@ -137,27 +182,40 @@ def _member_slice(da, member: int) -> np.ndarray:
     return arr
 
 
-def _wind_speed(arr: np.ndarray, states: list[str]) -> np.ndarray:
-    return np.hypot(arr[:, states.index("10u")], arr[:, states.index("10v")])
+def _combine(cols: list[np.ndarray], spec: dict) -> np.ndarray:
+    """Reduce the spec's source states to one field, in the spec's own units."""
+    val = np.hypot(cols[0], cols[1]) if spec["combine"] == "hypot" else cols[0]
+    return val * spec["scale"]
 
 
-def read_grib_wind(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(lat, lon, wind speed) from a GRIB file holding 10u and 10v for one member."""
+def _field(arr: np.ndarray, states: list[str], spec: dict) -> np.ndarray:
+    """Extract one renderable field from a (grid_point, weather_state) array."""
+    missing = [s for s in spec["states"] if s not in states]
+    if missing:
+        raise SystemExit(
+            f"Prediction file has no weather state(s) {missing}; it carries {states}."
+        )
+    return _combine([arr[:, states.index(s)] for s in spec["states"]], spec)
+
+
+def read_grib_field(path: str | Path, spec: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(lat, lon, field) from a GRIB file holding the spec's states for one member."""
     import earthkit.data as ekd
 
+    wanted = set(spec["states"])
     comp: dict[str, np.ndarray] = {}
     lat = lon = None
     for field in ekd.from_source("file", str(path)):
         short_name = field.metadata().get("shortName")
-        if short_name in ("10u", "10v"):
+        if short_name in wanted:
             ll = field.to_latlon()
             comp[short_name] = np.asarray(field.to_numpy(), dtype=np.float64).reshape(-1)
             lat = np.asarray(ll["lat"], dtype=np.float64).reshape(-1)
             lon = np.asarray(ll["lon"], dtype=np.float64).reshape(-1)
-    missing = {"10u", "10v"} - set(comp)
+    missing = wanted - set(comp)
     if missing:
         raise SystemExit(f"{path}: GRIB file is missing {sorted(missing)}.")
-    return lat, lon, np.hypot(comp["10u"], comp["10v"])
+    return lat, lon, _combine([comp[s] for s in spec["states"]], spec)
 
 
 def _render(
@@ -173,6 +231,8 @@ def _render(
     val: np.ndarray,
     res: float,
     extent: tuple[float, float, float, float],
+    spec: dict,
+    vmin: float,
     vmax: float,
     proj_lon: float,
     proj_lat: float,
@@ -196,17 +256,18 @@ def _render(
         fig = plt.figure(figsize=(11, 7.5))
         ax = plt.axes(projection=proj)
         ax.set_extent(extent, crs=ccrs.PlateCarree())
-        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap="viridis",
-                             vmin=0.0, vmax=vmax, shading="auto", rasterized=True)
+        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=spec["cmap"],
+                             vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
         ax.coastlines(resolution="50m", linewidth=1.0)
         ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.4)
         ax.set_title(
-            f"{title}\n10 m wind speed · member {member}\n"
+            f"{title}\n{spec['subtitle']} · member {member}\n"
             f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
             fontsize=13,
         )
-        cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40, extend="max")
-        cbar.set_label("10 m wind speed (m/s)")
+        cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40,
+                            extend=spec["extend"])
+        cbar.set_label(spec["cbar_label"])
         fig.tight_layout()
         fig.savefig(out_path, dpi=RENDER_DPI)
         plt.close(fig)
@@ -221,6 +282,7 @@ def run(args: argparse.Namespace) -> int:
     if not runs and not gribs:
         raise SystemExit("Nothing to plot: give at least one --run or --grib panel.")
     extent = tuple(args.extent)
+    spec, vmin, vmax = resolve_scale(args)
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -235,26 +297,28 @@ def run(args: argparse.Namespace) -> int:
         if i == 0:
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               _wind_speed(_member_slice(ds["x"], args.member), states), DEFAULT_LRES_RES))
+                               _field(_member_slice(ds["x"], args.member), states, spec), DEFAULT_LRES_RES))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h,
-                               _wind_speed(_member_slice(ds["y"], args.member), states), DEFAULT_HRES_RES))
+                               _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES))
         panels.append((key, lat_h, lon_h,
-                       _wind_speed(_member_slice(ds["y_pred"], args.member), states), DEFAULT_HRES_RES))
+                       _field(_member_slice(ds["y_pred"], args.member), states, spec), DEFAULT_HRES_RES))
     for key, grib_path in gribs.items():
-        lat, lon, wind = read_grib_wind(grib_path)
+        lat, lon, val = read_grib_field(grib_path, spec)
         res = DEFAULT_HRES_RES if lat.size > 2_000_000 else DEFAULT_LRES_RES
-        panels.append((key, lat, lon, wind, res))
+        panels.append((key, lat, lon, val, res))
 
     outputs: list[str] = []
-    for key, lat, lon, wind, res in panels:
+    for key, lat, lon, val, res in panels:
         out_path = out_dir / (
-            f"{key}_10mwind_init{args.date}_n{args.member:03d}_{args.region_tag}_f{args.step:03d}.png"
+            f"{key}_{spec['token']}_init{args.date}_n{args.member:03d}"
+            f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render(
             out_path=out_path, title=titles.get(key, f"{key.capitalize()} · O1280"),
             member=args.member, date=args.date, time=args.time, step=args.step,
-            lat=lat, lon=lon, val=wind, res=res, extent=extent, vmax=args.vmax,
+            lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
+            vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
         )
         outputs.append(str(out_path))
@@ -263,9 +327,14 @@ def run(args: argparse.Namespace) -> int:
     write_manifest(out_root=out_dir, payload={
         "tool": "membermaps",
         "date": args.date, "time": args.time, "step": args.step, "member": args.member,
-        "runs": runs, "gribs": gribs, "extent": list(extent), "vmax": args.vmax,
+        "variable": args.variable,
+        "runs": runs, "gribs": gribs, "extent": list(extent),
+        "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
-    }, filename=f"membermaps_manifest_init{args.date}_n{args.member:03d}_f{args.step:03d}.json")
+    }, filename=(
+        f"membermaps_manifest_{spec['token']}_init{args.date}"
+        f"_n{args.member:03d}_f{args.step:03d}.json"
+    ))
     return 0
 
 
