@@ -174,3 +174,20 @@ prepml:
   platform:
     gpu:
       time: "0-12:18"
+
+# Same lane as spectra_ecmwf above. This lane already stages through
+# template_grib_root, which clones a real GRIB message and so already uses the
+# complete grid, so v2 differs only in internals: the truncation is passed to
+# gptosp explicitly and verified, amplitudes come from eccodes rather than
+# Metview, curve names are the ones the scoreboard reads, and the reference
+# cache is keyed by evaluation window and staging template.
+spectra_ecmwf_v2:
+  truncation: 95  # O96 nominal cubic-octahedral truncation: TCo95
+  template_grib_root: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o48_o96/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "IEKM"
+  input_label: "ENFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930"

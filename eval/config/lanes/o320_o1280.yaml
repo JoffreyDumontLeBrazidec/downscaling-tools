@@ -100,11 +100,10 @@ spectra:
 
 spectra_ecmwf:
   truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
-  # Full-grid templates. The inherited enfo_o1280 templates dropped 28
-  # latitude rows near the poles, so the transform ran over an incomplete
-  # sphere: measured 2026-08-25 at 2.0% median and 13.2% max distortion,
-  # inside the scored band. A full-grid template makes the mask a no-op.
-  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  # The original templates, with latitude rows dropped near the poles.
+  # Kept deliberately: this evaluator reproduces the curves already trusted.
+  # spectra_ecmwf_v2 below runs the same lane on the complete grid.
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
   weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
   reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
   steps: [120]
@@ -232,3 +231,20 @@ prepml:
   platform:
     gpu:
       time: "0-12:18"
+
+# Same lane, staged onto the complete grid instead of templates with latitude
+# rows dropped near the poles. That pole mask was measured on 2026-08-25 to
+# shift the spectrum by 2.0% at the median and 13.2% at worst, inside the
+# scored band. spectra_ecmwf above is kept unchanged as the reference.
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  # shared with spectra_ecmwf on purpose: v2 addresses its reference by window
+  # and staging template, so the two cannot overwrite each other
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"

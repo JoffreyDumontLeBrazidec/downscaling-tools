@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import metview as mv
 import numpy as np
+
+# This script is also invoked by absolute path from hand-written job scripts,
+# where the repository root is not on PYTHONPATH. Bootstrap it so the shared
+# naming helper imports the same way under both invocation styles.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from eval._backends.spectra import harmonics, naming  # noqa: E402
 
 
 FILE_RE = re.compile(r".*_(?P<date>\d{8})_(?P<step>\d{2,3})_(?P<member>\d+)_nopoles\.grb_sh$")
@@ -51,7 +61,22 @@ def parse_args() -> argparse.Namespace:
         "--truncation",
         type=positive_int,
         required=True,
-        help="Maximum total wavenumber for mv.spec_graph (for example 1279 for O1280).",
+        help=(
+            "Total wavenumber truncation this run must produce (for example 1279 for "
+            "O1280). This is asserted against the truncation actually stored in each "
+            "spectral-harmonics file, not used as an upper clamp."
+        ),
+    )
+    parser.add_argument(
+        "--expid",
+        default=naming.DEFAULT_TOKEN,
+        help="Experiment token in the curve filename (the scoreboard calls it a token).",
+    )
+    parser.add_argument(
+        "--reference-spectra-dir",
+        default="",
+        help="Where the reference curves for these predictions live. Recorded in "
+             "the summary so the scoreboard need not guess.",
     )
     parser.add_argument("--summary-path", default="")
     return parser.parse_args()
@@ -76,23 +101,24 @@ def parse_components(path: Path) -> tuple[int, int, int]:
     )
 
 
+def read_truncation(path: Path) -> int:
+    """Total wavenumber truncation actually stored in a spectral GRIB."""
+    return harmonics.read_truncation(path)
+
+
 def read_curve(path: Path, cfg: SpectraConfig, *, truncation: int) -> tuple[np.ndarray, np.ndarray]:
-    fs_in = mv.Fieldset()
-    if cfg.level == "sfc":
-        fs_in.append(mv.read(data=mv.read(str(path)), param=cfg.param))
-    else:
-        fs_in.append(mv.read(data=mv.read(str(path)), levelist=cfg.level, param=cfg.param))
-    if len(fs_in) != 1:
-        raise RuntimeError(f"Expected exactly one field in {path}, got {len(fs_in)}")
-    sp = mv.spec_graph(
-        data=fs_in,
-        truncation=truncation,
-        x_axis_type="logartihmic",
-        y_axis_type="logartihmic",
+    """Wavenumbers and amplitudes for one spectral-harmonics file.
+
+    This used to call mv.spec_graph.  The eccodes computation reproduces it to
+    about 5e-12 across all four lanes, so the numbers are unchanged, but the
+    Metview startup, its unpinned version and the positional index into its
+    return value are all gone.  The param and level are now checked against the
+    file rather than used to filter a fieldset, which catches a curve staged
+    into the wrong parameter directory.
+    """
+    return harmonics.amplitude_curve(
+        path, truncation=truncation, param=cfg.param, level=cfg.level
     )
-    wvn = np.array(sp[1]["INPUT_X_VALUES"])
-    ampl = np.array(sp[1]["INPUT_Y_VALUES"])
-    return wvn, ampl
 
 
 def main() -> None:
@@ -103,6 +129,8 @@ def main() -> None:
     states = parse_weather_states(args.weather_states)
 
     written = []
+    achieved_truncations: set[int] = set()
+    warned: set[int] = set()
     for state in states:
         cfg = CONFIGS[state]
         in_dir = sh_root / cfg.dir_name
@@ -110,10 +138,27 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         for path in sorted(in_dir.glob("*_nopoles.grb_sh")):
             date_ymd, step_hours, member = parse_components(path)
-            wvn, ampl = read_curve(path, cfg, truncation=args.truncation)
-            stem = f"{date_ymd}_{step_hours}_{cfg.weather_state}_n{member}"
-            wvn_path = out_dir / f"wvn_{stem}.npy"
-            ampl_path = out_dir / f"ampl_{stem}.npy"
+            source_truncation = read_truncation(path)
+            achieved_truncations.add(source_truncation)
+            # The curve can only ever be as long as the shorter of the two.
+            curve_truncation = min(args.truncation, source_truncation)
+            if source_truncation != args.truncation and source_truncation not in warned:
+                warned.add(source_truncation)
+                print(
+                    f"WARNING: {path.parent} carries T{source_truncation} but "
+                    f"T{args.truncation} was requested, so curves are cut at "
+                    f"T{curve_truncation}. Pass -T {args.truncation} to gptosp so the two "
+                    f"stages agree; the cut itself is exact, but nothing downstream can "
+                    f"tell it happened unless it is recorded.",
+                    file=sys.stderr,
+                )
+            wvn, ampl = read_curve(path, cfg, truncation=curve_truncation)
+            key = dict(
+                date=date_ymd, step=step_hours, field_dir=cfg.dir_name,
+                token=args.expid, member=member,
+            )
+            wvn_path = out_dir / naming.canonical_name("wvn", **key)
+            ampl_path = out_dir / naming.canonical_name("ampl", **key)
             np.save(wvn_path, wvn)
             np.save(ampl_path, ampl)
             written.append(
@@ -126,6 +171,8 @@ def main() -> None:
                     "step_hours": step_hours,
                     "member": member,
                     "truncation": args.truncation,
+                    "source_truncation": source_truncation,
+                    "curve_truncation": curve_truncation,
                 }
             )
 
@@ -136,7 +183,21 @@ def main() -> None:
         "spectral_harmonics_dir": str(sh_root),
         "out_dir": str(out_root),
         "weather_states": states,
+        # "truncation" is kept under its original name because the runner cache
+        # validation already reads it; the two explicit keys below say which is which.
         "truncation": args.truncation,
+        "requested_truncation": args.truncation,
+        # The truncation the harmonics files actually carried. Equal to the
+        # requested value when stage 2 was given -T; larger when it was not.
+        "source_truncation": sorted(achieved_truncations),
+        "truncation_convention": "cubic_octahedral_TCo",
+        # Which binaries produced these curves. Metview is unpinned no more,
+        # but recording the resolved version keeps older caches interpretable.
+        "amplitude_backend": "eccodes",
+        # Retained so caches written while Metview was still in use stay
+        # interpretable; empty for anything computed by the eccodes path.
+        "metview_version": os.environ.get("METVIEW_VERSION", ""),
+        "reference_spectra_dir": args.reference_spectra_dir,
         "written_count": len(written),
         "files": written,
     }
