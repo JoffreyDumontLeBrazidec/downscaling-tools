@@ -50,6 +50,7 @@ ALL_EVALUATORS = [
     "precip_dist", "precip_events", "precip_scores",
     "interp", "probabilistic", "spread_proxy",
     "quaver", "local_global",
+    "spectra_coherence",
 ]
 
 DEFAULT_HOST = "atos_ac"
