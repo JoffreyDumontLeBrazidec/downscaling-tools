@@ -87,3 +87,29 @@ spectra_ecmwf_v2:
   truth_label: "ENFO"
   input_label: "EEFO"
   input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
+
+# ---------------------------------------------------------------------------
+# spectra_ecmwf (v1, the ORIGINAL pole-masked evaluator) -- restated 2026-08-31.
+# Kept and run deliberately AS A CONTROL beside spectra_ecmwf_v2 above: v1
+# stages on the pole-masked template (latitude rows dropped near the poles,
+# 6,598,392 points) while v2 stages on the complete grid (6,599,680). Running
+# both on one window is what makes the artifact check possible -- agreement
+# between the two is evidence, and disagreement localises to the pole rows.
+#
+# The ONLY change from the block inherited from o320_o1280_prepml_pw40_season
+# is input_bundles_dir: the parent points at the August-2023 idalia bundles,
+# which for a September-2025 evaluation would build the EEFO driver curve from
+# the WRONG WINDOW. The driver curve is the control that catches fabricated
+# fine-scale power (an O320 driver is spectrally truncated near wavenumber 320
+# and MUST collapse above it), so it has to come from the window under test.
+# Restated in full because the lane loader merges only two levels deep.
+spectra_ecmwf:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
