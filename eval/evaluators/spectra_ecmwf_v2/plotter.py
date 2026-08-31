@@ -15,8 +15,17 @@ def plot(
     *,
     output_dir: str | Path | None = None,
 ) -> Path:
-    """Build consolidated spectra PDF with prediction + truth + input curves."""
-    from ._plotter import build_pdf_ecmwf_with_references
+    """Build the spectra PDFs for this run.
+
+    Two files are written side by side. `spectra_ecmwf.pdf` holds the
+    absolute amplitudes, with the prediction, truth and input curves on
+    log-log axes. `spectra_ecmwf_ratio.pdf` holds the same prediction and
+    input curves divided by the truth curve, so that a perfect match is
+    the horizontal line at one and departures of a few percent are
+    readable. The ratio file needs the truth curves and is skipped
+    without them.
+    """
+    from ._plotter import build_pdf_ecmwf_ratio, build_pdf_ecmwf_with_references
 
     results_dir = Path(results_dir)
     output_dir = Path(output_dir) if output_dir else results_dir
@@ -80,5 +89,29 @@ def plot(
         LOG.info("spectra_ecmwf: wrote %d-page PDF: %s", n, out_pdf)
     except FileNotFoundError as exc:
         LOG.warning("spectra_ecmwf plotter: %s", exc)
+
+    # Same curves again, but divided by the truth curve, so that departures of
+    # a few percent are visible instead of being hidden inside the thickness of
+    # a log-log line. Written to its own file so the absolute-amplitude PDF
+    # above stays exactly as it was.
+    ratio_pdf = output_dir / "spectra_ecmwf_ratio.pdf"
+    if truth_amp_dir is None:
+        LOG.info(
+            "spectra_ecmwf plotter: no truth reference available, so the "
+            "ratio-to-truth PDF was not written"
+        )
+    else:
+        try:
+            n = build_pdf_ecmwf_ratio(
+                pred_amp_dir,
+                ratio_pdf,
+                truth_amp_dir=truth_amp_dir,
+                input_amp_dir=input_amp_dir,
+                truth_label=truth_label,
+                input_label=input_label,
+            )
+            LOG.info("spectra_ecmwf: wrote %d-page ratio PDF: %s", n, ratio_pdf)
+        except FileNotFoundError as exc:
+            LOG.warning("spectra_ecmwf ratio plotter: %s", exc)
 
     return output_dir
