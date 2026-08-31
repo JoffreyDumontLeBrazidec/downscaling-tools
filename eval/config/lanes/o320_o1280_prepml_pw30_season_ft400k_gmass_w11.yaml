@@ -1,0 +1,53 @@
+# o320_o1280_prepml_pw30_season_ft400k_gmass_w11 -- AUTOGUIDANCE month campaign arm
+# on the cycle-2 fine-tune checkpoint (ft400k, 12dcefea step 400000) at the CALIBRATED
+# weight w=1.1 (owner ask 2026-08-31). Basis: the 08-26/27 regional weight sweep +
+# fixed-input repeats + guide sweep (20260826_ft400k_wsweep_ckpt_calibration.md):
+# w1.25/1.30 RULED OUT, working recommendation w~1.10 (1.10-1.15 not separable at the
+# floor; lighter wins on depth-mean, wind tail AND overspread). This month IS the
+# global confirm that recommendation still owes. Identical to the ja6g lane
+# (o320_o1280_prepml_pw30_season_ft400k_gmass_w13) except:
+#   1. weight map w=1.1 (ja6g ran w1.3);
+#   2. ecflow gpu limit 4 (owner 2026-08-31, single live arm -- supersedes the
+#      2026-08-22 two-arm cap of 2 for this campaign).
+# Pairs with ja6g (w1.3) and ja6y (ctrl): same ckpt, same pw30 s1e5 sampler, same month.
+# D_bad = s397434 own-ancestor step-50000 (guide-sweep verdict: stronger guides are a
+# weak lever; the adopted guide stands).
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_AUTOGUIDE_CHECKPOINT: /home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt
+    CODEX_AUTOGUIDE_WEIGHT_MAP: /home/ecm5702/dev/anemoi-inference-configs/autoguide_mass_w11.json
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+
+prepml:
+  # Owner 2026-08-31: gpu limit 4 for THIS campaign (only live o320->o1280 arm).
+  # The 2026-08-22 default of 2 still applies whenever several arms run at once.
+  ecflow:
+    limits:
+      gpu: 4
+  # Guidance = 2 denoiser evals per sampler step; pw30 guided at chunks=1 projects to
+  # ~1h30 per member-date (j9f3 pw40 guided measured 1h53). 10h cap keeps margin.
+  platform:
+    gpu:
+      time: "0-10:00"
