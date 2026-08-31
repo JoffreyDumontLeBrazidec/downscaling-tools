@@ -45,3 +45,18 @@ def test_field_stats_wet_and_negative_fractions():
     assert s["neg_frac"] == 1 / 5
     assert s["max_mm"] == 5.0
     assert s["min_mm"] == -0.5
+
+
+def test_field_stats_reports_the_far_tail():
+    # A bulk plus three progressively rarer levels, sized so each reported
+    # quantile falls strictly inside a different one: p99 in the bulk, p99.9
+    # above it, and p99.99 in the far tail where this lane's precipitation
+    # deficit lives. Values are bin centres, so p99.99 may sit half a bin
+    # (0.01 mm) above the true maximum.
+    vals = np.concatenate([np.full(99_200, 1.0), np.full(650, 20.0),
+                           np.full(100, 100.0), np.full(50, 500.0)])
+    st = M.field_stats(vals)
+    assert st["p99_mm"] < st["p999_mm"] < st["p9999_mm"]
+    assert abs(st["p99_mm"] - 1.0) < 0.05
+    assert abs(st["p9999_mm"] - 500.0) < 0.05
+    assert st["max_mm"] == 500.0

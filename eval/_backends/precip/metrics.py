@@ -43,13 +43,17 @@ def field_stats(vals_mm: np.ndarray, *, wet_threshold_mm: float = WET_THRESHOLD_
     v = vals_mm[np.isfinite(vals_mm)]
     if v.size == 0:
         return {"n": 0}
-    p99, p999 = hist_quantiles(v, (99.0, 99.9))
+    p99, p999, p9999 = hist_quantiles(v, (99.0, 99.9, 99.99))
     return {
         "n": int(v.size),
         "mean_mm": float(v.mean()),
         "max_mm": float(v.max()),
         "p99_mm": p99,
         "p999_mm": p999,
+        # The far tail is where this lane's precipitation deficit lives, and a
+        # single-point maximum is the noisiest way to measure it. p99.99 keeps
+        # the same question with roughly a hundred points behind the answer.
+        "p9999_mm": p9999,
         "wet_frac": float((v > wet_threshold_mm).mean()),
         "neg_frac": float((v < 0.0).mean()),
         "min_mm": float(v.min()),
