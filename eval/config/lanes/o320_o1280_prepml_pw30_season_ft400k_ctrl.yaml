@@ -60,3 +60,30 @@ prepml:
   platform:
     gpu:
       time: "0-06:00"
+
+# ---------------------------------------------------------------------------
+# spectra_ecmwf_v2 (added 2026-08-31). The parent lane
+# o320_o1280_prepml_pw40_season declares only the v1 `spectra_ecmwf` block, so
+# v2 previously inherited NOTHING and fell back to an empty template_root,
+# dying in _grib_stager with "No *_nopoles.grb templates anywhere under
+# <code root>". This block is copied wholesale from the base lane
+# o320_o1280.yaml (the vetted full-grid convention, 6,599,680 points) rather
+# than hand-rolled, because the pole-masked and complete truth conventions
+# both exist under reference_dir and mixing them silently compares
+# incompatible supports. The lane loader merges only two levels deep, so this
+# block must stay restated in full here.
+#
+# WHY THIS MATTERS: the healpix proxy `spectra` evaluator on this lane runs at
+# nside 742, which zero-fills 12.2% of pixels and manufactures correlated
+# power above wavenumber ~500. Its fine-scale end is not trustworthy and no
+# fine-band number from it may reach a scoreboard. v2 is the fixed route.
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
