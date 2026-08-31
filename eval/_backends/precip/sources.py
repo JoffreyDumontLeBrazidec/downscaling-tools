@@ -15,6 +15,13 @@ Why this module exists (o1280->o2560 "definitive tp" fix, 2026-08-26):
 
 Both sources return values in the native GRIB unit (metres of water per 6h
 window). Conversion to mm is a presentation concern and stays in the callers.
+
+Regional runs (2026-08-31): a box-cut run predicts on a strict SUBSET of the
+model's global grid, while the truth GRIB always holds the full grid. When the
+reference grid is smaller, the truth source builds a support index (verified
+point-for-point, not a nearest-neighbour approximation) and returns truth on the
+run's own support; the interpolation baseline keeps its index in a cache file of
+its own so a regional run never overwrites the global one.
 """
 from __future__ import annotations
 
@@ -91,6 +98,54 @@ def check_grid_match(lat_ref, lon_ref, lat_grib, lon_grib, *, context: str) -> N
         )
 
 
+def build_support_index(lat_ref, lon_ref, lat_full, lon_full, *, context: str):
+    """Map a SUBSET reference grid onto the rows of a full-grid source.
+
+    A regional (box-cut) run predicts on a selection of the model's global grid
+    rows, so the full-grid truth holds every point the run needs and many more.
+    This returns an int64 index such that `full_values[index]` lands on the
+    reference grid.
+
+    The match is verified rather than assumed: a row selection means every
+    reference point must coincide with the point it matched, to the same
+    tolerance a full-grid comparison uses, and no two reference points may
+    match the same source row. Either failure means the reference is not a
+    subset of this grid, which would make every downstream number wrong.
+    """
+    lat_ref = np.asarray(lat_ref)
+    lon_ref = np.asarray(lon_ref)
+    lat_full = np.asarray(lat_full)
+    lon_full = np.asarray(lon_full)
+    n_ref, n_full = len(lat_ref), len(lat_full)
+    if n_ref > n_full:
+        raise ValueError(
+            f"{context}: reference grid has {n_ref} points but the source grid "
+            f"has only {n_full} — the reference cannot be a subset of it")
+    LOG.warning(
+        "%s: reference grid (%d points) is a SUBSET of the source grid "
+        "(%d points) — building a support index for this regional run",
+        context, n_ref, n_full)
+    idx = build_nn_index(lat_full, lon_full, lat_ref, lon_ref)
+    dlat = np.abs(lat_ref - lat_full[idx])
+    dlon_raw = np.abs(lon_ref - lon_full[idx])
+    dlon = np.minimum(dlon_raw, np.abs(dlon_raw - 360.0))
+    worst_lat, worst_lon = float(np.max(dlat)), float(np.max(dlon))
+    if worst_lat > _GRID_TOL_DEG or worst_lon > _GRID_TOL_DEG:
+        raise ValueError(
+            f"{context}: reference grid is not a subset of the source grid — "
+            f"the worst matched point is {worst_lat:.6f} deg of latitude and "
+            f"{worst_lon:.6f} deg of longitude away (tolerance {_GRID_TOL_DEG})")
+    if len(np.unique(idx)) != n_ref:
+        raise ValueError(
+            f"{context}: support index is not one-to-one — {n_ref} reference "
+            f"points matched only {len(np.unique(idx))} distinct source rows, "
+            "so the reference grid is finer than the source grid")
+    LOG.info("%s: support index built, %d of %d points, worst offset "
+             "%.2e deg lat / %.2e deg lon",
+             context, n_ref, n_full, worst_lat, worst_lon)
+    return idx
+
+
 def maybe_deaccumulate(values_by_step: dict[int, np.ndarray], *, context: str):
     """Convert an accumulated-from-init series to per-window values if needed.
 
@@ -140,6 +195,7 @@ class PrecipTruthSource:
         self._cache: dict[int, np.ndarray] = {}
         self._lats = self._lons = None
         self._grid_checked = False
+        self._support_index: np.ndarray | None = None
 
     def preload(self, date: str) -> dict[int, np.ndarray]:
         if self._cache_date == date:
@@ -164,16 +220,29 @@ class PrecipTruthSource:
             raise KeyError(
                 f"tp truth for date {date} has no step {step}; "
                 f"available: {sorted(cache)}")
-        return cache[step]
+        values = cache[step]
+        if self._support_index is not None:
+            values = values[self._support_index]
+        return values
 
     def verify_grid(self, lat_ref, lon_ref) -> None:
-        """Check GRIB grid against reference coords once (idempotent)."""
+        """Check GRIB grid against reference coords once (idempotent).
+
+        Equal grid sizes take the strict full-grid check. A smaller reference
+        grid is a regional run: build a verified support index instead, so
+        `load()` returns truth on the run's own support.
+        """
         if self._grid_checked:
             return
         if self._lats is None:
             raise RuntimeError("verify_grid called before any preload()")
-        check_grid_match(lat_ref, lon_ref, self._lats, self._lons,
-                         context="tp truth GRIB")
+        if len(lat_ref) == len(self._lats):
+            check_grid_match(lat_ref, lon_ref, self._lats, self._lons,
+                             context="tp truth GRIB")
+        else:
+            self._support_index = build_support_index(
+                lat_ref, lon_ref, self._lats, self._lons,
+                context="tp truth GRIB")
         self._grid_checked = True
 
     def release(self) -> None:
@@ -234,32 +303,53 @@ class LresInterpBaseline:
 
     # -- interpolation index -------------------------------------------------
 
+    def cache_path_for(self, n_dst: int) -> Path | None:
+        """Cache file to use for a destination grid of `n_dst` points.
+
+        The configured path keeps serving whatever grid it already holds — in
+        practice the global one. A run on a different support, meaning a
+        regional box cut, gets a sibling file of its own rather than
+        overwriting a cache that other runs depend on.
+        """
+        p = self.index_cache
+        if p is None or not p.exists():
+            return p
+        try:
+            with np.load(p) as z:
+                cached_dst = int(z["n_dst"])
+        except Exception:
+            return p
+        if cached_dst == n_dst:
+            return p
+        return p.with_name(f"{p.stem}__dst{n_dst}{p.suffix}")
+
     def ensure_index(self, dst_lat, dst_lon, *, probe_date: str) -> np.ndarray:
         """Build or load the source->target nearest-neighbour index."""
         if self._nn_index is not None:
             return self._nn_index
         self._preload(probe_date)  # populates source coords
         n_src, n_dst = len(self._src_lats), len(dst_lat)
-        if self.index_cache is not None and self.index_cache.exists():
-            with np.load(self.index_cache) as z:
+        cache = self.cache_path_for(n_dst)
+        if cache is not None and cache.exists():
+            with np.load(cache) as z:
                 if int(z["n_src"]) == n_src and int(z["n_dst"]) == n_dst:
                     self._nn_index = z["index"].astype(np.int64)
                     LOG.info("interp index loaded from %s (src=%d dst=%d)",
-                             self.index_cache, n_src, n_dst)
+                             cache, n_src, n_dst)
                     return self._nn_index
                 LOG.warning("interp index cache %s does not match grids "
                             "(cache src=%d dst=%d, need src=%d dst=%d); rebuilding",
-                            self.index_cache, int(z["n_src"]), int(z["n_dst"]),
+                            cache, int(z["n_src"]), int(z["n_dst"]),
                             n_src, n_dst)
         self._nn_index = build_nn_index(self._src_lats, self._src_lons,
                                         dst_lat, dst_lon)
-        if self.index_cache is not None:
-            self.index_cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.index_cache.with_suffix(".tmp.npz")
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_suffix(".tmp.npz")
             np.savez_compressed(tmp, index=self._nn_index.astype(np.int32),
                                 n_src=n_src, n_dst=n_dst)
-            tmp.replace(self.index_cache)
-            LOG.info("interp index built and cached at %s", self.index_cache)
+            tmp.replace(cache)
+            LOG.info("interp index built and cached at %s", cache)
         return self._nn_index
 
 

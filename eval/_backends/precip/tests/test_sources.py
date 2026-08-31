@@ -8,6 +8,7 @@ from eval._backends.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     build_nn_index,
+    build_support_index,
     check_grid_match,
     is_degenerate_channel,
     maybe_deaccumulate,
@@ -142,3 +143,89 @@ def test_baseline_interp_load(tmp_path):
     np.testing.assert_array_equal(src2._nn_index, src._nn_index)
     with pytest.raises(KeyError):
         src.load("20250926", 6, 99)
+
+
+# ---------------------------------------------------------------------------
+# regional (box-cut) support: truth on a subset of the full grid
+# ---------------------------------------------------------------------------
+
+def _full_grid(n=40):
+    lat = np.linspace(-30.0, 30.0, n)
+    lon = np.linspace(0.0, 300.0, n)
+    return lat, lon
+
+
+def test_support_index_selects_the_subset_rows():
+    lat, lon = _full_grid()
+    keep = np.array([3, 4, 5, 17, 31])
+    idx = build_support_index(lat[keep], lon[keep], lat, lon, context="t")
+    np.testing.assert_array_equal(idx, keep)
+    values = np.arange(len(lat), dtype=float)
+    np.testing.assert_array_equal(values[idx], values[keep])
+
+
+def test_support_index_accepts_wrapped_longitudes():
+    lat, lon = _full_grid()
+    keep = np.array([2, 19, 38])
+    ref_lon = np.where(lon[keep] > 180.0, lon[keep] - 360.0, lon[keep])
+    idx = build_support_index(lat[keep], ref_lon, lat, lon, context="t")
+    np.testing.assert_array_equal(idx, keep)
+
+
+def test_support_index_rejects_points_off_the_grid():
+    lat, lon = _full_grid()
+    # A reference point nowhere near any source point must not be silently
+    # snapped to its nearest neighbour.
+    with pytest.raises(ValueError, match="not a subset"):
+        build_support_index(np.array([0.0, 89.0]), np.array([0.0, 12.0]),
+                            lat, lon, context="t")
+
+
+def test_support_index_rejects_a_reference_larger_than_the_source():
+    lat, lon = _full_grid(10)
+    big_lat, big_lon = _full_grid(20)
+    with pytest.raises(ValueError, match="cannot be a subset"):
+        build_support_index(big_lat, big_lon, lat, lon, context="t")
+
+
+def test_support_index_rejects_a_finer_reference_grid():
+    lat, lon = _full_grid(10)
+    # Two reference points falling on the same source row: one-to-one fails.
+    ref_lat = np.array([lat[4], lat[4] + 1e-6, lat[7]])
+    ref_lon = np.array([lon[4], lon[4] + 1e-6, lon[7]])
+    with pytest.raises(ValueError, match="one-to-one"):
+        build_support_index(ref_lat, ref_lon, lat, lon, context="t")
+
+
+def test_truth_source_serves_a_regional_subset():
+    src = PrecipTruthSource("/nowhere/{date}.grib", _reader=_fake_truth_reader)
+    src.preload("20250926")
+    full = _fake_truth_reader("20250926")[0][(0, 12)]
+    lats = np.linspace(-10, 10, 8)
+    lons = np.linspace(100, 120, 8)
+    keep = np.array([1, 2, 6])
+    src.verify_grid(lats[keep], lons[keep])
+    out = src.load("20250926", 12)
+    assert out.shape == (3,)
+    np.testing.assert_array_equal(out, full[keep])
+
+
+def test_baseline_cache_is_per_support(tmp_path):
+    cache = tmp_path / "nn.npz"
+    src = LresInterpBaseline("/nowhere/{date}.grib", cache,
+                             _reader=_fake_baseline_reader)
+    dst_lat = np.array([0.1, 9.0])
+    dst_lon = np.array([4.4, 0.5])
+    src.ensure_index(dst_lat, dst_lon, probe_date="20250926")
+    assert cache.exists()
+    before = cache.read_bytes()
+
+    # A run on a DIFFERENT support must not overwrite the existing cache.
+    regional = LresInterpBaseline("/nowhere/{date}.grib", cache,
+                                  _reader=_fake_baseline_reader)
+    assert regional.cache_path_for(1).name == "nn__dst1.npz"
+    regional.ensure_index(np.array([9.0]), np.array([0.5]),
+                          probe_date="20250926")
+    assert cache.read_bytes() == before
+    assert (tmp_path / "nn__dst1.npz").exists()
+    np.testing.assert_array_equal(regional._nn_index, [2])
