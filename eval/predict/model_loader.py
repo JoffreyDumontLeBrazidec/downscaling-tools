@@ -13,6 +13,7 @@ _load_objects = _mi_predict._load_objects
 _resolve_device = _mi_predict._resolve_device
 
 from .graph_cut import activate_local_graph_cut
+from .seeding import seed_inference
 from .types import PredictionConfig
 
 import atexit as _atexit
@@ -331,6 +332,11 @@ def setup_distributed(config: PredictionConfig) -> tuple[str, object | None, int
         )
 
     model_comm_group = _init_model_comm_group(device, global_rank, world_size)
+    # Deterministic, shard-independent seeding. Nothing in this route seeded torch at
+    # all before 2026-08-31, so every run drew a fresh torch.initial_seed() and no two
+    # runs could be compared pointwise. Per-RANK seeds (not one shared seed) because the
+    # diffusion noise is drawn after the grid is sharded -- see eval/predict/seeding.py.
+    seed_inference(global_rank)
     return device, model_comm_group, global_rank, local_rank, world_size
 
 

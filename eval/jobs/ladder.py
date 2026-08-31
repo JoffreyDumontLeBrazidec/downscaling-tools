@@ -144,9 +144,15 @@ PREDICT_ONESHOT = """python -m eval.cli predict --lane {lane} --host {host} --mo
   --dates {dates} --steps {steps} --members {members}
 """
 
-# candidate-B mode: M independent draws of ONE bundle (model noise is unseeded ->
-# repeated predict = independent samples of the conditional PDF).
+# candidate-B mode: M independent draws of ONE bundle = M independent samples of
+# the conditional PDF. Until 2026-08-31 this relied on inference being UNSEEDED, so
+# simply re-running gave a fresh draw. Inference is now deterministically seeded
+# (eval/predict/seeding.py), so the draw index must vary the seed explicitly --
+# otherwise every draw returns the SAME field and the seed statistics silently
+# collapse to one realization. Spacing of 1000 keeps draw d's per-rank seeds
+# (base + rank) disjoint from draw d+1's.
 PREDICT_SEED_DRAWS = """for D in $(seq 1 {draws}); do
+  ANEMOI_BASE_SEED=$((756000 + 1000 * D)) \\
   python -m eval.cli predict --lane {lane} --host {host} --mode manual \\
     --checkpoint {ckpt} --bundle-dir {bundles} --output-dir {evaldir}/draw_$D \\
     --dates {dates} --steps {steps} --members {members}
