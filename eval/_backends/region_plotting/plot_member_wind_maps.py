@@ -1,7 +1,8 @@
 """Single-member field cutout maps: EEFO input / ENFO truth / prediction arms.
 
 Renders 10 m wind speed by default; ``--variable`` also takes ``msl`` (mean
-sea level pressure) and ``2t`` (2 m temperature) from the same files. See
+sea level pressure), ``2t`` (2 m temperature), ``t_850`` (850 hPa temperature)
+and ``z_500`` (500 hPa geopotential height) from the same files. See
 ``VARIABLES`` for the field table.
 
 Renders the member-level case-inspection map set (one PNG per panel, shared
@@ -101,6 +102,35 @@ VARIABLES: dict[str, dict] = {
         "extend": "both",
         "subtitle": "2 m temperature",
         "cbar_label": "2 m temperature (degC)",
+    },
+    "t_850": {
+        "states": ("t_850",),
+        "combine": "single",
+        "token": "t850",
+        "scale": 1.0,
+        "offset": -273.15,  # K -> degC
+        "cmap": "RdYlBu_r",
+        # Observed span over the Europe cutout / wide North Atlantic in late
+        # September 2025 is about -10 to +29 degC; both ends extend.
+        "vmin": -10.0,
+        "vmax": 30.0,
+        "extend": "both",
+        "subtitle": "850 hPa temperature",
+        "cbar_label": "850 hPa temperature (degC)",
+    },
+    "z_500": {
+        "states": ("z_500",),
+        "combine": "single",
+        "token": "z500",
+        "scale": 1.0 / 98.0665,  # m2/s2 -> decametres of geopotential height
+        "offset": 0.0,
+        "cmap": "viridis",
+        # Observed span over the same regions and season is about 523-592 dam.
+        "vmin": 522.0,
+        "vmax": 592.0,
+        "extend": "both",
+        "subtitle": "500 hPa geopotential height",
+        "cbar_label": "500 hPa geopotential height (dam)",
     },
 }
 
