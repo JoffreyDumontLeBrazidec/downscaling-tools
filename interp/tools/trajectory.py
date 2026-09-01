@@ -201,6 +201,26 @@ def row_sharded_upsample(inner, x_lres_5d, lo, hi):
     return out[:, :, None, :, :]                                # + ensemble axis
 
 
+def select_residual_channels(inner, x_interp, target_dataset="out_hres"):
+    """Channel-select an interpolated input for `compute_residuals`.
+
+    compute_residuals documents that x_interp "must already have channels selected
+    via matching_channel_indices": it subtracts x_interp from the target's
+    residual-prognostic channels, which excludes both the forcings and the
+    direct-prediction variables. On this o2560 checkpoint family that is 7 of the
+    91 interpolated channels (tp and cp are output-only, so they drop out of the
+    match by themselves). Lanes whose counts already agree are left untouched, so
+    no existing lane's residuals change.
+    """
+    idx = inner.get_matching_channel_indices(target_dataset).to(x_interp.device)
+    if x_interp.shape[-1] == len(idx):
+        return x_interp
+    LOGGER.info("compute_residuals: selecting %d of %d interpolated channels "
+                "(residual-prognostic subset of %s)", len(idx), x_interp.shape[-1],
+                target_dataset)
+    return x_interp[..., idx]
+
+
 def _gather_box_rows(field_sh, box_t, lo, hi, mcg, global_rank):
     """Collect the box cells of a grid-sharded field onto rank 0.
 
@@ -1399,7 +1419,8 @@ def run_trajectory(args):
             y_sh = y0[:, :, :, lo:hi, :]
             prt = getattr(bundle.model, "pre_processors_tendencies", None)
             y_residual_cond = inner.compute_residuals(
-                y_sh, x_interp_raw_sh, bundle.pre_processors["out_hres"], prt["out_hres"],
+                y_sh, select_residual_channels(inner, x_interp_raw_sh),
+                bundle.pre_processors["out_hres"], prt["out_hres"],
                 target_dataset="out_hres")
             del y_sh
             if torch.cuda.is_available():
@@ -1439,7 +1460,8 @@ def run_trajectory(args):
                 eb.x_lres[0:1].to(device)[:, 0, ...])[:, None, ...]
             prt = getattr(bundle.model, "pre_processors_tendencies", None)
             y_residual_cond = inner.compute_residuals(
-                y0, x_interp_raw, bundle.pre_processors["out_hres"], prt["out_hres"],
+                y0, select_residual_channels(inner, x_interp_raw),
+                bundle.pre_processors["out_hres"], prt["out_hres"],
                 target_dataset="out_hres")
         recon_state_box = x_interp_cond[:, :, :, box_t, :]    # NORMALIZED interp = what's added back
         xi_box = x_interp_raw[:, :, :, box_t, :]              # RAW physical interp for x_interp ref
