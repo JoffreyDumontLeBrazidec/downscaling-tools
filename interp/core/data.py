@@ -124,6 +124,11 @@ EVENTS: dict[str, dict] = {
     # members; override --dates/--members/--steps per case. Default slice is a
     # placeholder — the tp-peak probes pick the heaviest-truth slices via the
     # bundle census (see epics/tc-o1280-o2560 20260901 tp noise-level probe).
+    # NB: these 6h bundles embed NO tp/cp truth (target_hres_* = 10u/10v/2t/msl
+    # only) — y[tp] would be NaN->0. truth_grib_tpl points at the definitive
+    # per-date _tp_dea truth (6h window ENDING at each step, grid-identical to
+    # the o2560 hres grid); inject_truth_grib fills the tp channel from it.
+    # cp has no truth source and stays zero-filled (recorded by the caller).
     "sep2025_o1280_o2560": {
         "bundle_dir": ("/home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/"
                        "bundles_with_y"),
@@ -131,6 +136,10 @@ EVENTS: dict[str, dict] = {
         "members": ["01"],
         "steps": ["024"],
         "label": "sep2025_o2560",
+        "truth_grib_tpl": ("/home/ecm5702/perm/data/input_data/o1280_o2560/"
+                           "humberto_6h_20250926_20250930/o2560_targets/"
+                           "iekm_o2560_iekm_date{date}_time0000_step006to120by006"
+                           "_sfc_y_tp_dea.grib"),
     },
     "window6h_o48_o96_m4": {
         "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930_6h",
@@ -235,6 +244,44 @@ def load_single_bundle(bundle, bundle_path: str) -> BundleBatch:
         coords=(np.asarray(lat_l), np.asarray(lon_l),
                 np.asarray(lat_h), np.asarray(lon_h)),
     )
+
+
+def event_extra(args, key, default=None):
+    """Read an optional extra field (e.g. 'truth_grib_tpl') from the named event."""
+    ev = EVENTS.get(getattr(args, "event", None) or "", None)
+    return (ev or {}).get(key, default)
+
+
+def inject_truth_grib(bundle, eb: BundleBatch, truth_grib_tpl: str,
+                      dates, members, steps, var: str = "tp") -> None:
+    """Fill eb.y's `var` output channel from the definitive per-date truth GRIB.
+
+    The o2560 6h bundle pool embeds no tp truth (x_interp tp = 0 trap; the
+    bundles predate the target_hres_tp sidecar), so teacher-forced probes must
+    inject it. Reuses the eval backend's PrecipTruthSource: deaccumulated 6h
+    window ENDING at each step, grid verified identical to the bundle hres grid.
+    Bundle order matches find_bundles' dates->members->steps nesting."""
+    from eval._backends.precip.sources import PrecipTruthSource
+
+    vn = get_variable_names(bundle)
+    out_n2i = {name: idx for idx, name in vn["output"].items()}
+    if var not in out_n2i:
+        raise SystemExit(f"inject_truth_grib: {var!r} not in the output schema")
+    src = PrecipTruthSource(truth_grib_tpl, var=var)
+    _, _, lat_h, lon_h = eb.coords
+    src.preload(str(dates[0]))                       # verify_grid needs coords loaded
+    src.verify_grid(lat_h, lon_h)
+    k = 0
+    for d in dates:
+        for _m in members:
+            for s in steps:
+                vals = src.load(str(d), int(s))
+                eb.y[k, 0, 0, :, out_n2i[var]] = torch.from_numpy(
+                    np.ascontiguousarray(vals, dtype=np.float32))
+                k += 1
+    src.release()
+    LOGGER.info("inject_truth_grib: %s truth injected into %d bundle(s) from %s",
+                var, k, truth_grib_tpl)
 
 
 def resolve_event_args(args) -> tuple[str, list, list, list, str]:

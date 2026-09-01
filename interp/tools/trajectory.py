@@ -49,7 +49,8 @@ if str(_DT_ROOT) not in sys.path:
     sys.path.insert(0, str(_DT_ROOT))
 
 from interp.cli import add_event_args, add_model_args, setup_logging
-from interp.core.data import collect_event_bundles, resolve_event_args
+from interp.core.data import (collect_event_bundles, event_extra,
+                              inject_truth_grib, resolve_event_args)
 from interp.core.geometry import DEFAULT_AUTO_WINDOW, box_mask_km, detect_min_center
 from interp.core.model import (
     denoise_at_sigma,
@@ -1115,6 +1116,9 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
             "surface_targets": list(target_indices.keys()),
             "sweep_sigmas": sigmas, "seeds": [int(s) for s in seeds],
             "norm_factors": norm_factors,
+            "tp_scale": float(getattr(args, "tp_scale", 1.0) or 1.0),
+            "truth_grib_tpl": getattr(args, "truth_grib_tpl", None),
+            "zero_filled_targets": [n for n in ("cp",) if n in target_indices],
             "box": {"box_from": getattr(args, "box_from", "msl"), "lat": clat,
                     "lon": clon % 360.0, "radius_km": args.eye_radius_km,
                     "n_cells": int(box_np.sum())},
@@ -1180,6 +1184,23 @@ def run_trajectory(args):
 
     bundle_dir, dates, members, steps, _ = resolve_event_args(args)
     eb = collect_event_bundles(bundle, bundle_dir, dates, members, steps)
+    truth_tpl = (getattr(args, "truth_grib_tpl", None)
+                 or event_extra(args, "truth_grib_tpl"))
+    if truth_tpl:
+        # o2560 6h bundles carry no tp truth (x_interp tp = 0 trap) — inject the
+        # definitive _tp_dea truth; cp stays zero-filled (no truth source).
+        inject_truth_grib(bundle, eb, truth_tpl, dates, members, steps, var="tp")
+        args.truth_grib_tpl = truth_tpl               # record the resolved template
+    tp_scale = float(getattr(args, "tp_scale", 1.0) or 1.0)
+    if tp_scale != 1.0:
+        # Value-dependence control for the tp-peak probes: scale the TRUTH tp
+        # channel before residuals/references so 'clips the peak but returns a
+        # scaled-down one faithfully' can be told apart from harness trouble.
+        idx_tp = get_surface_target_indices(bundle).get("tp")
+        if idx_tp is None:
+            raise SystemExit("--tp-scale needs tp in the output schema")
+        eb.y[..., idx_tp] *= tp_scale
+        LOGGER.info("tp truth scaled by %.3g before residual computation", tp_scale)
     _, _, lat_hres, lon_hres = eb.coords
     y0 = eb.y[0:1].to(device)                                 # observed, physical, FULL grid
 
@@ -1590,6 +1611,14 @@ def main(argv=None):
     p.add_argument("--sampler-params-json", default=None,
                    help="[trajectory] JSON dict of sampler params for the realized sampler "
                         "(e.g. {\"S_churn\": 2.5})")
+    p.add_argument("--truth-grib-tpl", default=None,
+                   help="per-date deaccumulated tp truth GRIB template with {date} "
+                        "(overrides the event's truth_grib_tpl); fills the tp target "
+                        "channel the o2560 6h bundles never embedded")
+    p.add_argument("--tp-scale", type=float, default=1.0,
+                   help="[tp_sweep control] scale the TRUTH tp channel by this factor "
+                        "before residuals — separates a value-dependent output cap "
+                        "from a harness artifact (e.g. 0.5)")
     p.add_argument("--seed-sigmas", nargs="+", type=float,
                    default=[2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 300.0],
                    help="[seeding] σ_seed grid — plant the true storm at each, then sample free below")
