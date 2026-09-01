@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -158,6 +159,64 @@ def _side_reduce(col, name):
     if name in ("10u", "10v"):
         return _q(col.abs(), CORE_Q_HIGH)
     return _q(col, CORE_Q_HIGH)
+
+
+def _shard_bounds(shard_sizes, rank):
+    """[lo, hi) global row range owned by `rank` under `shard_sizes`."""
+    lo = int(sum(int(s) for s in shard_sizes[:rank]))
+    return lo, lo + int(shard_sizes[rank])
+
+
+def row_sharded_upsample(inner, x_lres_5d, lo, hi):
+    """This rank's block of the low-res -> high-res projection, and nothing more.
+
+    The model's own `_before_sampling` upsamples the FULL target grid on EVERY
+    rank and only then splits the result. At O2560 that single array is 26,306,560
+    cells x 91 channels = 8.92 GiB in fp32, and the projector holds two of them at
+    once (the multiply's output and the stack that copies it), which overruns an
+    A100-40GB no matter how many ranks are used (measured: 16.94 GiB resident
+    before the call, 35.17 GiB at the failure, job 31190882).
+
+    The projection matrix has one row per target cell and rows are independent, so
+    multiplying only rows [lo, hi) reproduces exactly that slice of the global
+    result while allocating 1/world_size of the memory. This is the same row-cut
+    idea the box lane already uses, applied to the grid shards instead of a box.
+    """
+    res = inner.residual["in_lres"]
+    mat = res.provider.get_edges(device=x_lres_5d.device)     # sparse (n_hres, n_lres)
+    idx, val = mat.indices(), mat.values()
+    keep = (idx[0] >= lo) & (idx[0] < hi)
+    sub = torch.sparse_coo_tensor(
+        torch.stack([idx[0][keep] - lo, idx[1][keep]]), val[keep],
+        (hi - lo, mat.shape[1]), device=x_lres_5d.device).coalesce()
+    del idx, val, keep
+    # Mirror residual.forward's own reshaping: pick the timestep, fold the leading
+    # dims, project, then restore (batch, time, ensemble, grid, features).
+    x = x_lres_5d[:, res.step, ...]                           # (batch, ens, grid, feat)
+    batch = x.shape[0]
+    x = x.reshape(-1, x.shape[-2], x.shape[-1])               # (batch*ens, grid, feat)
+    out = res.projector(x, sub)          # the model's own projector, autocast setting and all
+    del sub
+    out = out.reshape(batch, -1, out.shape[-2], out.shape[-1])  # (batch, time, grid, feat)
+    return out[:, :, None, :, :]                                # + ensemble axis
+
+
+def _gather_box_rows(field_sh, box_t, lo, hi, mcg, global_rank):
+    """Collect the box cells of a grid-sharded field onto rank 0.
+
+    Each rank selects the box cells inside its own row range and the pieces are
+    concatenated in rank order, which reproduces the global box selection because
+    the mask preserves row order. The payload is the box only (tens of MB), so
+    this replaces gathering the whole 8.92 GiB grid just to read a box.
+    """
+    import torch.distributed as dist
+
+    local = field_sh[:, :, :, box_t[lo:hi], :].detach().float().cpu()
+    parts = [None] * dist.get_world_size(group=mcg)
+    dist.all_gather_object(parts, local, group=mcg)
+    if global_rank != 0:
+        return None
+    return torch.cat(parts, dim=-2)
 
 
 def log_mem(tag):
@@ -1292,39 +1351,52 @@ def run_trajectory(args):
     elif sharded:  # unified dict-API, grid-sharded across model_comm_group
         from anemoi.models.distributed.graph import gather_tensor, shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
-        batch = {"in_lres": eb.x_lres[0:1].to(device), "in_hres": eb.x_hres[0:1].to(device)}
-        log_mem("after batch -> device")
+        # Shard sizes are the model's own balanced partition of the hres grid
+        # (_before_sampling derives in_lres/in_hres/out_hres from tensors that all
+        # live on that grid, so one partition serves all three).
+        out_sizes = get_shard_sizes(y0, -2, mcg)
+        gss = {"in_lres": out_sizes, "in_hres": out_sizes, "out_hres": out_sizes}
+        lo, hi = _shard_bounds(out_sizes, global_rank)
+        LOGGER.info("rank %d owns hres rows [%d, %d) of %d", global_rank, lo, hi,
+                    int(y0.shape[-2]))
+        log_mem("before setup")
         # no_grad throughout setup: nothing here is ever backpropagated, and at O2560
         # every retained full-grid intermediate is ~8.9 GiB per rank.
         with torch.no_grad():
-            (x_interp_cond, x_hres_cond), dss = inner._before_sampling(
-                batch, bundle.pre_processors, 1, model_comm_group=mcg)
-        del batch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        log_mem("after _before_sampling")
-        gss = dss  # DatasetShardSizes -> threaded into denoise/sample via gss_arg
-        out_sizes = dss["out_hres"]
-        # apply_interpolate_to_high_res with grid_shard_sizes set drives the
-        # InterpolationConnection all_to_all path, which expects a GRID-SHARDED input.
-        # Passing the FULL lres grid + hres shard sizes makes the all_to_all split counts
-        # disagree across ranks -> NCCL all_to_all deadlock (the tier1 b785 hang). Match
-        # _before_sampling: upsample the full grid collective-free (grid_shard_sizes=None),
-        # then take this rank's grid shard locally.
-        with torch.no_grad():
-            xir_full = inner.apply_interpolate_to_high_res(
-                eb.x_lres[0:1].to(device)[:, 0, ...],
-                grid_shard_sizes=None, model_comm_group=mcg)[:, None, ...]
-            x_interp_raw_sh = shard_tensor(xir_full, -2, out_sizes, mcg).clone()
-            # The RAW full-grid interp is ~8.9 GiB per rank and is needed only as this
-            # rank's shard (residuals) and as box cells (the x_interp reference), so it
-            # is reduced to both and freed before any sampling starts.
-            xi_box = xir_full[:, :, :, box_t, :].clone() if global_rank == 0 else None
-            del xir_full
+            x_lres_dev = eb.x_lres[0:1].to(device)
+            x_interp_raw_sh = row_sharded_upsample(inner, x_lres_dev, lo, hi)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            log_mem("after raw interp -> shard")
-            y_sh = shard_tensor(y0, -2, get_shard_sizes(y0, -2, mcg), mcg)
+            log_mem("after row-sharded upsample")
+            # Correctness gate for the row cut: compare against the model's OWN
+            # full-grid upsample, sliced to this rank's rows. Only usable on a lane
+            # whose full grid fits (it is the very allocation the row cut avoids),
+            # so it is env-gated and meant to be run once on o320->o1280.
+            if os.environ.get("INTERP_UPSAMPLE_CHECK"):
+                ref = inner.apply_interpolate_to_high_res(
+                    x_lres_dev[:, 0, ...], grid_shard_sizes=None,
+                    model_comm_group=mcg)[:, None, ...][:, :, :, lo:hi, :]
+                d = (x_interp_raw_sh - ref).abs()
+                scale = ref.abs().max().clamp_min(1e-12)
+                LOGGER.info("UPSAMPLE CHECK rank %d: max|rowcut-model|=%.3e "
+                            "(relative %.3e) over %s", global_rank, float(d.max()),
+                            float(d.max() / scale), tuple(ref.shape))
+                del ref, d
+            del x_lres_dev
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # Normalisation is per channel, so preprocessing a shard equals the shard
+            # of the preprocessed whole — the same reason the row cut is exact.
+            x_interp_cond = bundle.pre_processors["in_lres"](
+                x_interp_raw_sh, in_place=False)
+            x_hres_cond = bundle.pre_processors["in_hres"](
+                eb.x_hres[0:1][:, :, :, lo:hi, :].to(device), in_place=False)
+            log_mem("after preprocessing")
+            # The x_interp box reference: each rank contributes the box cells it owns
+            # and rank 0 concatenates them in rank order, which reproduces the global
+            # box selection exactly (row order is preserved). ~15 MB, not 8.92 GiB.
+            xi_box = _gather_box_rows(x_interp_raw_sh, box_t, lo, hi, mcg, global_rank)
+            y_sh = y0[:, :, :, lo:hi, :]
             prt = getattr(bundle.model, "pre_processors_tendencies", None)
             y_residual_cond = inner.compute_residuals(
                 y_sh, x_interp_raw_sh, bundle.pre_processors["out_hres"], prt["out_hres"],
@@ -1432,8 +1504,7 @@ def run_trajectory(args):
     # -> must equal the observed target storm-core. metrics_of gathers (collective), so ALL
     # ranks must call it. Garbage here => reconstruct/gather/layout bug; fine here => the
     # model FORWARD (ceiling/realized) is the bug.
-    import os as _pos
-    if _pos.environ.get("INTERP_PARITY_CHECK"):
+    if os.environ.get("INTERP_PARITY_CHECK"):
         _chk = metrics_of(y_residual_cond)
         if global_rank == 0:
             _t = references["target"]
