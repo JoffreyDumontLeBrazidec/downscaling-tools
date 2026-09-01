@@ -167,6 +167,46 @@ def _shard_bounds(shard_sizes, rank):
     return lo, lo + int(shard_sizes[rank])
 
 
+def _project_rows(inner, x_lres_5d, keep, new_row, n_rows):
+    """Project the low-res input onto a chosen subset of target rows.
+
+    Shared core of the row cut: `keep` selects the matrix entries belonging to the
+    wanted rows and `new_row` renumbers them into the subset, after which the
+    model's own projector does the multiply, so the arithmetic is byte-identical
+    to the path verified against the model's full-grid upsample.
+    """
+    res = inner.residual["in_lres"]
+    mat = res.provider.get_edges(device=x_lres_5d.device)
+    sub = torch.sparse_coo_tensor(
+        torch.stack([new_row, mat.indices()[1][keep]]), mat.values()[keep],
+        (n_rows, mat.shape[1]), device=x_lres_5d.device).coalesce()
+    x = x_lres_5d[:, res.step, ...]                           # (batch, ens, grid, feat)
+    batch = x.shape[0]
+    x = x.reshape(-1, x.shape[-2], x.shape[-1])               # (batch*ens, grid, feat)
+    out = res.projector(x, sub)          # the model's own projector, autocast setting and all
+    del sub
+    out = out.reshape(batch, -1, out.shape[-2], out.shape[-1])  # (batch, time, grid, feat)
+    return out[:, :, None, :, :]                                # + ensemble axis
+
+
+def box_rows_upsample(inner, x_lres_5d, box_bool):
+    """Interpolated input on the box cells only, computed locally on one rank.
+
+    The box reference used to be carved out of a gathered full grid, and then out
+    of a collective over the ranks. Both were needless: the row cut can take any
+    set of target rows, and the box is only ~42,000 of 26.3 million, so the rank
+    that needs the reference simply projects those rows itself. No collective at
+    all, which also keeps object-based collectives away from the NCCL group the
+    model's halo exchange depends on.
+    """
+    mat = inner.residual["in_lres"].provider.get_edges(device=x_lres_5d.device)
+    rows = mat.indices()[0]
+    keep = box_bool[rows]
+    sel = torch.nonzero(box_bool, as_tuple=False).flatten()   # sorted global row ids
+    new_row = torch.searchsorted(sel, rows[keep])
+    return _project_rows(inner, x_lres_5d, keep, new_row, int(sel.numel()))
+
+
 def row_sharded_upsample(inner, x_lres_5d, lo, hi):
     """This rank's block of the low-res -> high-res projection, and nothing more.
 
@@ -182,23 +222,10 @@ def row_sharded_upsample(inner, x_lres_5d, lo, hi):
     result while allocating 1/world_size of the memory. This is the same row-cut
     idea the box lane already uses, applied to the grid shards instead of a box.
     """
-    res = inner.residual["in_lres"]
-    mat = res.provider.get_edges(device=x_lres_5d.device)     # sparse (n_hres, n_lres)
-    idx, val = mat.indices(), mat.values()
-    keep = (idx[0] >= lo) & (idx[0] < hi)
-    sub = torch.sparse_coo_tensor(
-        torch.stack([idx[0][keep] - lo, idx[1][keep]]), val[keep],
-        (hi - lo, mat.shape[1]), device=x_lres_5d.device).coalesce()
-    del idx, val, keep
-    # Mirror residual.forward's own reshaping: pick the timestep, fold the leading
-    # dims, project, then restore (batch, time, ensemble, grid, features).
-    x = x_lres_5d[:, res.step, ...]                           # (batch, ens, grid, feat)
-    batch = x.shape[0]
-    x = x.reshape(-1, x.shape[-2], x.shape[-1])               # (batch*ens, grid, feat)
-    out = res.projector(x, sub)          # the model's own projector, autocast setting and all
-    del sub
-    out = out.reshape(batch, -1, out.shape[-2], out.shape[-1])  # (batch, time, grid, feat)
-    return out[:, :, None, :, :]                                # + ensemble axis
+    rows = inner.residual["in_lres"].provider.get_edges(
+        device=x_lres_5d.device).indices()[0]
+    keep = (rows >= lo) & (rows < hi)
+    return _project_rows(inner, x_lres_5d, keep, rows[keep] - lo, hi - lo)
 
 
 def select_residual_channels(inner, x_interp, target_dataset="out_hres"):
@@ -219,24 +246,6 @@ def select_residual_channels(inner, x_interp, target_dataset="out_hres"):
                 "(residual-prognostic subset of %s)", len(idx), x_interp.shape[-1],
                 target_dataset)
     return x_interp[..., idx]
-
-
-def _gather_box_rows(field_sh, box_t, lo, hi, mcg, global_rank):
-    """Collect the box cells of a grid-sharded field onto rank 0.
-
-    Each rank selects the box cells inside its own row range and the pieces are
-    concatenated in rank order, which reproduces the global box selection because
-    the mask preserves row order. The payload is the box only (tens of MB), so
-    this replaces gathering the whole 8.92 GiB grid just to read a box.
-    """
-    import torch.distributed as dist
-
-    local = field_sh[:, :, :, box_t[lo:hi], :].detach().float().cpu()
-    parts = [None] * dist.get_world_size(group=mcg)
-    dist.all_gather_object(parts, local, group=mcg)
-    if global_rank != 0:
-        return None
-    return torch.cat(parts, dim=-2)
 
 
 def log_mem(tag):
@@ -1410,6 +1419,11 @@ def run_trajectory(args):
                             "(relative %.3e) over %s", global_rank, float(d.max()),
                             float(d.max() / scale), tuple(ref.shape))
                 del ref, d
+            # The x_interp box reference, projected locally from the box rows only
+            # (~42,000 of 26.3 million) on the one rank that reports it, while the
+            # low-res input is still here.
+            xi_box = (box_rows_upsample(inner, x_lres_dev, box_t)
+                      if global_rank == 0 else None)
             del x_lres_dev
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1420,10 +1434,6 @@ def run_trajectory(args):
             x_hres_cond = bundle.pre_processors["in_hres"](
                 eb.x_hres[0:1][:, :, :, lo:hi, :].to(device), in_place=False)
             log_mem("after preprocessing")
-            # The x_interp box reference: each rank contributes the box cells it owns
-            # and rank 0 concatenates them in rank order, which reproduces the global
-            # box selection exactly (row order is preserved). ~15 MB, not 8.92 GiB.
-            xi_box = _gather_box_rows(x_interp_raw_sh, box_t, lo, hi, mcg, global_rank)
             y_sh = y0[:, :, :, lo:hi, :]
             prt = getattr(bundle.model, "pre_processors_tendencies", None)
             y_residual_cond = inner.compute_residuals(
