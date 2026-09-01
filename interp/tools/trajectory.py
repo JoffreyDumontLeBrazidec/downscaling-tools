@@ -160,6 +160,18 @@ def _side_reduce(col, name):
     return _q(col, CORE_Q_HIGH)
 
 
+def log_mem(tag):
+    """Log CUDA allocated/reserved/peak (GiB) at a setup milestone. At O2560 the
+    full-grid upsample transient alone is ~8.9 GiB per rank, so knowing which
+    step owns the memory is the difference between a fix and a guess."""
+    if not torch.cuda.is_available():
+        return
+    g = 1024 ** 3
+    LOGGER.info("MEM %-28s alloc=%6.2f GiB  reserved=%6.2f GiB  peak=%6.2f GiB", tag,
+                torch.cuda.memory_allocated() / g, torch.cuda.memory_reserved() / g,
+                torch.cuda.max_memory_allocated() / g)
+
+
 def _q_big(col, q):
     """Quantile that survives tensors above torch.quantile's ~2^24-element cap
     (the full O2560 grid is 26.3M cells) via kthvalue."""
@@ -1173,6 +1185,7 @@ def run_trajectory(args):
     LOGGER.info("Loading model from %s", args.checkpoint)
     bundle = load_model(args.checkpoint, device=device, precision=args.precision,
                         num_gpus_per_model=world_size)
+    log_mem("after load_model")
     inner = bundle.inner_model
     target_indices = get_surface_target_indices(bundle)
     if "msl" not in target_indices:
@@ -1203,6 +1216,7 @@ def run_trajectory(args):
         LOGGER.info("tp truth scaled by %.3g before residual computation", tp_scale)
     _, _, lat_hres, lon_hres = eb.coords
     y0 = eb.y[0:1].to(device)                                 # observed, physical, FULL grid
+    log_mem("after y0 -> device")
 
     # Storm box from the OBSERVED msl (deterministic -> identical on every rank).
     window = (tuple(float(x) for x in args.auto_window.split(","))
@@ -1270,13 +1284,25 @@ def run_trajectory(args):
             phys_full = _gather_full(phys_sh)
             return phys_full if global_rank == 0 else None
 
-        xir_full = _gather_full(x_interp_raw_sh)
+        _xir_full = _gather_full(x_interp_raw_sh)
+        xi_box = _xir_full[:, :, :, box_t, :].clone() if global_rank == 0 else None
+        del _xir_full
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     elif sharded:  # unified dict-API, grid-sharded across model_comm_group
         from anemoi.models.distributed.graph import gather_tensor, shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
         batch = {"in_lres": eb.x_lres[0:1].to(device), "in_hres": eb.x_hres[0:1].to(device)}
-        (x_interp_cond, x_hres_cond), dss = inner._before_sampling(
-            batch, bundle.pre_processors, 1, model_comm_group=mcg)
+        log_mem("after batch -> device")
+        # no_grad throughout setup: nothing here is ever backpropagated, and at O2560
+        # every retained full-grid intermediate is ~8.9 GiB per rank.
+        with torch.no_grad():
+            (x_interp_cond, x_hres_cond), dss = inner._before_sampling(
+                batch, bundle.pre_processors, 1, model_comm_group=mcg)
+        del batch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log_mem("after _before_sampling")
         gss = dss  # DatasetShardSizes -> threaded into denoise/sample via gss_arg
         out_sizes = dss["out_hres"]
         # apply_interpolate_to_high_res with grid_shard_sizes set drives the
@@ -1285,15 +1311,28 @@ def run_trajectory(args):
         # disagree across ranks -> NCCL all_to_all deadlock (the tier1 b785 hang). Match
         # _before_sampling: upsample the full grid collective-free (grid_shard_sizes=None),
         # then take this rank's grid shard locally.
-        xir_full = inner.apply_interpolate_to_high_res(
-            eb.x_lres[0:1].to(device)[:, 0, ...],
-            grid_shard_sizes=None, model_comm_group=mcg)[:, None, ...]
-        x_interp_raw_sh = shard_tensor(xir_full, -2, out_sizes, mcg)
-        y_sh = shard_tensor(y0, -2, get_shard_sizes(y0, -2, mcg), mcg)
-        prt = getattr(bundle.model, "pre_processors_tendencies", None)
-        y_residual_cond = inner.compute_residuals(
-            y_sh, x_interp_raw_sh, bundle.pre_processors["out_hres"], prt["out_hres"],
-            target_dataset="out_hres")
+        with torch.no_grad():
+            xir_full = inner.apply_interpolate_to_high_res(
+                eb.x_lres[0:1].to(device)[:, 0, ...],
+                grid_shard_sizes=None, model_comm_group=mcg)[:, None, ...]
+            x_interp_raw_sh = shard_tensor(xir_full, -2, out_sizes, mcg).clone()
+            # The RAW full-grid interp is ~8.9 GiB per rank and is needed only as this
+            # rank's shard (residuals) and as box cells (the x_interp reference), so it
+            # is reduced to both and freed before any sampling starts.
+            xi_box = xir_full[:, :, :, box_t, :].clone() if global_rank == 0 else None
+            del xir_full
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log_mem("after raw interp -> shard")
+            y_sh = shard_tensor(y0, -2, get_shard_sizes(y0, -2, mcg), mcg)
+            prt = getattr(bundle.model, "pre_processors_tendencies", None)
+            y_residual_cond = inner.compute_residuals(
+                y_sh, x_interp_raw_sh, bundle.pre_processors["out_hres"], prt["out_hres"],
+                target_dataset="out_hres")
+            del y_sh
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log_mem("after residuals")
 
         def _gather_full(field_sh):
             return gather_tensor(field_sh, -2, out_sizes, mcg)
@@ -1317,21 +1356,21 @@ def run_trajectory(args):
             phys_full = _gather_full(phys_sh)
             return phys_full if global_rank == 0 else None
 
-        xir_full = _gather_full(x_interp_raw_sh)
     elif is_dict_api(inner):
         # Unified (dict-API) single-GPU prep: _before_sampling gives the NORMALIZED interp
         # (which the unified add_interp_to_state adds back), compute_residuals (with the
         # SINGLE out_hres state/tendency normalizers) gives the true residual for the ceiling.
         batch = {"in_lres": eb.x_lres[0:1].to(device), "in_hres": eb.x_hres[0:1].to(device)}
-        (x_interp_cond, x_hres_cond), _ = inner._before_sampling(batch, bundle.pre_processors, 1)
-        x_interp_raw = inner.apply_interpolate_to_high_res(
-            eb.x_lres[0:1].to(device)[:, 0, ...])[:, None, ...]
-        prt = getattr(bundle.model, "pre_processors_tendencies", None)
-        y_residual_cond = inner.compute_residuals(
-            y0, x_interp_raw, bundle.pre_processors["out_hres"], prt["out_hres"],
-            target_dataset="out_hres")
+        with torch.no_grad():                                 # see the sharded branch
+            (x_interp_cond, x_hres_cond), _ = inner._before_sampling(batch, bundle.pre_processors, 1)
+            x_interp_raw = inner.apply_interpolate_to_high_res(
+                eb.x_lres[0:1].to(device)[:, 0, ...])[:, None, ...]
+            prt = getattr(bundle.model, "pre_processors_tendencies", None)
+            y_residual_cond = inner.compute_residuals(
+                y0, x_interp_raw, bundle.pre_processors["out_hres"], prt["out_hres"],
+                target_dataset="out_hres")
         recon_state_box = x_interp_cond[:, :, :, box_t, :]    # NORMALIZED interp = what's added back
-        xi_phys_box = x_interp_raw[:, :, :, box_t, :]         # RAW physical interp for x_interp ref
+        xi_box = x_interp_raw[:, :, :, box_t, :]              # RAW physical interp for x_interp ref
 
         def metrics_of(residual):
             return reduce_field(
@@ -1349,7 +1388,7 @@ def run_trajectory(args):
         x_interp_cond, x_hres_cond = prepared["x_interp"], prepared["x_hres"]
         y_residual_cond = prepared["y_residual"]
         recon_state_box = prepared["x_interp_raw"][:, :, :, box_t, :]
-        xi_phys_box = recon_state_box
+        xi_box = recon_state_box
 
         def metrics_of(residual):
             return reduce_field(
@@ -1381,7 +1420,7 @@ def run_trajectory(args):
         if getattr(args, "grid_tail", False) or args.mode == "tp_sweep":
             surf_idx_t = torch.tensor(list(target_indices.values()), device=y0.device)
             references["target_grid_tail"] = tp_tail_stats(y0[..., surf_idx_t], surf_remap)
-        fb_xi = (xir_full[:, :, :, box_t, :] if sharded else xi_phys_box)[0, 0, 0]
+        fb_xi = xi_box[0, 0, 0]
         xi_metrics = {name: _side_reduce(fb_xi[:, name2in[name]], name)
                       for name in target_indices if name in name2in}
         if has_wind and "10u" in name2in and "10v" in name2in:
