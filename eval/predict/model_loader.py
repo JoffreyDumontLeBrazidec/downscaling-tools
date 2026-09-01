@@ -17,6 +17,7 @@ from .seeding import seed_inference
 from .types import PredictionConfig
 
 import atexit as _atexit
+import os as _os
 import logging
 import sys as _sys
 from pathlib import Path as _Path
@@ -193,6 +194,85 @@ def _activate_autoguidance(inference_model, extra_args: dict, config: Prediction
     _atexit.register(_report)
     return info
 
+
+
+def _activate_denoiser_trace(inference_model, config: PredictionConfig) -> dict | None:
+    """Record what the denoiser PROPOSES at every noise level. Off by default.
+
+    Motivation (2026-09-01): the o1280->o2560 checkpoint emits no 6-hour
+    precipitation cell beyond about 330 mm anywhere on Earth, while the data it
+    was trained on holds cells past 600 mm in the same units and the same window.
+    Two things could produce that. The network may be unable to represent such a
+    value, in which case it never proposes one at ANY noise level; or the network
+    may propose one and the sampling trajectory may pull it back. This separates
+    the two by logging, per denoiser call, the noise level and the extreme of the
+    denoised estimate for each output channel.
+
+    Enable with DS_DENOISER_TRACE=<path to a json file>. Everything below is a
+    no-op when that variable is unset, so the deployed path is unchanged.
+    """
+    out_path = _os.environ.get("DS_DENOISER_TRACE")
+    if not out_path:
+        return None
+    inner = getattr(inference_model, "model", inference_model)
+    base_fn = inner.fwd_with_preconditioning
+    names: dict[str, list[str]] = {}
+    di = getattr(inner, "data_indices", None)
+    if di is not None:
+        try:
+            for dkey, idx in dict(di).items():
+                nti = getattr(getattr(getattr(idx, "model", None), "output", None),
+                              "name_to_index", None)
+                if nti:
+                    order = [None] * (max(nti.values()) + 1)
+                    for nm, i in nti.items():
+                        order[i] = nm
+                    names[dkey] = order
+        except Exception:
+            LOG.exception("denoiser trace: could not read output variable names")
+    records: list[dict] = []
+
+    def _traced(*args, **kwargs):
+        D = base_fn(*args, **kwargs)
+        try:
+            if args and isinstance(args[0], dict):
+                sigma = float(next(iter(args[2].values())).reshape(-1)[0].item())
+            else:
+                sigma = float(args[3].reshape(-1)[0].item())
+            items = D.items() if isinstance(D, dict) else [("out", D)]
+            rec = {"sigma": sigma, "channels": {}}
+            for dkey, tensor in items:
+                order = names.get(dkey) or [str(i) for i in range(tensor.shape[-1])]
+                flat = tensor.reshape(-1, tensor.shape[-1])
+                mx = flat.max(dim=0).values.detach().float().cpu().numpy()
+                for i, nm in enumerate(order[:tensor.shape[-1]]):
+                    rec["channels"][nm] = float(mx[i])
+            records.append(rec)
+        except Exception:
+            LOG.exception("denoiser trace: could not record this call")
+        return D
+
+    inner.fwd_with_preconditioning = _traced
+    print("[denoiser-trace] ACTIVE -> %s" % out_path, file=_sys.stderr, flush=True)
+
+    def _dump():
+        try:
+            _Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            _Path(out_path).write_text(json.dumps(
+                {"note": "max of the denoised estimate per output channel, in "
+                         "NORMALISED units (the out_hres normaliser is std-only "
+                         "for tp and cp, so physical = value * stdev)",
+                 "n_calls": len(records), "records": records}, indent=1))
+            print("[denoiser-trace] wrote %d records to %s" % (len(records), out_path),
+                  file=_sys.stderr, flush=True)
+        except Exception:
+            LOG.exception("denoiser trace: dump failed")
+
+    # Mirrors the autoguidance wrapper: keep the state reachable on the model so
+    # a caller (or a test) can dump without waiting for interpreter exit.
+    inference_model._denoiser_trace = {"records": records, "dump": _dump}
+    _atexit.register(_dump)
+    return {"denoiser_trace": out_path}
 
 
 def _activate_sigma_switch(inference_model, extra_args: dict, config: PredictionConfig,
@@ -386,6 +466,9 @@ def load_inference_model(
                                      autoguide_active=bool(ag_info))
     if sw_info:
         LOG.info("sigma-switch ACTIVE: %s", sw_info)
+    tr_info = _activate_denoiser_trace(inference_model, config)
+    if tr_info:
+        LOG.info("denoiser trace ACTIVE: %s", tr_info)
     return (
         inference_model,
         datamodule,
