@@ -1131,8 +1131,8 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
 
 def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_indices,
                   x_interp_cond, x_hres_cond, y_residual_cond, phys_full_of, surf_remap,
-                  references, truth_grid, truth_box, box_t, clat, clon, box_np, window,
-                  eb, out_path):
+                  references, truth_grid, truth_box, box_t, peak_idx, clat, clon, box_np,
+                  window, eb, out_path):
     """Probe A of the tp-peak program (epics/tc-o1280-o2560): the ERASURE CURVE.
 
     For each sigma in --sweep-sigmas and each seed: re-noise the TRUE residual at
@@ -1189,6 +1189,11 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
             shown_full = phys_full_of(y_residual_cond + float(sigma) * noise)
             shown_stats = (tp_tail_stats(shown_full, surf_remap)
                            if shown_full is not None else None)
+            # Value AT the truth's heaviest cell, so the split between what the skip
+            # connection carries and what the network itself emits is exact rather
+            # than inferred by differencing two maxima that may sit on different cells.
+            shown_at_peak = (float(shown_full[0, 0, 0, peak_idx, surf_remap["tp"]])
+                             if (shown_full is not None and peak_idx is not None) else None)
             del shown_full
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1207,11 +1212,22 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
                 rec["c_skip"] = _c_skip(float(sigma))
                 rec["c_out"] = _c_out(float(sigma))
                 rec["passthrough_tp_max"] = rec["c_skip"] * rec["shown_grid"]["tp_max"]
+                if peak_idx is not None:
+                    den_at_peak = float(den_full[0, 0, 0, peak_idx, surf_remap["tp"]])
+                    rec["shown_at_peak"] = shown_at_peak
+                    rec["denoised_at_peak"] = den_at_peak
+                    # D = c_skip * x_noised + c_out * F, evaluated on one fixed cell.
+                    rec["network_at_peak"] = (
+                        (den_at_peak - rec["c_skip"] * shown_at_peak) / rec["c_out"])
                 LOGGER.info("tp_sweep sigma=%-8g seed=%d  shown=%7.1f mm -> denoised=%7.1f mm "
-                            "(truth %7.1f, skip-only would give %7.1f, c_skip=%.3g)",
+                            "(truth %7.1f, skip-only %7.1f, c_skip=%.3g) | at peak cell: "
+                            "shown=%7.1f returned=%7.1f network=%7.1f mm",
                             sigma, seed, 1e3 * rec["shown_grid"]["tp_max"],
                             1e3 * rec["denoised_grid"]["tp_max"], 1e3 * truth_grid["tp_max"],
-                            1e3 * rec["passthrough_tp_max"], rec["c_skip"])
+                            1e3 * rec["passthrough_tp_max"], rec["c_skip"],
+                            1e3 * (rec.get("shown_at_peak") or float("nan")),
+                            1e3 * (rec.get("denoised_at_peak") or float("nan")),
+                            1e3 * (rec.get("network_at_peak") or float("nan")))
             del den_full
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1234,6 +1250,12 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
                 "truth_retention_mean": float(dmax.mean() / truth_grid["tp_max"]),
                 "c_skip": _c_skip(sigma), "c_out": _c_out(sigma),
                 "passthrough_tp_max": _c_skip(sigma) * float(smax.mean()),
+                "network_at_peak_mean": (
+                    float(np.mean([r["network_at_peak"] for r in rs]))
+                    if all("network_at_peak" in r for r in rs) else None),
+                "denoised_at_peak_mean": (
+                    float(np.mean([r["denoised_at_peak"] for r in rs]))
+                    if all("denoised_at_peak" in r for r in rs) else None),
             })
         result = {
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
@@ -1247,6 +1269,7 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
             "tp_scale": float(getattr(args, "tp_scale", 1.0) or 1.0),
             "truth_grib_tpl": getattr(args, "truth_grib_tpl", None),
             "zero_filled_targets": [n for n in ("cp",) if n in target_indices],
+            "peak_cell_index": peak_idx,
             "box": {"box_from": getattr(args, "box_from", "msl"), "lat": clat,
                     "lon": clon % 360.0, "radius_km": args.eye_radius_km,
                     "n_cells": int(box_np.sum())},
@@ -1338,6 +1361,7 @@ def run_trajectory(args):
     # Storm box from the OBSERVED msl (deterministic -> identical on every rank).
     window = (tuple(float(x) for x in args.auto_window.split(","))
               if args.auto_window else DEFAULT_AUTO_WINDOW)
+    peak_idx = None
     if getattr(args, "box_from", "msl") == "tp":
         # Center the box on the TRUTH tp maximum inside the window — for the tp-peak
         # probes the cell of interest is the heaviest rain cell, not the msl eye.
@@ -1352,6 +1376,7 @@ def run_trajectory(args):
         if cand.size == 0:
             cand = np.arange(tp_np.shape[0])
         i = int(cand[np.argmax(tp_np[cand])])
+        peak_idx = i                     # global grid index of the truth's heaviest cell
         clat, clon = float(lat_np[i]), float(lonn[i])
         LOGGER.info("box centered on truth tp max %.4g m at (%.2f, %.2f)",
                     float(tp_np[i]), clat, clon)
@@ -1608,7 +1633,7 @@ def run_trajectory(args):
         return _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg,
                              target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
                              phys_full_of, surf_remap, references, truth_grid, truth_box,
-                             box_t, clat, clon, box_np, window, eb, out_path)
+                             box_t, peak_idx, clat, clon, box_np, window, eb, out_path)
 
     # Production-sampler overrides for the realized trajectories (e.g. reproduce a
     # scored eval config's piecewise schedule: --noise-scheduler-json
