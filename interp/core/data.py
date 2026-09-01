@@ -118,6 +118,20 @@ EVENTS: dict[str, dict] = {
         "steps": ["024"],
         "label": "sep2025_6h",
     },
+    # o1280->o2560 lane: full-globe enfo o1280 input bundles + o2560 targets,
+    # Sept 2025 Humberto window (the pool behind the 100-slice global tp control
+    # of the 20260831 precip screen). 1000 bundles = (date, step) slices x 10
+    # members; override --dates/--members/--steps per case. Default slice is a
+    # placeholder — the tp-peak probes pick the heaviest-truth slices via the
+    # bundle census (see epics/tc-o1280-o2560 20260901 tp noise-level probe).
+    "sep2025_o1280_o2560": {
+        "bundle_dir": ("/home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/"
+                       "bundles_with_y"),
+        "dates": ["20250926"],
+        "members": ["01"],
+        "steps": ["024"],
+        "label": "sep2025_o2560",
+    },
     "window6h_o48_o96_m4": {
         "bundle_dir": "/home/ecm5702/hpcperm/data/input_data/o48_o96/humberto_20250926_20250930_6h",
         "dates": ["20250926"],
