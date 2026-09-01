@@ -48,6 +48,10 @@ RENDER_DPI = 140
 # rows are denser in latitude than longitude, so an isotropic lookup would
 # smear rows; 1.4 keeps the lookup roughly isotropic in grid spacing.
 LAT_LOOKUP_SCALE = 1.4
+# High-pass cutoff for --field fine, in degrees. 0.6 deg sits just below what
+# the O320 driving input can resolve, so what survives the filter is the part
+# of the field the model had to invent rather than inherit.
+DEFAULT_FINE_CUT_DEG = 0.6
 
 DEFAULT_TITLES = {
     "eefo": "EEFO input · O320",
@@ -73,6 +77,7 @@ VARIABLES: dict[str, dict] = {
         "extend": "max",
         "subtitle": "10 m wind speed",
         "cbar_label": "10 m wind speed (m/s)",
+        "fine_vmax": 2.5,
     },
     "msl": {
         "states": ("msl",),
@@ -86,6 +91,7 @@ VARIABLES: dict[str, dict] = {
         "extend": "both",
         "subtitle": "Mean sea level pressure",
         "cbar_label": "Mean sea level pressure (hPa)",
+        "fine_vmax": 0.8,
     },
     "2t": {
         "states": ("2t",),
@@ -102,6 +108,7 @@ VARIABLES: dict[str, dict] = {
         "extend": "both",
         "subtitle": "2 m temperature",
         "cbar_label": "2 m temperature (degC)",
+        "fine_vmax": 3.0,
     },
     "t_850": {
         "states": ("t_850",),
@@ -117,6 +124,7 @@ VARIABLES: dict[str, dict] = {
         "extend": "both",
         "subtitle": "850 hPa temperature",
         "cbar_label": "850 hPa temperature (degC)",
+        "fine_vmax": 1.2,
     },
     "z_500": {
         "states": ("z_500",),
@@ -131,6 +139,7 @@ VARIABLES: dict[str, dict] = {
         "extend": "both",
         "subtitle": "500 hPa geopotential height",
         "cbar_label": "500 hPa geopotential height (dam)",
+        "fine_vmax": 0.3,
     },
 }
 
@@ -138,6 +147,11 @@ VARIABLES: dict[str, dict] = {
 def resolve_scale(args: argparse.Namespace) -> tuple[dict, float, float]:
     """(spec, vmin, vmax) for the requested variable, honouring explicit overrides."""
     spec = VARIABLES[args.variable]
+    if getattr(args, "field", "value") == "fine":
+        # The high-pass field is a departure from a local mean, so it is
+        # centred on zero and needs a symmetric diverging scale.
+        half = spec["fine_vmax"] if args.vmax is None else args.vmax
+        return spec, -half, half
     vmin = spec["vmin"] if args.vmin is None else args.vmin
     vmax = spec["vmax"] if args.vmax is None else args.vmax
     return spec, vmin, vmax
@@ -173,6 +187,15 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
                    help="Field to render (default: wind10m, the 10 m wind speed).")
     p.add_argument("--vmin", type=float, default=None, help="Colour-scale minimum (default: the variable's own).")
     p.add_argument("--vmax", type=float, default=None, help=f"Colour-scale maximum (default: the variable's own; {DEFAULT_VMAX} m/s for wind10m).")
+    p.add_argument(
+        "--field", choices=("value", "fine"), default="value",
+        help="value (default): the field itself. fine: only the scales below --fine-cut-deg, "
+             "i.e. the detail the O320 input could not carry, on a symmetric diverging scale.",
+    )
+    p.add_argument(
+        "--fine-cut-deg", type=float, default=DEFAULT_FINE_CUT_DEG,
+        help=f"High-pass cutoff in degrees for --field fine (default: {DEFAULT_FINE_CUT_DEG}).",
+    )
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
     p.add_argument("--proj-lon", type=float, default=5.0, help="Lambert conformal central longitude (default: 5.0).")
@@ -285,6 +308,8 @@ def _render(
     vmax: float,
     proj_lon: float,
     proj_lat: float,
+    field: str = "value",
+    fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
 ) -> None:
     import matplotlib
     matplotlib.use("Agg")
@@ -293,6 +318,11 @@ def _render(
     import cartopy.feature as cfeature
 
     gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
+    if field == "fine":
+        from scipy.ndimage import gaussian_filter
+        # Subtract a Gaussian smooth of the regridded field, so only the scales
+        # below the cutoff survive. sigma is half the cutoff.
+        grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
 
@@ -300,23 +330,28 @@ def _render(
     # matter what the importing context (e.g. eval.cli's import chain) has
     # tweaked — keeps these maps reproducible pixel-for-pixel across entry
     # points.
+    fine_note = f" · scales below {fine_cut_deg:g} deg" if field == "fine" else ""
     with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}):
         proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
         fig = plt.figure(figsize=(11, 7.5))
         ax = plt.axes(projection=proj)
         ax.set_extent(extent, crs=ccrs.PlateCarree())
-        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=spec["cmap"],
+        cmap = "RdBu_r" if field == "fine" else spec["cmap"]
+        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
                              vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
         ax.coastlines(resolution="50m", linewidth=1.0)
         ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.4)
         ax.set_title(
-            f"{title}\n{spec['subtitle']} · member {member}\n"
+            f"{title}\n{spec['subtitle']}"
+            f"{fine_note} · member {member}\n"
             f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
             fontsize=13,
         )
         cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40,
                             extend=spec["extend"])
-        cbar.set_label(spec["cbar_label"])
+        cbar.set_label(
+            spec["cbar_label"] + " · fine-scale part" if field == "fine" else spec["cbar_label"]
+        )
         fig.tight_layout()
         fig.savefig(out_path, dpi=RENDER_DPI)
         plt.close(fig)
@@ -358,9 +393,12 @@ def run(args: argparse.Namespace) -> int:
         panels.append((key, lat, lon, val, res))
 
     outputs: list[str] = []
+    # "fine" panels get their own filename token so the two field kinds never
+    # overwrite each other in a shared output directory.
+    token = spec["token"] if args.field == "value" else f"{spec['token']}-fine"
     for key, lat, lon, val, res in panels:
         out_path = out_dir / (
-            f"{key}_{spec['token']}_init{args.date}_n{args.member:03d}"
+            f"{key}_{token}_init{args.date}_n{args.member:03d}"
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render(
@@ -369,6 +407,7 @@ def run(args: argparse.Namespace) -> int:
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
+            field=args.field, fine_cut_deg=args.fine_cut_deg,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
@@ -377,11 +416,12 @@ def run(args: argparse.Namespace) -> int:
         "tool": "membermaps",
         "date": args.date, "time": args.time, "step": args.step, "member": args.member,
         "variable": args.variable,
+        "field": args.field, "fine_cut_deg": args.fine_cut_deg,
         "runs": runs, "gribs": gribs, "extent": list(extent),
         "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
     }, filename=(
-        f"membermaps_manifest_{spec['token']}_init{args.date}"
+        f"membermaps_manifest_{token}_init{args.date}"
         f"_n{args.member:03d}_f{args.step:03d}.json"
     ))
     return 0
