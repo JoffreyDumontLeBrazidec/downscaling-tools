@@ -109,6 +109,14 @@ def _bootstrap_ratio_ci(num: np.ndarray, den: np.ndarray, n_boot: int = 2000, se
     return float(np.percentile(ratios, 2.5)), float(np.percentile(ratios, 97.5))
 
 
+def _bin_value(bins: list[dict], label: str, key: str) -> float:
+    """Look one measured bin up by its label, so captions quote the plotted number."""
+    for b in bins:
+        if b["label"] == label:
+            return float(b[key])
+    return float("nan")
+
+
 def _great_circle_deg(lat1, lon1, lat2, lon2) -> np.ndarray:
     """Angular separation in degrees between two sets of points."""
     p1, p2 = np.radians(lat1), np.radians(lat2)
@@ -159,7 +167,7 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
     the cases where the driver was already almost right, because a gap close to
     zero in the denominator makes the ratio explode.
     """
-    fig, axs = plt.subplots(1, 2, figsize=(13.5, 5.4))
+    fig, axs = plt.subplots(1, 2, figsize=(14.5, 5.6))
     arms = [("control", cap_ctrl, C_MODEL)]
     if cap_w13 is not None:
         arms.append(("mass-only autoguidance, weight 1.3", cap_w13, C_GUIDED))
@@ -203,14 +211,15 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
                 fontsize=8.5, color="#555555")
     axs[1].set_ylabel("fraction of the driver-to-target gap closed")
     axs[1].set_title("The same result as a fraction of what was needed")
-    axs[1].set_ylim(0, 1.25)
+    axs[1].set_ylim(0, 1.45)
     for ax in axs:
         ax.set_xticks(xs)
         ax.set_xticklabels([b[0] for b in DRIVER_BINS], fontsize=9)
         ax.set_xlabel("driver quality: driver box minimum minus target box minimum (hPa)")
         ax.axhline(0.0, color="#000000", lw=0.8)
-        ax.legend(fontsize=9, loc="upper left")
+        ax.legend(fontsize=9, loc="upper right")
         ax.grid(axis="y", alpha=0.25)
+    fig.subplots_adjust(wspace=0.28, left=0.075, right=0.985)
 
     caption = (
         "Left: the mean pressure the downscaler subtracts from its driver's box minimum, "
@@ -245,7 +254,8 @@ def fig02_required_vs_delivered(entries: list[dict]):
     colours = [C_MODEL if f < 0.5 else "#2ca02c" for f in fracs]
     ax.barh(ys, fracs, color=colours, alpha=0.85, height=0.6)
     ax.axvline(1.0, color=C_TRUTH, ls="--", lw=1.2)
-    ax.text(1.01, ys.max() + 0.55, "the whole systematic correction", fontsize=9, color="#555555")
+    ax.text(1.01, ys.min() - 0.55, "the whole systematic correction", fontsize=9,
+            color="#555555", va="bottom")
     for y, e, f in zip(ys, entries, fracs):
         ax.text(min(f, 1.05) + 0.02, y,
                 f"{f*100:.0f}%   (needed {e['required']:+.3g} {e['unit']}, "
@@ -253,7 +263,7 @@ def fig02_required_vs_delivered(entries: list[dict]):
                 va="center", fontsize=9)
     ax.set_yticks(ys)
     ax.set_yticklabels(labels, fontsize=10)
-    ax.set_xlim(0, 1.75)
+    ax.set_xlim(0, 2.05)
     ax.set_xlabel("fraction of the systematic 9 km to 4.4 km correction that the model delivers")
     ax.grid(axis="x", alpha=0.25)
     ax.set_title("Everything except the rare intense convective peak")
@@ -323,12 +333,18 @@ def fig03_systematic_by_intensity(scan_bins: list[dict]):
         "average difference between them is the systematic effect of resolution and "
         "physics that a downscaler could learn: the chaotic disagreement between two "
         "integrations averages away, a systematic offset does not. For genuine tropical "
-        "cyclones, meaning a driver low below 990 hPa, that effect is 6.23 hPa of "
-        "deepening, and it saturates near 10 hPa rather than growing without limit. Error "
-        "bars are 95 per cent bootstrap intervals on the mean.\n"
-        + SUPPORT_TROPICS + " Sample: 1,333 paired forecast times, 2023-08 to about "
-        "2024-03, every third time. No model is involved in this figure; it is a property "
-        "of the data the model was trained on.\n"
+        "cyclones, meaning a driver low below 990 hPa, that effect is "
+        f"{abs(_bin_value(scan_bins, '< 990 hPa', 'deepening')):.2f} hPa of deepening, and "
+        "it saturates near 10 hPa rather than growing without limit: the deepest selection "
+        "does not get a proportionally larger correction. Error bars are 95 per cent "
+        "bootstrap intervals on the mean.\n"
+        + SUPPORT_TROPICS + f" Sample: {scan_bins[0]['n']} paired forecast times in the "
+        "widest selection shown, from a scan of the two training datasets every third "
+        "time. No model is involved in this figure; it is a property of the data the model "
+        "was trained on.\n"
+        "The earlier reading of this scan, made on 2026-08-28 when 1,333 samples had been "
+        "written, gave 6.23 hPa for the same selection. The scan has since finished more "
+        "samples and the number has moved slightly; the verdict is unchanged.\n"
         "Note the earlier reading that the systematic difference is about 30 hPa is "
         "RETRACTED: that came from a single global extreme over 15 months, which is not a "
         "systematic effect."
@@ -413,8 +429,11 @@ def fig05_track_divergence(cap: dict):
     ax.set_ylim(0, 100)
 
     caption = (
-        "How often the model and the target are no longer describing the same low. Two "
-        "per cent of members at 6 hours, a majority beyond 72 hours. This is why every "
+        "How often the model and the target are no longer describing the same low. "
+        f"{100*frac[0]:.0f} per cent of members at {steps[0]:.0f} hours, "
+        f"{100*frac[-1]:.0f} per cent at {steps[-1]:.0f} hours, and it passes half the "
+        f"members between {steps[np.argmax(frac > 0.5)] if (frac > 0.5).any() else float('nan'):.0f} "
+        "hours and the end of the forecast. This is why every "
         "intensity number in this bundle is restricted to at most 72 hours or is shown "
         "with the longer leads shaded: past that point a track error would otherwise be "
         "read as an intensity error. The cut-off coincides with the trained lead range, "
@@ -482,21 +501,33 @@ def fig06_precip_ceiling(peaks: dict):
 # ---------------------------------------------------------------------------
 
 def fig07_precip_quantiles(campaign: dict, systematic: dict):
+    """Where the three precipitation distributions sit, and what the step changes.
+
+    The left panel is drawn as a RATIO to the target rather than as three raw
+    curves. Raw curves span three decades, so a model sitting ten per cent away
+    from the target is indistinguishable from one sitting on top of it, and the
+    whole point of the panel is exactly that difference.
+    """
     fig, axs = plt.subplots(1, 2, figsize=(13.5, 5.6))
 
     xs = np.arange(len(campaign["labels"]))
-    for name, key, colour in (("downscaler", "model", C_MODEL),
-                              ("interpolated 9 km driver", "driver", C_DRIVER),
-                              ("IEKM 4.4 km target", "truth", C_TRUTH)):
-        axs[0].plot(xs, campaign[key], "-o", color=colour, lw=2.0, ms=6, label=name)
-    axs[0].set_yscale("log")
+    truth = np.asarray(campaign["truth"], dtype=float)
+    for name, key, colour, marker in (("downscaler", "model", C_MODEL, "o"),
+                                      ("interpolated 9 km driver", "driver", C_DRIVER, "s")):
+        ratio = np.asarray(campaign[key], dtype=float) / truth
+        axs[0].plot(xs, ratio, "-" + marker, color=colour, lw=2.0, ms=7, label=name)
+        for x, v in zip(xs, ratio):
+            axs[0].annotate(f"{v:.2f}", (x, v), textcoords="offset points",
+                            xytext=(0, 8 if colour == C_MODEL else -14),
+                            ha="center", fontsize=8.5, color=colour)
+    axs[0].axhline(1.0, color=C_TRUTH, lw=2.0, ls="--", label="IEKM 4.4 km target")
     axs[0].set_xticks(xs)
     axs[0].set_xticklabels(campaign["labels"], fontsize=9)
-    axs[0].set_ylabel("six-hour precipitation (mm), median over slices")
+    axs[0].set_ylabel("value divided by the target's value")
     axs[0].set_xlabel("position in the distribution")
     axs[0].legend(fontsize=9)
-    axs[0].grid(alpha=0.25, which="both")
-    axs[0].set_title("Where the three distributions sit")
+    axs[0].grid(alpha=0.25)
+    axs[0].set_title("Each field relative to the target it should match")
 
     xs2 = np.arange(len(systematic["labels"]))
     width = 0.38
@@ -505,35 +536,46 @@ def fig07_precip_quantiles(campaign: dict, systematic: dict):
     axs[1].bar(xs2 + width / 2, systematic["delivered"], width, color=C_MODEL,
                alpha=0.9, label="model minus its own driver")
     axs[1].axhline(0.0, color="#000000", lw=1.0)
+    axs[1].set_yscale("symlog", linthresh=1.0)
     neg = [i for i, v in enumerate(systematic["required"]) if v < 0]
     for i in neg:
         axs[1].axvspan(i - 0.5, i + 0.5, color="#9ecae1", alpha=0.30, zorder=0)
+    for x, v in zip(xs2, systematic["required"]):
+        axs[1].annotate(f"{v:+.2f}", (x - width / 2, v), textcoords="offset points",
+                        xytext=(0, 5 if v >= 0 else -12), ha="center", fontsize=8.5)
+    for x, v in zip(xs2, systematic["delivered"]):
+        axs[1].annotate(f"{v:+.2f}", (x + width / 2, v), textcoords="offset points",
+                        xytext=(0, 5 if v >= 0 else -12), ha="center", fontsize=8.5,
+                        color=C_MODEL)
     if neg:
-        axs[1].text(neg[0], min(systematic["required"]) * 1.9,
-                    "here the 4.4 km target is\nLIGHTER than its 9 km driver,\n"
-                    "and the model gets the sign right",
-                    ha="center", fontsize=8.5, color="#1a5276")
+        axs[1].set_title("Shaded: the target is LIGHTER than its driver here")
+    else:
+        axs[1].set_title("What the step from 9 km to 4.4 km changes")
     axs[1].set_xticks(xs2)
     axs[1].set_xticklabels(systematic["labels"], fontsize=9)
-    axs[1].set_yscale("symlog", linthresh=1.0)
     axs[1].set_ylabel("increment (mm), symmetric-log scale")
     axs[1].set_xlabel("position in the distribution")
-    axs[1].legend(fontsize=9)
+    axs[1].legend(fontsize=9, loc="lower left")
     axs[1].grid(axis="y", alpha=0.25)
-    axs[1].set_title("What the step from 9 km to 4.4 km changes, and what the model changes")
+    top = max(max(systematic["required"]), max(systematic["delivered"]))
+    axs[1].set_ylim(top=top * 4.0)
 
     caption = (
-        "Left: the model, its interpolated driver and the target, at four places in the "
-        "precipitation distribution, on a logarithmic scale. The model sits essentially on "
-        "top of its driver everywhere. Right: the systematic increment between the two "
-        "training datasets beside the increment the model actually applies. Going from 9 km "
-        "to 4.4 km makes the moderate-heavy rain LIGHTER, the shaded 99th-percentile column, "
-        "while making the rare peak far heavier; the model reproduces the light direction "
-        "and almost none of the heavy one.\n"
-        "TWO SUPPORTS. The left panel is the Humberto campaign on " + SUPPORT_GLOBAL.split(': ')[1] +
-        " The right panel's required bars come from the paired training datasets over the "
-        "global tropical belt, and its delivered bars from the campaign; the wet fraction "
-        "is a fraction of grid points and is plotted on the same axis for compactness.\n"
+        "Left: the model and its interpolated driver, each divided by the target at the "
+        "same place in the precipitation distribution, so the flat line at one is the "
+        "target. The model tracks its driver closely everywhere and the two fall short "
+        "together at the peak. Right: the systematic increment between the two training "
+        "datasets beside the increment the model actually applies, on a scale that is "
+        "linear near zero and logarithmic beyond, so a small negative bar and a large "
+        "positive one are both visible. Going from 9 km to 4.4 km makes the moderate-heavy "
+        "rain LIGHTER, the shaded 99th-percentile column, while making the rare peak far "
+        "heavier. The model reproduces the light direction, including its sign, and almost "
+        "none of the heavy one.\n"
+        "TWO SUPPORTS, and the comparison is only as good as that. The left panel and the "
+        "delivered bars are the Humberto campaign on the complete global O2560 grid. The "
+        "required bars are the mean difference between the paired training datasets over "
+        "the global tropical belt. Both sides are means over their own samples, so the two "
+        "kinds of average match.\n"
         + CAMPAIGN + " " + ARM_CTRL + f" Sample: {campaign['n_member_slices']} member-slices "
         f"for the model and driver, {campaign['n_slices']} slices for the target; "
         f"{systematic['n_scan']} paired times for the systematic bars."

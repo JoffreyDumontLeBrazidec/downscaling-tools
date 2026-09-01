@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
@@ -55,6 +56,15 @@ def _arm_caption(arm_label: str, event_stats: dict, variable: str, mode: str) ->
             "per-case reading.")
 
 
+def _stamp(fig, caption: str) -> None:
+    """Lay a caption under a figure that was built by a shared backend plotter."""
+    wrapped = "\n".join(textwrap.fill(part, 118) for part in caption.split("\n"))
+    n_lines = wrapped.count("\n") + 1
+    fig.set_size_inches(fig.get_size_inches()[0], fig.get_size_inches()[1] + 0.16 * n_lines)
+    fig.subplots_adjust(bottom=0.06 + 0.030 * n_lines)
+    fig.text(0.015, 0.006, wrapped, ha="left", va="bottom", fontsize=7.8, color="#333333")
+
+
 def _slug(text: str) -> str:
     """A filename-safe form of a human-readable arm label."""
     keep = [c if (c.isalnum() or c in "-_") else "_" for c in text.lower()]
@@ -84,6 +94,7 @@ def build_tc_set(arms: dict, event: str, out_dir: Path):
                 cfg_arm = replace(cfg, plot_title=f"{event.capitalize()} — {arm_label}")
                 fig = plot_pdf_single_variable(
                     cfg_arm, event_stats=stats, variable=variable, mode=mode)
+                _stamp(fig, _arm_caption(arm_label, stats, variable, mode))
                 letter = next(letters)
                 name = f"12{letter}_tc_{vshort}_{mode}_{_slug(arm_label)}.pdf"
                 fig.savefig(out_dir / name, dpi=200)
@@ -93,6 +104,84 @@ def build_tc_set(arms: dict, event: str, out_dir: Path):
                     "file": name,
                     "caption": _arm_caption(arm_label, stats, variable, mode)}
     return figures, captions
+
+
+def _curve_key(name: str) -> str:
+    """The (date, step, state, member) part of an amplitude file name."""
+    return name[len("ampl_"):]
+
+
+def _load_spectra_dir(spectra_dir: Path) -> dict:
+    """Read every amplitude/wavenumber pair under a spectra directory.
+
+    Returns {weather_state: {curve_key: (wavenumbers, amplitudes)}}.
+    """
+    out: dict = {}
+    for state_dir in sorted(Path(spectra_dir).glob("*")):
+        if not state_dir.is_dir():
+            continue
+        curves = {}
+        for ampl in sorted(state_dir.glob("ampl_*.npy")):
+            wvn = state_dir / ("wvn_" + _curve_key(ampl.name))
+            if not wvn.exists():
+                continue
+            curves[_curve_key(ampl.name)] = (np.load(wvn), np.load(ampl))
+        if curves:
+            out[state_dir.name] = curves
+    return out
+
+
+def _relative_deviation(pred, truth, wavenumbers, wmin: float) -> float:
+    """Relative L2 distance between two amplitude curves above a wavenumber."""
+    sel = wavenumbers > wmin
+    t = np.asarray(truth)[sel]
+    p = np.asarray(pred)[sel]
+    denom = np.sqrt(np.sum(t ** 2))
+    if denom == 0:
+        return float("nan")
+    return float(np.sqrt(np.sum((p - t) ** 2)) / denom)
+
+
+def _spectra_measure(summary_path: Path, wmin: float) -> dict:
+    """Per-field deviation from the target's spectrum, for the model and the driver."""
+    summary = json.loads(Path(summary_path).read_text())
+    pred_dir = Path(summary["out_dir"])
+    truth_dir = Path(summary["reference_spectra_dir"])
+    input_dir = Path(str(truth_dir).replace("/truth/", "/input/"))
+    if not input_dir.exists():
+        LOG.warning("no input spectra beside the truth reference at %s", input_dir)
+
+    pred = _load_spectra_dir(pred_dir)
+    truth = _load_spectra_dir(truth_dir)
+    inp = _load_spectra_dir(input_dir) if input_dir.exists() else {}
+
+    rows, curves = [], {}
+    for state in sorted(truth):
+        shared = sorted(set(truth[state]) & set(pred.get(state, {})))
+        if not shared:
+            continue
+        model_dev, input_dev = [], []
+        for key in shared:
+            wvn, t_amp = truth[state][key]
+            model_dev.append(_relative_deviation(pred[state][key][1], t_amp, wvn, wmin))
+            if key in inp.get(state, {}):
+                input_dev.append(_relative_deviation(inp[state][key][1], t_amp, wvn, wmin))
+        rows.append({
+            "field": state.replace("_sfc", ""),
+            "n_curves": len(shared),
+            "model_dev": float(np.mean(model_dev)),
+            "input_dev": float(np.mean(input_dev)) if input_dev else float("nan"),
+        })
+        wvn = truth[state][shared[0]][0]
+        curves[state.replace("_sfc", "")] = {
+            "wavenumbers": wvn,
+            "truth": np.mean([truth[state][k][1] for k in shared], axis=0),
+            "model": np.mean([pred[state][k][1] for k in shared], axis=0),
+            "driver": (np.mean([inp[state][k][1] for k in shared if k in inp.get(state, {})], axis=0)
+                       if input_dev else None),
+        }
+    return {"rows": rows, "curves": curves, "wmin": wmin,
+            "truncation": summary.get("truncation")}
 
 
 def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
@@ -105,91 +194,93 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
             source = candidate
             break
     if source is None:
-        LOG.error("no spectra source available: %s",
+        LOG.error("figure 12i skipped: no spectra source exists among %s",
                   [c["path"] for c in spectra_cfg.get("candidates", [])])
         return [], {}
 
-    curves = json.loads(Path(source["path"]).read_text())
-    fig, axs = plt.subplots(1, 2, figsize=(13.5, 5.4))
-    rows = _spectra_rows(curves)
+    wmin = float(spectra_cfg.get("wavenumber_min", 100.0))
+    measured = _spectra_measure(Path(source["path"]), wmin)
+    rows = measured["rows"]
     if not rows:
-        LOG.error("spectra source %s carried no usable curves", source["path"])
-        plt.close(fig)
+        LOG.error("figure 12i skipped: %s carried no matched curves", source["path"])
         return [], {}
+
+    show = [f for f in ("10u", "msl") if f in measured["curves"]][:2]
+    fig, axs = plt.subplots(1, 2 + len(show), figsize=(5.0 * (2 + len(show)), 5.2))
+    for ax, field in zip(axs, show):
+        c = measured["curves"][field]
+        ax.loglog(c["wavenumbers"], c["truth"], color="#111111", lw=2.0,
+                  label="IEKM 4.4 km target")
+        if c["driver"] is not None:
+            ax.loglog(c["wavenumbers"], c["driver"], color="#1f77b4", lw=1.6,
+                      label="interpolated 9 km driver")
+        ax.loglog(c["wavenumbers"], c["model"], color="#d62728", lw=1.6,
+                  label="downscaler")
+        ax.axvline(wmin, color="#888888", ls=":", lw=1.2)
+        ax.set_xlabel("spherical wavenumber")
+        ax.set_ylabel("power")
+        ax.set_title(f"{field}: how power is spread over scales")
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.2, which="both")
 
     fields = [r["field"] for r in rows]
     xs = np.arange(len(rows))
     model = 100 * np.asarray([r["model_dev"] for r in rows])
     driver = 100 * np.asarray([r["input_dev"] for r in rows])
     width = 0.38
-    axs[0].bar(xs - width / 2, driver, width, color="#1f77b4", alpha=0.85,
-               label="interpolated 9 km driver")
-    axs[0].bar(xs + width / 2, model, width, color="#d62728", alpha=0.85,
-               label="downscaler")
+    ax = axs[len(show)]
+    ax.bar(xs - width / 2, driver, width, color="#1f77b4", alpha=0.85,
+           label="interpolated 9 km driver")
+    ax.bar(xs + width / 2, model, width, color="#d62728", alpha=0.85, label="downscaler")
     for x, v in zip(xs, model):
-        axs[0].text(x + width / 2, v + 0.15, f"{v:.1f}", ha="center", fontsize=8.5)
-    axs[0].set_xticks(xs)
-    axs[0].set_xticklabels(fields)
-    axs[0].set_ylabel("deviation from the target's spectrum (percentage points)")
-    axs[0].set_title("How far each field's spectrum sits from the target's")
-    axs[0].legend(fontsize=9)
-    axs[0].grid(axis="y", alpha=0.25)
+        if np.isfinite(v):
+            ax.text(x + width / 2, v, f"{v:.1f}", ha="center", va="bottom", fontsize=8.5)
+    ax.set_xticks(xs)
+    ax.set_xticklabels(fields)
+    ax.set_ylabel("deviation from the target's spectrum (percentage points)")
+    ax.set_title(f"Deviation above wavenumber {wmin:.0f}")
+    ax.legend(fontsize=8.5)
+    ax.grid(axis="y", alpha=0.25)
 
+    ax = axs[len(show) + 1]
     gain = driver - model
-    axs[1].bar(xs, gain, color="#2ca02c", alpha=0.85)
+    ax.bar(xs, gain, color="#2ca02c", alpha=0.85)
     for x, v in zip(xs, gain):
-        axs[1].text(x, v + 0.05 * np.sign(v or 1), f"{v:+.1f}", ha="center", fontsize=9)
-    axs[1].axhline(0.0, color="#000000", lw=0.9)
-    axs[1].set_xticks(xs)
-    axs[1].set_xticklabels(fields)
-    axs[1].set_ylabel("percentage points of deviation removed by the model")
-    axs[1].set_title("What the downscaler buys, in absolute percentage points")
-    axs[1].grid(axis="y", alpha=0.25)
+        if np.isfinite(v):
+            ax.text(x, v, f"{v:+.1f}", ha="center",
+                    va="bottom" if v >= 0 else "top", fontsize=9)
+    ax.axhline(0.0, color="#000000", lw=0.9)
+    ax.set_xticks(xs)
+    ax.set_xticklabels(fields)
+    ax.set_ylabel("percentage points of deviation removed")
+    ax.set_title("What the downscaler buys, absolute")
+    ax.grid(axis="y", alpha=0.25)
 
-    fig.suptitle("12i. Spectra: how much fine-scale structure each field has",
-                 fontsize=13, fontweight="bold")
-    fig.tight_layout(rect=(0, 0.14, 1, 0.95))
+    detail = "; ".join(f"{r['field']} driver {100*r['input_dev']:.1f} pp, "
+                       f"model {100*r['model_dev']:.1f} pp" for r in rows)
     caption = (
-        "The spectrum says how a field's variance is spread across spatial scales. What "
-        "is plotted is the deviation of each field's spectrum from the target's, in "
-        "ABSOLUTE PERCENTAGE POINTS, and the right-hand panel is how many of those points "
-        "the downscaler removes. Percentage points, not a percentage of the error: these "
-        "errors are already small, and quoting a change as a fraction of a small error "
-        "has previously made a negligible cost read as a real one.\n"
-        f"Support: {source['support']}. Source: {source['label']}, {source['path']}.\n"
-        "Wind is listed as its own field here, not folded into a surface average."
+        "A spectrum says how a field's variance is spread across spatial scales, from "
+        "planetary waves at low wavenumber to the smallest features the grid can carry at "
+        "high wavenumber. The left panels are the mean spectra themselves, both axes "
+        "logarithmic. The remaining panels give the deviation of each field's spectrum "
+        "from the target's in ABSOLUTE PERCENTAGE POINTS, and how many of those points the "
+        "downscaler removes relative to its driver. Percentage points, not a percentage of "
+        "the error: these deviations are small, and quoting a change as a fraction of a "
+        f"small error has previously made a negligible cost read as a real one. {detail}.\n"
+        "10 m wind is shown as its own field, not folded into a surface average.\n"
+        f"Support: {source['support']}, scored above wavenumber {wmin:.0f} only, "
+        f"spectral truncation {measured['truncation']}. "
+        f"Sample: {rows[0]['n_curves']} curves per field. Source: {source['label']}."
     )
     name = "12i_spectra_panel.pdf"
+    fig.suptitle("12i. Spectra: how much fine-scale structure each field has",
+                 fontsize=13, fontweight="bold")
+    n_lines = caption.count("\n") + 6
+    fig.subplots_adjust(bottom=0.10 + 0.022 * n_lines, top=0.88, wspace=0.30)
+    fig.text(0.012, 0.008, "\n".join(textwrap.fill(part, 190) for part in caption.split("\n")),
+             ha="left", va="bottom", fontsize=8.2, color="#333333")
     fig.savefig(out_dir / name, dpi=200)
-    fig.text(0.012, 0.008, caption, fontsize=8.2, va="bottom", ha="left", color="#333333",
-             wrap=True)
     return [fig], {"12i": {"slug": "spectra panel", "file": name, "caption": caption}}
-
-
-def _spectra_rows(curves) -> list[dict]:
-    """Pull per-field relative deviations out of whichever spectra product is present.
-
-    Both spectra products store a per-field relative L2 deviation between a
-    curve and the target's curve; the layouts differ, so this reads the shapes
-    known to occur and returns an empty list rather than guessing.
-    """
-    rows: list[dict] = []
-    if isinstance(curves, dict) and "fields" in curves:
-        for field, entry in curves["fields"].items():
-            if not isinstance(entry, dict):
-                continue
-            m = entry.get("prediction_relative_l2", entry.get("relative_l2"))
-            i = entry.get("input_relative_l2")
-            if m is not None and i is not None:
-                rows.append({"field": field, "model_dev": float(m), "input_dev": float(i)})
-    elif isinstance(curves, dict):
-        for field, entry in curves.items():
-            if isinstance(entry, dict) and "prediction_relative_l2" in entry \
-                    and "input_relative_l2" in entry:
-                rows.append({"field": field,
-                             "model_dev": float(entry["prediction_relative_l2"]),
-                             "input_dev": float(entry["input_relative_l2"])})
-    return rows
 
 
 def build_standing_set(eval_config: dict, out_dir: Path) -> dict:
