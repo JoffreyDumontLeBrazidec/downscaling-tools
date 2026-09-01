@@ -1153,6 +1153,20 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
+    # EDM preconditioning writes the denoised estimate as D = c_skip * x_noised +
+    # c_out * F(...), so at small sigma c_skip is near 1 and D is mostly the input
+    # passing straight through the skip connection. Recording c_skip per sigma keeps
+    # "the model returned 1007 mm" from being read as "the network produced 1007 mm":
+    # `passthrough_tp_max` is what the skip term alone would carry, and only a
+    # denoised value well above it is the network's own doing.
+    sigma_data = float(getattr(bundle.inner_model, "sigma_data", 1.0))
+
+    def _c_skip(s):
+        return sigma_data ** 2 / (s ** 2 + sigma_data ** 2)
+
+    def _c_out(s):
+        return s * sigma_data / (s ** 2 + sigma_data ** 2) ** 0.5
+
     norm_factors = None
     if global_rank == 0:
         norm_factors = _output_norm_factors(
@@ -1190,11 +1204,14 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
                        "denoised_grid": tp_tail_stats(den_full, surf_remap),
                        "denoised_box": tp_tail_stats(den_full[:, :, :, box_t, :], surf_remap)}
                 records.append(rec)
-                LOGGER.info("tp_sweep sigma=%-8g seed=%d  shown tp_max=%7.1f mm -> "
-                            "denoised tp_max=%7.1f mm (truth %7.1f, box %7.1f)",
+                rec["c_skip"] = _c_skip(float(sigma))
+                rec["c_out"] = _c_out(float(sigma))
+                rec["passthrough_tp_max"] = rec["c_skip"] * rec["shown_grid"]["tp_max"]
+                LOGGER.info("tp_sweep sigma=%-8g seed=%d  shown=%7.1f mm -> denoised=%7.1f mm "
+                            "(truth %7.1f, skip-only would give %7.1f, c_skip=%.3g)",
                             sigma, seed, 1e3 * rec["shown_grid"]["tp_max"],
-                            1e3 * rec["denoised_grid"]["tp_max"],
-                            1e3 * truth_grid["tp_max"], 1e3 * rec["denoised_box"]["tp_max"])
+                            1e3 * rec["denoised_grid"]["tp_max"], 1e3 * truth_grid["tp_max"],
+                            1e3 * rec["passthrough_tp_max"], rec["c_skip"])
             del den_full
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -1215,6 +1232,8 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
                 "denoised_tp_max_best": float(dmax.max()),
                 "shown_tp_max_mean": float(smax.mean()),
                 "truth_retention_mean": float(dmax.mean() / truth_grid["tp_max"]),
+                "c_skip": _c_skip(sigma), "c_out": _c_out(sigma),
+                "passthrough_tp_max": _c_skip(sigma) * float(smax.mean()),
             })
         result = {
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
@@ -1223,6 +1242,7 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
             "bundle_paths": [str(p) for p in eb.paths],
             "surface_targets": list(target_indices.keys()),
             "sweep_sigmas": sigmas, "seeds": [int(s) for s in seeds],
+            "sigma_data": sigma_data,
             "norm_factors": norm_factors,
             "tp_scale": float(getattr(args, "tp_scale", 1.0) or 1.0),
             "truth_grib_tpl": getattr(args, "truth_grib_tpl", None),
@@ -1243,9 +1263,10 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
         print("\nTP SWEEP — teacher-forced denoise across sigma "
               f"(truth grid tp_max {1e3 * truth_grid['tp_max']:.1f} mm):")
         for row in by_sigma:
-            print(f"  σ={row['sigma']:>8g}  shown={1e3 * row['shown_tp_max_mean']:7.1f} mm"
+            print(f"  sigma={row['sigma']:>8g}  shown={1e3 * row['shown_tp_max_mean']:7.1f} mm"
                   f"  denoised={1e3 * row['denoised_tp_max_mean']:7.1f}"
-                  f" ±{1e3 * row['denoised_tp_max_std']:5.1f} mm"
+                  f" +/-{1e3 * row['denoised_tp_max_std']:5.1f} mm"
+                  f"  skip-only={1e3 * row['passthrough_tp_max']:7.1f}"
                   f"  retention={row['truth_retention_mean']:.2f}")
 
     if mcg is not None:
