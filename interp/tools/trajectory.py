@@ -1122,7 +1122,8 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
 
 def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_indices,
                   x_interp_cond, x_hres_cond, y_residual_cond, phys_full_of, surf_remap,
-                  references, y0, box_t, clat, clon, box_np, window, eb, out_path):
+                  references, truth_grid, truth_box, box_t, clat, clon, box_np, window,
+                  eb, out_path):
     """Probe A of the tp-peak program (epics/tc-o1280-o2560): the ERASURE CURVE.
 
     For each sigma in --sweep-sigmas and each seed: re-noise the TRUE residual at
@@ -1143,14 +1144,10 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
-    norm_factors = truth_grid = truth_box = None
+    norm_factors = None
     if global_rank == 0:
         norm_factors = _output_norm_factors(
             bundle, device, y_residual_cond.dtype, y_residual_cond.shape[-1], target_indices)
-        surf_idx_t = torch.tensor(list(target_indices.values()), device=y0.device)
-        y0_surf = y0[..., surf_idx_t]
-        truth_grid = tp_tail_stats(y0_surf, surf_remap)
-        truth_box = tp_tail_stats(y0_surf[:, :, :, box_t, :], surf_remap)
         LOGGER.info("truth: grid tp_max=%.1f mm, box tp_max=%.1f mm",
                     1e3 * truth_grid["tp_max"], 1e3 * truth_box["tp_max"])
 
@@ -1164,25 +1161,36 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
                 int(seed) * 100003 + int(global_rank))
             noise = torch.randn(y_residual_cond.shape, device=device,
                                 dtype=y_residual_cond.dtype, generator=gen)
+            # Reduce what the model is SHOWN to numbers and free it before the
+            # forward pass: at O2560 the forward needs every spare GiB.
             shown_full = phys_full_of(y_residual_cond + float(sigma) * noise)
+            shown_stats = (tp_tail_stats(shown_full, surf_remap)
+                           if shown_full is not None else None)
+            del shown_full
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             D = denoise_at_sigma(bundle, x_interp_cond, x_hres_cond, y_residual_cond,
                                  float(sigma), noise, model_comm_group=mcg,
                                  grid_shard_shapes=gss_arg)
+            del noise
             den_full = phys_full_of(D)
+            del D
             if global_rank == 0:
                 rec = {"sigma": float(sigma), "seed": int(seed),
-                       "shown_grid": tp_tail_stats(shown_full, surf_remap),
+                       "shown_grid": shown_stats,
                        "denoised_grid": tp_tail_stats(den_full, surf_remap),
                        "denoised_box": tp_tail_stats(den_full[:, :, :, box_t, :], surf_remap)}
                 records.append(rec)
-                LOGGER.info("tp_sweep σ=%-8g seed=%d  shown tp_max=%7.1f mm -> "
+                LOGGER.info("tp_sweep sigma=%-8g seed=%d  shown tp_max=%7.1f mm -> "
                             "denoised tp_max=%7.1f mm (truth %7.1f, box %7.1f)",
                             sigma, seed, 1e3 * rec["shown_grid"]["tp_max"],
                             1e3 * rec["denoised_grid"]["tp_max"],
                             1e3 * truth_grid["tp_max"], 1e3 * rec["denoised_box"]["tp_max"])
-            del noise, shown_full, D, den_full
+            del den_full
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            if sigma == sigmas[0] and seed == seeds[0]:
+                log_mem("after first denoiser call")
 
     result = None
     if global_rank == 0:
@@ -1422,7 +1430,10 @@ def run_trajectory(args):
                 y_sh, select_residual_channels(inner, x_interp_raw_sh),
                 bundle.pre_processors["out_hres"], prt["out_hres"],
                 target_dataset="out_hres")
-            del y_sh
+            # The RAW interp has done its two jobs (the residual and the box
+            # reference); only the NORMALISED conditioning is needed from here on,
+            # and at O2560 this shard is 2.4 GiB that the forward pass needs back.
+            del y_sh, x_interp_raw_sh
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             log_mem("after residuals")
@@ -1513,7 +1524,10 @@ def run_trajectory(args):
         references = {"target": reduce_box(y0, target_indices, box_t, has_wind)}
         if getattr(args, "grid_tail", False) or args.mode == "tp_sweep":
             surf_idx_t = torch.tensor(list(target_indices.values()), device=y0.device)
-            references["target_grid_tail"] = tp_tail_stats(y0[..., surf_idx_t], surf_remap)
+            y0_surf = y0[..., surf_idx_t]
+            references["target_grid_tail"] = tp_tail_stats(y0_surf, surf_remap)
+            references["target_box_tail"] = tp_tail_stats(y0_surf[:, :, :, box_t, :], surf_remap)
+            del y0_surf
         fb_xi = xi_box[0, 0, 0]
         xi_metrics = {name: _side_reduce(fb_xi[:, name2in[name]], name)
                       for name in target_indices if name in name2in}
@@ -1552,10 +1566,18 @@ def run_trajectory(args):
                              metrics_of, references, clat, clon, box_np, window, eb, out_path, fields_of=fields_of)
 
     if args.mode == "tp_sweep":
+        # The truth statistics are already in `references`, so the full-grid target
+        # can go before the first forward pass, which needs the memory.
+        truth_grid = (references or {}).get("target_grid_tail")
+        truth_box = (references or {}).get("target_box_tail")
+        del y0
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log_mem("before tp_sweep")
         return _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg,
                              target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
-                             phys_full_of, surf_remap, references, y0, box_t,
-                             clat, clon, box_np, window, eb, out_path)
+                             phys_full_of, surf_remap, references, truth_grid, truth_box,
+                             box_t, clat, clon, box_np, window, eb, out_path)
 
     # Production-sampler overrides for the realized trajectories (e.g. reproduce a
     # scored eval config's piecewise schedule: --noise-scheduler-json
