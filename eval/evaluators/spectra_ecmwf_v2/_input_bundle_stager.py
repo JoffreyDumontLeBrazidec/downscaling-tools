@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Stage PrepML O96 input bundle NC files as O96 GRIBs for spectra_ecmwf.
+"""Stage PrepML input bundle NC files as input-grid GRIBs for spectra_ecmwf.
 
-Reads eefo_o96_*_input_bundle.nc files and writes one GRIB per
+Reads eefo_*_input_bundle.nc files and writes one GRIB per
 (date, step, member, weather_state) in the same nopoles layout used by
 _grib_stager.py so that runner.py can hand them to gptosp + _amplitude_computer.
 """
@@ -60,11 +60,11 @@ GRIB_PARAM: dict[str, tuple[str, int | None, str]] = {
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Stage O96 input bundle NC files as O96 GRIBs for spectra_ecmwf."
+        description="Stage input bundle NC files as input-grid GRIBs for spectra_ecmwf."
     )
     p.add_argument("--bundles-dir",    required=True)
     p.add_argument("--out-dir",        required=True)
-    p.add_argument("--template-grib",  required=True, help="Path to o96-template.grib")
+    p.add_argument("--template-grib",  required=True, help="Path to the input-grid template GRIB, e.g. o96-template.grib or o320-template.grib")
     p.add_argument("--weather-states", default="10u,10v,2t,sp,t_850,z_500")
     p.add_argument("--date-list",      default="ALL")
     p.add_argument("--step-list",      default="ALL")
@@ -81,13 +81,16 @@ def csv_matches(raw: str, needle: int) -> bool:
 
 def discover_bundles(bundles_dir: Path) -> list[tuple[Path, int, int, int]]:
     out: list[tuple[Path, int, int, int]] = []
-    for p in sorted(bundles_dir.glob("eefo_o96_*_input_bundle.nc")):
+    # Any input grid: the lane decides which bundles live here (o96 for
+    # o96->o320, o320 for o320->o1280, ...). BUNDLE_RE below still
+    # validates the name shape, so a stray file cannot slip through.
+    for p in sorted(bundles_dir.glob("eefo_*_input_bundle.nc")):
         m = BUNDLE_RE.match(p.name)
         if not m:
             continue
         out.append((p, int(m.group(1)), int(m.group(2)), int(m.group(3))))
     if not out:
-        raise FileNotFoundError(f"No eefo_o96_*_input_bundle.nc files found in {bundles_dir}")
+        raise FileNotFoundError(f"No eefo_*_input_bundle.nc files found in {bundles_dir}")
     return out
 
 
