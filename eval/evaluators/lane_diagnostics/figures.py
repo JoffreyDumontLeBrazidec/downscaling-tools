@@ -71,13 +71,30 @@ DRIVER_BINS = [
 # small shared helpers
 # ---------------------------------------------------------------------------
 
-def finish(fig, title: str, caption: str):
-    """Stamp a title on a figure and lay the caption out underneath it."""
-    fig.suptitle(title, fontsize=13, fontweight="bold", y=0.985)
+def finish(fig, title: str, caption: str, *, left_inches: float = 1.05):
+    """Stamp a title on a figure and lay the caption out underneath it.
+
+    The page grows downwards to make room for the caption rather than the axes
+    shrinking upwards. Shrinking the axes was the wrong way round: it left the
+    plotting area shorter than its own rotated y-axis label, which matplotlib
+    then clipped at the edge of the page.
+    """
     wrapped = "\n".join(textwrap.fill(part, 132) for part in caption.split("\n"))
     n_lines = wrapped.count("\n") + 1
-    fig.subplots_adjust(bottom=0.10 + 0.028 * n_lines, top=0.90)
-    fig.text(0.012, 0.008, wrapped, ha="left", va="bottom", fontsize=8.2,
+
+    width, height = fig.get_size_inches()
+    caption_inches = 0.135 * n_lines + 0.20
+    title_inches = 0.45
+    total = height + caption_inches + title_inches
+    fig.set_size_inches(width, total)
+    fig.subplots_adjust(
+        bottom=(caption_inches + 0.62) / total,
+        top=1.0 - title_inches / total,
+        left=left_inches / width,
+        right=1.0 - 0.25 / width,
+    )
+    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.0 - 0.16 / total)
+    fig.text(0.012, 0.10 / total, wrapped, ha="left", va="bottom", fontsize=8.2,
              family="DejaVu Sans", color="#333333")
     return fig, caption
 
@@ -219,7 +236,6 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
         ax.axhline(0.0, color="#000000", lw=0.8)
         ax.legend(fontsize=9, loc="upper right")
         ax.grid(axis="y", alpha=0.25)
-    fig.subplots_adjust(wspace=0.28, left=0.075, right=0.985)
 
     caption = (
         "Left: the mean pressure the downscaler subtracts from its driver's box minimum, "
@@ -266,8 +282,7 @@ def fig02_required_vs_delivered(entries: list[dict]):
     ax.set_xlim(0, 2.05)
     ax.set_xlabel("fraction of the systematic 9 km to 4.4 km correction that the model delivers")
     ax.grid(axis="x", alpha=0.25)
-    ax.set_title("Everything except the rare intense convective peak")
-    fig.subplots_adjust(left=0.20, right=0.985)
+    fig.set_size_inches(15.0, 6.4)
 
     caption = (
         "The bar is the model's own increment over its interpolated driver divided by the "
@@ -284,9 +299,11 @@ def fig02_required_vs_delivered(entries: list[dict]):
         "pairs the deterministic high-resolution forecast the model trained against, "
         "while the campaign uses interpolated ensemble members.\n"
         + ARM_CTRL + " " + CAMPAIGN + "\n"
-        + "; ".join(f"{e['label']}: {e['support_note']}" for e in entries) + "."
+        + "; ".join(f"{e['label'].replace(chr(10), ' ')}: {e['support_note']}"
+                    for e in entries) + "."
     )
-    return finish(fig, "2. What the correction requires against what the model delivers", caption)
+    return finish(fig, "2. Everything except the rare intense convective peak",
+                  caption, left_inches=3.1)
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +663,7 @@ def fig09_loss_budget(budget: dict):
     ax.set_ylabel("share of the total (%)")
     ax.grid(alpha=0.25, which="both")
     ax.legend(fontsize=9.5)
+    ax.set_xlim(right=float(thr.max()) * 6.0)
     for t in (30.0, 100.0):
         if t in thr:
             k = int(np.where(thr == t)[0][0])
@@ -679,7 +697,7 @@ def fig09_loss_budget(budget: dict):
 def fig10_sampler_arms(arms: dict, order: list[str]):
     present = [k for k in order if arms.get(k, {}).get("n_member_slices", 0) > 0]
     missing = [k for k in order if k not in present]
-    fig, ax = plt.subplots(figsize=(12.5, 5.8))
+    fig, ax = plt.subplots(figsize=(12.5, 6.0))
     data = [np.asarray(arms[k]["peaks_mm"], dtype=float) for k in present]
     parts = ax.violinplot(data, positions=np.arange(len(present)), widths=0.8,
                           showmedians=True, showextrema=False)
@@ -687,6 +705,7 @@ def fig10_sampler_arms(arms: dict, order: list[str]):
         body.set_facecolor(C_MODEL)
         body.set_alpha(0.35)
     parts["cmedians"].set_color(C_TRUTH)
+
     truth = None
     for k in present:
         if arms[k].get("truth_peaks_mm"):
@@ -697,39 +716,59 @@ def fig10_sampler_arms(arms: dict, order: list[str]):
         ax.text(len(present) - 0.5, float(np.median(truth)) * 1.02,
                 f"median target peak in these boxes, {np.median(truth):.0f} mm",
                 ha="right", fontsize=9, color="#333333")
-    labels = []
+
+    labels, medians, cvs = [], [], []
     for i, k in enumerate(present):
         v = np.asarray(arms[k]["peaks_mm"], dtype=float)
-        cv = v.std() / v.mean()
-        ax.text(i, v.max() * 1.03, f"cv {cv:.3f}\nmedian {np.median(v):.0f} mm\nn={v.size}",
+        medians.append(float(np.median(v)))
+        cvs.append(float(v.std() / v.mean()))
+        ax.text(i, v.max() * 1.02, f"cv {cvs[-1]:.3f}\nmedian {medians[-1]:.0f} mm\nn={v.size}",
                 ha="center", fontsize=8.5)
-        s = arms[k]["sampler"]
-        labels.append(f"{k}\nsteps {s.get('num_steps')}, ceiling {s.get('sigma_max'):g}\n"
-                      f"churn {s.get('S_churn')}")
+        sm = arms[k]["sampler"]
+        labels.append(f"{k}\nsteps {sm.get('num_steps')}, ceiling {sm.get('sigma_max'):g}\n"
+                      f"churn {sm.get('S_churn')}")
     ax.set_xticks(np.arange(len(present)))
     ax.set_xticklabels(labels, fontsize=8.5)
-    ax.set_ylabel("largest six-hour precipitation in the box (mm)")
+    ax.set_ylabel("box peak six-hour precipitation (mm)")
+    ax.set_ylim(top=max(np.max(d) for d in data) * 1.22)
     ax.grid(axis="y", alpha=0.25)
 
+    # the two arms that share a configuration measure the run-to-run scatter
+    repeats = [i for i, k in enumerate(present) if k.startswith("ceiling 1e6")]
+    scatter_line = ""
+    if len(repeats) == 2:
+        a, b = medians[repeats[0]], medians[repeats[1]]
+        scatter_line = (
+            f"Two arms carry IDENTICAL settings and differ only in being separate runs; "
+            f"their medians are {a:.0f} and {b:.0f} mm, so about {100*abs(a-b)/((a+b)/2):.0f} "
+            "per cent is run-to-run scatter and any smaller difference means nothing. ")
+    base = medians[0]
+    effects = "; ".join(f"{k}: median {m:.0f} mm ({100*(m-base)/base:+.0f} per cent), "
+                        f"coefficient of variation {c:.3f}"
+                        for k, m, c in zip(present, medians, cvs))
+
     caption = (
-        "All arms are the same checkpoint on the same cases, so the sampler is the only "
-        "thing that differs. Widening the noise ceiling by a factor of a thousand moves "
-        "the median peak by a few per cent. Raising the churn, which is how much extra "
-        "noise is injected and removed at each sampling step, does lift the field, but it "
-        "lifts the whole distribution and REDUCES the coefficient of variation, which is "
-        "added roughness rather than rare intense cells. No sampler setting reaches the "
-        "target's peak, which places the limit in the trained weights rather than in how "
-        "they are sampled.\n"
-        + SUPPORT_BOXLANE + " Same checkpoint fccc23df step 300,000 throughout; the arms "
-        "belong to a screen run by another session and were read without modification.\n"
-        + ("Sample sizes are annotated per arm. "
-           if not missing else
-           f"Sample sizes are annotated per arm. NOT SHOWN because no prediction files "
-           f"existed when this bundle was built: {', '.join(missing)}. ")
-        + "Arms with fewer member-slices than the others are partial and are labelled with "
-        "their own count rather than pooled."
+        "All arms are the SAME checkpoint on the SAME cases, so the sampler is the only "
+        "thing that differs and any change here is the sampler's doing. Widening the noise "
+        "ceiling by a factor of a thousand barely moves the peak. Raising the churn, which "
+        "is how much extra noise is injected and then removed again at each sampling step, "
+        "does lift the field, but it lifts the WHOLE distribution while REDUCING the "
+        "coefficient of variation, which is the signature of a raised roughness floor "
+        "rather than of rare intense cells appearing. That places the limit in the trained "
+        "weights rather than in how they are sampled. " + effects + ". " + scatter_line + "\n"
+        + SUPPORT_BOXLANE + " Checkpoint fccc23df step 300,000 throughout. These arms "
+        "belong to a sampler screen run by another session and were read without "
+        "modification.\n"
+        "Sample sizes are annotated on each arm and are NOT pooled, because they differ. "
+        + (f"NOT SHOWN because no prediction files existed when this bundle was built: "
+           f"{', '.join(missing)}. " if missing else "")
+        + ("The boxed predictions carry no target precipitation field, so there is no "
+           "target line on this figure; for how far the model's peak sits below the "
+           "target's, see figures 6 and 14 on the global support."
+           if truth is None else "")
     )
-    return finish(fig, "10. No sampler setting moves the ceiling", caption)
+    return finish(fig, "10. No sampler setting moves the ceiling", caption,
+                  left_inches=1.35)
 
 
 # ---------------------------------------------------------------------------
@@ -750,10 +789,10 @@ def fig11_pair_coherence(lanes: dict):
                     label=f"{name}: model against target")
         gain = [100 * (a - b) / a for a, b in zip(ri, rm)]
         axs[1].plot(steps, gain, "-o", color=colour, lw=2.0, ms=5, label=name)
-    axs[0].set_ylabel("root-mean-square error in sea-level pressure (Pa)")
+    axs[0].set_ylabel("sea-level pressure error (Pa)")
     axs[0].set_title("How far the interpolated input already is from the target")
     axs[1].axhline(0.0, color="#000000", lw=0.8)
-    axs[1].set_ylabel("error the model removes, per cent of the input's error")
+    axs[1].set_ylabel("error removed (% of the input's)")
     axs[1].set_title("What the downscaler adds on top")
     for ax in axs:
         ax.set_xlabel("lead time (h)")
@@ -866,7 +905,7 @@ def fig14_spread_collapse(spread: dict):
     axs[0].plot(x, np.asarray(spread["truth"])[order], color=C_TRUTH, lw=2.0,
                 label="IEKM 4.4 km target")
     axs[0].set_xlabel("the 100 slices, ordered by the target's own peak")
-    axs[0].set_ylabel("largest six-hour precipitation on the globe (mm)")
+    axs[0].set_ylabel("global peak six-hour precipitation (mm)")
     axs[0].legend(fontsize=9)
     axs[0].grid(alpha=0.25)
     axs[0].set_title("Ten members in, and how wide they come out")

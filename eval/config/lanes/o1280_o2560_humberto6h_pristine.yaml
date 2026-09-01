@@ -220,11 +220,14 @@ lane_diagnostics:
 
   # READ ONLY. These boxed arms belong to another session's live sampler screen.
   # Arms still filling report their own smaller sample rather than being pooled.
+  # Two of these arms carry IDENTICAL sampler settings and differ only in being
+  # separate runs. That repeat is deliberately kept: it measures the run-to-run
+  # scatter against which any sampler effect has to be judged.
   sampler_arms:
-    "ctrl": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_ctrl_20260826T122854Z
-    "wider noise ceiling": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_pw40s1e6_20260827T051954Z
+    "ceiling 1e3": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_ctrl_20260826T122854Z
+    "ceiling 1e6, run A": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_pw40s1e6_20260827T051954Z
+    "ceiling 1e6, run B": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn2p5_20260901T055159Z
     "churn 0": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn0_20260901T055159Z
-    "churn 2.5": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn2p5_20260901T055159Z
     "churn 8": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn8_20260901T055159Z
     "churn 16.6": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn16p6_20260831T184705Z
 

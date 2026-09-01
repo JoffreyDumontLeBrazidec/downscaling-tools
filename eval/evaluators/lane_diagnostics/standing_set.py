@@ -237,7 +237,7 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
             ax.text(x + width / 2, v, f"{v:.1f}", ha="center", va="bottom", fontsize=8.5)
     ax.set_xticks(xs)
     ax.set_xticklabels(fields)
-    ax.set_ylabel("deviation from the target's spectrum (percentage points)")
+    ax.set_ylabel("deviation from target (percentage points)")
     ax.set_title(f"Deviation above wavenumber {wmin:.0f}")
     ax.legend(fontsize=8.5)
     ax.grid(axis="y", alpha=0.25)
@@ -252,7 +252,7 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
     ax.axhline(0.0, color="#000000", lw=0.9)
     ax.set_xticks(xs)
     ax.set_xticklabels(fields)
-    ax.set_ylabel("percentage points of deviation removed")
+    ax.set_ylabel("deviation removed (percentage points)")
     ax.set_title("What the downscaler buys, absolute")
     ax.grid(axis="y", alpha=0.25)
 
@@ -273,12 +273,20 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
         f"Sample: {rows[0]['n_curves']} curves per field. Source: {source['label']}."
     )
     name = "12i_spectra_panel.pdf"
+
+    wrapped = "\n".join(textwrap.fill(part, 190) for part in caption.split("\n"))
+    n_lines = wrapped.count("\n") + 1
+    width, height = fig.get_size_inches()
+    caption_inches = 0.135 * n_lines + 0.20
+    total = height + caption_inches + 1.05
+    fig.set_size_inches(width, total)
+    fig.subplots_adjust(bottom=(caption_inches + 0.62) / total,
+                        top=1.0 - 1.30 / total, wspace=0.34,
+                        left=0.75 / width, right=1.0 - 0.15 / width)
     fig.suptitle("12i. Spectra: how much fine-scale structure each field has",
-                 fontsize=13, fontweight="bold")
-    n_lines = caption.count("\n") + 6
-    fig.subplots_adjust(bottom=0.10 + 0.022 * n_lines, top=0.88, wspace=0.30)
-    fig.text(0.012, 0.008, "\n".join(textwrap.fill(part, 190) for part in caption.split("\n")),
-             ha="left", va="bottom", fontsize=8.2, color="#333333")
+                 fontsize=13, fontweight="bold", y=1.0 - 0.30 / total)
+    fig.text(0.010, 0.10 / total, wrapped, ha="left", va="bottom", fontsize=8.2,
+             color="#333333")
     fig.savefig(out_dir / name, dpi=200)
     return [fig], {"12i": {"slug": "spectra panel", "file": name, "caption": caption}}
 
