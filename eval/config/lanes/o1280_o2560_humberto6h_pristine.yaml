@@ -184,3 +184,58 @@ resource_profiles:
     time: "04:00:00"
     mem: 32G
     cpus: 4
+
+# ---------------------------------------------------------------------------
+# Diagnostic figure bundle for this lane (2026-09-01).
+#
+# Reads measurements that already exist and makes the few that need a compute
+# node, then renders one labelled bundle of figures with captions that state
+# the support, the sample size and the arm behind every number. Diagnostic
+# only: this evaluator deliberately produces NO scoreboard row, and it is not
+# in any evaluator group, so it runs only when named with --only.
+# ---------------------------------------------------------------------------
+lane_diagnostics:
+  box: {south: 15.0, north: 40.0, west: -80.0, east: -35.0}
+
+  capacity:
+    control: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_ctrl.json
+    guided: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_w13.json
+
+  precip_scores_json: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/precip_scores/scores.json
+
+  # 1,333 paired tropical-belt samples from the two training datasets, scanned
+  # on Jupiter (job 1524468) and relayed here.
+  scan_jsonl: /home/ecm5702/agent-work/20260901-o2560-figures/scratch/tropical_extremes_stride3.jsonl
+
+  loss_budget:
+    stride: 5
+    member: 0
+    thresholds_mm: [0.1, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0]
+
+  # Each lane is scored on its OWN target grid against its own target; the two
+  # are never mixed into one number.
+  pair_lanes:
+    o1280_o2560: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/predictions
+    o320_o1280: /home/ecm5702/scratch/eval/o320_o1280_b785bf12_unified_full/run_20260619T192122_anemoi-by_ep/predictions
+
+  # READ ONLY. These boxed arms belong to another session's live sampler screen.
+  # Arms still filling report their own smaller sample rather than being pooled.
+  sampler_arms:
+    "ctrl": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_ctrl_20260826T122854Z
+    "wider noise ceiling": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_pw40s1e6_20260827T051954Z
+    "churn 0": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn0_20260901T055159Z
+    "churn 2.5": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn2p5_20260901T055159Z
+    "churn 8": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn8_20260901T055159Z
+    "churn 16.6": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn16p6_20260831T184705Z
+
+  standing_set:
+    event: humberto
+    tc_arms:
+      "unguided control": /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
+      "mass-only autoguidance, weight 1.3": /home/ecm5702/scratch/eval/o2560_humberto_agmass_w13_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
+    spectra:
+      wavenumber_min: 100.0
+      candidates:
+        - label: spectra_ecmwf_v2, the corrected spectral route
+          path: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/spectra_ecmwf_v2/spectra_summary.json
+          support: "global field, spherical-harmonic transform at TCo2559, lead time 120 h, member 1, 5 initialisations"

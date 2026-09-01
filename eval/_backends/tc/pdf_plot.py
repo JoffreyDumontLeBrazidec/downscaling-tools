@@ -412,3 +412,94 @@ def plot_pdf_log(
     fig.suptitle(plot_config.plot_title.replace("normed pdfs", "TC distributions"))
     fig.subplots_adjust(left=0.07, right=0.985, bottom=0.16, top=0.83, wspace=0.24)
     return fig
+
+
+def plot_pdf_single_variable(
+    plot_config: TCPlotConfig,
+    *,
+    event_stats: dict,
+    variable: str,
+    mode: str = "ratio",
+    exp_labels: dict[str, str] | None = None,
+    title_suffix: str = "",
+) -> plt.Figure:
+    """Render ONE variable's tropical-cyclone distribution on its own figure.
+
+    ``plot_pdf_ratios`` and ``plot_pdf_log`` put sea-level pressure and 10 m wind
+    speed side by side in one figure.  That is convenient for a quick look but it
+    forces wind to share a caption and a title with pressure, and wind is not a
+    secondary column on any lane: a change that deepens a cyclone without
+    strengthening its wind is a different verdict from one that moves both.  This
+    function draws a single variable so wind can carry its own figure, its own
+    axis limits and its own caption.
+
+    ``variable`` is a key of ``event_stats["variables"]``, normally ``mslp_hpa``
+    or ``wind10m_ms``.  ``mode`` is ``"ratio"`` for curves normalised by the
+    analysis, matching ``plot_pdf_ratios``, or ``"log"`` for raw densities on a
+    logarithmic axis, matching ``plot_pdf_log``.
+    """
+    if mode not in ("ratio", "log"):
+        raise ValueError(f"mode must be 'ratio' or 'log', got {mode!r}")
+    exp_labels = exp_labels or {}
+    oper_key = event_stats["analysis_key"]
+    curve_order = event_stats["curve_order"]
+    var_data = event_stats["variables"][variable]
+
+    oper_hist = np.asarray(var_data["oper_histogram"])
+    mids = np.asarray(var_data["bin_mids"])
+
+    ml_like_keys = [
+        k for k in curve_order
+        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
+    ]
+    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
+    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
+
+    is_wind = variable.startswith("wind")
+    xlabel = "10 m wind speed (m/s)" if is_wind else "Mean sea level pressure (hPa)"
+    ylim = plot_config.wind_ylim if is_wind else plot_config.mslp_ylim
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.6))
+
+    if mode == "log":
+        series = [oper_hist, *(np.asarray(var_data["curves"][k]["histogram"]) for k in curve_order)]
+        floor = _log_density_floor(*series)
+        ax.plot(mids, _floor_for_log(oper_hist, floor=floor), "-", linewidth=3.0,
+                color="#000000",
+                label=_clean_distribution_label(oper_key, exp_labels, oper_key=oper_key))
+
+    for key in curve_order:
+        label = curve_label(key, exp_labels, oper_key=oper_key)
+        style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
+        hist = np.asarray(var_data["curves"][key]["histogram"])
+        values = (safe_ratio(hist, oper_hist) if mode == "ratio"
+                  else _floor_for_log(hist, floor=floor))
+        ax.plot(mids, values, label=label, color=style["color"],
+                linestyle=style["linestyle"], linewidth=style["linewidth"])
+
+    _apply_distribution_xlim(ax, var_data, variable=variable)
+    if mode == "ratio":
+        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="#111827", label="OPER AN")
+        ydata_max = max(
+            (np.nanmax(line.get_ydata()) for line in ax.get_lines() if line.get_ydata().size),
+            default=0.0,
+        )
+        if np.isfinite(ydata_max) and ydata_max > ylim[1]:
+            ax.set_yscale("symlog", linthresh=ylim[1])
+            ax.set_ylim(0, None)
+        else:
+            ax.set_ylim(*ylim)
+        ax.set_ylabel("Probability density divided by the analysis's", fontsize=12)
+        kind = "normalised by the analysis"
+    else:
+        ax.set_yscale("log")
+        ax.set_ylabel("Probability density", fontsize=12)
+        kind = "raw density, logarithmic axis"
+
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_title(f"{'10 m wind speed' if is_wind else 'Sea level pressure'} — {kind}",
+                 fontsize=12)
+    ax.legend(fontsize=8.5)
+    fig.suptitle((plot_config.plot_title + " " + title_suffix).strip())
+    fig.tight_layout()
+    return fig

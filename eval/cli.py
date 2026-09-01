@@ -51,6 +51,7 @@ ALL_EVALUATORS = [
     "interp", "probabilistic", "spread_proxy",
     "quaver", "local_global",
     "spectra_coherence",
+    "lane_diagnostics",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -86,6 +87,18 @@ def _add_evaluator_filter_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--include-diagnostics", action="store_true", default=False,
         help="Run default + diagnostics evaluator groups from lane YAML.",
+    )
+    parser.add_argument(
+        "--stages", default=None,
+        help=(
+            "Comma-separated stage names passed to every selected evaluator as "
+            "eval_config['stages'], overriding the lane YAML. Evaluators that do "
+            "their work in one piece ignore it; evaluators whose measurements "
+            "have very different costs use it to run in separate jobs. Write the "
+            "stages' outputs to separate --output-dir trees when running them "
+            "concurrently, because an evaluator's results directory is cleaned "
+            "before a fresh run."
+        ),
     )
 
 
@@ -464,6 +477,13 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
+
+def _parse_csv_or_none(raw: str | None) -> list[str] | None:
+    """Split a comma-separated option into a list, or None when it was not given."""
+    if raw is None:
+        return None
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
 
 def _parse_int_csv(raw: str) -> list[int]:
     """Parse comma-separated integers, sorted ascending."""
@@ -970,6 +990,7 @@ def _run_evaluators(
     plot_only: bool = False,
     checkpoint: str | None = None,
     run_label: str = "",
+    stages: list[str] | None = None,
 ) -> list[str]:
     """Run selected evaluators on existing predictions. Returns list of evaluators that ran."""
     evaluators_run: list[str] = []
@@ -1012,7 +1033,9 @@ def _run_evaluators(
 
         # Determine results directory
         results_dir = output_dir / "evaluators" / name
-        eval_config = lane_config.get(name, {})
+        eval_config = dict(lane_config.get(name, {}))
+        if stages is not None:
+            eval_config["stages"] = list(stages)
 
         # C3: completion is tracked by a `.complete` marker written only after a
         # fully successful run/score/plot. A bare results_dir is NOT proof of
@@ -1787,6 +1810,7 @@ def main(argv: list[str] | None = None) -> None:
             plot_only=getattr(args, "plot_only", False),
             checkpoint=getattr(args, "checkpoint", None),
             run_label=getattr(args, "run_label", ""),
+            stages=_parse_csv_or_none(getattr(args, "stages", None)),
         )
         # C2: record completion FIRST (always), then consolidate plots (non-fatal).
         _update_effective_config_completion(output_dir, evaluators_run)

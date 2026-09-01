@@ -17,7 +17,7 @@ _LANE_ALLOWED_KEYS = {
     "resource_profiles", "region_plot", "prepare", "prepml",
     "default_host", "allowed_hosts", "lineage",
     "precip", "precip_dist", "precip_events", "precip_scores", "probabilistic", "quaver", "local_global",
-    "tctracker",
+    "tctracker", "lane_diagnostics",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
