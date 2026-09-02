@@ -1,0 +1,10 @@
+# Smoke-test override for the texture evaluator (added 2026-09-02).
+# The ft400k unguided control lane with the texture block restricted to forecast
+# step 24 and ensemble members 1 and 2. It exists because the CLI's --members flag
+# only reaches predict.members, so an evaluator's member subset has to live in its
+# own block; --steps does propagate once the block carries a steps key.
+base: o320_o1280_prepml_pw30_season_ft400k_ctrl
+
+texture:
+  steps: [24]
+  members: [1, 2]

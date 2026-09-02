@@ -52,6 +52,7 @@ ALL_EVALUATORS = [
     "quaver", "local_global",
     "spectra_coherence",
     "lane_diagnostics",
+    "texture",
 ]
 
 DEFAULT_HOST = "atos_ac"
