@@ -467,10 +467,12 @@ def _render_grid(
             ax.set_title(f"member {member} · max {peak:.1f}", fontsize=10)
         for ax in axes[len(members):]:
             ax.set_visible(False)
+        # y above 1 keeps the three title lines clear of the first row of panel
+        # titles; bbox_inches="tight" then crops back to the drawn extent.
         fig.suptitle(
             f"{title}\n{spec['subtitle']}{fine_note} · {len(members)} members\n"
             f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
-            fontsize=13,
+            fontsize=13, y=1.06,
         )
         if mesh is not None:
             cbar = fig.colorbar(mesh, ax=axes.tolist(), orientation="horizontal",
