@@ -280,13 +280,16 @@ def _aggregate(samples: list[dict], boxes: list[str], fields: list[str]) -> list
             if field == "msl":
                 row["minimum_distance_km"] = {
                     pair: _mean_sd([s["minimum"]["distance_km"][pair] for s in sel
-                                    if s.get("minimum")])
+                                    if s.get("minimum") and pair in s["minimum"]["distance_km"]])
                     for pair in PAIRS
+                    if any(pair in (s.get("minimum") or {}).get("distance_km", {})
+                           for s in sel)
                 }
                 row["minimum_value_hpa"] = {
                     src: _mean_sd([s["minimum"]["value"][src] / 100.0 for s in sel
-                                   if s.get("minimum")])
+                                   if s.get("minimum") and src in s["minimum"]["value"]])
                     for src in SOURCE_OF
+                    if any(src in (s.get("minimum") or {}).get("value", {}) for s in sel)
                 }
             rows.append(row)
     return rows
