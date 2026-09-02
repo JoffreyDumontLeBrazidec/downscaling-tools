@@ -54,6 +54,7 @@ ALL_EVALUATORS = [
     "lane_diagnostics",
     "texture",
     "wind_extremes",
+    "displacement",
 ]
 
 DEFAULT_HOST = "atos_ac"

@@ -13,3 +13,14 @@ wind_extremes:
     franklin_atlantic: [22.0, 40.0, -72.0, -50.0]
     north_atlantic_midlat: [42.0, 60.0, -40.0, -10.0]
     europe: [40.0, 60.0, -10.0, 20.0]
+
+displacement:
+  fields: [msl, wind10m]
+  grid_res_deg: 0.25
+  max_shift_deg: 2.0
+  smooth_deg: 0.5
+  boxes:
+    idalia_gulf: [20.0, 32.0, -92.0, -78.0]
+    franklin_atlantic: [22.0, 40.0, -72.0, -50.0]
+    north_atlantic_midlat: [42.0, 60.0, -40.0, -10.0]
+    europe: [40.0, 60.0, -10.0, 20.0]
