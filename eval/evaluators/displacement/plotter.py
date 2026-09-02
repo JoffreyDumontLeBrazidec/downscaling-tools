@@ -1,9 +1,10 @@
 """Figures for the displacement evaluator: one PNG per box and field.
 
-The left panel is a scatter of the shift that best aligns each sample, eastward
-against northward, in kilometres, with the origin marked. A cloud centred on the
-origin means the model leaves features where the driver put them; a cloud
-displaced from it means it moves them, and the offset is how far. The right
+The left panel is a scatter of the offset that best aligns each sample, eastward
+against northward, in kilometres, with the origin marked. The offset is where the
+second field's feature sits relative to the first field's, so a cloud centred on
+the origin means the model leaves features where the driver put them, and a cloud
+away from it means it moves them, by the amount shown. The right
 panel shows how much correlation the shift buys: the correlation without any
 shift against the correlation at the best shift. Points close to the diagonal
 mean the alignment was already as good as it gets, which is the reassuring case.
@@ -68,8 +69,8 @@ def plot(
         ax.axvline(0.0, color="black", lw=0.8)
         ax.set_xlim(-limit * 1.15, limit * 1.15)
         ax.set_ylim(-limit * 1.15, limit * 1.15)
-        ax.set_xlabel("eastward shift needed to align (km)")
-        ax.set_ylabel("northward shift needed to align (km)")
+        ax.set_xlabel("how far east the second field's feature sits (km)")
+        ax.set_ylabel("how far north the second field's feature sits (km)")
         ax.set_title(f"{box} · {field}: where the best alignment sits")
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)

@@ -15,7 +15,10 @@ regular longitude-latitude mesh, smoothed to keep only scales the driver can
 carry, and then compared under every whole-cell shift within a search window.
 The shift with the highest correlation is reported in kilometres, split into an
 eastward and a northward component, and refined to a fraction of a cell by
-fitting a parabola through the correlation peak and its two neighbours. A
+fitting a parabola through the correlation peak and its two neighbours. The sign
+convention is that a positive eastward number means the second field's feature
+sits that far east of the first field's; for the model against the driver, a
+positive number therefore places the driver's feature east of the model's. A
 displacement is real when the median shift over members and cases is away from
 zero by more than its own scatter; a cloud of shifts scattered around zero means
 the model leaves features where it found them.
@@ -171,8 +174,9 @@ def _best_shift(a_core: np.ndarray, b_full: np.ndarray, core_slice, max_cells: i
 
     ``a_core`` is the reference over the core window; ``b_full`` is the other
     field over the padded mesh, from which the same window is cut at each trial
-    offset. A positive column offset means b has to move east to match a, so the
-    feature in b sits west of the one in a.
+    offset. The best offset is where b sampled that many cells further east and
+    north reproduces a, which means the feature b carries sits that far east and
+    north of the one a carries.
     """
     r0, r1, c0, c1 = core_slice
     scores = np.full((2 * max_cells + 1, 2 * max_cells + 1), np.nan)
@@ -279,8 +283,8 @@ def _write_summary(path: Path, payload: dict) -> None:
     lines = [
         f"# Feature displacement — {payload['run_label']}",
         "",
-        "Positive eastward or northward numbers mean the second field has to move that way",
-        "to line up with the first, so its features sit on the other side. The verdict rests",
+        "A positive eastward or northward number means the second field's feature sits that",
+        "far east or north of the first field's. The verdict rests",
         "on model against driver: the model is conditioned on the driver, so a shift there is",
         "the model moving what it was given. Model against truth is context only, because the",
         "extended-range driver and the medium-range truth are different realisations of the",

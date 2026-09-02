@@ -3,8 +3,8 @@
 One record per (box, field, pair, quantity), named
 ``disp_{box}_{field}_{pair}_{quantity}``:
 
-* ``_east_km`` / ``_north_km``  the mean shift that best aligns the two fields,
-  positive meaning the second field has to move east or north;
+* ``_east_km`` / ``_north_km``  the mean offset that best aligns the two fields,
+  positive meaning the second field's feature sits east or north of the first's;
 * ``_distance_km``             the length of that shift;
 * ``_east_km_sd`` and friends  the scatter over the (file, member) samples,
   which is what a claimed systematic shift has to beat;
