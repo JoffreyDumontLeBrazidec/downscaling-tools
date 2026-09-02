@@ -1,0 +1,23 @@
+# Wind-extreme and displacement diagnostics for Storm Eowyn, the extratropical
+# case (initialised 22 and 23 January 2025, valid over Ireland and Scotland on
+# the 24th). Override lane: it adds the two diagnostic blocks to the base
+# o320->o1280 lane and changes nothing else.
+base: o320_o1280
+
+wind_extremes:
+  radii_km: [10, 20, 30, 50, 75, 100]
+  adjacency_km: 15
+  boxes:
+    ireland_scotland: [50.0, 60.0, -12.0, 0.0]
+    british_isles_wide: [46.0, 63.0, -18.0, 4.0]
+    north_atlantic_approaches: [45.0, 62.0, -35.0, -12.0]
+
+displacement:
+  fields: [msl, wind10m]
+  grid_res_deg: 0.25
+  max_shift_deg: 2.0
+  smooth_deg: 0.5
+  boxes:
+    ireland_scotland: [50.0, 60.0, -12.0, 0.0]
+    british_isles_wide: [46.0, 63.0, -18.0, 4.0]
+    north_atlantic_approaches: [45.0, 62.0, -35.0, -12.0]
