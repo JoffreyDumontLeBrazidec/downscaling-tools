@@ -44,10 +44,21 @@ truth and for the model:
     n_points         number of points in the stratum
 
 plus the ratios model/truth of the three variances and the differences
-model - truth of the two correlations. For reference, a Gaussian white-noise
-field has fine_lag1_zonal ~ 0, fine_nn_corr ~ 0, top5_share ~ 0.28 and
-kurtosis ~ 0; the IFS truth is smooth below its grid scale and should sit far
-from those values.
+model - truth of the two correlations.
+
+White-noise reference and grain index. The fine-part operator (I - up@down) is
+a sharp high-pass filter and leaves its own signature on every statistic: on
+this grid, Gaussian white noise comes out with fine_lag1_zonal of about -0.66
+and fine_nn_corr of about +0.11 (measured 2026-09-02), NOT zero, while a field
+that is smooth at the grid scale gives lag-1 near 0 and fine_nn_corr near 0.85.
+So the evaluator also pushes Gaussian white noise through the same operator
+(fixed seeds, once per run) and reports those values per stratum as the
+``noise`` reference, together with a grain index for the two correlations::
+
+    grain_index = (model - truth) / (noise - truth)
+
+which is 0 when the model's fine part is textured like the truth and 1 when it
+is indistinguishable from white noise through the same filter.
 
 Strata: ``all``; three terrain classes from the lane's forcings zarr (``ocean``,
 ``flat_land``, ``mountain``, from the land-sea mask and the standard deviation
@@ -111,6 +122,7 @@ STAT_NAMES = [
 ]
 RATIO_STATS = ["resid_var", "fine_var", "zonal_diff_var"]
 DELTA_STATS = ["fine_lag1_zonal", "fine_nn_corr"]
+NOISE_SEEDS = (20260902, 20260903)   # white-noise reference draws, fixed for reproducibility
 
 _FILE_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")
 
@@ -387,6 +399,33 @@ def _safe_ratio(num: float, den: float) -> float:
     return float(num / den) if (np.isfinite(num) and np.isfinite(den) and den != 0.0) else float("nan")
 
 
+def _grain_index(model: float, truth: float, noise) -> float:
+    """(model - truth) / (noise - truth): 0 = textured like the truth, 1 = white noise."""
+    if noise is None:
+        return float("nan")
+    den = float(noise) - truth
+    if not (np.isfinite(model) and np.isfinite(truth) and np.isfinite(den)) or abs(den) < 1e-6:
+        return float("nan")
+    return float((model - truth) / den)
+
+
+def _noise_reference(n_points: int, up, down, nxt, nn, sels: dict, strata_order: list[str],
+                     frac: float, seeds=NOISE_SEEDS) -> dict[str, dict[str, dict]]:
+    """Statistics of Gaussian white noise pushed through the same fine-part operator,
+    per stratum: {stratum: {stat: {mean, sd, n}}} over the seeds."""
+    per_stratum: dict[str, list[dict]] = {s: [] for s in strata_order}
+    for seed in seeds:
+        w = np.random.default_rng(int(seed)).standard_normal(n_points)
+        arrs = _texture_arrays(w, up, down, nxt, nn)
+        for stratum in strata_order:
+            per_stratum[stratum].append(_field_stats(w, *arrs, sels[stratum], frac))
+        del arrs
+    return {
+        stratum: {stat: _mean_sd([d[stat] for d in dicts]) for stat in STAT_NAMES}
+        for stratum, dicts in per_stratum.items()
+    }
+
+
 def _clean(obj):
     """Replace NaN/inf by None recursively so the JSON is strict."""
     if isinstance(obj, dict):
@@ -414,7 +453,8 @@ def _mean_sd(vals) -> dict[str, Any]:
     }
 
 
-def _aggregate(samples: list[dict], states: list[str], strata_order: list[str]) -> list[dict]:
+def _aggregate(samples: list[dict], states: list[str], strata_order: list[str],
+               noise_ref: dict) -> list[dict]:
     rows: list[dict] = []
     for state in states:
         for stratum in strata_order:
@@ -424,6 +464,7 @@ def _aggregate(samples: list[dict], states: list[str], strata_order: list[str]) 
             row: dict[str, Any] = {
                 "state": state, "stratum": stratum, "n_samples": len(sub),
                 "truth": {}, "model": {}, "ratio": {}, "delta": {},
+                "noise": dict(noise_ref.get(stratum, {})), "grain_index": {},
             }
             for side in ("truth", "model"):
                 for stat in STAT_NAMES + ["n_points"]:
@@ -432,6 +473,7 @@ def _aggregate(samples: list[dict], states: list[str], strata_order: list[str]) 
                 row["ratio"][stat] = _mean_sd([s["ratio"][stat] for s in sub])
             for stat in DELTA_STATS:
                 row["delta"][stat] = _mean_sd([s["delta"][stat] for s in sub])
+                row["grain_index"][stat] = _mean_sd([s["grain_index"][stat] for s in sub])
             rows.append(row)
     return rows
 
@@ -541,17 +583,39 @@ def _write_summary(path: Path, payload: dict) -> None:
         )
     lines += [
         "",
-        "Null scatter of the correlation differences (model - truth), mean +- sd over samples:",
+        "White-noise reference: Gaussian white noise pushed through the same fine-part operator "
+        f"(seeds {payload.get('noise_seeds')}), per stratum. This is where pure grain sits; the "
+        "operator is a sharp high-pass, so its lag-1 correlation is strongly negative, not zero.",
         "",
-        "| state | stratum | d lag1 | d nn_corr |",
-        "|---|---|---:|---:|",
+        "| stratum | lag1 N | nn_corr N | top5 N | kurt N | fine_var/var N |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for stratum, ref in payload.get("noise_reference", {}).items():
+        fv = ref["fine_var"]["mean"]
+        rv = ref["resid_var"]["mean"]
+        lines.append(
+            f"| {stratum} | {_fmt(ref['fine_lag1_zonal']['mean'])} | {_fmt(ref['fine_nn_corr']['mean'])} "
+            f"| {_fmt(ref['top5_share']['mean'])} | {_fmt(ref['kurtosis']['mean'], 2)} "
+            f"| {_fmt(None if (fv is None or not rv) else fv / rv)} |"
+        )
+    lines += [
+        "",
+        "Model - truth differences of the correlations (mean +- sd over samples; the sd is the "
+        "null scatter later arms are judged against) and the grain index "
+        "(model - truth) / (noise - truth): 0 = textured like the truth, 1 = white noise.",
+        "",
+        "| state | stratum | d lag1 | d nn_corr | grain (lag1) | grain (nn_corr) |",
+        "|---|---|---:|---:|---:|---:|",
     ]
     for row in payload["aggregate"]:
         d = row["delta"]
+        g = row["grain_index"]
         lines.append(
             f"| {row['state']} | {row['stratum']} | "
             f"{_fmt(d['fine_lag1_zonal']['mean'])} +- {_fmt(d['fine_lag1_zonal']['sd'])} | "
-            f"{_fmt(d['fine_nn_corr']['mean'])} +- {_fmt(d['fine_nn_corr']['sd'])} |"
+            f"{_fmt(d['fine_nn_corr']['mean'])} +- {_fmt(d['fine_nn_corr']['sd'])} | "
+            f"{_fmt(g['fine_lag1_zonal']['mean'], 2)} +- {_fmt(g['fine_lag1_zonal']['sd'], 2)} | "
+            f"{_fmt(g['fine_nn_corr']['mean'], 2)} +- {_fmt(g['fine_nn_corr']['sd'], 2)} |"
         )
     path.write_text("\n".join(lines) + "\n")
 
@@ -632,6 +696,17 @@ def run(
     strata_order = static["strata_order"]
     sels = {name: (None if m is None else np.flatnonzero(m)) for name, m in masks.items()}
 
+    t_noise = time.time()
+    noise_ref = _noise_reference(
+        n_points, up, down, static["nxt"], static["nn"], sels, strata_order, frac,
+    )
+    LOG.info(
+        "texture: white-noise reference in %.1fs (all: lag1=%.3f nn_corr=%.3f)",
+        time.time() - t_noise,
+        noise_ref["all"]["fine_lag1_zonal"]["mean"], noise_ref["all"]["fine_nn_corr"]["mean"],
+    )
+    noise_mean = {s: {k: noise_ref[s][k]["mean"] for k in DELTA_STATS} for s in strata_order}
+
     samples: list[dict[str, Any]] = []
     for file_path in files:
         m = _FILE_RE.search(file_path.name)
@@ -694,6 +769,10 @@ def run(
                             "truth": st_t, "model": st_m,
                             "ratio": {k: _safe_ratio(st_m[k], st_t[k]) for k in RATIO_STATS},
                             "delta": {k: st_m[k] - st_t[k] for k in DELTA_STATS},
+                            "grain_index": {
+                                k: _grain_index(st_m[k], st_t[k], noise_mean[stratum][k])
+                                for k in DELTA_STATS
+                            },
                         })
                     del arrs_t, arrs_m
                 LOG.info(
@@ -702,7 +781,7 @@ def run(
                 )
         LOG.info("texture: %s finished in %.1fs", file_path.name, time.time() - t_file)
 
-    aggregate = _aggregate(samples, states, strata_order)
+    aggregate = _aggregate(samples, states, strata_order, noise_ref)
     n_cell = max((r["n_samples"] for r in aggregate), default=0)
     payload = {
         "run_label": run_label or predictions_dir.name,
@@ -724,6 +803,9 @@ def run(
         "statistics": STAT_NAMES,
         "ratio_statistics": RATIO_STATS,
         "delta_statistics": DELTA_STATS,
+        "grain_statistics": DELTA_STATS,
+        "noise_seeds": [int(s) for s in NOISE_SEEDS],
+        "noise_reference": noise_ref,
         "aggregate": aggregate,
         "samples": samples,
         "elapsed_s": time.time() - t0,

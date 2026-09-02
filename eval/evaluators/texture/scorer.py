@@ -8,7 +8,11 @@ One record per (state, stratum, statistic, side), named
 * ``_ratio``: mean of the per-sample model/truth ratio (variances only);
 * ``_delta``: mean of the per-sample model - truth difference (correlations only);
 * ``_sd``: standard deviation over samples of that difference -- the null
-  scatter a later arm has to beat.
+  scatter a later arm has to beat;
+* ``_noise``: the same statistic for Gaussian white noise pushed through the
+  same fine-part operator (per stratum, identical for every state);
+* ``_grain``: mean grain index (model - truth) / (noise - truth) for the two
+  correlations: 0 = textured like the truth, 1 = white noise.
 """
 from __future__ import annotations
 
@@ -57,4 +61,10 @@ def score(
         for stat in DELTA_STATS:
             _add(f"{stem}_{stat}_delta", row["delta"][stat]["mean"], "correlation")
             _add(f"{stem}_{stat}_sd", row["delta"][stat]["sd"], "correlation")
+        noise = row.get("noise") or {}
+        for stat in STAT_NAMES:
+            if stat in noise:
+                _add(f"{stem}_{stat}_noise", noise[stat]["mean"], UNITS[stat])
+        for stat, entry in (row.get("grain_index") or {}).items():
+            _add(f"{stem}_{stat}_grain", entry["mean"], "grain_index")
     return records
