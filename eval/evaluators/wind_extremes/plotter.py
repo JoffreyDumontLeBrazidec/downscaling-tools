@@ -52,7 +52,7 @@ def plot(
     for row in payload.get("aggregate", []):
         box = row["box"]
         samples = [s for s in payload["samples"] if s["box"] == box]
-        fig, axes = plt.subplots(1, 3, figsize=(15.0, 4.6))
+        fig, axes = plt.subplots(1, 3, figsize=(16.5, 5.2))
 
         ax = axes[0]
         for source in SOURCES:
@@ -62,7 +62,7 @@ def plot(
                         color=COLOURS[source], label=LABELS[source])
         ax.set_xlabel("averaging radius (km)")
         ax.set_ylabel("maximum after averaging / raw maximum")
-        ax.set_title(f"{box}: how much of the wind maximum survives averaging")
+        ax.set_title("how much of the maximum survives averaging", fontsize=11)
         ax.set_ylim(0.0, 1.02)
         ax.grid(alpha=0.3)
         ax.legend(fontsize=8)
@@ -81,8 +81,8 @@ def plot(
         patch = [row[s]["patch_points_90pct"]["mean"] for s in SOURCES]
         ax2.bar(pos + width / 2, patch, width, color="none", edgecolor="black", hatch="//",
                 label="patch above 90% (points)")
-        ax2.set_ylabel("connected patch above 90% of the peak (grid points)")
-        ax.set_title(f"{box}: peak amplitude and the size of its patch")
+        ax2.set_ylabel("patch above 90% of the peak (grid points)", fontsize=9)
+        ax.set_title("peak amplitude and the size of its patch", fontsize=11)
 
         ax = axes[2]
         pairs = ["model_vs_truth", "model_vs_input", "truth_vs_input"]
@@ -98,12 +98,12 @@ def plot(
         ax.set_xticks(range(len(pairs)))
         ax.set_xticklabels([nice[p] for p in pairs], fontsize=8)
         ax.set_ylabel("distance between wind maxima (km)")
-        ax.set_title(f"{box}: where the maximum sits")
+        ax.set_title("where the maximum sits", fontsize=11)
         ax.grid(alpha=0.3, axis="y")
 
         fig.suptitle(f"Wind extremes — {payload['run_label']} — {box} "
                      f"({row['n_samples']} file-member samples)", fontsize=11)
-        fig.tight_layout(rect=(0, 0, 1, 0.94))
+        fig.tight_layout(rect=(0, 0, 1, 0.90), w_pad=3.0)
         target = out_dir / f"wind_extremes_{box}.png"
         fig.savefig(target, dpi=140)
         plt.close(fig)
