@@ -94,6 +94,30 @@ def discover_bundles(bundles_dir: Path) -> list[tuple[Path, int, int, int]]:
     return out
 
 
+
+def _nn_index_great_circle(src_lat, src_lon, dst_lat, dst_lon) -> np.ndarray:
+    """Nearest-neighbour index from source points to destination points.
+
+    Distances are great-circle: both grids are projected onto the unit sphere
+    before the KD-tree query, so the result does not distort near the poles or
+    across the +/-180 longitude seam.  Same construction as build_nn_index in
+    eval/_backends/precip/sources.py, kept local so this stager stays a
+    standalone script.
+    """
+    from scipy.spatial import cKDTree
+
+    def to_xyz(lat, lon):
+        la = np.radians(np.asarray(lat, dtype=np.float64))
+        lo = np.radians(np.asarray(lon, dtype=np.float64))
+        cos_la = np.cos(la)
+        return np.column_stack((cos_la * np.cos(lo), cos_la * np.sin(lo),
+                                np.sin(la)))
+
+    tree = cKDTree(to_xyz(src_lat, src_lon))
+    _dist, idx = tree.query(to_xyz(dst_lat, dst_lon), k=1, workers=-1)
+    return idx.astype(np.int64)
+
+
 def load_template_grib(template_path: Path) -> tuple[np.ndarray, np.ndarray]:
     """Return (lat, lon) arrays from the template GRIB."""
     with template_path.open("rb") as fh:
@@ -147,6 +171,7 @@ def main() -> None:
 
     bundles = discover_bundles(bundles_dir)
     written = 0
+    src_point_count = 0
     for path, date, member, step in bundles:
         if not csv_matches(args.date_list,   date):
             continue
@@ -159,12 +184,24 @@ def main() -> None:
             bnd_lat = np.asarray(ds["lat_lres"].values, dtype=np.float64)
             bnd_lon = np.asarray(ds["lon_lres"].values, dtype=np.float64)
             bnd_lon = ((bnd_lon + 180.0) % 360.0) - 180.0
+            src_point_count = len(bnd_lat)
 
             if len(bnd_lat) != n_tmpl:
-                # Build a reindex from bundle lat/lon → template lat/lon order
-                from scipy.spatial import cKDTree
-                tree = cKDTree(np.column_stack([bnd_lat, bnd_lon]))
-                _, idx = tree.query(np.column_stack([tmpl_lat, tmpl_lon]))
+                # Source and template grids differ, so map source values onto
+                # the template by nearest neighbour.  When the template is the
+                # TARGET grid (o1280) rather than the source grid (o320) this
+                # is exactly the driver interpolation the spectral comparison
+                # needs: it puts the coarse driver on the same grid, and hence
+                # the same spectral support, as the model and the truth.
+                #
+                # Nearest neighbour is measured as a GREAT-CIRCLE distance on
+                # the unit sphere, matching the project's gate-verified
+                # build_nn_index (eval/_backends/precip/sources.py).  A KD-tree
+                # on raw (lat, lon) is wrong near the poles, where a degree of
+                # longitude is far shorter than a degree of latitude, and
+                # across the +/-180 seam, where 179.9 and -179.9 are adjacent
+                # on the sphere but maximally distant in lat/lon coordinates.
+                idx = _nn_index_great_circle(bnd_lat, bnd_lon, tmpl_lat, tmpl_lon)
             else:
                 idx = None
 
@@ -191,6 +228,16 @@ def main() -> None:
         "template_grib":  str(template_path),
         "weather_states": states,
         "grib_files_written": written,
+        # Auditability: a reader must be able to tell, from the summary alone,
+        # which grid these spectra live on and whether the driver was
+        # interpolated to get there.  template_point_count is the field the
+        # support check compares against the model and truth sides.
+        "template_point_count": int(n_tmpl),
+        "source_point_count":   int(src_point_count) if src_point_count else None,
+        "interpolated_to_template": bool(src_point_count and src_point_count != n_tmpl),
+        "interpolation_method": ("nearest_neighbour_great_circle"
+                                 if (src_point_count and src_point_count != n_tmpl)
+                                 else "none_same_grid"),
     }
     sp = Path(args.summary_path) if args.summary_path else out_dir / "staging_summary.json"
     sp.parent.mkdir(parents=True, exist_ok=True)

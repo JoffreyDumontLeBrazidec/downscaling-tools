@@ -87,6 +87,25 @@ spectra_ecmwf_v2:
   truth_label: "ENFO"
   input_label: "EEFO"
   input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
+  # OWNER DECISION 2026-09-01 (option 2): interpolate the driver to O1280
+  # BEFORE the spectral transform, instead of transforming the native O320
+  # field at T1279.
+  #
+  # Why: an O320 field has 421,120 points and a T1279 transform needs
+  # ~6,599,680. Transforming it natively is underdetermined by ~16x and the
+  # transform FABRICATES power -- measured 45-50% of the driver's total power
+  # landing above wavenumber 320, and still ~45% above 800, which is
+  # impossible for a field truncated near 320. That destroyed the
+  # driver-collapse control test.
+  #
+  # Pointing input_template_grib at the O1280 template puts the driver on the
+  # SAME grid, and therefore the same spectral support, as the model and the
+  # truth, so all three curves are formed identically. The stager maps the
+  # coarse values on by great-circle nearest neighbour, which is what the
+  # model itself ingests. This template is bit-identical in grid to the
+  # fullgrid template the model side stages on (verified: max |dlat| =
+  # max |dlon| = 0.0, both 6,599,680 points).
+  input_template_grib: "/home/ecm5702/hpcperm/data/o1280-template.grib"
 
 # ---------------------------------------------------------------------------
 # spectra_ecmwf (v1, the ORIGINAL pole-masked evaluator) -- restated 2026-08-31.
