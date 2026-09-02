@@ -29,6 +29,15 @@ the great-circle distances between those positions are reported. In a box that
 contains one dominant depression this is the position of that depression, which
 is the interpretable version of the same question.
 
+The truth against its own coarsened self. Optionally the evaluator also pushes the
+truth down onto the driver's O320 grid with the lane's own projection and back up
+again, and measures the same offset between the truth and that coarsened copy.
+Nothing about the weather differs between the two: they are the same field at the
+same instant, and the only difference is resolution. Any offset there is what
+smoothing alone does to the position of a feature, which is the yardstick a
+model's offset from its driver has to be read against. Switch it on with
+``include_coarsened_truth: true``.
+
 One caution belongs with every number that involves the truth. The coarse driver
 comes from the extended-range ensemble and the truth from the medium-range
 ensemble, and the two are not paired: the truth is a genuine atmosphere, but not
@@ -73,15 +82,19 @@ FIELD_STATES = {
     "z_500": (("z_500",), "single"),
 }
 
-PAIRS = ("model_vs_input", "model_vs_truth", "truth_vs_input")
-SOURCE_OF = {"model": "model", "input": "input", "truth": "truth"}
+PAIRS = ("model_vs_input", "model_vs_truth", "truth_vs_input", "truth_vs_truthcoarse")
+SOURCE_OF = {"model": "model", "input": "input", "truth": "truth",
+             "truthcoarse": "truthcoarse"}
 
 _FILE_RE = re.compile(r"predictions_(\d{8})_step(\d+)\.nc$")
 
 
 def _default_paths() -> dict[str, str]:
     inter = os.environ.get("INTER_MAT_DIR", "/home/ecm5702/hpcperm/data/inter_mat")
-    return {"up_matrix": os.path.join(inter, "interpol_O320_to_O1280_linear.mat.npz")}
+    return {
+        "up_matrix": os.path.join(inter, "interpol_O320_to_O1280_linear.mat.npz"),
+        "down_matrix": os.path.join(inter, "interpol_o1280_to_o320_linear.mat.npz"),
+    }
 
 
 def _as_list(value, cast=str) -> list | None:
@@ -362,6 +375,7 @@ def run(
     res_deg = float(eval_config.get("grid_res_deg", DEFAULT_GRID_RES_DEG))
     max_shift_deg = float(eval_config.get("max_shift_deg", DEFAULT_MAX_SHIFT_DEG))
     smooth_deg = float(eval_config.get("smooth_deg", DEFAULT_SMOOTH_DEG))
+    coarsen_truth = bool(eval_config.get("include_coarsened_truth", False))
     steps = _as_list(eval_config.get("steps"), int)
     dates = _as_list(eval_config.get("dates"), str)
     members = _as_list(eval_config.get("members"), int)
@@ -384,6 +398,7 @@ def run(
 
     t0 = time.time()
     up = sps.load_npz(paths["up_matrix"]).tocsr()
+    down = sps.load_npz(paths["down_matrix"]).tocsr() if coarsen_truth else None
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
     samples: list[dict[str, Any]] = []
@@ -423,6 +438,17 @@ def run(
                     yt = [_read_component(ds.variables["y"], member_index, c) for c in cols]
                     xx = [_read_component(ds.variables["x"], member_index, c) for c in cols]
 
+                    coarse_full = None
+                    if coarsen_truth:
+                        # Down to the driver's grid and back up, the lane's own
+                        # projection, so the only change is resolution.
+                        if combine == "hypot":
+                            cu_ = up @ (down @ yt[0])
+                            cv_ = up @ (down @ yt[1])
+                            coarse_full = np.hypot(cu_, cv_)
+                        else:
+                            coarse_full = up @ (down @ yt[0])
+
                     for name, st in box_static.items():
                         native = st["native_idx"]
                         if combine == "hypot":
@@ -434,9 +460,12 @@ def run(
                             truth_n = yt[0][native]
                             input_n = up_box[name] @ xx[0]
 
+                        sources = [("model", model_n), ("truth", truth_n),
+                                   ("input", input_n)]
+                        if coarse_full is not None:
+                            sources.append(("truthcoarse", coarse_full[native]))
                         grids = {}
-                        for src, values in (("model", model_n), ("truth", truth_n),
-                                            ("input", input_n)):
+                        for src, values in sources:
                             grids[src] = _smooth(_resample(values, st), sigma_cells)
 
                         rows, cols_n = st["shape"]
@@ -452,11 +481,14 @@ def run(
                             "member": int(member_label), "box": name, "field": field,
                             "shift": {},
                         }
-                        for pair, (a_src, b_src) in {
+                        wanted = {
                             "model_vs_input": ("model", "input"),
                             "model_vs_truth": ("model", "truth"),
                             "truth_vs_input": ("truth", "input"),
-                        }.items():
+                        }
+                        if "truthcoarse" in grids:
+                            wanted["truth_vs_truthcoarse"] = ("truth", "truthcoarse")
+                        for pair, (a_src, b_src) in wanted.items():
                             a_core = grids[a_src][r0:r1, c0:c1]
                             res = _best_shift(a_core, grids[b_src], window, max_cells)
                             east = res["shift_cols"] * km_per_col
@@ -471,7 +503,8 @@ def run(
                         if field == "msl":
                             core_slice = (slice(r0, r1), slice(c0, c1))
                             pos, val = {}, {}
-                            for src in ("model", "truth", "input"):
+                            for src in [k for k in ("model", "truth", "input",
+                                                   "truthcoarse") if k in grids]:
                                 la, lo, v = _extremum(
                                     grids[src][core_slice],
                                     st["mesh_lat"][core_slice], st["mesh_lon"][core_slice],
@@ -481,9 +514,13 @@ def run(
                                 "position": {k: list(v) for k, v in pos.items()},
                                 "value": val,
                                 "distance_km": {
-                                    "model_vs_input": _great_circle_km(*pos["model"], *pos["input"]),
-                                    "model_vs_truth": _great_circle_km(*pos["model"], *pos["truth"]),
-                                    "truth_vs_input": _great_circle_km(*pos["truth"], *pos["input"]),
+                                    p: _great_circle_km(*pos[a], *pos[b])
+                                    for p, (a, b) in {
+                                        "model_vs_input": ("model", "input"),
+                                        "model_vs_truth": ("model", "truth"),
+                                        "truth_vs_input": ("truth", "input"),
+                                        "truth_vs_truthcoarse": ("truth", "truthcoarse"),
+                                    }.items() if a in pos and b in pos
                                 },
                             }
                         samples.append(entry)
@@ -499,6 +536,7 @@ def run(
         "config": {
             "boxes": boxes, "fields": fields, "grid_res_deg": res_deg,
             "max_shift_deg": max_shift_deg, "smooth_deg": smooth_deg,
+            "include_coarsened_truth": coarsen_truth,
             "steps": steps, "dates": dates, "members": members,
             "max_members": max_members, "paths": paths,
             "search_cells": max_cells, "smooth_sigma_cells": sigma_cells,
