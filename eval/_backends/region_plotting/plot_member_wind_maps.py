@@ -178,7 +178,18 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--date", required=True, help="Init date YYYYMMDD.")
     p.add_argument("--step", type=int, required=True, help="Lead time in hours (predictions file suffix for --run panels).")
-    p.add_argument("--member", type=int, required=True, help="Ensemble member number (selects within --run files; label-only for --grib panels, which are already single-member).")
+    p.add_argument("--member", type=int, default=1, help="Ensemble member number (selects within --run files; label-only for --grib panels, which are already single-member).")
+    p.add_argument(
+        "--members", default=None, metavar="SPEC",
+        help="Render every listed member as one multi-panel figure per source instead of "
+             "one figure for a single member. SPEC is 'all', a range like '1-10', or a "
+             "comma-separated list like '1,3,5'. --member is then only the label used when "
+             "a --grib panel carries no member axis.",
+    )
+    p.add_argument(
+        "--grid-cols", type=int, default=5,
+        help="Columns in the member grid produced by --members (default: 5).",
+    )
     p.add_argument("--output-dir", required=True, help="Directory for the PNGs and manifest.")
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
     p.add_argument("--no-truth", action="store_true", default=False, help="Skip the enfo (embedded truth) panel.")
@@ -357,8 +368,189 @@ def _render(
         plt.close(fig)
 
 
+
+def parse_members(spec: str, available: list[int]) -> list[int]:
+    """Members named by a --members spec: 'all', '1-10', or '1,3,5'."""
+    text = str(spec).strip().lower()
+    if text in ("all", "*"):
+        return list(available)
+    wanted: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            wanted.extend(range(int(lo), int(hi) + 1))
+        else:
+            wanted.append(int(part))
+    missing = [m for m in wanted if m not in available]
+    if missing:
+        raise SystemExit(
+            f"--members asks for {missing}, but the file carries members {available}."
+        )
+    return wanted
+
+
+def _render_grid(
+    *,
+    out_path: Path,
+    title: str,
+    members: list[int],
+    values: list[np.ndarray],
+    date: str,
+    time: str,
+    step: int,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    res: float,
+    extent: tuple[float, float, float, float],
+    spec: dict,
+    vmin: float,
+    vmax: float,
+    proj_lon: float,
+    proj_lat: float,
+    ncols: int = 5,
+    field: str = "value",
+    fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
+) -> None:
+    """One figure holding every member of a single source on a shared colour scale.
+
+    The members are regridded and drawn exactly as the single-member renderer
+    does, so a panel of this figure and the corresponding standalone PNG show
+    the same field; only the layout differs.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+
+    grids = []
+    for val in values:
+        gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
+        if field == "fine":
+            from scipy.ndimage import gaussian_filter
+            grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
+        grids.append((gx, gy, grid))
+
+    init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
+    valid_dt = init_dt + timedelta(hours=step)
+    nrows = int(np.ceil(len(members) / float(ncols)))
+    fine_note = f" · scales below {fine_cut_deg:g} deg" if field == "fine" else ""
+
+    with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items()
+                                if k != "backend"}):
+        proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+        fig, axes = plt.subplots(
+            nrows, ncols, figsize=(3.5 * ncols, 3.6 * nrows),
+            subplot_kw={"projection": proj},
+        )
+        axes = np.atleast_1d(axes).ravel()
+        cmap = "RdBu_r" if field == "fine" else spec["cmap"]
+        mesh = None
+        for ax, member, (gx, gy, grid) in zip(axes, members, grids):
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
+            mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
+                                 vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
+            ax.coastlines(resolution="50m", linewidth=0.7)
+            ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.3)
+            peak = float(np.nanmax(grid)) if field == "value" else float(np.nanmax(np.abs(grid)))
+            ax.set_title(f"member {member} · max {peak:.1f}", fontsize=10)
+        for ax in axes[len(members):]:
+            ax.set_visible(False)
+        fig.suptitle(
+            f"{title}\n{spec['subtitle']}{fine_note} · {len(members)} members\n"
+            f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
+            fontsize=13,
+        )
+        if mesh is not None:
+            cbar = fig.colorbar(mesh, ax=axes.tolist(), orientation="horizontal",
+                                pad=0.04, aspect=50, fraction=0.05, extend=spec["extend"])
+            cbar.set_label(
+                spec["cbar_label"] + " · fine-scale part" if field == "fine"
+                else spec["cbar_label"]
+            )
+        fig.savefig(out_path, dpi=RENDER_DPI, bbox_inches="tight")
+        plt.close(fig)
+
+
+def run_member_grid(args: argparse.Namespace) -> int:
+    """--members: one multi-panel figure per source, members side by side."""
+    import xarray as xr
+
+    runs = _parse_kv(args.run, "run")
+    gribs = _parse_kv(args.grib, "grib")
+    titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
+    if not runs:
+        raise SystemExit("--members needs at least one --run panel (GRIB files hold one member).")
+    if gribs:
+        raise SystemExit("--members and --grib cannot be combined: a GRIB panel has no member axis.")
+    extent = tuple(args.extent)
+    spec, vmin, vmax = resolve_scale(args)
+    out_dir = Path(args.output_dir).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    token = spec["token"] if args.field == "value" else f"{spec['token']}-fine"
+    outputs: list[str] = []
+    members: list[int] = []
+
+    # (key, lat, lon, resolution, [field per member])
+    panels: list[tuple[str, np.ndarray, np.ndarray, float, list[np.ndarray]]] = []
+    for i, (key, run_dir) in enumerate(runs.items()):
+        pred_file = Path(run_dir).expanduser() / f"predictions_{args.date}_step{args.step:03d}.nc"
+        if not pred_file.exists():
+            raise SystemExit(f"{pred_file} not found (run {key!r}).")
+        ds = xr.open_dataset(pred_file, decode_timedelta=False)
+        states = [str(s) for s in ds["weather_state"].values]
+        lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
+        available = [int(m) for m in np.asarray(ds["ensemble_member"].values).reshape(-1)]
+        if not members:
+            members = parse_members(args.members, available)
+        if i == 0:
+            if not args.no_input:
+                panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
+                               DEFAULT_LRES_RES,
+                               [_field(_member_slice(ds["x"], m), states, spec) for m in members]))
+            if not args.no_truth:
+                panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES,
+                               [_field(_member_slice(ds["y"], m), states, spec) for m in members]))
+        panels.append((key, lat_h, lon_h, DEFAULT_HRES_RES,
+                       [_field(_member_slice(ds["y_pred"], m), states, spec) for m in members]))
+
+    for key, lat, lon, res, values in panels:
+        out_path = out_dir / (
+            f"{key}_{token}_init{args.date}_members{len(members):02d}"
+            f"_{args.region_tag}_f{args.step:03d}.png"
+        )
+        _render_grid(
+            out_path=out_path, title=titles.get(key, f"{key.capitalize()} · O1280"),
+            members=members, values=values, date=args.date, time=args.time, step=args.step,
+            lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
+            proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
+            field=args.field, fine_cut_deg=args.fine_cut_deg,
+        )
+        outputs.append(str(out_path))
+        print(f"saved {out_path}", flush=True)
+
+    write_manifest(out_root=out_dir, payload={
+        "tool": "membermaps", "mode": "member_grid",
+        "date": args.date, "time": args.time, "step": args.step, "members": members,
+        "variable": args.variable, "field": args.field, "fine_cut_deg": args.fine_cut_deg,
+        "runs": runs, "extent": list(extent), "vmin": vmin, "vmax": vmax,
+        "outputs": outputs,
+    }, filename=(
+        f"membermaps_manifest_{token}_init{args.date}"
+        f"_members{len(members):02d}_f{args.step:03d}.json"
+    ))
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     import xarray as xr
+
+    if getattr(args, "members", None):
+        return run_member_grid(args)
 
     runs = _parse_kv(args.run, "run")
     gribs = _parse_kv(args.grib, "grib")
