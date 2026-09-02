@@ -60,10 +60,20 @@ So the evaluator also pushes Gaussian white noise through the same operator
 which is 0 when the model's fine part is textured like the truth and 1 when it
 is indistinguishable from white noise through the same filter.
 
-Strata: ``all``; three terrain classes from the lane's forcings zarr (``ocean``,
-``flat_land``, ``mountain``, from the land-sea mask and the standard deviation
-of the orography over the 32 nearest neighbours); and the region boxes from the
-``regions:`` mapping of the evaluator config block.
+Strata: ``all``; five terrain classes from the lane's forcings zarr (``ocean``,
+``open_ocean``, ``coastal``, ``flat_land``, ``mountain``, from the land-sea mask
+and the standard deviation of the orography over the 32 nearest neighbours); and
+the region boxes from the ``regions:`` mapping of the evaluator config block.
+
+``ocean`` (land-sea mask below 0.05) mixes in the 2.6 percent of ocean points
+that lie within about one O320 cell of land. Those coastal points carry 7 to 26
+times the fine variance of the open ocean and all of the o320->o1280 champion's
+ocean phase skill (Phase 0 test P0.11, 2026-09-02), so ``ocean`` is split:
+``coastal`` = ocean points whose coarse-smoothed mask ``up @ (down @ lsm)`` is
+at least 0.01, ``open_ocean`` = the rest. Over the open ocean the champion's
+fine-band phase correlation with the truth is 0.03-0.04 for every field, so
+texture is the only meaningful gate there; read every arm's ocean texture on
+``open_ocean``.
 
 Everything is aggregated over the (file, member) samples per (state, stratum):
 mean and standard deviation of each statistic. The standard deviation of the
@@ -107,8 +117,9 @@ DEFAULT_TERRAIN = {
     "land_lsm_min": 0.95,           # land classes: land-sea mask above this
     "flat_roughness_max_m": 30.0,   # flat_land: orography roughness below this
     "mountain_roughness_min_m": 150.0,  # mountain: orography roughness above this
+    "coastal_lsm_smooth_min": 0.01,  # coastal: ocean with up(down(lsm)) at or above this
 }
-TERRAIN_CLASSES = ["ocean", "flat_land", "mountain"]
+TERRAIN_CLASSES = ["ocean", "open_ocean", "coastal", "flat_land", "mountain"]
 
 KNN_K = 32              # neighbours kept in the cache (the point itself excluded)
 NN_COUNT = 6            # neighbours averaged for fine_nn_corr
@@ -262,7 +273,11 @@ def _region_mask(lat: np.ndarray, lon180: np.ndarray, box) -> np.ndarray:
     return m
 
 
-def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int) -> dict[str, Any]:
+def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
+                  up=None, down=None) -> dict[str, Any]:
+    """Grid structures and strata. ``up``/``down`` are the O320<->O1280 linear
+    interpolation matrices; they define the coarse-smoothed land-sea mask that
+    splits ``ocean`` into ``open_ocean`` and ``coastal``."""
     import zarr
 
     t0 = time.time()
@@ -298,15 +313,24 @@ def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int) -> d
     strata["all"] = {"kind": "all", "n_points": int(n)}
     ocean = lsm < float(terrain["ocean_lsm_max"])
     land = lsm > float(terrain["land_lsm_min"])
+    if up is None or down is None:
+        raise ValueError("texture: up/down matrices are required for the open_ocean/coastal strata")
+    lsm_coarse = np.asarray(up @ (down @ lsm.astype(np.float64)))
+    coastal_min = float(terrain["coastal_lsm_smooth_min"])
     class_masks = {
         "ocean": ocean,
+        "open_ocean": ocean & (lsm_coarse < coastal_min),
+        "coastal": ocean & (lsm_coarse >= coastal_min),
         "flat_land": land & (rough < float(terrain["flat_roughness_max_m"])),
         "mountain": land & (rough > float(terrain["mountain_roughness_min_m"])),
     }
+    del lsm_coarse
     for name in TERRAIN_CLASSES:
         m = class_masks[name]
         masks[name] = m
         strata[name] = {"kind": "terrain", "n_points": int(m.sum())}
+    strata["open_ocean"]["definition"] = f"lsm < {terrain['ocean_lsm_max']} and up(down(lsm)) < {coastal_min}"
+    strata["coastal"]["definition"] = f"lsm < {terrain['ocean_lsm_max']} and up(down(lsm)) >= {coastal_min}"
     for name, box in regions.items():
         m = _region_mask(lat, lon180, box)
         masks[name] = m
@@ -686,7 +710,7 @@ def run(
     stdev = {s: float(stdev_all[s]) for s in states}
     LOG.info("texture: matrices up=%s down=%s loaded in %.1fs", up.shape, down.shape, time.time() - t0)
 
-    static = _build_static(paths, regions, terrain, nn_count)
+    static = _build_static(paths, regions, terrain, nn_count, up=up, down=down)
     n_points = static["grid"]["n_points"]
     if up.shape[0] != n_points or down.shape[1] != n_points:
         raise RuntimeError(
