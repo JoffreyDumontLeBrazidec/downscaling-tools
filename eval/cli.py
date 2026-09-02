@@ -53,6 +53,7 @@ ALL_EVALUATORS = [
     "spectra_coherence",
     "lane_diagnostics",
     "texture",
+    "wind_extremes",
 ]
 
 DEFAULT_HOST = "atos_ac"

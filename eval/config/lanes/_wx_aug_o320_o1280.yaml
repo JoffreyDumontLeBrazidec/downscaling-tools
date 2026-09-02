@@ -1,0 +1,15 @@
+# Wind-extreme and displacement diagnostics on the August-2023 tropical-cyclone
+# window (Franklin and Idalia, 26-30 August 2023). Override lane: it adds the
+# wind_extremes block to the base o320->o1280 lane and changes nothing else, so
+# the arms of the ft400k guided-versus-control campaign can be measured without
+# touching the lanes those arms were produced with.
+base: o320_o1280
+
+wind_extremes:
+  radii_km: [10, 20, 30, 50, 75, 100]
+  adjacency_km: 15
+  boxes:
+    idalia_gulf: [20.0, 32.0, -92.0, -78.0]
+    franklin_atlantic: [22.0, 40.0, -72.0, -50.0]
+    north_atlantic_midlat: [42.0, 60.0, -40.0, -10.0]
+    europe: [40.0, 60.0, -10.0, 20.0]

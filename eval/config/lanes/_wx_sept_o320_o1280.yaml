@@ -1,0 +1,13 @@
+# Wind-extreme and displacement diagnostics on the September-2025 window
+# (26-30 September 2025), used for the four prepml month arms read back from the
+# field database. Same block as the August override, different boxes.
+base: o320_o1280_prepml_pw30_season_ft400k_ctrl
+
+wind_extremes:
+  radii_km: [10, 20, 30, 50, 75, 100]
+  adjacency_km: 15
+  boxes:
+    humberto_atlantic: [22.0, 42.0, -72.0, -48.0]
+    iberia_approaches: [35.0, 48.0, -22.0, 0.0]
+    north_atlantic_midlat: [42.0, 62.0, -40.0, -10.0]
+    europe: [40.0, 62.0, -10.0, 25.0]
