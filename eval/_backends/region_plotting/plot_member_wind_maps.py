@@ -370,7 +370,13 @@ def _render(
 
 
 def parse_members(spec: str, available: list[int]) -> list[int]:
-    """Members named by a --members spec: 'all', '1-10', or '1,3,5'."""
+    """Members named by a --members spec: 'all', '1-10', or '1,3,5'.
+
+    Members the file does not carry are dropped with a warning rather than
+    treated as an error, because arms of the same campaign do not always hold the
+    same members: a member whose inference job failed leaves a gap, and a figure
+    of the nine members that exist is more useful than no figure at all.
+    """
     text = str(spec).strip().lower()
     if text in ("all", "*"):
         return list(available)
@@ -384,12 +390,14 @@ def parse_members(spec: str, available: list[int]) -> list[int]:
             wanted.extend(range(int(lo), int(hi) + 1))
         else:
             wanted.append(int(part))
+    present = [m for m in wanted if m in available]
     missing = [m for m in wanted if m not in available]
     if missing:
-        raise SystemExit(
-            f"--members asks for {missing}, but the file carries members {available}."
-        )
-    return wanted
+        print(f"warning: members {missing} are not in this file (it carries "
+              f"{available}); rendering {present}", flush=True)
+    if not present:
+        raise SystemExit(f"--members asks for {wanted}, none of which the file carries.")
+    return present
 
 
 def _render_grid(
@@ -495,8 +503,8 @@ def run_member_grid(args: argparse.Namespace) -> int:
     outputs: list[str] = []
     members: list[int] = []
 
-    # (key, lat, lon, resolution, [field per member])
-    panels: list[tuple[str, np.ndarray, np.ndarray, float, list[np.ndarray]]] = []
+    # (key, lat, lon, resolution, [member label], [field per member])
+    panels: list[tuple[str, np.ndarray, np.ndarray, float, list[int], list[np.ndarray]]] = []
     for i, (key, run_dir) in enumerate(runs.items()):
         pred_file = Path(run_dir).expanduser() / f"predictions_{args.date}_step{args.step:03d}.nc"
         if not pred_file.exists():
@@ -505,27 +513,29 @@ def run_member_grid(args: argparse.Namespace) -> int:
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
         available = [int(m) for m in np.asarray(ds["ensemble_member"].values).reshape(-1)]
+        here = parse_members(args.members, available)
         if not members:
-            members = parse_members(args.members, available)
+            members = here
         if i == 0:
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               DEFAULT_LRES_RES,
-                               [_field(_member_slice(ds["x"], m), states, spec) for m in members]))
+                               DEFAULT_LRES_RES, here,
+                               [_field(_member_slice(ds["x"], m), states, spec) for m in here]))
             if not args.no_truth:
-                panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES,
-                               [_field(_member_slice(ds["y"], m), states, spec) for m in members]))
-        panels.append((key, lat_h, lon_h, DEFAULT_HRES_RES,
-                       [_field(_member_slice(ds["y_pred"], m), states, spec) for m in members]))
+                panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, here,
+                               [_field(_member_slice(ds["y"], m), states, spec) for m in here]))
+        panels.append((key, lat_h, lon_h, DEFAULT_HRES_RES, here,
+                       [_field(_member_slice(ds["y_pred"], m), states, spec) for m in here]))
 
-    for key, lat, lon, res, values in panels:
+    for key, lat, lon, res, member_labels, values in panels:
         out_path = out_dir / (
-            f"{key}_{token}_init{args.date}_members{len(members):02d}"
+            f"{key}_{token}_init{args.date}_members{len(member_labels):02d}"
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render_grid(
             out_path=out_path, title=titles.get(key, f"{key.capitalize()} · O1280"),
-            members=members, values=values, date=args.date, time=args.time, step=args.step,
+            members=member_labels, values=values, date=args.date, time=args.time,
+            step=args.step,
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
             field=args.field, fine_cut_deg=args.fine_cut_deg,
