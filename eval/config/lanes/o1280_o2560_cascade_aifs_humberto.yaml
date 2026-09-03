@@ -1,0 +1,20 @@
+# o1280_o2560_cascade_aifs_humberto.yaml  (2026-09-03)
+# CASCADE PROBE, deliberately outside the "lanes are independent, never a cascade"
+# rule: the 9 km driver is NOT the IFS ensemble but the output of the o320->o1280
+# downscaler (ckpt 12dcefea s400000, prepml expver jaou) fed with the operational
+# AIFS-CRPS ensemble (class=ai). Bundles are the Humberto IFS bundles with the
+# 7 surface + 6x13 pressure-level driver fields overwritten by jaou; the six
+# cloud/radiation inputs the AI chain lacks (tcc hcc lcc mcc ssrd strd) stay
+# from the IFS ENS member of the same number. Truth = IEKM o2560, unchanged.
+# Builder: ~/agent-work/20260903-cascade-aifs-o2560/scripts/build_cascade_bundles.py
+# Matched control = o1280_o2560_humberto6h_pristine on the ORIGINAL bundles,
+# same ckpt (fccc23df s300k, Atos path repoint), same sampler (base pw40 s1e6),
+# same date/members/steps, same job template.
+base: o1280_o2560_humberto6h_pristine
+
+predict:
+  dates: ["20250926"]
+  members: [1, 2]
+  steps: [24, 48, 72, 96, 120]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/scratch/eval/cascade_aifs_o2560_20260903/bundles_cascade_jaou
