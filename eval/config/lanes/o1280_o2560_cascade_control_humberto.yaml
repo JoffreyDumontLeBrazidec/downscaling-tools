@@ -1,0 +1,17 @@
+# o1280_o2560_cascade_control_humberto.yaml (2026-09-03)
+# The IFS-driven CONTROL of the cascade probe: the pristine Humberto lane restricted to
+# the probe's sample (20250926, members 1-2, 24-hourly steps) so that the evaluators
+# read the same support as the cascade arms. tc.max_pf_members caps the ENFO reference
+# ensemble at the 2 predicted members (the TC comparison contract refuses 10 vs 2).
+base: o1280_o2560_humberto6h_pristine
+
+predict:
+  dates: ["20250926"]
+  members: [1, 2]
+  steps: [24, 48, 72, 96, 120]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/bundles_with_y
+
+tc:
+  max_pf_members: 2
+  support_mode: "both"
