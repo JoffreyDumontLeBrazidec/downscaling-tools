@@ -1,0 +1,13 @@
+# o1280_o2560_ladder_control.yaml (2026-09-03) — PRODUCT-LADDER evaluation lane for the
+# downscaling-aifs-crps epic. Identical to its base for prediction; the tc block adds every
+# product of the ladder as a reference curve on the regridded 0.25 deg support (owner rule:
+# always eefo o320 / enfo o1280 / iekm o2560 / aifs-crps o320 / aifs->o1280 / aifs->o1280->o2560).
+# Reference GRIBs live in ~/hpcperm/data/tc/humberto/ as surface_pf_<EXPID>_<date>.grib
+# (msl 10u 10v x steps 24..120 x members), staged by scripts/stage_ladder_refs.sbatch.
+# max_pf_members caps EVERY ensemble at the 2 predicted members (comparison contract).
+base: o1280_o2560_cascade_control_humberto
+
+tc:
+  max_pf_members: 2
+  support_mode: "both"
+  reference_expids: ["ENFO_O1280_0001", "EEFO_O320_0001", "AIFS_N320_0001", "JAOU_O1280_0001"]
