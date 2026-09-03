@@ -1,0 +1,41 @@
+# o320_o1280_sept0105_ft400k_gmass_w11 -- early-September 2025 window override.
+base: o320_o1280_prepml_pw30_season_ft400k_gmass_w11
+
+# --------------------------------------------------------------------------
+# Window override for the EARLY-SEPTEMBER 2025 three-way arm comparison
+# (2026-09-03). The 26-30 September window used by the earlier ja6y/ja6g
+# spectra + spread_proxy + membermaps pass CANNOT include jaj3, which was
+# paused at 43% and holds only 1-13 September. This lane moves the whole
+# NetCDF-evaluator pass to 1-5 September, which all three arms cover, so the
+# three arms sit on one shared support.
+#
+# spectra_ecmwf_v2 is restated IN FULL rather than partially overridden,
+# because the lane loader merges only two levels deep and a partial nested
+# block silently clobbers the rest of it. The only field that differs from
+# the parent's block is input_bundles_dir, repointed at the new window --
+# the same class of fix as commits a81f407 and e1ae5e9, which caught a block
+# that inherited nothing and a block that inherited stale August-2023
+# bundles respectively.
+
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/sept_20250901_20250905"
+  # Owner decision 2026-09-01 (option 2), carried forward unchanged: interpolate
+  # the driver to O1280 BEFORE the spectral transform rather than transforming
+  # the native O320 field at T1279, which fabricates power. Owner 2026-09-03
+  # further ruled that the driver curve is not a gate for this comparison, so
+  # the guided-versus-control read below is model against truth, both native
+  # O1280 on the identical template with no regrid anywhere.
+  input_template_grib: "/home/ecm5702/hpcperm/data/o1280-template.grib"
+
+predict:
+  dates: ["20250901", "20250902", "20250903", "20250904", "20250905"]
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
