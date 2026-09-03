@@ -1,0 +1,18 @@
+# EXPERIMENTAL AIFS-CRPS v2 input family for the o320->o1280 lane (added 2026-09-02).
+# Same O320 model INPUT GEOMETRY as the canonical O320 (eefo) family, but the staged input
+# stream is the operational AIFS ensemble (AIFS-CRPS: class=ai, stream=enfo, type=pf) instead
+# of the IFS extended-range ensemble (class=od, stream=eefo). This is a DELIBERATE
+# out-of-distribution probe -- the o320->o1280 checkpoint was trained on eefo O320. Keyed by
+# the distinct grid label "O320_aifs" so it can never be confused with the eefo O320 family;
+# a lane opts in by setting prepml.input.grid: O320_aifs. The canonical grid below is O320, so
+# after the loader applies this reference the actual MARS grid is a real O320 retrieval.
+# Output identity is unchanged (the downscaled product label stays enfo, class=rd).
+input:
+  class: ai
+  stream: enfo
+  type: pf
+  grid: O320
+output:
+  class: rd
+  stream: enfo
+  type: pf

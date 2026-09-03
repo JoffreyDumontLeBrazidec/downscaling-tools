@@ -1,0 +1,26 @@
+# AIFS-CRPS v2 -> o320->o1280 prepml TC probe: Hurricane Humberto, September 2025.
+# Identical recipe to the UNGUIDED ft400k control month lane (ja6y), i.e. the 800k
+# fine-tuned champion (family 12dcefea step 400000; prepml uses the inference-* companion
+# supplied on the CLI) with the piecewise-30 sigma_max=1e5 sampler and NO autoguidance,
+# EXCEPT the staged input is the operational AIFS ensemble (AIFS-CRPS, class=ai stream=enfo)
+# instead of the IFS extended-range ensemble (class=od stream=eefo). prepml stages ai/enfo on
+# O320 from MARS into FDB, downscales to O1280, writes FDB class=rd. Directly comparable to
+# ja6y (same ckpt/sampler/window) -> AIFS-driven vs IFS-driven downscaling of the same storm.
+base: o320_o1280_prepml_pw30_season_ft400k_ctrl
+
+predict:
+  # Humberto intensified ~26-28 Sep 2025; inits 24-28 Sep forecast into the truth window
+  # (reference/tc/humberto covers 0926-0930). 24h steps out to 168h reach every init into it.
+  dates: ["20250924","20250925","20250926","20250927","20250928"]
+  members: [1,2,3,4,5,6,7,8,9,10]
+  steps: [24,48,72,96,120,144,168]
+
+prepml:
+  # ONLY change vs the ctrl lane: the staged input stream. Restated in full because the lane
+  # loader merges only two levels deep (a partial prepml.input clobbers the rest of the block).
+  input:
+    # Opt into the AIFS-CRPS input family (anemoi_inference_reference/O320_aifs.yaml),
+    # which the loader expands to class=ai stream=enfo type=pf grid=O320.
+    grid: O320_aifs
+  # Cap the forecast at 168h (7 x 24h) to cover Humberto without staging the full 15 days.
+  lead_time: 168h
