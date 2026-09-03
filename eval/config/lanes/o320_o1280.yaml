@@ -263,3 +263,18 @@ texture:
     alps: [43, 49, 4, 16]
     open_north_atlantic: [35, 55, -45, -20]
     west_tropical_atlantic: [10, 25, -70, -45]
+
+# membermaps (added 2026-09-02): the four-panel case-inspection maps, as an
+# evaluator rather than a hand-written sbatch. Default OFF because it is a figure
+# bundle, not a measurement: run it with `eval.cli evaluate --only membermaps`.
+# Each combination renders input, truth and prediction, twice — the field itself
+# and the fine-scale high-pass view.
+membermaps:
+  variables: ["wind10m", "msl", "2t"]
+  fields: ["value", "fine"]
+  # default = the middle step of the lane; listed so --steps propagates here
+  steps: [72]
+  members: [1]
+  fine_cut_deg: 0.6
+  # omitted on purpose: `regions` falls back to the texture block above, so the
+  # two fine-scale diagnostics always speak about the same boxes.

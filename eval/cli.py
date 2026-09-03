@@ -55,6 +55,7 @@ ALL_EVALUATORS = [
     "texture",
     "wind_extremes",
     "displacement",
+    "membermaps",
 ]
 
 DEFAULT_HOST = "atos_ac"

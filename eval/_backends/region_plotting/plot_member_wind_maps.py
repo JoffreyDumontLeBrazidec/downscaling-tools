@@ -48,9 +48,12 @@ RENDER_DPI = 140
 # rows are denser in latitude than longitude, so an isotropic lookup would
 # smear rows; 1.4 keeps the lookup roughly isotropic in grid spacing.
 LAT_LOOKUP_SCALE = 1.4
-# High-pass cutoff for --field fine, in degrees. 0.6 deg sits just below what
-# the O320 driving input can resolve, so what survives the filter is the part
-# of the field the model had to invent rather than inherit.
+# High-pass scale for --field fine, in degrees. 0.6 deg sits just below what the
+# O320 driving input can resolve, so the fully-transmitted part of the filtered
+# field is what the model had to invent rather than inherit. The Gaussian
+# rolloff also passes half the amplitude at 1.6 deg, which the driver DOES
+# carry; that leakage is inherited correctly by both truth and model, so it
+# biases a truth-versus-model contrast towards agreement, never away from it.
 DEFAULT_FINE_CUT_DEG = 0.6
 
 DEFAULT_TITLES = {
@@ -200,12 +203,15 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--vmax", type=float, default=None, help=f"Colour-scale maximum (default: the variable's own; {DEFAULT_VMAX} m/s for wind10m).")
     p.add_argument(
         "--field", choices=("value", "fine"), default="value",
-        help="value (default): the field itself. fine: only the scales below --fine-cut-deg, "
-             "i.e. the detail the O320 input could not carry, on a symmetric diverging scale.",
+        help="value (default): the field itself. fine: a high-pass keeping the scales at and "
+             "below --fine-cut-deg, i.e. the detail the O320 input could not carry, on a "
+             "symmetric diverging scale.",
     )
     p.add_argument(
         "--fine-cut-deg", type=float, default=DEFAULT_FINE_CUT_DEG,
-        help=f"High-pass cutoff in degrees for --field fine (default: {DEFAULT_FINE_CUT_DEG}).",
+        help="High-pass scale in degrees for --field fine (default: "
+             f"{DEFAULT_FINE_CUT_DEG}). Gaussian rolloff, not a brick wall: it transmits 99% "
+             "at this wavelength and 50% at 2.67x it.",
     )
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
@@ -331,8 +337,11 @@ def _render(
     gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
     if field == "fine":
         from scipy.ndimage import gaussian_filter
-        # Subtract a Gaussian smooth of the regridded field, so only the scales
-        # below the cutoff survive. sigma is half the cutoff.
+        # Subtract a Gaussian smooth of the regridded field: a high-pass built as
+        # identity minus low-pass, in real space, with no transform involved. sigma
+        # is half --fine-cut-deg, which makes the high-pass transmit 99% at a
+        # wavelength of fine_cut_deg and 50% at 2.67x it. The rolloff is gradual, so
+        # the panel is not a sharp band.
         grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
@@ -341,7 +350,12 @@ def _render(
     # matter what the importing context (e.g. eval.cli's import chain) has
     # tweaked — keeps these maps reproducible pixel-for-pixel across entry
     # points.
-    fine_note = f" · scales below {fine_cut_deg:g} deg" if field == "fine" else ""
+    # State the real filter response, not just the parameter: the high-pass passes
+    # 99% at fine_cut_deg and 50% at 2.67x it (Gaussian rolloff, not a brick wall).
+    fine_note = (
+        f" · high-pass, full below {fine_cut_deg:g} deg, half at {2.67 * fine_cut_deg:.1f} deg"
+        if field == "fine" else ""
+    )
     with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}):
         proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
         fig = plt.figure(figsize=(11, 7.5))
@@ -439,13 +453,19 @@ def _render_grid(
         gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
         if field == "fine":
             from scipy.ndimage import gaussian_filter
+            # Same real-space high-pass as the single-member renderer.
             grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
         grids.append((gx, gy, grid))
 
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
     nrows = int(np.ceil(len(members) / float(ncols)))
-    fine_note = f" · scales below {fine_cut_deg:g} deg" if field == "fine" else ""
+    # State the real filter response, not just the parameter: the high-pass passes
+    # 99% at fine_cut_deg and 50% at 2.67x it (Gaussian rolloff, not a brick wall).
+    fine_note = (
+        f" · high-pass, full below {fine_cut_deg:g} deg, half at {2.67 * fine_cut_deg:.1f} deg"
+        if field == "fine" else ""
+    )
 
     with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items()
                                 if k != "backend"}):
