@@ -1,0 +1,15 @@
+# o1280_o2560_cascade_aifs_humberto_v2.yaml (2026-09-03)
+# v2 of the cascade probe: identical to o1280_o2560_cascade_aifs_humberto except that
+# specific humidity at the three interpolated levels (150/250/600 hPa) is interpolated
+# GEOMETRICALLY (ln q linear in ln p, q clipped at 1e-9). v1 interpolated q linearly in
+# ln p and the runtime input guard flagged q_150 at +2.1 sigma / 3x spread. All other
+# fields, the six IFS-sourced cloud/radiation inputs, truth and forcings are unchanged.
+# Builder: ~/agent-work/20260903-cascade-aifs-o2560/scripts/build_cascade_bundles_v2.py
+base: o1280_o2560_cascade_aifs_humberto
+
+predict:
+  dates: ["20250926"]
+  members: [1, 2]
+  steps: [24, 48, 72, 96, 120]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/scratch/eval/cascade_aifs_o2560_20260903/bundles_cascade_jaou_v2
