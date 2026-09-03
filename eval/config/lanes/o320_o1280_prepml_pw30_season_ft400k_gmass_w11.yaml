@@ -41,11 +41,12 @@ predict:
     S_noise: 1.05
 
 prepml:
-  # Owner 2026-08-31: gpu limit 4 for THIS campaign (only live o320->o1280 arm).
-  # The 2026-08-22 default of 2 still applies whenever several arms run at once.
+  # Owner 2026-09-03: gpu limit 2. The 08-31 setting of 4 assumed jaj3 was the
+  # only live o320->o1280 arm; it is no longer, so this returns to the 2026-08-22
+  # default of 2 that governs whenever several arms share the node budget.
   ecflow:
     limits:
-      gpu: 4
+      gpu: 2
   # Guidance = 2 denoiser evals per sampler step; pw30 guided at chunks=1 projects to
   # ~1h30 per member-date (j9f3 pw40 guided measured 1h53). 10h cap keeps margin.
   platform:
