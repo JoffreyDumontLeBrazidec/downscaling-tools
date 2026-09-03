@@ -705,9 +705,14 @@ def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_con
     skw = dict(sampler_kwargs or {})
     with torch.no_grad():                    # must not retain the Heun-loop autograd graph (OOM)
         if is_dict_api(inner):               # unified sampler takes per-dataset dicts
+            # grid_shard_sizes must be passed under model-parallel inference, or the
+            # model assembles a per-rank shard against full-grid forcings and dies in
+            # _assemble_input (job 31387278: expected 3288320, got 26306560). The
+            # seeding path predates sharded dict-API use, which is why only Probe C
+            # ever hit this.
             out = sampler.sample({"in_lres": x_interp_cond, "in_hres": x_hres_cond},
                                  {"out_hres": y_init}, sigmas, denoise_fn,
-                                 model_comm_group=mcg, **skw)
+                                 model_comm_group=mcg, grid_shard_sizes=gss, **skw)
             return out["out_hres"] if isinstance(out, dict) else out
         return sampler.sample(x_interp_cond, x_hres_cond, y_init, sigmas,
                               denoise_fn,
