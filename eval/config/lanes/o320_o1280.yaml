@@ -1,7 +1,12 @@
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ag]
-  predict: [atos_ag]
+  # 2026-09-04: widened from [atos_ag] to also allow AC. AG is the more congested
+  # queue (mean submit->start wait 190 min over 570 jobs in 45 days, vs 130 min on
+  # AC), and this model is proven to run on AC 4xA100: job 31842778 completed the
+  # forward pass there on the edges shard path and failed only on a missing-truth
+  # guard, not on memory. Widening lets a probe target whichever queue is shorter.
+  predict: [atos_ag, atos_ac]
   run: []
   evaluate: [atos_ac]
   scoreboard: [atos_ac]
