@@ -31,6 +31,14 @@ environment_setup:
     - GCCcore/.13.3.0
     - Python/3.12.3
   exports:
+    # The .ds venv ships an older anemoi. Inference checkpoints pickle the model
+    # BY REFERENCE, so the runtime must expose the exact class the checkpoint
+    # names -- anemoi.models.models.diffusiondownscaler_encoder_processor_decoder.
+    # Point at the same pristine checkout AG runs from; both sides are at commit
+    # c286c1a3 on branch 'pristine' with clean working trees, which is what makes
+    # a Jupiter result comparable to an AG one. The renderer prepends code_root to
+    # PYTHONPATH afterwards, so downscaling-tools still wins for its own packages.
+    PYTHONPATH: /e/project1/gkpdm/dumontlebrazidec1/pristine/anemoi-core/models/src:/e/project1/gkpdm/dumontlebrazidec1/pristine/anemoi-core/training/src:/e/project1/gkpdm/dumontlebrazidec1/pristine/anemoi-core/graphs/src:/e/project1/gkpdm/dumontlebrazidec1/pristine/anemoi-inference/src
     GRID_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/grids/
     INTER_MAT_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/inter_mat
     RESIDUAL_STATISTICS_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/residuals_statistics/
