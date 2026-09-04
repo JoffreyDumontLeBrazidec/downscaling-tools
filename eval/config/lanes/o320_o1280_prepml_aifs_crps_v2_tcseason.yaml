@@ -1,0 +1,22 @@
+# AIFS-CRPS v2 -> o320->o1280 prepml TC-SEASON campaign (2026-09-03).
+# Same recipe as the UNGUIDED ft400k control (800k champion, inference-* ckpt on CLI, pw30
+# sigma_max=1e5, no autoguidance) with the AIFS input family, but spread over SIX September-2025
+# init dates so each 10-day forecast sweeps up the active tropical cyclones worldwide (Atlantic
+# Humberto/Imelda/Gabrielle, Pacific typhoons incl. Ragasa). 10-day lead (240h) so the ECMWF
+# tctracker has a long-enough trajectory to detect and follow storms (the 7-day Humberto run was
+# too short and the tracker found nothing). Directly comparable to ja6y (eefo-driven, same dates).
+# GPU limit 2: back to the standing cap 2026-09-04 (owner: prepml queue congestion complaints).
+base: o320_o1280_prepml_pw30_season_ft400k_ctrl
+
+predict:
+  dates: ["20250912","20250915","20250918","20250921","20250924","20250927"]
+  members: [1,2,3,4,5,6,7,8,9,10]
+  steps: [24,48,72,96,120,144,168,192,216,240]
+
+prepml:
+  input:
+    grid: O320_aifs
+  lead_time: 240h
+  ecflow:
+    limits:
+      gpu: 2
