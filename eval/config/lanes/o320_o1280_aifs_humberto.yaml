@@ -1,0 +1,50 @@
+# AIFS-CRPS -> o320->o1280 GUIDANCE + SAMPLER SCREEN on Hurricane Humberto (2026-09-04).
+# Base for the matched-arm screen of downscaling-aifs-crps epic. Feeds the operational
+# AIFS-CRPS ensemble (class=ai stream=enfo type=pf, native N320 regridded to O320 by MARS
+# grid=O320) into the ft400k champion 12dcefea step 400000, MANUAL mode. Truth-aware bundles:
+# AIFS O320 input, enfo O1280 target (enfo member n is NOT the same realisation as AIFS
+# member n -- surface nMSE/CRPS are read ARM-vs-ARM only, never as absolute skill).
+# This lane is the UNGUIDED control (base sampler pw30 s1e5); arms base off it.
+base: o320_o1280
+default_host: atos_ag
+allowed_hosts:
+  prepare: [atos_ac_pristine, atos_ag]
+  predict: [atos_ac_pristine, atos_ag]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+prepare:
+  bundle_filename_tpl: "aifs_o320_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib: "{source_grib_root}/aifs_o320_0001_date{date}_time0000_mem1to10_step24to120_sfc.grib"
+    lres_pl_grib:  "{source_grib_root}/aifs_o320_0001_date{date}_time0000_mem1to10_step24to120_pl.grib"
+    hres_grib:     "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930/enfo_o1280_0001_date{date}_time0000_step24to120_sfc.grib"
+    target_sfc_grib: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930/enfo_o1280_0001_date{date}_time0000_mem1to10_step24to120_sfc_y.grib"
+    target_pl_grib:  "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930/enfo_o1280_0001_date{date}_time0000_mem1to10_step24to120_pl_y.grib"
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20250926"]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/scratch/eval/aifs_crps_guidance_20260904/bundles
+
+tc:
+  events: ["humberto"]
+  grib_dir: "/home/ecm5702/hpcperm/data/tc/humberto"
+  analysis_expid: "OPER_O1280_0001"
+  extreme_reference_expid: "ENFO_O1280_0001"
+  reference_expids: ["ENFO_O1280_0001", "EEFO_O320_0001", "AIFS_N320_0001", "JAOU_O1280_0001"]
+  support_mode: "regridded"
+  max_pf_members: 10
+  input_label: "aifs-crps O320"
+  member_maps:
+    enabled: true
+    event_dates:
+      humberto: "20250926"
+    steps: [24, 120]
+    members: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+spectra_ecmwf_v2:
+  input_bundles_dir: "/home/ecm5702/scratch/eval/aifs_crps_guidance_20260904/bundles"

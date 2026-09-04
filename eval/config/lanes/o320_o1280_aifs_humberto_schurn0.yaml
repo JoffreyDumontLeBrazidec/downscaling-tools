@@ -1,0 +1,19 @@
+# AIFS Humberto screen: sampler arm S_churn 0 (base pw30 s1e5, no stochastic churn), UNGUIDED. Isolates the churn term vs the control.
+base: o320_o1280_aifs_humberto
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
