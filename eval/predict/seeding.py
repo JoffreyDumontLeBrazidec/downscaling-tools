@@ -39,11 +39,36 @@ match:
   * the ordering AND count of dates, steps and members, because the generator is
     consumed in sequence -- predicting a subset does NOT reproduce those same
     members inside a fuller run.
+  * the GPU class, added 2026-09-04 -- see below.
 
-Any before-and-after gate must hold all three fixed and vary only the knob under
+Any before-and-after gate must hold all four fixed and vary only the knob under
 test. Code that wants genuinely independent draws (for example the ladder's
 candidate-B seed-draw loop) must vary `ANEMOI_BASE_SEED` explicitly; re-running
 the same command no longer suffices.
+
+The GPU-class condition (measured 2026-09-04). Seeding alone does NOT make the
+draw portable between machines. From one base seed, `torch.randn` on CUDA yields
+bit-identical values on Atos AC (A100, torch 2.10.0), Atos AG (GH200, torch
+2.9.0) and JUPITER (GH200, torch 2.9.0) for small tensors -- shapes (8,) and
+(1024,) all hash to 8f848bed.../ee2edd5d... -- but DIVERGES at the shape that
+actually matters, the per-shard draw of (1_649_920, 10): AG and JUPITER both give
+da635fe0adcc049e while AC gives f325fa5ca94a83e0. Large-tensor generation maps
+elements to Philox counters through the kernel launch configuration, which
+follows the device, so the streams are different orderings of the same
+distribution. Both remain proper standard normals (std 0.99975 vs 0.99998).
+
+Consequence: a run is reproducible within a GPU class and not across one. A
+JUPITER prediction and an AG prediction of the same configuration agree to
+floating-point noise; the same prediction on AC differs by roughly the ensemble
+spread (measured 0.30 of the 10v standard deviation over 10 members at O1280),
+which is a DIFFERENT DRAW, not a wrong answer. Scores and distributions stay
+valid across hosts; only pointwise comparison breaks. Compare JUPITER against
+AG, never against AC.
+
+Caveat: AG and JUPITER share both the GPU generation and the torch version,
+while AC differs in both, so this evidence cannot separate the two causes. The
+practical rule is the same either way -- hold the host fixed across a pointwise
+gate.
 """
 
 from __future__ import annotations
