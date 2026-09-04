@@ -9,7 +9,7 @@ base: o320_o1280
 default_host: atos_ag
 allowed_hosts:
   prepare: [atos_ac_pristine, atos_ag]
-  predict: [atos_ac_pristine, atos_ag]
+  predict: [atos_ac_pristine, atos_ag, jupiter]
   run: []
   evaluate: [atos_ac]
   scoreboard: [atos_ac]
