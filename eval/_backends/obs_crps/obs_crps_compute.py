@@ -297,7 +297,7 @@ def retrieve_stvl_model(
     reference = valid - dt.timedelta(hours=int(step))
     frames = {}
     elevation = None
-    for name in mars_parameters(parameter):
+    for name in (parameter,):
         fieldset = vmedia.stvl_retrieve(
             table="model",
             parameter=name,
@@ -325,12 +325,7 @@ def retrieve_stvl_model(
             columns[member] = frame.set_index("stnid")["value_0"]
         frames[name] = pd.DataFrame(columns)
 
-    names = list(frames)
-    if parameter == "10ff":
-        values = np.hypot(frames[names[0]], frames[names[1]])
-    else:
-        values = frames[names[0]]
-    values = values.rename(columns=lambda m: f"member_{m}")
+    values = frames[parameter].rename(columns=lambda m: f"member_{m}")
     return values.join(elevation.set_index("stnid"), how="inner")
 
 
