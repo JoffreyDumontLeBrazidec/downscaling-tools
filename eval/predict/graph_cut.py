@@ -249,6 +249,14 @@ def activate_local_graph_cut(inference_model, raw_scope: str | dict[str, Any] | 
     _subset_provider(model.encoder_graph_provider[dataset], data_mask, hidden_mask)
     _subset_provider(model.decoder_graph_provider[dataset], hidden_mask, data_mask)
     _subset_provider(model.processor_graph_provider, hidden_mask, hidden_mask)
+    # Fine-scale epic (2026-09-04): checkpoints of branch exp/hres-local-branch-20260902 carry an
+    # extra data->data edge set on the output grid (hres_branch_graph_provider). It must be cut to
+    # the same data mask on BOTH ends, otherwise the branch indexes the full-grid edges against the
+    # cut node set. Absent (None) on every pristine checkpoint, so this is a no-op there.
+    hres_provider = getattr(model, "hres_branch_graph_provider", None)
+    if hres_provider is not None:
+        _subset_provider(hres_provider, data_mask, data_mask)
+        stats["hres_branch_edges_kept"] = int(hres_provider.edge_index_base.shape[1])
     interp_stats = _subset_interpolation(model, data_mask)
     if interp_stats:
         stats.update(interp_stats)
