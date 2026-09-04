@@ -438,13 +438,9 @@ def score_window(
     interpolated here.  With source "stvl" it is taken from STVL, already at the
     station points; see retrieve_stvl_model for why the two are interchangeable.
     """
-    if source == "grib":
-        grid_lat, grid_lon = read_grid(orography_path)
-        tree = cKDTree(unit_xyz(grid_lat, grid_lon))
-        orography_height = read_field_values(orography_path) / G_CONST
-    else:
-        tree = None
-        orography_height = None
+    grid_lat, grid_lon = read_grid(orography_path)
+    tree = cKDTree(unit_xyz(grid_lat, grid_lon))
+    orography_height = read_field_values(orography_path) / G_CONST
     weights = WeightCache()
 
     rows: list[dict] = []
@@ -463,32 +459,16 @@ def score_window(
                 lo, hi = HARD_LIMITS.get(parameter, (-np.inf, np.inf))
                 obs = obs[(obs["obs"] >= lo) & (obs["obs"] <= hi)].reset_index(drop=True)
 
-                if source == "stvl":
-                    model_frame = retrieve_stvl_model(
-                        parameter, valid, step, stvl_model or {}, nmem
-                    )
-                    if model_frame is None:
-                        LOG.warning(
-                            "STVL holds no model data for %s at %s, skipping",
-                            parameter, valid,
-                        )
-                        continue
-                    # Restrict to the stations that have BOTH an observation and a
-                    # model value, so the support is explicit rather than implied.
-                    obs = obs[obs["stnid"].isin(model_frame.index)].reset_index(drop=True)
-                    model_frame = model_frame.loc[obs["stnid"].to_numpy()]
-                    members = model_frame[
-                        [f"member_{m}" for m in range(1, nmem + 1)]
-                    ].to_numpy().T
-                    model_elevation = model_frame["elevation"].to_numpy()
-                    idx = None
-                else:
-                    _, idx = tree.query(
-                        unit_xyz(obs["latitude"].to_numpy(), obs["longitude"].to_numpy())
-                    )
+                # The observation filtering has to be identical for every curve,
+                # or the curves are computed over different stations and cannot be
+                # compared. So the grid index and the gross-error check come first,
+                # whatever the model values will come from.
+                _, idx = tree.query(
+                    unit_xyz(obs["latitude"].to_numpy(), obs["longitude"].to_numpy())
+                )
 
                 limit = ANALYSIS_DEPARTURE_MAX.get(parameter)
-                if gross_error_check and limit is not None and idx is not None:
+                if gross_error_check and limit is not None:
                     an = analysis_values_at_stations(cache_dir, parameter, valid, idx, grid)
                     if an is None:
                         LOG.warning(
@@ -500,7 +480,31 @@ def score_window(
                         obs = obs[keep].reset_index(drop=True)
                         idx = idx[keep]
 
-                if source == "grib":
+                if source == "stvl":
+                    model_frame = retrieve_stvl_model(
+                        parameter, valid, step, stvl_model or {}, nmem
+                    )
+                    if model_frame is None:
+                        LOG.warning(
+                            "STVL holds no model data for %s at %s, skipping",
+                            parameter, valid,
+                        )
+                        continue
+                    model_frame = model_frame[~model_frame.index.duplicated()]
+                    keep = obs["stnid"].isin(model_frame.index).to_numpy()
+                    if not keep.all():
+                        LOG.info(
+                            "%s: %d observed stations absent from STVL's model table",
+                            curve, int((~keep).sum()),
+                        )
+                    obs = obs[keep].reset_index(drop=True)
+                    idx = idx[keep]
+                    model_frame = model_frame.loc[obs["stnid"].to_numpy()]
+                    members = model_frame[
+                        [f"member_{m}" for m in range(1, nmem + 1)]
+                    ].to_numpy().T
+                    model_elevation = model_frame["elevation"].to_numpy()
+                else:
                     members = model_values_at_stations(
                         cache_dir, expver, parameter, date, step, nmem, idx,
                         stream, grid,
@@ -606,17 +610,21 @@ def main(argv=None) -> int:
         for d in dates for s in steps
     })
 
-    orography_path = None
+    # The orography defines the grid the station index is built on, and the
+    # analysis is what the gross-error check compares against; both are needed
+    # whatever the model values come from.
+    orography_path = ensure_orography(cache_dir, args.grid)
+    for parameter in parameters:
+        if not args.no_gross_error_check and parameter in ANALYSIS_DEPARTURE_MAX:
+            ensure_analysis_fields(cache_dir, parameter, valid_dates, args.grid)
+
     stvl_model = None
     if args.source == "grib":
-        orography_path = ensure_orography(cache_dir, args.grid)
         for parameter in parameters:
             ensure_forecast_fields(
                 cache_dir, parameter, dates, steps, args.nmem, args.expver,
                 args.class_, args.stream, args.type_, args.database, args.grid,
             )
-            if not args.no_gross_error_check and parameter in ANALYSIS_DEPARTURE_MAX:
-                ensure_analysis_fields(cache_dir, parameter, valid_dates, args.grid)
     else:
         # STVL already holds the values at the stations, and its own model
         # elevation with them, so nothing has to be retrieved or interpolated.
