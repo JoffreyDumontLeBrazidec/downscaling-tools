@@ -73,6 +73,14 @@ DOMAINS = {
 # stored as its components and quaver derives the speed the same way.
 MARS_PARAMETERS = {"10ff": ("10u", "10v")}
 
+# STVL numbers the perturbed members of the operational ensemble from zero, while
+# MARS numbers them from one, so ensemble member m is STVL number m-1. This was
+# established by comparing the two directly (2026-09-04): with the offset applied
+# every station agrees, and without it the two disagree by about 0.7 K on average,
+# which is the difference between two unrelated ensemble members and would be
+# invisible in a final score.
+STVL_MEMBER_OFFSET = -1
+
 
 def mars_parameters(parameter: str) -> tuple[str, ...]:
     return MARS_PARAMETERS.get(parameter, (parameter,))
@@ -167,6 +175,7 @@ def ensure_forecast_fields(
     stream: str,
     type_: str,
     database: str,
+    grid: str,
 ) -> None:
     """Retrieve the whole window for one parameter in a single MARS call.
 
@@ -174,7 +183,7 @@ def ensure_forecast_fields(
     files already present are left alone so a rerun is close to free.
     """
     wanted = [
-        cache_dir / f"{expver}_{p}_{d}_{s}.grib"
+        cache_dir / f"{expver}_{stream}_{grid}_{p}_{d}_{s}.grib"
         for p in mars_parameters(parameter)
         for d in dates
         for s in steps
@@ -186,7 +195,7 @@ def ensure_forecast_fields(
     numbers = "/".join(str(i) for i in range(1, nmem + 1))
     blocks = []
     for i, p in enumerate(mars_parameters(parameter)):
-        target = f'"{expver}_{p}_[date]_[step].grib"'
+        target = f'"{expver}_{stream}_{grid}_{p}_[date]_[step].grib"'
         if i == 0:
             blocks.append(
                 "retrieve,\n"
@@ -207,7 +216,7 @@ def ensure_analysis_fields(
 ) -> None:
     """Retrieve the operational analysis used for the gross-error check."""
     wanted = [
-        cache_dir / f"an_{p}_{d}.grib"
+        cache_dir / f"an_{p}_{grid}_{d}.grib"
         for p in mars_parameters(parameter)
         for d in valid_dates
     ]
@@ -215,7 +224,7 @@ def ensure_analysis_fields(
         return
     blocks = []
     for i, p in enumerate(mars_parameters(parameter)):
-        target = f'"an_{p}_[date].grib"'
+        target = f'"an_{p}_{grid}_[date].grib"'
         if i == 0:
             blocks.append(
                 "retrieve,\n"
@@ -262,6 +271,67 @@ def read_grid(path: Path):
 
     geo = ekd.from_source("file", str(path)).to_fieldlist()[0].geography
     return geo.latitudes(), geo.longitudes()
+
+
+def retrieve_stvl_model(
+    parameter: str, valid: dt.datetime, step: int, model: dict, nmem: int
+) -> pd.DataFrame | None:
+    """Ensemble values already interpolated to the station points, from STVL.
+
+    STVL keeps the operational forecasts at the observing stations, and it stores
+    them at the NEAREST grid point, which is exactly what quaver's default
+    interpolation does.  That was verified against a MARS retrieval of the same
+    field on 2026-09-04: of 15,469 stations, all but three agreed to within a
+    millikelvin, and those three sit within a few hundred metres of a cell
+    boundary where the choice between two equidistant grid points can go either
+    way.  So for the streams STVL holds, the baseline curves cost nothing rather
+    than a large archive retrieval.
+
+    Returns a frame indexed by station with one column per member, plus the model
+    orography height at each station, which is what the 2 m temperature
+    correction needs.  Returns None when STVL holds nothing for this stream,
+    which is the case for the extended-range ensemble.
+    """
+    import vtb.media as vmedia
+
+    reference = valid - dt.timedelta(hours=int(step))
+    frames = {}
+    elevation = None
+    for name in mars_parameters(parameter):
+        fieldset = vmedia.stvl_retrieve(
+            table="model",
+            parameter=name,
+            reference_datetimes=[reference.strftime("%Y-%m-%dT%H:%M:%S")],
+            forecast_lengths=[dt.timedelta(hours=int(step))],
+            model=model,
+        )
+        if len(fieldset) == 0:
+            return None
+        by_number = {}
+        for field in fieldset:
+            number = field.header_get("number")
+            while isinstance(number, (list, tuple)):
+                number = number[0]
+            by_number[int(number)] = field
+        columns = {}
+        for member in range(1, nmem + 1):
+            key = member + STVL_MEMBER_OFFSET
+            if key not in by_number:
+                LOG.warning("STVL has no member %s for %s", key, name)
+                return None
+            frame = by_number[key].to_dataframe()
+            if elevation is None:
+                elevation = frame[["stnid", "elevation"]].copy()
+            columns[member] = frame.set_index("stnid")["value_0"]
+        frames[name] = pd.DataFrame(columns)
+
+    names = list(frames)
+    if parameter == "10ff":
+        values = np.hypot(frames[names[0]], frames[names[1]])
+    else:
+        values = frames[names[0]]
+    values = values.rename(columns=lambda m: f"member_{m}")
+    return values.join(elevation.set_index("stnid"), how="inner")
 
 
 def retrieve_observations(parameter: str, valid: dt.datetime) -> pd.DataFrame:
@@ -314,7 +384,7 @@ class WeightCache:
 
 def model_values_at_stations(
     cache_dir: Path, expver: str, parameter: str, date: str, step: int,
-    nmem: int, idx: np.ndarray,
+    nmem: int, idx: np.ndarray, stream: str, grid: str,
 ) -> np.ndarray:
     """Ensemble values at the station points, one row per member.
 
@@ -323,7 +393,7 @@ def model_values_at_stations(
     """
     parts = []
     for p in mars_parameters(parameter):
-        path = cache_dir / f"{expver}_{p}_{date}_{step}.grib"
+        path = cache_dir / f"{expver}_{stream}_{grid}_{p}_{date}_{step}.grib"
         parts.append(
             np.stack([read_field_values(path, n)[idx] for n in range(1, nmem + 1)])
         )
@@ -333,11 +403,11 @@ def model_values_at_stations(
 
 
 def analysis_values_at_stations(
-    cache_dir: Path, parameter: str, valid: dt.datetime, idx: np.ndarray
+    cache_dir: Path, parameter: str, valid: dt.datetime, idx: np.ndarray, grid: str
 ) -> np.ndarray | None:
     parts = []
     for p in mars_parameters(parameter):
-        path = cache_dir / f"an_{p}_{valid.strftime('%Y%m%d')}.grib"
+        path = cache_dir / f"an_{p}_{grid}_{valid.strftime('%Y%m%d')}.grib"
         if not path.exists():
             return None
         parts.append(read_field_values(path)[idx])
@@ -355,12 +425,26 @@ def score_window(
     steps: list[int],
     nmem: int,
     grid: str,
-    orography_path: Path,
+    orography_path: Path | None,
     gross_error_check: bool = True,
+    source: str = "grib",
+    stvl_model: dict | None = None,
+    curve: str = "experiment",
+    stream: str = "enfo",
 ) -> pd.DataFrame:
-    grid_lat, grid_lon = read_grid(orography_path)
-    tree = cKDTree(unit_xyz(grid_lat, grid_lon))
-    orography_height = read_field_values(orography_path) / G_CONST
+    """Score one curve over the window.
+
+    With source "grib" the ensemble is read from FDB or the MARS archive and
+    interpolated here.  With source "stvl" it is taken from STVL, already at the
+    station points; see retrieve_stvl_model for why the two are interchangeable.
+    """
+    if source == "grib":
+        grid_lat, grid_lon = read_grid(orography_path)
+        tree = cKDTree(unit_xyz(grid_lat, grid_lon))
+        orography_height = read_field_values(orography_path) / G_CONST
+    else:
+        tree = None
+        orography_height = None
     weights = WeightCache()
 
     rows: list[dict] = []
@@ -379,13 +463,33 @@ def score_window(
                 lo, hi = HARD_LIMITS.get(parameter, (-np.inf, np.inf))
                 obs = obs[(obs["obs"] >= lo) & (obs["obs"] <= hi)].reset_index(drop=True)
 
-                _, idx = tree.query(
-                    unit_xyz(obs["latitude"].to_numpy(), obs["longitude"].to_numpy())
-                )
+                if source == "stvl":
+                    model_frame = retrieve_stvl_model(
+                        parameter, valid, step, stvl_model or {}, nmem
+                    )
+                    if model_frame is None:
+                        LOG.warning(
+                            "STVL holds no model data for %s at %s, skipping",
+                            parameter, valid,
+                        )
+                        continue
+                    # Restrict to the stations that have BOTH an observation and a
+                    # model value, so the support is explicit rather than implied.
+                    obs = obs[obs["stnid"].isin(model_frame.index)].reset_index(drop=True)
+                    model_frame = model_frame.loc[obs["stnid"].to_numpy()]
+                    members = model_frame[
+                        [f"member_{m}" for m in range(1, nmem + 1)]
+                    ].to_numpy().T
+                    model_elevation = model_frame["elevation"].to_numpy()
+                    idx = None
+                else:
+                    _, idx = tree.query(
+                        unit_xyz(obs["latitude"].to_numpy(), obs["longitude"].to_numpy())
+                    )
 
                 limit = ANALYSIS_DEPARTURE_MAX.get(parameter)
-                if gross_error_check and limit is not None:
-                    an = analysis_values_at_stations(cache_dir, parameter, valid, idx)
+                if gross_error_check and limit is not None and idx is not None:
+                    an = analysis_values_at_stations(cache_dir, parameter, valid, idx, grid)
                     if an is None:
                         LOG.warning(
                             "analysis missing for %s at %s, gross-error check skipped",
@@ -396,11 +500,14 @@ def score_window(
                         obs = obs[keep].reset_index(drop=True)
                         idx = idx[keep]
 
-                members = model_values_at_stations(
-                    cache_dir, expver, parameter, date, step, nmem, idx
-                )
+                if source == "grib":
+                    members = model_values_at_stations(
+                        cache_dir, expver, parameter, date, step, nmem, idx,
+                        stream, grid,
+                    )
+                    model_elevation = orography_height[idx]
                 if parameter in OROGRAPHY_CORRECTED:
-                    delta = orography_height[idx] - obs["elevation"].to_numpy()
+                    delta = model_elevation - obs["elevation"].to_numpy()
                     members = members + delta[None, :] * LAPSE_RATE
 
                 good = np.isfinite(members).all(axis=0) & np.isfinite(obs["obs"].to_numpy())
@@ -419,6 +526,7 @@ def score_window(
                     lon = obs["longitude"].to_numpy()[mask]
                     w = weights.get(lat, lon)
                     rows.append({
+                        "curve": curve,
                         "parameter": parameter,
                         "domain": domain,
                         "date": int(date),
@@ -429,7 +537,8 @@ def score_window(
                         "bias": float(np.sum(w * error[mask])),
                         "spread": float(np.sum(w * spread[mask])),
                     })
-                LOG.info("scored %s %s +%sh (%d stations)", parameter, date, step, len(obs))
+                LOG.info("scored %s %s %s +%sh (%d stations)",
+                         curve, parameter, date, step, len(obs))
     return pd.DataFrame(rows)
 
 
@@ -440,7 +549,7 @@ def summarise_by_lead(rows: pd.DataFrame) -> pd.DataFrame:
     time, with the forecast start dates averaged out.  ``ndates`` is carried so a
     lead time that is short of dates cannot be mistaken for a complete one.
     """
-    grouped = rows.groupby(["parameter", "domain", "step"], as_index=False).agg(
+    grouped = rows.groupby(["curve", "parameter", "domain", "step"], as_index=False).agg(
         fcrps=("fcrps", "mean"),
         fcrps_std=("fcrps", "std"),
         bias=("bias", "mean"),
@@ -448,7 +557,7 @@ def summarise_by_lead(rows: pd.DataFrame) -> pd.DataFrame:
         nstations=("nstations", "mean"),
         ndates=("date", "nunique"),
     )
-    return grouped.sort_values(["parameter", "domain", "step"]).reset_index(drop=True)
+    return grouped.sort_values(["curve", "parameter", "domain", "step"]).reset_index(drop=True)
 
 
 def main(argv=None) -> int:
@@ -467,6 +576,15 @@ def main(argv=None) -> int:
     ap.add_argument("--cache-dir", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--no-gross-error-check", action="store_true")
+    ap.add_argument(
+        "--source", choices=("grib", "stvl"), default="grib",
+        help="where the ensemble comes from: GRIB retrieved here, or STVL's "
+             "model table which already holds it at the station points",
+    )
+    ap.add_argument(
+        "--curve", default="experiment",
+        help="label for this curve, e.g. experiment, input, reference",
+    )
     args = ap.parse_args(argv)
 
     logging.basicConfig(
@@ -483,25 +601,38 @@ def main(argv=None) -> int:
     parameters = [p.strip() for p in args.parameters.split(",") if p.strip()]
     domains = [d.strip() for d in args.domains.split(",") if d.strip()]
 
-    orography_path = ensure_orography(cache_dir, args.grid)
-
     valid_dates = sorted({
         (dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=s)).strftime("%Y%m%d")
         for d in dates for s in steps
     })
 
-    for parameter in parameters:
-        ensure_forecast_fields(
-            cache_dir, parameter, dates, steps, args.nmem, args.expver,
-            args.class_, args.stream, args.type_, args.database,
-        )
-        if not args.no_gross_error_check and parameter in ANALYSIS_DEPARTURE_MAX:
-            ensure_analysis_fields(cache_dir, parameter, valid_dates, args.grid)
+    orography_path = None
+    stvl_model = None
+    if args.source == "grib":
+        orography_path = ensure_orography(cache_dir, args.grid)
+        for parameter in parameters:
+            ensure_forecast_fields(
+                cache_dir, parameter, dates, steps, args.nmem, args.expver,
+                args.class_, args.stream, args.type_, args.database, args.grid,
+            )
+            if not args.no_gross_error_check and parameter in ANALYSIS_DEPARTURE_MAX:
+                ensure_analysis_fields(cache_dir, parameter, valid_dates, args.grid)
+    else:
+        # STVL already holds the values at the stations, and its own model
+        # elevation with them, so nothing has to be retrieved or interpolated.
+        stvl_model = {
+            "class": args.class_,
+            "stream": args.stream,
+            "expver": args.expver,
+            "type": args.type_,
+        }
 
     rows = score_window(
         cache_dir, args.expver, parameters, domains, dates, steps, args.nmem,
         args.grid, orography_path,
         gross_error_check=not args.no_gross_error_check,
+        source=args.source, stvl_model=stvl_model, curve=args.curve,
+        stream=args.stream,
     )
     if rows.empty:
         LOG.error("no scores produced")
@@ -518,6 +649,8 @@ def main(argv=None) -> int:
         "steps": steps,
         "nmem": args.nmem,
         "grid": args.grid,
+        "source": args.source,
+        "curve": args.curve,
         "n_rows": int(len(rows)),
         "summary": by_lead.to_dict(orient="records"),
     }, indent=2))
