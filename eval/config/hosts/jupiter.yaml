@@ -1,0 +1,41 @@
+# JUPITER (Forschungszentrum Julich) -- prediction only.
+#
+# Julich has no MARS archive and no FDB field database, so bundles are built at
+# ECMWF and shipped here, and every evaluator still runs on Atos. This host is
+# therefore valid for the predict stage alone.
+#
+# Booster nodes are GH200 on aarch64, the same architecture as Atos AG, so the
+# AG environment recipe applies. The .ds venv below is the TRAINING environment
+# and must not be mutated: live training jobs depend on it. It already carries a
+# GPU-capable torch 2.9.0+cu128 on Python 3.12.3 (verified on a booster node
+# 2026-09-04: 4x GH200, 102 GB each, cuda available, finite matmul).
+code_root: /e/data1/jureap-data/ecmwf/users/jdumont/inference/downscaling-tools
+scratch_root: /e/data1/jureap-data/ecmwf/users/jdumont/inference
+perm_root: /e/data1/jureap-data/ecmwf/users/jdumont/inference
+venv: /e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds
+
+scheduler:
+  qos: normal
+  # Atos infers the partition from the QOS; Julich does not, and also requires
+  # an account. Rendered verbatim by eval/jobs/renderer.py.
+  extra_directives:
+    - "--account=gkpdm"
+    - "--partition=booster"
+  default_time: "04:00:00"
+  default_mem: 64G
+  default_cpus: 16
+
+environment_setup:
+  module_loads:
+    - Stages/2025
+    - GCCcore/.13.3.0
+    - Python/3.12.3
+  exports:
+    GRID_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/grids/
+    INTER_MAT_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/inter_mat
+    RESIDUAL_STATISTICS_DIR: /e/data1/jureap-data/ecmwf/users/jdumont/inference/reference/residuals_statistics/
+    OUTPUT: /e/data1/jureap-data/ecmwf/users/jdumont/inference/out
+    TORCHINDUCTOR_COMPILE_THREADS: "1"
+    OMP_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+  venv_activate: /e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds/bin/activate

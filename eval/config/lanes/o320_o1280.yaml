@@ -9,7 +9,7 @@ allowed_hosts:
   # writing 13-14 min AFTER the job ended, so their target_hres_* arrays were
   # declared but not yet filled. A scheduling race, not a memory or hardware limit.
   # Widening lets a probe target whichever of the two queues is shorter.
-  predict: [atos_ag, atos_ac]
+  predict: [atos_ag, atos_ac, jupiter]
   run: []
   evaluate: [atos_ac]
   scoreboard: [atos_ac]
