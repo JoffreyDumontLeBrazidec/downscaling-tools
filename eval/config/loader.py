@@ -16,7 +16,7 @@ _LANE_ALLOWED_KEYS = {
     "evaluator_groups", "sigma", "sigma_loss", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
     "default_host", "allowed_hosts", "lineage",
-    "precip", "precip_dist", "precip_events", "precip_scores", "probabilistic", "quaver", "local_global",
+    "precip", "precip_dist", "precip_events", "precip_scores", "probabilistic", "quaver", "obs_crps", "local_global",
     "tctracker", "lane_diagnostics", "texture", "wind_extremes", "displacement",
     "membermaps",
 }

@@ -49,7 +49,7 @@ ALL_EVALUATORS = [
     "spectra_ecmwf", "spectra_ecmwf_v2", "mlflow",
     "precip_dist", "precip_events", "precip_scores",
     "interp", "probabilistic", "spread_proxy",
-    "quaver", "local_global",
+    "quaver", "obs_crps", "local_global",
     "spectra_coherence",
     "lane_diagnostics",
     "texture",
@@ -521,16 +521,24 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
     return {}
 
 
-def _with_prepml_quaver(evaluators: list[str], args: argparse.Namespace) -> list[str]:
-    """Auto-include the quaver scorecard for prepml evaluations (expver set).
+def _with_prepml_fdb_evaluators(evaluators: list[str], args: argparse.Namespace) -> list[str]:
+    """Auto-include the FDB-based scorecards for prepml evaluations (expver set).
 
-    Quaver is FDB-based and only meaningful when the run published an ensemble to
-    FDB under an expver. We avoid even listing it for manual runs. Applied to the
-    default / --include-diagnostics paths; --only stays explicit.
+    Both quaver and obs_crps read the ensemble from FDB under an expver, so they
+    are only meaningful when the run published one; we avoid even listing them
+    for manual runs. obs_crps is the cheap numeric counterpart of the quaver
+    surface scorecard (calibrated against it on ja6y, 2026-09-04) and quaver
+    remains the canonical scorecard and the only one covering upper air, so both
+    run. Applied to the default / --include-diagnostics paths; --only stays
+    explicit.
     """
-    if getattr(args, "expver", None) and "quaver" not in evaluators:
-        return [*evaluators, "quaver"]
-    return evaluators
+    if not getattr(args, "expver", None):
+        return evaluators
+    out = list(evaluators)
+    for name in ("quaver", "obs_crps"):
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str]:
@@ -560,9 +568,9 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
         for e in diag_group:
             if e not in combined:
                 combined.append(e)
-        return _with_prepml_quaver(combined, args)
+        return _with_prepml_fdb_evaluators(combined, args)
 
-    return _with_prepml_quaver(list(evaluator_groups.get("default", [])), args)
+    return _with_prepml_fdb_evaluators(list(evaluator_groups.get("default", [])), args)
 
 
 def _get_git_commit() -> str:
