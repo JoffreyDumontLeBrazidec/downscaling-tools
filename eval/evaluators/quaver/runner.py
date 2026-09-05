@@ -219,13 +219,30 @@ def resolve_reference_params(eff: dict, exp_params: dict, eval_config: dict) -> 
     }
 
 
+def _vstream_base(params: dict) -> str:
+    """Quaver vstream base for a computed curve.
+
+    Legacy name ``prepml_<expver>`` is kept for the operational IFS sources (class od, stream
+    eefo/enfo) so their existing shared-DB records and caches stay valid. Any other source
+    (e.g. AIFS-CRPS: class ai, stream enfo, expver 0001) gets a class/stream-qualified base, so
+    it no longer collides with the eefo O320 input curve that shares expver 0001 and grid O320
+    (memory: reference_quaver_input_curve_class_collision, 2026-09-04).
+    """
+    cls = str(params.get("class_", "od")); stream = str(params.get("stream", "enfo")); expver = str(params["expver"])
+    if cls == "od" and stream in ("eefo", "enfo"):
+        return f"prepml_{expver}"
+    return f"prepml_{cls}{stream}_{expver}"
+
+
 def _input_cache_dir(input_params: dict, eval_config: dict) -> Path:
     root = eval_config.get("input_cache_root") or (
         Path.home() / "perm" / "eval" / "_quaver_input_baseline_cache"
     )
     grid = str(input_params["grid"]).replace("/", "p")
+    base = _vstream_base(input_params)
+    qual = "" if base == f"prepml_{input_params['expver']}" else f"{input_params.get('class_', 'od')}{input_params.get('stream', 'enfo')}_"
     key = (
-        f"{input_params['expver']}_{grid}"
+        f"{qual}{input_params['expver']}_{grid}"
         f"_{input_params['first_reference_date']}_{input_params['last_reference_date']}"
         f"_lt{input_params['first_lead_time']}-{input_params['last_lead_time']}"
         f"s{input_params['lead_time_step']}_n{input_params['nmem']}"
@@ -249,6 +266,8 @@ def _compute_args(params: dict) -> list[str]:
         # Ensemble stream: input=eefo (resolved.prepml.input.stream), reference/experiment=enfo.
         # Without this the compute hardcoded enfo -> the "eefo O320 input" curve was silently enfo.
         "--stream", str(params.get("stream", "enfo")),
+        # class/stream-qualified vstream for non-IFS sources (AIFS-CRPS); legacy name for od eefo/enfo
+        "--vstream_base", _vstream_base(params),
     ] + (["--skip_upperair"] if params.get("skip_upperair") else [])
 
 
@@ -316,6 +335,7 @@ def run(predictions_dir, lane_config, eval_config, *, output_dir=None, overwrite
         else:
             try:
                 _compute_input_baseline(input_params, eval_config, results_dir, overwrite)
+                input_params["vstream_base"] = _vstream_base(input_params)
                 (results_dir / "input_params.json").write_text(json.dumps(input_params, indent=2))
                 # Reference (enfo O1280): SELF-COMPUTE it too — never the rotating oper_ob — so the
                 # 3rd curve is ALWAYS present (standing rule: input+target+ML always). Same generic
@@ -323,6 +343,7 @@ def run(predictions_dir, lane_config, eval_config, *, output_dir=None, overwrite
                 # is distinct from the O320 input, no clobber.
                 ref_params = resolve_reference_params(eff, params, eval_config)
                 _compute_input_baseline(ref_params, eval_config, results_dir, overwrite)
+                ref_params["vstream_base"] = _vstream_base(ref_params)
                 (results_dir / "reference_params.json").write_text(json.dumps(ref_params, indent=2))
             except subprocess.CalledProcessError:
                 # Baselines are best-effort; a MARS hiccup must not fail the eval. The

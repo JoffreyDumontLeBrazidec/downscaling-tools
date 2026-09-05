@@ -47,6 +47,8 @@ parser.add_argument("--database", type=str, default="fdb", help="Database name")
 parser.add_argument("--skip_upperair", action="store_true",
                     help="Skip pl scoring (for expvers whose pl fields are donors, not model output)")
 parser.add_argument("--stream", type=str, default="enfo", help="Ensemble stream: enfo (target/output), eefo (o320 input)")
+parser.add_argument("--vstream_base", type=str, default=None,
+                    help="Base of the quaver vstream name (default prepml_<expver>); pass a class/stream-qualified base so curves from different sources sharing an expver do not collide in the shared DB")
 
 
 args = parser.parse_args()
@@ -64,6 +66,7 @@ class_ = args.class_
 expver = args.expver
 database = args.database
 stream_ = args.stream
+vstream_base = args.vstream_base or f"prepml_{expver}"
 oro_interp_postproc = (
     "orography_correction:"
     f"class=od,number=1,stream=enfo,type=pf,step=0,expver=0001,date=2024-01-01,grid={grid},database=off"
@@ -108,7 +111,7 @@ def analysis_upperair(DATETIME, preproc, numbers):
             levelist=levelist,
         ),
         preprocess=preproc,
-        vstream=f"prepml_{expver}_an",
+        vstream=f"{vstream_base}_an",
         overwrite="yes",
         ignore_missing="no",
     )
@@ -126,7 +129,7 @@ def analysis_upperair(DATETIME, preproc, numbers):
                 parameter=pl_param,
                 levelist=levelist,
             ),
-            vstream=f"prepml_{expver}_an",
+            vstream=f"{vstream_base}_an",
             overwrite="yes",
             ignore_missing="no",
         )
@@ -161,7 +164,7 @@ def observations_surface(DATETIME, preproc, numbers):
     )
     common_mem = dict(
         preprocess=preproc,
-        vstream=f"prepml_{expver}_ob",
+        vstream=f"{vstream_base}_ob",
         spatial_mean_weights="station_density",
         ignore_missing="no",
         overwrite="yes",
@@ -174,7 +177,7 @@ def observations_surface(DATETIME, preproc, numbers):
             specifics=specifics(
                 parameter=parameters_without_precip,
                 score=all_scores_det_without_seeps,
-                vstream=f"prepml_{expver}_ob",
+                vstream=f"{vstream_base}_ob",
                 **common_specifics,
             ),
             **common_mem,
@@ -188,7 +191,7 @@ def observations_surface(DATETIME, preproc, numbers):
                     parameter="tp",
                     period=24,
                     score=all_scores_det_without_seeps,
-                    vstream=f"prepml_{expver}_ob",
+                    vstream=f"{vstream_base}_ob",
                     **common_specifics,
                 ),
                 **common_mem,
@@ -203,7 +206,7 @@ def observations_surface(DATETIME, preproc, numbers):
                 parameter="tp",
                 period=24,
                 score=["seeps"],
-                vstream=f"prepml_{expver}_ob",
+                vstream=f"{vstream_base}_ob",
                 **common_specifics,
             ),
             **common_mem,
@@ -211,7 +214,7 @@ def observations_surface(DATETIME, preproc, numbers):
 
     if preproc:
         common_ens = dict(
-            vstream=f"prepml_{expver}_ob",
+            vstream=f"{vstream_base}_ob",
             spatial_mean_weights="station_density",
             ignore_missing="no",
             overwrite="yes",
@@ -225,7 +228,7 @@ def observations_surface(DATETIME, preproc, numbers):
                 specifics=specifics(
                     parameter=parameters_without_precip,
                     score=all_scores_ens,
-                    vstream=f"prepml_{expver}_ob",
+                    vstream=f"{vstream_base}_ob",
                     **common_specifics,
                 ),
                 **common_ens,
@@ -239,7 +242,7 @@ def observations_surface(DATETIME, preproc, numbers):
                     parameter="tp",
                     period=24,
                     score=all_scores_ens,
-                    vstream=f"prepml_{expver}_ob",
+                    vstream=f"{vstream_base}_ob",
                     **common_specifics,
                 ),
                 **common_ens,
