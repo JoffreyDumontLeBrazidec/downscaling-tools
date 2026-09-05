@@ -10,7 +10,9 @@ predict:
   members: [1, 2]
   steps: [24, 48, 72, 96, 120]
   num_gpus_per_model: 4
-  input_root: /home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/bundles_with_y
+  # input_root repointed 2026-09-05 from the auto-purged scratch copy to the /perm copy (verified
+  # byte-identical; epics/o1280-o2560-lane-defects/in-progress/20260905_tranche1_probeC_D1_B1.md).
+  input_root: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/bundles_with_y
 
 tc:
   max_pf_members: 2
