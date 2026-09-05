@@ -203,7 +203,10 @@ lane_diagnostics:
     control: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_ctrl.json
     guided: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_w13.json
 
-  precip_scores_json: /home/ecm5702/perm/eval-archive/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/precip_scores/scores.json
+  # Campaign paths point at the SCRATCH original (auto-purged ~1 month after its last write): the
+  # /perm copy stalled on the 10 TB user quota on 2026-09-05 and is incomplete. Repoint to
+  # ~/perm/eval-archive/<campaign> once that copy is complete and verified. NEVER ~/perm/eval (scratch symlink).
+  precip_scores_json: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/precip_scores/scores.json
 
   # 1,333 paired tropical-belt samples from the two training datasets, scanned
   # on Jupiter (job 1524468) and relayed here.
@@ -217,7 +220,7 @@ lane_diagnostics:
   # Each lane is scored on its OWN target grid against its own target; the two
   # are never mixed into one number.
   pair_lanes:
-    o1280_o2560: /home/ecm5702/perm/eval-archive/o2560_humberto_pristine_fixed_20260822T082649Z/data/predictions
+    o1280_o2560: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/predictions
     o320_o1280: /home/ecm5702/scratch/eval/o320_o1280_b785bf12_unified_full/run_20260619T192122_anemoi-by_ep/predictions
 
   # READ ONLY. These boxed arms belong to another session's live sampler screen.
@@ -236,13 +239,13 @@ lane_diagnostics:
   standing_set:
     event: humberto
     tc_arms:
-      "unguided control": /home/ecm5702/perm/eval-archive/o2560_humberto_pristine_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
+      "unguided control": /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
       "mass-only autoguidance, weight 1.3": /home/ecm5702/scratch/eval/o2560_humberto_agmass_w13_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
     spectra:
       wavenumber_min: 100.0
       candidates:
         - label: spectra_ecmwf_v2, the corrected spectral route
-          path: /home/ecm5702/perm/eval-archive/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/spectra_ecmwf_v2/spectra_summary.json
+          path: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/spectra_ecmwf_v2/spectra_summary.json
           support: "global field, spherical-harmonic transform at TCo2559, lead time 120 h, member 1, 5 initialisations"
 
 # Texture evaluator at O2560 (front B1 of epics/o1280-o2560-lane-defects/20260905_improvement_plan.md,
