@@ -25,18 +25,26 @@ TARGET_PREFIXES = ("target_", "out_hres_", "y_hres_")
 _SLAB = 1_000_000
 
 
-def _is_target(name: str) -> bool:
-    return name.startswith(TARGET_PREFIXES)
+def _is_target(name: str, drop: frozenset[str] = frozenset()) -> bool:
+    return name.startswith(TARGET_PREFIXES) or name in drop
 
 
-def strip_bundle(src: Path, dst: Path, *, overwrite: bool = False) -> tuple[int, int, list[str]]:
-    """Write ``src`` to ``dst`` minus target fields; return (src bytes, dst bytes, dropped)."""
+def strip_bundle(
+    src: Path, dst: Path, *, overwrite: bool = False, drop: frozenset[str] = frozenset()
+) -> tuple[int, int, list[str]]:
+    """Write ``src`` to ``dst`` minus target fields; return (src bytes, dst bytes, dropped).
+
+    ``drop`` names extra variables to omit. Its main use is the RETURN leg: a
+    prediction made from stripped bundles carries an all-NaN ``y`` that is a
+    third of the file, and ``eval.predict.reattach_truth`` rebuilds it at ECMWF
+    from truth that never left, so shipping it back is pure waste.
+    """
     if dst.exists() and not overwrite:
         raise SystemExit(f"refusing to overwrite {dst} (pass --overwrite)")
 
     with netCDF4.Dataset(src) as ds_in, netCDF4.Dataset(dst, "w", format=ds_in.data_model) as ds_out:
-        dropped = sorted(v for v in ds_in.variables if _is_target(v))
-        keep = [v for v in ds_in.variables if not _is_target(v)]
+        dropped = sorted(v for v in ds_in.variables if _is_target(v, drop))
+        keep = [v for v in ds_in.variables if not _is_target(v, drop)]
 
         # Only carry over dimensions the kept variables actually use, so an
         # orphaned target_level does not survive.
@@ -79,6 +87,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dst-dir", required=True, help="where to write the stripped copies")
     p.add_argument("--pattern", default="*_input_bundle.nc")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument(
+        "--drop",
+        default="",
+        help=(
+            "Comma-separated extra variable names to omit, on top of the target fields. "
+            "For the return leg use --drop y: a prediction made from stripped bundles "
+            "carries an all-NaN y worth a third of the file, and reattach_truth rebuilds "
+            "it at ECMWF."
+        ),
+    )
     args = p.parse_args(argv)
 
     src_dir, dst_dir = Path(args.src_dir), Path(args.dst_dir)
@@ -87,9 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     if not files:
         raise SystemExit(f"no files matching {args.pattern} in {src_dir}")
 
+    drop = frozenset(x.strip() for x in args.drop.split(",") if x.strip())
     tot_in = tot_out = 0
     for f in files:
-        b_in, b_out, dropped = strip_bundle(f, dst_dir / f.name, overwrite=args.overwrite)
+        b_in, b_out, dropped = strip_bundle(f, dst_dir / f.name, overwrite=args.overwrite, drop=drop)
         tot_in += b_in
         tot_out += b_out
         print(f"  {f.name}: {b_in/1e9:.3f} -> {b_out/1e9:.3f} GB  ({len(dropped)} fields dropped)")
