@@ -32,7 +32,7 @@ predict:
 
 tc:
   events: ["humberto"]
-  grib_dir: "/home/ecm5702/hpcperm/data/tc/humberto"
+  grib_dir: "/home/ecm5702/hpcperm/data/tc"
   analysis_expid: "OPER_O1280_0001"
   extreme_reference_expid: "ENFO_O1280_0001"
   reference_expids: ["ENFO_O1280_0001", "EEFO_O320_0001", "AIFS_N320_0001", "JAOU_O1280_0001"]
