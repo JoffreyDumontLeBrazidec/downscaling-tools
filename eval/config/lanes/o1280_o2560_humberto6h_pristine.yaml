@@ -251,6 +251,8 @@ lane_diagnostics:
 texture:
   weather_states: [10u, 10v, 2t, msl, tp]
   output_only_states: [tp, cp]
+  steps: [24, 120]
+  members: [1, 2, 3]
   paths:
     up_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O1280_to_O2560_linear.mat.npz
     down_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O2560_to_O1280_linear.mat.npz
