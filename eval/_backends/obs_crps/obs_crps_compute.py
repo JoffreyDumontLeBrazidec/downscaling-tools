@@ -152,16 +152,51 @@ def fair_crps(members: np.ndarray, truth: np.ndarray) -> np.ndarray:
 
 
 def run_mars(request: str, cache_dir: Path, tag: str) -> None:
-    req_path = cache_dir / f"_request_{tag}.mars"
+    """Retrieve into a private staging directory, then move the files into place.
+
+    Two runs pointed at one cache directory will ask MARS for overlapping files:
+    the analysis and the orography are deliberately named without the expver so
+    that different experiments can share them. Writing straight to the final name
+    lets two MARS processes interleave inside one target, which produces GRIB
+    files holding more fields than were asked for, or truncated ones that cannot
+    be read at all. Both happened on 2026-09-05 when two jobs shared a cache
+    directory, and the over-length files were the more dangerous of the two,
+    because they are readable and would have been scored.
+
+    Staging plus os.replace makes each file appear complete or not at all, and a
+    concurrent run can only ever overwrite a finished file with an identical one.
+    """
+    staging = cache_dir / f"_staging_{os.getpid()}_{tag}"
+    staging.mkdir(parents=True, exist_ok=True)
+    req_path = staging / "request.mars"
     req_path.write_text(request)
     LOG.info("mars retrieve: %s", tag)
     proc = subprocess.run(
-        ["mars", str(req_path)], cwd=cache_dir, capture_output=True, text=True
+        ["mars", str(req_path)], cwd=staging, capture_output=True, text=True
     )
     if proc.returncode != 0:
         raise RuntimeError(
             f"mars failed for {tag} (rc={proc.returncode}):\n{proc.stdout[-4000:]}"
         )
+    for produced in staging.glob("*.grib"):
+        os.replace(produced, cache_dir / produced.name)
+    req_path.unlink(missing_ok=True)
+    try:
+        staging.rmdir()
+    except OSError:
+        LOG.warning("staging directory not empty after retrieval: %s", staging)
+
+
+def count_fields(path: Path) -> int:
+    """How many GRIB messages a file holds, or zero if it cannot be read."""
+    import earthkit.data as ekd
+
+    if not path.exists():
+        return 0
+    try:
+        return len(ekd.from_source("file", str(path)).to_fieldlist())
+    except Exception:
+        return 0
 
 
 def ensure_forecast_fields(
@@ -176,21 +211,39 @@ def ensure_forecast_fields(
     type_: str,
     database: str,
     grid: str,
-) -> None:
+) -> set[tuple[str, int]]:
     """Retrieve the whole window for one parameter in a single MARS call.
 
     One bulk request is far cheaper than one request per date and lead time, and
     files already present are left alone so a rerun is close to free.
     """
-    wanted = [
-        cache_dir / f"{expver}_{stream}_{grid}_{p}_{d}_{s}.grib"
-        for p in mars_parameters(parameter)
+    wanted = {
+        (d, s): [
+            cache_dir / f"{expver}_{stream}_{grid}_{p}_{d}_{s}.grib"
+            for p in mars_parameters(parameter)
+        ]
         for d in dates
         for s in steps
-    ]
-    if all(f.exists() for f in wanted):
+    }
+
+    def usable() -> set[tuple[str, int]]:
+        """The date and lead time pairs whose files are present AND complete.
+
+        A file holding the wrong number of fields is treated as unusable rather
+        than trusted: MARS exits zero having written only what it could find, so
+        an experiment that does not cover the whole window leaves gaps, and a
+        cache shared with a concurrent run can leave over-length files.
+        """
+        good = set()
+        for key, paths in wanted.items():
+            if all(count_fields(f) == nmem for f in paths):
+                good.add(key)
+        return good
+
+    have = usable()
+    if len(have) == len(wanted):
         LOG.info("forecast fields for %s already cached", parameter)
-        return
+        return have
 
     numbers = "/".join(str(i) for i in range(1, nmem + 1))
     blocks = []
@@ -209,6 +262,19 @@ def ensure_forecast_fields(
         else:
             blocks.append(f"retrieve, param={p}, target={target}")
     run_mars("\n".join(blocks) + "\n", cache_dir, f"fc_{parameter}")
+
+    have = usable()
+    missing = sorted(set(wanted) - have)
+    if missing:
+        LOG.warning(
+            "%s: MARS returned nothing usable for %d of %d date/lead-time pairs. "
+            "This normally means expver %s does not cover the whole window "
+            "(an incomplete or suspended run), not that the retrieval failed. "
+            "Those pairs are skipped and recorded; the first few are %s",
+            parameter, len(missing), len(wanted), expver,
+            ", ".join(f"{d}+{s}h" for d, s in missing[:6]),
+        )
+    return have
 
 
 def ensure_analysis_fields(
@@ -426,6 +492,7 @@ def score_window(
     stvl_model: dict | None = None,
     curve: str = "experiment",
     stream: str = "enfo",
+    available: dict[str, set[tuple[str, int]]] | None = None,
 ) -> pd.DataFrame:
     """Score one curve over the window.
 
@@ -443,6 +510,20 @@ def score_window(
         observation_cache: dict[dt.datetime, pd.DataFrame] = {}
         for date in dates:
             for step in steps:
+                if (
+                    source == "grib"
+                    and available is not None
+                    and (date, int(step)) not in available.get(parameter, set())
+                ):
+                    # Recorded as a gap by the retrieval, so there is nothing to
+                    # score here. Skipping quietly would narrow the support
+                    # without saying so, which is the trap this project keeps
+                    # hitting, so it is logged and carried into the output.
+                    LOG.warning(
+                        "%s %s %s +%sh: no forecast fields, skipped",
+                        curve, parameter, date, step,
+                    )
+                    continue
                 valid = dt.datetime.strptime(date, "%Y%m%d") + dt.timedelta(hours=step)
                 if valid not in observation_cache:
                     observation_cache[valid] = retrieve_observations(parameter, valid)
@@ -614,9 +695,10 @@ def main(argv=None) -> int:
             ensure_analysis_fields(cache_dir, parameter, valid_dates, args.grid)
 
     stvl_model = None
+    available: dict[str, set[tuple[str, int]]] = {}
     if args.source == "grib":
         for parameter in parameters:
-            ensure_forecast_fields(
+            available[parameter] = ensure_forecast_fields(
                 cache_dir, parameter, dates, steps, args.nmem, args.expver,
                 args.class_, args.stream, args.type_, args.database, args.grid,
             )
@@ -635,10 +717,30 @@ def main(argv=None) -> int:
         args.grid, orography_path,
         gross_error_check=not args.no_gross_error_check,
         source=args.source, stvl_model=stvl_model, curve=args.curve,
-        stream=args.stream,
+        stream=args.stream, available=available or None,
     )
+    if available:
+        gaps = {
+            parameter: sorted(
+                f"{d}+{s}h"
+                for d in dates for s in steps
+                if (d, int(s)) not in have
+            )
+            for parameter, have in available.items()
+        }
+        gaps = {k: v for k, v in gaps.items() if v}
+        if gaps:
+            (out_dir / "missing_fields.json").write_text(json.dumps(gaps, indent=2))
+            LOG.warning(
+                "the window is incomplete: %s; see missing_fields.json",
+                ", ".join(f"{k} missing {len(v)}" for k, v in gaps.items()),
+            )
+
     if rows.empty:
-        LOG.error("no scores produced")
+        LOG.error(
+            "no scores produced. If the retrieval reported missing date/lead-time "
+            "pairs above, expver %s does not cover the requested window.", args.expver
+        )
         return 1
 
     by_lead = summarise_by_lead(rows)
