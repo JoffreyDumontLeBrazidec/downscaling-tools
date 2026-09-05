@@ -1,4 +1,4 @@
-"""Texture evaluator: fine-scale texture statistics on the NATIVE O1280 grid.
+"""Texture evaluator: fine-scale texture statistics on the NATIVE output grid (O1280 or O2560).
 
 Why this exists
 ---------------
@@ -219,7 +219,7 @@ def _load_or_build_knn(path: str | Path, lat: np.ndarray, lon: np.ndarray, k: in
     np.savez(
         tmp, idx=idx, dist_km=dist, k=np.int32(k), self_excluded=np.bool_(True),
         note=np.array(
-            "O1280 grid, storage order of the forcings zarr / prediction files; "
+            f"{lat.size}-point grid, storage order of the static fields / prediction files; "
             "idx[i] = the k nearest neighbours of point i (self excluded) by "
             "great-circle distance, nearest first; dist_km = great-circle km."
         ),
@@ -273,26 +273,79 @@ def _region_mask(lat: np.ndarray, lon180: np.ndarray, box) -> np.ndarray:
     return m
 
 
+def _read_static_grib(path: str):
+    """lat, lon, lsm, orography (m) from a GRIB holding `lsm` and `z` on the output grid."""
+    import eccodes as ec
+
+    fields: dict[str, np.ndarray] = {}
+    lat = lon = None
+    with open(path, "rb") as fh:
+        while True:
+            gid = ec.codes_grib_new_from_file(fh)
+            if gid is None:
+                break
+            try:
+                name = ec.codes_get(gid, "shortName")
+                if lat is None:
+                    lat = np.asarray(ec.codes_get_array(gid, "latitudes"), dtype=np.float64)
+                    lon = np.asarray(ec.codes_get_array(gid, "longitudes"), dtype=np.float64)
+                if name in ("lsm", "z"):
+                    fields[name] = np.asarray(ec.codes_get_values(gid), dtype=np.float32)
+            finally:
+                ec.codes_release(gid)
+    missing = [k for k in ("lsm", "z") if k not in fields]
+    if missing:
+        raise RuntimeError(f"static GRIB {path} lacks {missing}")
+    return lat, lon, fields["lsm"], fields["z"] / GRAVITY
+
+
+def _read_precip_truth(path: str, step: int, lat_ref: np.ndarray, lon_ref: np.ndarray, var: str = "tp"):
+    """One lead of the six-hour precipitation truth (native GRIB unit, metres), grid-checked."""
+    import eccodes as ec
+
+    with open(path, "rb") as fh:
+        while True:
+            gid = ec.codes_grib_new_from_file(fh)
+            if gid is None:
+                break
+            try:
+                if ec.codes_get(gid, "shortName") != var or int(ec.codes_get(gid, "endStep")) != int(step):
+                    continue
+                la = np.asarray(ec.codes_get_array(gid, "latitudes"), dtype=np.float64)
+                lo = np.asarray(ec.codes_get_array(gid, "longitudes"), dtype=np.float64)
+                if not _lonlat_match(la, lo, lat_ref, lon_ref):
+                    raise RuntimeError(f"{path} step {step}: grid does not match the prediction grid")
+                return np.asarray(ec.codes_get_values(gid), dtype=np.float64)
+            finally:
+                ec.codes_release(gid)
+    raise RuntimeError(f"no {var!r} message for step {step} in {path}")
+
+
 def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
                   up=None, down=None) -> dict[str, Any]:
     """Grid structures and strata. ``up``/``down`` are the O320<->O1280 linear
     interpolation matrices; they define the coarse-smoothed land-sea mask that
     splits ``ocean`` into ``open_ocean`` and ``coastal``."""
-    import zarr
-
     t0 = time.time()
-    zpath = paths["forcings_zarr"]
-    z = zarr.open(zpath, mode="r")
-    with open(os.path.join(zpath, ".zattrs")) as fh:
-        variables = json.load(fh)["variables"]
-    lat = np.asarray(z["latitudes"][:], dtype=np.float64)
-    lon = np.asarray(z["longitudes"][:], dtype=np.float64)
-    block = np.asarray(z["data"][0, :, 0, :], dtype=np.float32)   # (n_vars, n_points), time 0
-    lsm = block[variables.index("lsm")]
-    oro_m = block[variables.index("z")] / GRAVITY
-    del block
-    n = lat.size
-    LOG.info("texture: forcings read (%d points) in %.1fs", n, time.time() - t0)
+    if paths.get("static_grib"):
+        lat, lon, lsm, oro_m = _read_static_grib(paths["static_grib"])
+        n = lat.size
+        LOG.info("texture: static GRIB read (%d points) in %.1fs", n, time.time() - t0)
+    else:
+        import zarr
+
+        zpath = paths["forcings_zarr"]
+        z = zarr.open(zpath, mode="r")
+        with open(os.path.join(zpath, ".zattrs")) as fh:
+            variables = json.load(fh)["variables"]
+        lat = np.asarray(z["latitudes"][:], dtype=np.float64)
+        lon = np.asarray(z["longitudes"][:], dtype=np.float64)
+        block = np.asarray(z["data"][0, :, 0, :], dtype=np.float32)   # (n_vars, n_points), time 0
+        lsm = block[variables.index("lsm")]
+        oro_m = block[variables.index("z")] / GRAVITY
+        del block
+        n = lat.size
+        LOG.info("texture: forcings read (%d points) in %.1fs", n, time.time() - t0)
 
     knn_idx, knn_dist, built = _load_or_build_knn(paths["knn_cache"], lat, lon, KNN_K)
     nn_dist_km = {
@@ -300,7 +353,22 @@ def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
         "sixth_km_median": float(np.median(knn_dist[:, min(nn_count, knn_dist.shape[1]) - 1])),
     }
     del knn_dist
-    rough = _roughness(oro_m, knn_idx)
+    rough_k = int(terrain.get("roughness_neighbours", KNN_K))
+    if rough_k > knn_idx.shape[1] and paths.get("roughness_knn_cache"):
+        # A wider footprint than the texture cache holds: take the first rough_k
+        # neighbours from a larger cache (self column stripped if present).
+        with np.load(paths["roughness_knn_cache"]) as zr:
+            ridx = np.asarray(zr["idx"])
+        probe = min(1000, ridx.shape[0])
+        if np.array_equal(ridx[:probe, 0], np.arange(probe)):
+            ridx = ridx[:, 1:]
+        if ridx.shape[0] != n:
+            raise RuntimeError("roughness_knn_cache does not match the grid")
+        rough = _roughness(oro_m, np.ascontiguousarray(ridx[:, :rough_k]))
+        del ridx
+        LOG.info("texture: roughness over %d neighbours from %s", rough_k, paths["roughness_knn_cache"])
+    else:
+        rough = _roughness(oro_m, knn_idx[:, :min(rough_k, knn_idx.shape[1])])
     nn = np.ascontiguousarray(knn_idx[:, :nn_count])
     del knn_idx
 
@@ -682,6 +750,8 @@ def run(
     paths = {**_default_paths(), **(eval_config.get("paths") or {})}
     nn_count = int(eval_config.get("nn_count", NN_COUNT))
     frac = float(eval_config.get("top_fraction", TOP_FRACTION))
+    output_only = set(_as_list(eval_config.get("output_only_states")) or [])
+    precip_truth_tpl = paths.get("precip_truth_tpl")
 
     files = valid_prediction_files(predictions_dir, steps=steps)
     if dates:
@@ -765,9 +835,21 @@ def run(
                     si = idx_of.get(state)
                     if si is None:
                         continue
-                    x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
                     sd = stdev[state]
-                    r_t = (np.asarray(yt[:, si], dtype=np.float64) - x_interp) / sd
+                    if state in output_only:
+                        # No input counterpart: the interpolated driver is identically zero
+                        # and the residual is the raw field. Truth from the GRIB if given.
+                        x_interp = 0.0
+                        if precip_truth_tpl:
+                            y_state = _read_precip_truth(
+                                precip_truth_tpl.format(date=date), int(lead), lat_f, lon_f, state,
+                            )
+                        else:
+                            y_state = np.asarray(yt[:, si], dtype=np.float64)
+                    else:
+                        x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
+                        y_state = np.asarray(yt[:, si], dtype=np.float64)
+                    r_t = (y_state - x_interp) / sd
                     r_m = (yp[:, si] - x_interp) / sd
                     finite = np.isfinite(r_t) & np.isfinite(r_m)
                     all_finite = bool(finite.all())
@@ -822,7 +904,7 @@ def run(
             "members": members, "max_members": max_members,
             "regions": regions, "terrain": terrain, "paths": paths,
             "knn_k": KNN_K, "nn_count": nn_count, "top_fraction": frac,
-            "stdev": stdev,
+            "stdev": stdev, "output_only_states": sorted(output_only),
         },
         "statistics": STAT_NAMES,
         "ratio_statistics": RATIO_STATS,

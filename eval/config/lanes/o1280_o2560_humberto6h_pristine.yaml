@@ -242,3 +242,28 @@ lane_diagnostics:
         - label: spectra_ecmwf_v2, the corrected spectral route
           path: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/spectra_ecmwf_v2/spectra_summary.json
           support: "global field, spherical-harmonic transform at TCo2559, lead time 120 h, member 1, 5 initialisations"
+
+# Texture evaluator at O2560 (front B1 of epics/o1280-o2560-lane-defects/20260905_improvement_plan.md,
+# 2026-09-05). Same instrument as the o320->o1280 Phase 0 texture gate, run on the native 4.4 km grid:
+# static fields from the lane GRIB (no forcings zarr at O2560), a 32-neighbour cache built 2026-09-05,
+# the terrain roughness over 128 neighbours (the same ~20 km footprint as 32 neighbours at 8.8 km),
+# and tp as an OUTPUT-ONLY state whose truth comes from the six-hour _tp_dea GRIB.
+texture:
+  weather_states: [10u, 10v, 2t, msl, tp]
+  output_only_states: [tp, cp]
+  paths:
+    up_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O1280_to_O2560_linear.mat.npz
+    down_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O2560_to_O1280_linear.mat.npz
+    residual_stats: /home/ecm5702/hpcperm/data/residuals_statistics/o2560_dict_6_72.npy
+    static_grib: /home/ecm5702/perm/reference/o1280_o2560/unified_91var/o2560-z-lsm.grib
+    knn_cache: /home/ecm5702/hpcperm/data/static/o2560_knn32.npz
+    roughness_knn_cache: /home/ecm5702/hpcperm/data/static/o2560_knn128.npz
+    precip_truth_tpl: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib
+  terrain:
+    roughness_neighbours: 128
+  regions:
+    west_tropical_atlantic: [10.0, 25.0, -70.0, -45.0]
+    open_north_atlantic: [35.0, 55.0, -45.0, -20.0]
+    europe: [35.0, 60.0, -10.0, 25.0]
+    alps: [43.0, 49.0, 4.0, 16.0]
+    arabian_sea_monsoon: [10.0, 25.0, 60.0, 78.0]
