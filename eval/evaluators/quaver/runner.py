@@ -231,7 +231,11 @@ def _vstream_base(params: dict) -> str:
     cls = str(params.get("class_", "od")); stream = str(params.get("stream", "enfo")); expver = str(params["expver"])
     if cls == "od" and stream in ("eefo", "enfo"):
         return f"prepml_{expver}"
-    return f"prepml_{cls}{stream}_{expver}"
+    # The quaver score DB stores the vstream in a character varying(20) column; with the "_ob"/"_an"
+    # suffix the base must stay <= 17 characters ("prepml_aienfo_0001_ob" = 21 failed on 2026-09-05).
+    base = f"pml_{cls}{stream}_{expver}"
+    assert len(base) <= 17, f"quaver vstream base too long for the DB column: {base}"
+    return base
 
 
 def _input_cache_dir(input_params: dict, eval_config: dict) -> Path:
