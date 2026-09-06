@@ -4,6 +4,7 @@ import argparse
 import inspect
 import json
 import os
+import logging
 import re
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -49,6 +50,21 @@ _JUPITER_RUNTIME_LOCAL = "/home/mlx/ai-ml/datasets/"
 # Unified multi-ds predict_step kwarg routing.
 _NOISE_SCHEDULER_KEYS = {"num_steps", "sigma_max", "sigma_min", "rho", "schedule_type"}
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
+
+
+def _model_takes_lead_hours(inference_model) -> bool:
+    """True iff the checkpoint carries a lead-conditioned hres_branch (fine-scale epic, 2026-09-06)."""
+    inner = getattr(inference_model, "model", inference_model)
+    branch = getattr(inner, "hres_branch", None)
+    return branch is not None and getattr(branch, "lead_embed", None) is not None
+
+
+_BUNDLE_LEAD_RE = re.compile(r"_step(\d{3})h_input_bundle\.nc$")
+
+
+def _bundle_lead_hours(bundle_nc) -> float | None:
+    m = _BUNDLE_LEAD_RE.search(str(bundle_nc)) if bundle_nc is not None else None
+    return float(int(m.group(1))) if m else None
 
 
 def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group, extra_args: dict):
@@ -347,6 +363,8 @@ def _predict_from_dataloader(
         amp_enabled = False  # native bf16 layernorm (~6.3GB) vs autocast fp32 transient (~12.6GB); OOM fix for 1-GPU global-o1280
     amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
+    if _model_takes_lead_hours(inference_model):
+        raise NotImplementedError("from-dataloader does not carry the forecast lead; use from-bundle for a lead-conditioned model")
     for i_sample in range(n_samples):
         for j, m in enumerate(members):
             x_l = torch.from_numpy(x_in_full[i_sample, m]).to(device)[None, None, None, ...]
@@ -459,6 +477,14 @@ def predict_from_bundle(
 
         # Unified multi-ds: predict_step takes a dict batch.
         batch = {"in_lres": x_in, "in_hres": x_in_hres}
+        # lead-conditioned hres_branch (2026-09-06): the lead comes from the bundle file name and
+        # travels as a plain predict_step kwarg; models without the option never see it.
+        if _model_takes_lead_hours(inference_model):
+            lead_hours = _bundle_lead_hours(bundle_nc)
+            if lead_hours is None:
+                raise ValueError(f"lead-conditioned model but no _stepNNNh in bundle name: {bundle_nc}")
+            extra_args = {**extra_args, "lead_hours": lead_hours}
+            logging.getLogger(__name__).info("lead_hours=%s passed to the lead-conditioned branch (%s)", lead_hours, Path(str(bundle_nc)).name)
         with torch.inference_mode():
             with torch.autocast(
                 device_type="cuda",
