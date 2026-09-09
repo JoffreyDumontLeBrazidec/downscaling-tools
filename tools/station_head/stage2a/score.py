@@ -192,6 +192,14 @@ def write_markdown(path: Path, table: pd.DataFrame, cfg: dict, args, label: str)
         "same way on the interpolated AIFS input alone; `analysis` is the operational analysis at "
         "the nearest point, which is deterministic so its fair CRPS is its absolute error.",
         "",
+        "One warning about reading the `analysis` column. A fair CRPS of a ten-member "
+        "ensemble is always smaller than the absolute error of any one of its members, so "
+        "the analysis column is not on the same footing as the three forecast columns and "
+        "a larger number there does not mean the analysis is the worse product. To compare "
+        "them like with like, run analysis_control_check.py on the same dataset directory: "
+        "it prints the absolute error of the analysis beside the absolute error of one "
+        "member and of the ensemble mean of the nearest-point forecast.",
+        "",
     ]
 
     def block(title: str, sel: pd.DataFrame, index_cols: list[str]) -> None:

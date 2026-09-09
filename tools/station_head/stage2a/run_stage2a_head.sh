@@ -34,6 +34,11 @@
 #     VAL_TO       the last initialisation date of the validation split (default none)
 #     PIPELINE_TEST=1  label every output as a pipeline test and not a result
 #     SKIP_GATHER=1    start at the assembly, for a rerun where the gather is done
+#     CACHE_GB     gigabytes of assembled cases the trainer keeps in memory, so that
+#                  an epoch does not read every case file from disk again (default 60)
+#     USE_CPU=1        train and score on the nf queue instead of on one GPU, which
+#                      is the way to run while the inference arrays hold every GPU
+#                      node slot the account is allowed
 set -uo pipefail
 
 S=/home/ecm5702/dev/downscaling-tools-station-head/tools/station_head/stage2a
@@ -45,6 +50,7 @@ RUN_PREFIX=${RUN_PREFIX:-firstcut_$(date -u +%Y%m%d)}
 VAL_FROM=${VAL_FROM:-2026-08-18}
 VAL_TO=${VAL_TO:-}
 PIPELINE_TEST=${PIPELINE_TEST:-0}
+CACHE_GB=${CACHE_GB:-60}
 
 echo "stage 2a head chain: tag=$TAG run_prefix=$RUN_PREFIX validation from $VAL_FROM ${VAL_TO:+to $VAL_TO} pipeline_test=$PIPELINE_TEST"
 
@@ -85,10 +91,14 @@ else
 fi
 echo "assemble array:   $J4"
 
+HEAD_SBATCH="$S/train_score.sbatch"
+[ "${USE_CPU:-0}" = "1" ] && HEAD_SBATCH="$S/train_score_cpu.sbatch"
+echo "head jobs use $HEAD_SBATCH"
+
 for T in 2t 2d 10ff; do
   JT=$(submit "$J4" --job-name="sh2a_head_$T" \
-        --export=ALL,TARGET="$T",TAG="$TAG",RUN_PREFIX="$RUN_PREFIX",VAL_FROM="$VAL_FROM",VAL_TO="$VAL_TO",PIPELINE_TEST="$PIPELINE_TEST" \
-        "$S/train_score.sbatch")
+        --export=ALL,TARGET="$T",TAG="$TAG",RUN_PREFIX="$RUN_PREFIX",VAL_FROM="$VAL_FROM",VAL_TO="$VAL_TO",PIPELINE_TEST="$PIPELINE_TEST",CACHE_GB="$CACHE_GB" \
+        "$HEAD_SBATCH")
   echo "head + score $T:  $JT"
 done
 

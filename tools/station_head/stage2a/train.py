@@ -77,7 +77,43 @@ def split_cases(cases: pd.DataFrame, val_from: str, val_to: str | None) -> tuple
     return cases[~is_val].reset_index(drop=True), cases[is_val].reset_index(drop=True)
 
 
+# An in-memory cache of assembled cases. An epoch reads every training case file
+# again, and on a busy scratch filesystem that reading, not the arithmetic, is what
+# an epoch costs: during the pipeline test of 2026-09-09 an epoch took fourteen
+# seconds of computation and about four minutes of waiting for four case files,
+# because the inference arrays were writing eight-gigabyte prediction files on the
+# same disks. Set the budget with --cache-gb; zero, the default, disables it.
+_CACHE: dict = {}
+_CACHE_BYTES = 0
+_CACHE_BUDGET = 0
+
+
+def set_cache_budget(gigabytes: float) -> None:
+    global _CACHE_BUDGET, _CACHE, _CACHE_BYTES
+    _CACHE_BUDGET = int(gigabytes * (1 << 30))
+    _CACHE = {}
+    _CACHE_BYTES = 0
+
+
+def _cache_size(c: dict) -> int:
+    return sum(int(v.nbytes) for v in c.values() if isinstance(v, np.ndarray))
+
+
 def load_case(path: str, features: str) -> dict:
+    global _CACHE_BYTES
+    key = (path, features)
+    if _CACHE_BUDGET and key in _CACHE:
+        return _CACHE[key]
+    c = _load_case_from_disk(path, features)
+    if _CACHE_BUDGET:
+        size = _cache_size(c)
+        if _CACHE_BYTES + size <= _CACHE_BUDGET:
+            _CACHE[key] = c
+            _CACHE_BYTES += size
+    return c
+
+
+def _load_case_from_disk(path: str, features: str) -> dict:
     z = np.load(path, allow_pickle=False)
     if features == "both":
         x = np.concatenate([z["feat_pred"], z["feat_int"]], axis=2)
@@ -191,6 +227,7 @@ def evaluate(model, paths: list[str], features: str, stats: dict, device, stable
 def train(args) -> Path:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
+    set_cache_budget(getattr(args, "cache_gb", 0.0))
     data_dir = Path(args.data_dir)
     cases = list_cases(data_dir)
     tr, va = split_cases(cases, args.val_init_from, args.val_init_to)
@@ -327,6 +364,9 @@ def main() -> None:
     ap.add_argument("--min-delta", type=float, default=1e-4)
     ap.add_argument("--clip", type=float, default=5.0)
     ap.add_argument("--stats-cases", type=int, default=24)
+    ap.add_argument("--cache-gb", type=float, default=0.0,
+                    help="hold this many gigabytes of assembled cases in memory, so "
+                         "that an epoch does not read every case file from disk again")
     ap.add_argument("--train-on-stable-only", action="store_true",
                     help="train only on the stable network; the default trains on every "
                          "seen station and reports on both networks")

@@ -18,6 +18,7 @@ RUN_PREFIX=${RUN_PREFIX:-firstcut}
 VAL_FROM=${VAL_FROM:-2026-08-18}
 VAL_TO=${VAL_TO:-}
 EPOCHS=${EPOCHS:-60}
+CACHE_GB=${CACHE_GB:-0}
 PATIENCE=${PATIENCE:-8}
 DATA=/home/ecm5702/scratch/eval/station_head_2a/datasets/${TARGET}_${TAG}
 RUNS=/home/ecm5702/perm/station-head-adapter/head
@@ -35,11 +36,11 @@ RUN_INT=${RUN_PREFIX}_${TARGET}_xinterp
 
 echo "=== training the full head ($RUN_FULL) on $DATA ==="
 $PY "$S/train.py" --target "$TARGET" --data-dir "$DATA" --run-id "$RUN_FULL" \
-    --features both --val-init-from "$VAL_FROM" --epochs "$EPOCHS" --patience "$PATIENCE" $EXTRA || exit 4
+    --features both --val-init-from "$VAL_FROM" --epochs "$EPOCHS" --patience "$PATIENCE" --cache-gb "$CACHE_GB" $EXTRA || exit 4
 
 echo "=== training the interpolated-input control head ($RUN_INT) ==="
 $PY "$S/train.py" --target "$TARGET" --data-dir "$DATA" --run-id "$RUN_INT" \
-    --features xinterp --val-init-from "$VAL_FROM" --epochs "$EPOCHS" --patience "$PATIENCE" $EXTRA || exit 5
+    --features xinterp --val-init-from "$VAL_FROM" --epochs "$EPOCHS" --patience "$PATIENCE" --cache-gb "$CACHE_GB" $EXTRA || exit 5
 
 echo "=== scoring on the validation cases ==="
 $PY "$S/score.py" --run-dir "$RUNS/$RUN_FULL" --xinterp-run-dir "$RUNS/$RUN_INT" --on validation || exit 6
