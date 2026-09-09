@@ -100,8 +100,14 @@ for T in 2t 2d 10ff; do
         --export=ALL,TARGET="$T",TAG="$TAG",RUN_PREFIX="$RUN_PREFIX",VAL_FROM="$VAL_FROM",VAL_TO="$VAL_TO",PIPELINE_TEST="$PIPELINE_TEST",CACHE_GB="$CACHE_GB" \
         "$HEAD_SBATCH")
   echo "head + score $T:  $JT"
+  # A separate scoring job, submitted with afterany rather than afterok, so that the
+  # scores are written even if the training job stops silently after saving its
+  # checkpoints, as job 34925896 did on 2026-09-09 (see score_only.sbatch).
+  JS=$(sbatch --parsable --dependency=afterany:"$JT" --job-name="sh2a_score_$T" \
+        --export=ALL,TARGET="$T",RUN_PREFIX="$RUN_PREFIX" "$S/score_only.sbatch")
+  echo "score only $T:    $JS (afterany $JT)"
 done
 
 echo
-echo "Watch with: squeue -u ecm5702 -n sh2a_manifest,sh2a_gather,sh2a_assemble,sh2a_head_2t,sh2a_head_2d,sh2a_head_10ff"
+echo "Watch with: squeue -u ecm5702 -n sh2a_manifest,sh2a_gather,sh2a_assemble,sh2a_head_2t,sh2a_head_2d,sh2a_head_10ff,sh2a_score_2t,sh2a_score_2d,sh2a_score_10ff"
 echo "Results land in /home/ecm5702/perm/station-head-adapter/head/${RUN_PREFIX}_<target>/"
