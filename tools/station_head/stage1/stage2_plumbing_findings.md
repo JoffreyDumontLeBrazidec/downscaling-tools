@@ -1,0 +1,9 @@
+# Stage 2 plumbing findings (architect session, 2026-09-09)
+
+These are facts checked on hpc-login while stage 1 was being built. They refine section 7 of the design note.
+
+1. Prediction files. A `predictions_<date>_step<NNN>.nc` file holds `y_pred` with dimensions (sample, ensemble_member, grid_point_hres, weather_state), the coordinates `lon_hres` and `lat_hres` of every output point, `x_interp` (the interpolated coarse input on the same points), `y` (the truth) and the attributes `output_weather_states` (for example `10u,10v,2d,2t,msl,skt,sp,t_850,tcw,z_500`), `init_date`, `lead_step_hours`, `member_ids`, `checkpoint_id`. A global file has 6,599,680 output points. The station gather must build its nearest-point index on the file's own `lon_hres`/`lat_hres`, not assume the store ordering.
+
+2. Bundles. The inference input bundles are built by `eval/prepare/builder.py` from GRIB files per date (`lres_sfc_grib`, `lres_pl_grib`, `hres_grib`, `target_sfc_grib`), not from the anemoi stores. For 2026 cases there are two routes without a new MARS request: (a) the archive cache of the dataset build survives at `/home/ecm5702/scratch/eval/aifsv2_full_cache/_done_aside/part_*/` (1.2 TB, 1,479 files, written 6 September, purge-exposed from early October), if its files can be split per date and member into the templates the builder expects; (b) a small converter from the three stores to per-date GRIB or directly to bundle netCDF. Route (a) must be checked first (file naming and content per part), and if it is usable, the subset needed for the first cut should be copied to a safe place before the purge.
+
+3. Cost. Measured production rate: five (date, lead) predictions of ten members in about 2 h 15 min on four A100, so about 27 minutes per case. First cut: every second initialisation and five members, about 100 to 200 GPU-hours.
