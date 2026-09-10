@@ -155,6 +155,15 @@ NATIVE_FIELDS_PER_MEMBER_EXPECTED = NATIVE_FIELDS_PER_STEP_EXPECTED * len(LEAD_S
 OUTPUT_CLASS = "ai"
 OUTPUT_STREAM = "enfo"
 OUTPUT_TYPE = "pf"
-OUTPUT_MODEL = "aifs-ens"
 OUTPUT_EXPVER = "rgn2"
 OUTPUT_GENERATING_PROCESS = 2
+
+# The model name.  This is NOT written into the GRIB headers, because the
+# eccodes installed here, version 2.47.0, has no "model" key: grib_set rejects
+# both "model" and "modelName" with "Key/value not found", while class, expver,
+# stream, type, number and generatingProcessIdentifier all set correctly.  The
+# name is kept here, and recorded in the manifests, so that the intent is not
+# lost; if a later eccodes gains the key, add it to the encoding dictionary in
+# run_forecasts.base_config and the outputs will carry it.
+OUTPUT_MODEL = "aifs-ens"
+OUTPUT_MODEL_IS_ENCODED = False

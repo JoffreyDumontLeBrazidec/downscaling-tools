@@ -127,12 +127,29 @@ def base_config(checkpoint: str, lsm: str) -> dict:
         "output": {
             "grib": {
                 "path": "PLACEHOLDER",
+                # Two notes on this dictionary, both found the hard way on
+                # 2026-09-10 rather than assumed.
+                #
+                # "eps: 1" has to be here.  The templates anemoi falls back on
+                # are deterministic analyses, whose product definition template
+                # has no room for an ensemble member, so eccodes rejects
+                # "number" outright with "Key/value not found".  Setting eps
+                # first moves the message to an ensemble product definition and
+                # the member number then encodes.  anemoi applies these keys in
+                # the order given by ORDERING in grib/encoding.py, which puts
+                # eps before number, so this ordering is guaranteed.  For the
+                # accumulated fields the library overrides the product
+                # definition template with 11 by itself.
+                #
+                # "model" is deliberately absent: eccodes 2.47.0 has no such
+                # key and rejects it, which failed every member of the first
+                # pilot attempt.  See the note in gribspec.OUTPUT_MODEL.
                 "encoding": {
+                    "eps": 1,
                     "class": spec.OUTPUT_CLASS,
                     "stream": spec.OUTPUT_STREAM,
                     "type": spec.OUTPUT_TYPE,
                     "expver": spec.OUTPUT_EXPVER,
-                    "model": spec.OUTPUT_MODEL,
                     "generatingProcessIdentifier": spec.OUTPUT_GENERATING_PROCESS,
                     "number": 1,
                 },
@@ -240,18 +257,29 @@ def expected_fields_per_step(runner) -> int:
     loudly and the checkpoint's own answer is used.
     """
     n = None
-    for attr in ("output_tensor_index_to_variable", "diagnostic_variables"):
-        try:
-            v = getattr(runner.checkpoint, attr)
-            if attr == "output_tensor_index_to_variable":
-                n = len(v)
-                break
-        except Exception:
-            continue
+    try:
+        names = set(runner.checkpoint.output_tensor_index_to_variable.values())
+        # The model predicts wave direction as a cosine and a sine component,
+        # and the backward wave-direction post-processor turns each such pair
+        # back into a single direction field before it is written.  So each
+        # cos_X / sin_X pair in the output tensor accounts for one written
+        # field, not two.  For this checkpoint that is cos_mwd and sin_mwd,
+        # which is why 120 output variables become 119 written fields.
+        pairs = sum(
+            1
+            for name in names
+            if name.startswith("cos_") and f"sin_{name[4:]}" in names
+        )
+        n = len(names) - pairs
+        # Some variables are also renamed on the way out, snowc being written
+        # as fscov here, but a rename does not change how many fields appear.
+    except Exception as exc:  # noqa: BLE001
+        log(f"could not read the output variables from the checkpoint ({exc})")
+
     if n is None:
         log(
-            "could not read the output variable count from the checkpoint; "
-            f"using the reference value {spec.NATIVE_FIELDS_PER_STEP_EXPECTED}"
+            "using the reference value "
+            f"{spec.NATIVE_FIELDS_PER_STEP_EXPECTED} fields per lead time"
         )
         return spec.NATIVE_FIELDS_PER_STEP_EXPECTED
     if n != spec.NATIVE_FIELDS_PER_STEP_EXPECTED:
@@ -360,6 +388,15 @@ def main(argv=None) -> int:
             "checkpoint_load_seconds": round(load_seconds, 2),
             "fields_per_step": per_step,
             "lead_steps": spec.LEAD_STEPS,
+            "model": spec.OUTPUT_MODEL,
+            "model_encoded_in_grib": spec.OUTPUT_MODEL_IS_ENCODED,
+            "grib_identification": {
+                "class": spec.OUTPUT_CLASS,
+                "stream": spec.OUTPUT_STREAM,
+                "type": spec.OUTPUT_TYPE,
+                "expver": spec.OUTPUT_EXPVER,
+                "generatingProcessIdentifier": spec.OUTPUT_GENERATING_PROCESS,
+            },
             "members": {},
         }
         previous = {}
