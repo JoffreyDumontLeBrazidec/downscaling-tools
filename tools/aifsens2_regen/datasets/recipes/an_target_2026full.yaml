@@ -1,5 +1,5 @@
 name: downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifscrps-validtime
-description: FULL YEAR 2026 (1 Jan 00 UTC to 2026-09-09 12:00:00, starts at 00 and 12 UTC, leads 6 and 12 h). Operational O1280 analysis at the VALID time of each (init, lead) sample of the full-year AIFS-CRPS input store downscaling-ai-pf-enfo-0001-mars-o320-2026-2026-12h-6h-v1-aifscrps, on the SAME synthetic forecast axis (origin 1900-01-01), so every 6-hourly analysis is used exactly once. Target store of the AIFS->analysis o320->o1280 lane. Built with the fake_forecasts analysis-at-valid-time source (fork branch feature/aifs-regen-2026-early, a superset of feature/aifs-analysis-target).
+description: "FULL YEAR 2026 (1 Jan 00 UTC to 2026-09-09 12:00:00, starts at 00 and 12 UTC, leads 6 and 12 h). Operational O1280 analysis at the VALID time of each (init, lead) sample of the full-year AIFS-CRPS input store downscaling-ai-pf-enfo-0001-mars-o320-2026-2026-12h-6h-v1-aifscrps, on the SAME synthetic forecast axis (origin 1900-01-01), so every 6-hourly analysis is used exactly once. Target store of the AIFS->analysis o320->o1280 lane. Built with the fake_forecasts analysis-at-valid-time source (fork branch feature/aifs-regen-2026-early, a superset of feature/aifs-analysis-target)."
 attribution: ECMWF
 licence: CC-BY-4.0
 dates:

@@ -1,5 +1,5 @@
 name: downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifscrps-validtime-forcings
-description: FULL YEAR 2026 (1 Jan 00 UTC to 2026-09-09 12:00:00, starts at 00 and 12 UTC, leads 6 and 12 h). O1280 static lsm and surface z from the operational analysis plus the nine valid-time forcings (incl. insolation) on the same synthetic forecast axis (origin 1900-01-01) as the full-year AIFS-CRPS input store. Forcing store of the AIFS->analysis o320->o1280 lane (the in_hres dataset).
+description: "FULL YEAR 2026 (1 Jan 00 UTC to 2026-09-09 12:00:00, starts at 00 and 12 UTC, leads 6 and 12 h). O1280 static lsm and surface z from the operational analysis plus the nine valid-time forcings (incl. insolation) on the same synthetic forecast axis (origin 1900-01-01) as the full-year AIFS-CRPS input store. Forcing store of the AIFS->analysis o320->o1280 lane (the in_hres dataset)."
 attribution: ECMWF
 licence: CC-BY-4.0
 dates:
