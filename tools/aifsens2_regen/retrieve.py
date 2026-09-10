@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 
@@ -39,6 +40,7 @@ from .common import DEFAULT_ROOT, grib_count, log, move_aside, run_cmd
 TAPE_MESSAGE = "tape on which the data reside is unavailable"
 MAX_ATTEMPTS = 3
 PAUSE_SECONDS = 600
+MARS_TIMEOUT_SECONDS = 36000
 
 
 def raw_dir(root: str, block: str) -> str:
@@ -138,7 +140,14 @@ def execute_request(req: dict, root: str) -> int:
         with open(req_path, "w") as f:
             f.write(mars_text(req, tmp))
         t0 = time.time()
-        rc, _ = run_cmd(["bash", "-c", f"mars {req_path} > {log_path} 2>&1"])
+        # A tape-bound request can sit in the MARS server queue for hours before a
+        # single field arrives, so the ceiling is ten hours (inside the twelve-hour
+        # job limit) and a timeout counts as a failed attempt, not as a crash.
+        try:
+            rc, _ = run_cmd(["bash", "-c", f"mars {req_path} > {log_path} 2>&1"], timeout=MARS_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            rc = 124
+            log(f"RETRIEVE {label} attempt={attempt}: mars exceeded {MARS_TIMEOUT_SECONDS} s and was stopped")
         elapsed = time.time() - t0
         n = grib_count(tmp)
         log(
