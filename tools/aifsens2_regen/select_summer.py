@@ -55,9 +55,16 @@ PROBE_GROUPS = {
 }
 
 
-def index_by_date_and_number(path: str) -> dict[tuple[int, str], int]:
-    """Count the messages of a file by analysis date and ensemble member."""
-    rc, out = run_cmd(["grib_get", "-p", "dataDate,number", path])
+def index_by_date_and_time(path: str) -> dict[tuple[int, int], int]:
+    """Count the messages of a file by analysis date and analysis time.
+
+    Counting by date alone is not enough for the invariant fields.  The
+    2026-09-09 request asked for both 0000 and 1800 on every date, so that file
+    holds eight messages per date, of which only four belong to any one
+    analysis time.  A date-only count made every date look as though it had
+    twice the constants it needed.
+    """
+    rc, out = run_cmd(["grib_get", "-p", "dataDate,dataTime", path])
     if rc != 0:
         return {}
     c: collections.Counter = collections.Counter()
@@ -65,7 +72,7 @@ def index_by_date_and_number(path: str) -> dict[tuple[int, str], int]:
         f = line.split()
         if len(f) != 2:
             continue
-        c[(int(f[0]), f[1])] += 1
+        c[(int(f[0]), int(f[1]))] += 1
     return dict(c)
 
 
@@ -84,11 +91,13 @@ def main(argv=None) -> int:
             log(f"shared group {name} is absent from {SHARED_DIR}")
             shared_counts[name] = {}
             continue
-        by_date: collections.Counter = collections.Counter()
-        for (date, _number), n in index_by_date_and_number(path).items():
-            by_date[date] += n
-        shared_counts[name] = dict(by_date)
-        log(f"shared group {name}: {sum(by_date.values())} messages over {len(by_date)} dates")
+        counts = index_by_date_and_time(path)
+        shared_counts[name] = counts
+        dates = {d for d, _ in counts}
+        log(
+            f"shared group {name}: {sum(counts.values())} messages over "
+            f"{len(dates)} dates and {len({tm for _, tm in counts})} analysis times"
+        )
 
     evidence = {}
     selected = []
@@ -113,13 +122,15 @@ def main(argv=None) -> int:
         for name, (which, want) in SHARED_GROUPS.items():
             counts = shared_counts.get(name, {})
             if name == "grp_con.grib":
-                got = counts.get(d, 0) + counts.get(prev, 0)
+                # Four invariant fields at the start itself, and four at the
+                # analysis six hours before it, which is 18 UTC the day before.
+                got = counts.get((d, 0), 0) + counts.get((prev, 1800), 0)
                 want_here = 2 * spec.N_CON_PER_TIME
             elif which == "t0":
-                got = counts.get(d, 0)
+                got = counts.get((d, 0), 0)
                 want_here = want
             else:
-                got = counts.get(prev, 0)
+                got = counts.get((prev, 1800), 0)
                 want_here = want
             rec["shared"][name] = {"fields": got, "expected": want_here}
             if got != want_here:
