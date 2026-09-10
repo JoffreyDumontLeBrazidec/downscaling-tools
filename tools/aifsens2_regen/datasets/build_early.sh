@@ -27,6 +27,7 @@
 #   --concurrency N how many array tasks run at once (default 14)
 #   --recipes R     space separated list of recipe stems to build (default: all three)
 #   --dry-run       write the sbatch files and the run recipes, but do not submit
+#   --tag T         name of the run directory under runs/ (default: early<suffix>)
 set -euo pipefail
 
 S=/home/ecm5702/hpcperm/sandbox/20260910-aifsens2-2026-early/datasets-build
@@ -42,6 +43,7 @@ NPARTS=27
 CONC=14
 RECIPES="aifs_in_early an_target_early forcings_early"
 DRYRUN=0
+TAGOPT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,11 +57,12 @@ while [ $# -gt 0 ]; do
     --concurrency) CONC="$2"; shift 2;;
     --recipes) RECIPES="$2"; shift 2;;
     --dry-run) DRYRUN=1; shift;;
+    --tag) TAGOPT="$2"; shift 2;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
 
-TAG="early${SUFFIX}"
+TAG="${TAGOPT:-early${SUFFIX}}"
 RUN=$S/runs/$TAG
 LOGS=$RUN/logs
 CACHE=/home/ecm5702/scratch/data/aifsens2_regenerated_2026_early_20260910/cache/$TAG
