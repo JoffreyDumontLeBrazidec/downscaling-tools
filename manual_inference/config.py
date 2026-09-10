@@ -88,6 +88,14 @@ DATASET_PATH_REWRITE_PREFIXES = (
     ("/e/data1/jureap-data/ai-ml/datasets/", "/home/mlx/ai-ml/datasets/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets///", "/home/mlx/ai-ml/datasets/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets/", "/home/mlx/ai-ml/datasets/"),
+    # Arm A (aifs-arm-a, 2026-09-08) trains on Jupiter from a scratch store root that has no
+    # counterpart under the AG mirror, so the run-id fallback above cannot catch it. The Atos
+    # copy of record is the permanent one; the scratch working copy is purge-exposed and is
+    # listed second only as a fallback. Both entries are inert unless the target exists.
+    ("/e/scratch/gkpdm/dumontlebrazidec1/datasets/aifsens2_20260907//", "/perm/ecm5702/datasets/aifsens2_20260907/"),
+    ("/e/scratch/gkpdm/dumontlebrazidec1/datasets/aifsens2_20260907/", "/perm/ecm5702/datasets/aifsens2_20260907/"),
+    ("/e/scratch/gkpdm/dumontlebrazidec1/datasets/aifsens2_20260907//", "/home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/"),
+    ("/e/scratch/gkpdm/dumontlebrazidec1/datasets/aifsens2_20260907/", "/home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523//", "/home/mlx/ai-ml/datasets/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/dev/.runtime_datasets/o1280_370523/", "/home/mlx/ai-ml/datasets/"),
 )
