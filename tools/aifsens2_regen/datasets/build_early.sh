@@ -21,6 +21,10 @@
 #   --start S       override the recipe start date (quoted, "YYYY-MM-DD HH:MM:SS")
 #   --end S         override the recipe end date
 #   --origin S      override fake_forecasts_origin (default: keep the recipe value)
+#   --missing-starts L  comma separated list of real forecast starts that do not exist in the
+#                   source data, for example a start whose initial conditions were lost. The
+#                   synthetic axis keeps its regular spacing and the samples of those starts
+#                   are written to the missing_dates attribute of every store built here.
 #   --grib-dir D    override the directory holding the O320 GRIB files of the input store
 #   --dest D        destination directory for the .zarr stores
 #   --nparts N      number of load array tasks (default 27, about 10 starts each)
@@ -39,6 +43,7 @@ SUFFIX=""
 START=""
 END=""
 ORIGIN=""
+MISSINGSTARTS=""
 GRIBDIR=""
 NPARTS=27
 CONC=14
@@ -56,6 +61,8 @@ while [ $# -gt 0 ]; do
     --start) START="$2"; shift 2;;
     --end) END="$2"; shift 2;;
     --origin) ORIGIN="$2"; shift 2;;
+    --missing-starts) MISSINGSTARTS="$2"; shift 2;;
+    --missing-starts=*) MISSINGSTARTS="${1#*=}"; shift;;
     --grib-dir) GRIBDIR="$2"; shift 2;;
     --dest) DEST="$2"; shift 2;;
     --nparts) NPARTS="$2"; shift 2;;
@@ -83,6 +90,13 @@ for R in $RECIPES; do
   [ -n "$START" ]  && sed -i "s|^\(  start: \).*$|\1$START|" "$DST"
   [ -n "$END" ]    && sed -i "s|^\(  end: \).*$|\1$END|" "$DST"
   [ -n "$ORIGIN" ] && sed -i "s|^\(  fake_forecasts_origin: \).*$|\1$ORIGIN|" "$DST"
+  # --missing-starts declares real forecast starts that do not exist in the source data. It is
+  # written into the run recipe as the dates key missing_starts, which the fork turns into one
+  # missing synthetic date per lead time, leaving the synthetic axis itself regular.
+  if [ -n "$MISSINGSTARTS" ]; then
+    LIST=$(echo "$MISSINGSTARTS" | sed 's/[[:space:]]//g; s/[^,]*/"&"/g')
+    sed -i "s|^\(  steps: .*\)$|\1\n  missing_starts: [$LIST]|" "$DST"
+  fi
   [ -n "$GRIBDIR" ] && sed -i "s|^\(      path: \).*/\([^/]*\)$|\1${GRIBDIR}/\2|" "$DST"
   # --members restricts the MARS ensemble to the listed members in the run copy only. It is meant
   # for fixtures, so that a test build stays a small tape retrieval instead of fifty members.
