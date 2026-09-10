@@ -120,16 +120,17 @@ def split_raw(root: str, block: str, parts: str) -> list[str]:
         and not os.path.basename(os.path.dirname(p)).startswith("_aside_")
     ]
     if block == cal.SUMMER_BLOCK:
-        raws += sorted(
-            glob.glob(
-                "/home/ecm5702/scratch/eval/aifs_v1_vs_regen_20260909/regen/"
-                "ic_v2_2026_pf/grp_{sfc_t0,wave_t6,wave_t0,con}.grib"
-            )
-        ) or [
-            f"/home/ecm5702/scratch/eval/aifs_v1_vs_regen_20260909/regen/ic_v2_2026_pf/grp_{n}.grib"
-            for n in ("sfc_t0", "wave_t6", "wave_t0", "con")
-        ]
-        raws = sorted({p for p in raws if os.path.exists(p)})
+        # Four of the summer groups were never re-fetched: they survive from the
+        # 2026-09-09 study and are read from there, never written to.  They are
+        # named explicitly rather than matched by a pattern, because that
+        # directory also holds an empty grp_sfc_t6.grib left by a failed
+        # request, and because Python's glob does not expand braces.
+        from .select_summer import SHARED_DIR, SHARED_GROUPS
+
+        raws += [os.path.join(SHARED_DIR, n) for n in SHARED_GROUPS]
+        raws = sorted(
+            {p for p in raws if os.path.exists(p) and os.path.getsize(p) > 0}
+        )
 
     if not raws:
         log(f"FATAL no raw files found for block {block} under {d}")
