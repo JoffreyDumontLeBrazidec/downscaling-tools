@@ -10,5 +10,5 @@ module load ecmwf-toolbox
 source /home/ecm5702/hpcperm/venvs/pristine-uv-x86_64/bin/activate
 export PYTHONPATH=/home/ecm5702/hpcperm/sandbox/20260910-aifsens2-2026-early/anemoi-datasets/src
 python /home/ecm5702/hpcperm/sandbox/20260910-aifsens2-2026-early/datasets-build/verify_full2025.py \
-  --dir /home/ecm5702/scratch/data/aifscrps_2026_full_20260910/test2025 --suffix "-test4" --fixture
+  --dir /home/ecm5702/scratch/data/aifscrps_2026_full_20260910/test2025 --suffix=-test4 --fixture
 echo "TEST2025_VERIFY_RC=$?"
