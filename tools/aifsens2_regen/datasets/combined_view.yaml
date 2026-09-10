@@ -1,0 +1,45 @@
+# Open-time specification of the combined summer + early-2026 training view.
+#
+# Nothing here is a new store. These are the arguments to pass to
+# anemoi.datasets.open_dataset, so the training run reads the two existing stores side by side
+# and sees one dataset of 972 samples (446 summer + 526 early). Both halves live on the same
+# synthetic hourly axis: the summer axis runs from 1900-01-01T00:00:00 to 1900-01-19T13:00:00,
+# and the early axis was built with fake_forecasts_origin 1900-01-19T14:00:00, so a plain
+# `concat` gives contiguous one-hour dates with no gap and no overlap.
+#
+# Two things are deliberate and must not be left to chance.
+#
+#   * The summer input store holds 50 ensemble members and the early input store holds 10.
+#     `concat` requires the two halves to have the same shape apart from the date axis, so the
+#     summer half is cut down to members 1 to 10 with the open-time key `number`, which is
+#     one-based and therefore selects exactly the members the early store contains.
+#
+#   * `statistics` names the SUMMER store explicitly. Without it, the concatenation would take
+#     its statistics from whichever half the implementation happens to pick, and the
+#     normalisation seen by the model would change silently. The existing summer training run
+#     was normalised with the summer store's statistics, so pinning them here keeps the new,
+#     longer training comparable with everything already on the scoreboard. Change this only as
+#     a deliberate, recorded decision, and only together with a fresh baseline.
+#
+# Read-only: opening these stores never writes to them.
+
+input:
+  # statistics of the summer input store, on purpose (see the note above)
+  statistics: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-ai-pf-enfo-0001-mars-o320-2026-2026-12h-6h-v1-aifsens2.zarr
+  concat:
+    - dataset: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-ai-pf-enfo-0001-mars-o320-2026-2026-12h-6h-v1-aifsens2.zarr
+      number: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    - dataset: /home/ecm5702/scratch/data/aifsens2_regenerated_2026_early_20260910/training/downscaling-ai-pf-enfo-rgn2-mars-o320-2026-2026-12h-6h-v1-aifsens2-early.zarr
+
+target:
+  # one member on both sides, so no `number` subset is needed
+  statistics: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-validtime.zarr
+  concat:
+    - dataset: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-validtime.zarr
+    - dataset: /home/ecm5702/scratch/data/aifsens2_regenerated_2026_early_20260910/training/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-early-validtime.zarr
+
+forcings:
+  statistics: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-validtime-forcings.zarr
+  concat:
+    - dataset: /home/ecm5702/scratch/data/anemoi_datasets_aifsens2_20260907/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-validtime-forcings.zarr
+    - dataset: /home/ecm5702/scratch/data/aifsens2_regenerated_2026_early_20260910/training/downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-early-validtime-forcings.zarr

@@ -1,0 +1,161 @@
+From 0b82aeb8ca6ef8691aaaf3567fba1ef44c63ea24 Mon Sep 17 00:00:00 2001
+From: Joffrey Dumont Le Brazidec <joffreydumont95@gmail.com>
+Date: Thu, 10 Sep 2026 07:38:10 +0000
+Subject: [PATCH] fake_forecasts: optional synthetic-axis origin, and a
+ fake_grib source
+
+Two small additions on top of feature/aifs-analysis-target, needed to build a second
+training store on a synthetic forecast axis that continues the first one.
+
+1. FakeForecastsDates accepts an optional dates key fake_forecasts_origin. When it is
+   absent the axis still starts at 1900-01-01T00:00:00, so existing recipes are
+   unchanged. When it is set, the axis starts there instead, which lets two stores be
+   concatenated at open time with contiguous one-hour dates.
+
+2. The grib source gains a fake_grib variant, registered through the same
+   __support_fake_dates__ marker that mars.py uses. It maps each synthetic date back to
+   its real (forecast start, step) pair, substitutes the start into the path pattern, and
+   selects the messages by their real GRIB keys, checking the field count. The synthetic
+   valid_datetime is still applied by FakeForecastsDates.patch_result, as for fake_mars.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ .../datasets/create/functions/sources/grib.py | 76 +++++++++++++++++++
+ src/anemoi/datasets/dates/__init__.py         | 23 +++++-
+ 2 files changed, 97 insertions(+), 2 deletions(-)
+
+diff --git a/src/anemoi/datasets/create/functions/sources/grib.py b/src/anemoi/datasets/create/functions/sources/grib.py
+index 40d6b9b4..a5c58a84 100644
+--- a/src/anemoi/datasets/create/functions/sources/grib.py
++++ b/src/anemoi/datasets/create/functions/sources/grib.py
+@@ -15,6 +15,7 @@ from earthkit.data import from_source
+ from earthkit.data.indexing.fieldlist import FieldArray
+ from earthkit.data.utils.patterns import Pattern
+ 
++
+ LOG = logging.getLogger(__name__)
+ 
+ 
+@@ -148,3 +149,78 @@ def execute(context, dates, path, latitudes=None, longitudes=None, *args, **kwar
+         LOG.warning(f"No fields found for {dates} in {given_paths} (kwargs={kwargs})")
+ 
+     return ds
++
++
++def fake_grib(context, dates, path, *args, **kwargs):
++    """Serve a `grib` source on a synthetic (fake) forecast axis.
++
++    The plain `grib` source selects fields by `valid_datetime`, which cannot work under
++    `fake_forecasts` because the requested dates are synthetic (they start at the axis origin
++    and advance by one hour per sample). This variant translates every synthetic date back to
++    its real (forecast start, step) pair through `context.dates_provider.mapping`, substitutes
++    the start into the path pattern, and selects the messages by their real GRIB keys.
++
++    The fields are returned with their ORIGINAL date/time/step metadata. The synthetic
++    valid_datetime is applied afterwards, once per group, by `FakeForecastsDates.patch_result`,
++    exactly as for the `fake_mars` forecast path. Patching here as well would be redundant.
++    """
++    from collections import defaultdict
++
++    provider = context.dates_provider
++
++    # Group the requested synthetic dates by the real forecast start they come from: one file
++    # per start, several steps per file.
++    by_start = defaultdict(set)
++    for d in dates:
++        forecast = provider.mapping[d]
++        by_start[forecast.date].add(int(forecast.step))
++
++    given_paths = path if isinstance(path, list) else [path]
++
++    # Everything left in kwargs is a GRIB selection key (param, levelist, levtype, number, ...).
++    selection = {k: v for k, v in kwargs.items() if v is not None}
++    for name in ("grid", "area", "rotation", "frame", "resol", "bitmap"):
++        if name in selection:
++            raise ValueError(f"MARS interpolation parameter {name} not supported by fake_grib")
++
++    ds = from_source("empty")
++    expected = 0
++
++    for start in sorted(by_start):
++        steps = sorted(by_start[start])
++        sel = dict(selection)
++        sel["date"] = int(start.strftime("%Y%m%d"))
++        sel["time"] = int(start.strftime("%H%M"))
++        sel["step"] = steps
++
++        # One field per combination of the list-valued selection keys, per start.
++        n = 1
++        for v in sel.values():
++            if isinstance(v, (list, tuple)):
++                n *= len(v)
++        expected += n
++
++        for given in given_paths:
++            for p in _expand(Pattern(given).substitute({"date": start}, allow_extra=True)):
++                context.trace("📁", "PATH", p)
++                s = from_source("file", p)
++                s = s.sel(**sel)
++                ds = ds + s
++
++    if not context.partial_ok:
++        if len(ds) != expected:
++            raise ValueError(
++                f"fake_grib: expected {expected} fields, got {len(ds)} "
++                f"(paths={given_paths}, selection={selection}, starts={sorted(by_start)})"
++            )
++
++    if len(ds) == 0:
++        LOG.warning(f"fake_grib: no fields found for {len(dates)} dates in {given_paths}")
++
++    return ds
++
++
++# `fake_grib` is defined after `execute`, so the marker is attached here rather than with the
++# `@support_fake_dates(...)` decorator used in mars.py. The builder looks the attribute up on the
++# function object (see FunctionAction.supports_fake_dates), so the two forms are equivalent.
++execute.__support_fake_dates__ = fake_grib
+diff --git a/src/anemoi/datasets/dates/__init__.py b/src/anemoi/datasets/dates/__init__.py
+index 29b9990c..49ad1fef 100644
+--- a/src/anemoi/datasets/dates/__init__.py
++++ b/src/anemoi/datasets/dates/__init__.py
+@@ -357,15 +357,34 @@ class FakeHindcastsDates(FakeDateProvider):
+         return {"fake_hindcasts": {v.isoformat(): k for k, v in self.date_mapping.items()}}
+ 
+ 
++# Default origin of the synthetic (fake) forecast axis. Kept as a module-level constant so
++# that the historical behaviour is bit-identical when a recipe does not set an origin.
++FAKE_FORECASTS_DEFAULT_ORIGIN = datetime.datetime(1900, 1, 1, 0, 0)
++
++
+ class FakeForecastsDates(FakeDateProvider):
+-    def __init__(self, start, end, steps, frequency=24, **kwargs):
++    def __init__(self, start, end, steps, frequency=24, fake_forecasts_origin=None, **kwargs):
++        """Synthetic forecast axis.
++
++        Parameters
++        ----------
++        fake_forecasts_origin : str or datetime, optional
++            First synthetic date of the axis. Defaults to 1900-01-01T00:00:00, the historical
++            value. Setting it lets two stores built separately share one contiguous hourly
++            axis, so that they can be joined with `concat` at open time: give the second store
++            the origin that immediately follows the last synthetic date of the first one.
++        """
+         dates = datetimes_factory(
+             start=start,
+             end=end,
+             frequency=frequency,
+         )
+         all_dates = {}
+-        ref = datetime.datetime(1900, 1, 1, 0, 0)
++        if fake_forecasts_origin is None:
++            ref = FAKE_FORECASTS_DEFAULT_ORIGIN
++        else:
++            ref = as_datetime(fake_forecasts_origin)
++        self.origin = ref
+         for date in dates:
+             for s in steps:
+                 all_dates[(date, s)] = ref + datetime.timedelta(hours=len(all_dates))
+-- 
+2.43.7
+
