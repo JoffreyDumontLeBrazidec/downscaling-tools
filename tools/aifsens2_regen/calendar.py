@@ -40,9 +40,39 @@ SUMMER_CANDIDATE_DATES = [
     "20260804", "20260814", "20260824", "20260830",
 ]
 
+# The 12 UTC validation block reuses the five summer days the archive was able
+# to serve at 00 UTC.  Its raw fields were fetched by a separate probe, which
+# wrote one file per group and date holding both input times at once, the
+# analysis at D 06 UTC as t-6 and the analysis at D 12 UTC as t0.
+SUMMER_12UTC_CANDIDATE_DATES = [
+    "20260605", "20260615",
+    "20260705", "20260715", "20260725",
+]
+
 MONTHLY_BLOCKS = ["202601", "202602", "202603", "202604", "202605"]
 PILOT_BLOCK = "pilot_20260101"
 SUMMER_BLOCK = "summer_validation"
+SUMMER_BLOCK_12UTC = "summer_validation_12utc"
+
+# The two validation blocks differ in only three things: the time of day of
+# their starts, the file that records which dates the archive served, and the
+# suffix their directories carry under validation/.  Writing that difference
+# down once here keeps every stage free of a second "if block == ..." branch,
+# and keeps the two blocks from ever writing into each other's output.
+VALIDATION_BLOCKS = {
+    SUMMER_BLOCK: dict(
+        hour=0,
+        selection="selected_dates.json",
+        suffix="",
+        candidates=SUMMER_CANDIDATE_DATES,
+    ),
+    SUMMER_BLOCK_12UTC: dict(
+        hour=12,
+        selection="selected_dates_12utc.json",
+        suffix="_12utc",
+        candidates=SUMMER_12UTC_CANDIDATE_DATES,
+    ),
+}
 
 
 def campaign_starts() -> list[dt.datetime]:
@@ -61,18 +91,23 @@ def block_starts(block: str, root: str | None = None) -> list[dt.datetime]:
     Parameters
     ----------
     block
-        A monthly block name such as "202603", or "pilot_20260101", or
-        "summer_validation".
+        A monthly block name such as "202603", or "pilot_20260101", or one of
+        the validation block names "summer_validation" and
+        "summer_validation_12utc".
     root
-        The data root.  Only the summer validation block uses it, to read the
-        list of dates the archive was able to serve.
+        The data root.  Only the validation blocks use it, to read the list of
+        dates the archive was able to serve.
     """
     if block == PILOT_BLOCK:
         return [dt.datetime(2026, 1, 1, 0), dt.datetime(2026, 1, 1, 12)]
 
-    if block == SUMMER_BLOCK:
-        dates = selected_summer_dates(root)
-        return [dt.datetime.strptime(d, "%Y%m%d") for d in dates]
+    if block in VALIDATION_BLOCKS:
+        hour = VALIDATION_BLOCKS[block]["hour"]
+        dates = selected_summer_dates(root, block)
+        return [
+            dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=hour)
+            for d in dates
+        ]
 
     if block in MONTHLY_BLOCKS:
         year, month = int(block[:4]), int(block[4:])
@@ -80,26 +115,42 @@ def block_starts(block: str, root: str | None = None) -> list[dt.datetime]:
 
     raise ValueError(
         f"unknown block {block!r}; expected one of "
-        f"{MONTHLY_BLOCKS + [PILOT_BLOCK, SUMMER_BLOCK]}"
+        f"{MONTHLY_BLOCKS + [PILOT_BLOCK] + list(VALIDATION_BLOCKS)}"
     )
 
 
-def selected_summer_dates(root: str | None = None) -> list[str]:
-    """The summer validation dates whose initial conditions arrived complete.
+def selected_summer_dates(
+    root: str | None = None, block: str = SUMMER_BLOCK
+) -> list[str]:
+    """The validation dates whose initial conditions arrived complete.
 
-    The list is written by the availability check into
-    <root>/validation/selected_dates.json.  If that file does not exist yet the
-    function returns an empty list rather than guessing, because running a
-    forecast from an incomplete initial condition would silently produce a
-    wrong member.
+    The list is written by the availability check into a file under
+    <root>/validation/, named selected_dates.json for the 00 UTC block and
+    selected_dates_12utc.json for the 12 UTC block.  If that file does not
+    exist yet the function returns an empty list rather than guessing, because
+    running a forecast from an incomplete initial condition would silently
+    produce a wrong member.
     """
     if root is None:
         root = os.environ.get("AIFSENS2_ROOT", "")
-    path = os.path.join(root, "validation", "selected_dates.json")
+    path = os.path.join(root, "validation", VALIDATION_BLOCKS[block]["selection"])
     if not os.path.exists(path):
         return []
     with open(path) as f:
         return list(json.load(f)["dates"])
+
+
+def validation_dir(root: str, kind: str, block: str) -> str:
+    """The directory one validation block keeps a given kind of file in.
+
+    ``kind`` is one of "ic_raw", "ic_members", "native_n320" and
+    "derived_o320".  The 00 UTC block uses those names unchanged, and the 12
+    UTC block appends "_12utc" to each of them, so that the two blocks share
+    the same shapes without sharing any file.
+    """
+    return os.path.join(
+        root, "validation", kind + VALIDATION_BLOCKS[block]["suffix"]
+    )
 
 
 def input_times(starts: list[dt.datetime]) -> list[dt.datetime]:
@@ -140,7 +191,7 @@ def parse_start_key(key: str) -> dt.datetime:
 
 
 def all_blocks() -> list[str]:
-    return [PILOT_BLOCK, SUMMER_BLOCK] + MONTHLY_BLOCKS
+    return [PILOT_BLOCK] + list(VALIDATION_BLOCKS) + MONTHLY_BLOCKS
 
 
 def describe() -> str:
@@ -164,4 +215,27 @@ if __name__ == "__main__":
     for b, n in expected.items():
         got = len(block_starts(b))
         assert got == n, f"{b}: expected {n} starts, got {got}"
-    print("calendar self-check passed: 263 starts, block sizes as specified")
+
+    # The two validation blocks must differ in the time of day of their starts
+    # and must not be able to write into each other's directories.  Both are
+    # checked here because the whole 12 UTC block rests on that hour, and a
+    # suffix that came back empty would silently overwrite the 00 UTC results.
+    for block, hour in ((SUMMER_BLOCK, 0), (SUMMER_BLOCK_12UTC, 12)):
+        assert VALIDATION_BLOCKS[block]["hour"] == hour, block
+    for kind in ("ic_raw", "ic_members", "native_n320", "derived_o320"):
+        a = validation_dir("/r", kind, SUMMER_BLOCK)
+        b = validation_dir("/r", kind, SUMMER_BLOCK_12UTC)
+        assert a == f"/r/validation/{kind}", a
+        assert b == f"/r/validation/{kind}_12utc", b
+
+    # A 12 UTC start needs the analysis at 06 UTC and at 12 UTC of the same day,
+    # unlike a 00 UTC start, whose t-6 falls on the previous day.
+    noon = dt.datetime(2026, 6, 5, 12)
+    assert input_times([noon]) == [dt.datetime(2026, 6, 5, 6), noon]
+    assert input_times_by_time_of_day([noon]) == {
+        "0600": ["20260605"],
+        "1200": ["20260605"],
+    }
+
+    print("calendar self-check passed: 263 starts, block sizes as specified,")
+    print("validation blocks separated and their input times correct")

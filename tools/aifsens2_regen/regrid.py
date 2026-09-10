@@ -65,14 +65,14 @@ def selection_rules() -> list[list[str]]:
 
 
 def native_root_for(root: str, block: str) -> str:
-    if block == cal.SUMMER_BLOCK:
-        return os.path.join(root, "validation", "native_n320")
+    if block in cal.VALIDATION_BLOCKS:
+        return cal.validation_dir(root, "native_n320", block)
     return os.path.join(root, "native_n320")
 
 
 def derived_root_for(root: str, block: str) -> str:
-    if block == cal.SUMMER_BLOCK:
-        return os.path.join(root, "validation", "derived_o320")
+    if block in cal.VALIDATION_BLOCKS:
+        return cal.validation_dir(root, "derived_o320", block)
     return os.path.join(root, "derived_o320")
 
 
@@ -131,11 +131,18 @@ def _validate_derived(path: str, start) -> tuple[bool, list[str], dict]:
     return not problems, problems, stats
 
 
-def regrid_start(root: str, block: str, start, workdir: str) -> tuple[bool, list[str], dict]:
+def regrid_start(
+    root: str,
+    block: str,
+    start,
+    workdir: str,
+    native_root: str | None = None,
+    derived_root: str | None = None,
+) -> tuple[bool, list[str], dict]:
     """Build one start's O320 file from the ten member native files."""
     key = cal.start_key(start)
-    native_dir = os.path.join(native_root_for(root, block), key)
-    dest = os.path.join(derived_root_for(root, block), f"{key}.grib")
+    native_dir = os.path.join(native_root or native_root_for(root, block), key)
+    dest = os.path.join(derived_root or derived_root_for(root, block), f"{key}.grib")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
 
     if os.path.exists(dest):
@@ -205,6 +212,8 @@ def main(argv=None) -> int:
     p.add_argument("--block", required=True)
     p.add_argument("--root", default=os.environ.get("AIFSENS2_ROOT", DEFAULT_ROOT))
     p.add_argument("--workdir", help="scratch space for the intermediate selections")
+    p.add_argument("--native-root", help="override the directory the native forecasts are read from")
+    p.add_argument("--derived-root", help="override the destination for the O320 files")
     a = p.parse_args(argv)
 
     starts = cal.block_starts(a.block, a.root)
@@ -223,7 +232,9 @@ def main(argv=None) -> int:
     for start in starts:
         key = cal.start_key(start)
         t0 = time.time()
-        ok, problems, stats = regrid_start(a.root, a.block, start, workdir)
+        ok, problems, stats = regrid_start(
+            a.root, a.block, start, workdir, a.native_root, a.derived_root
+        )
         elapsed = time.time() - t0
         if ok:
             ok_count += 1

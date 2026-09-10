@@ -21,7 +21,10 @@ source /home/ecm5702/dev/downscaling-tools-aifsens2-regen/tools/aifsens2_regen/e
 BLOCK="${1:-${BLOCK:-}}"
 : "${BLOCK:?give the block as the first argument, for example: sbatch regrid.sbatch 202601}"
 
-python -m aifsens2_regen.regrid --block "$BLOCK" --workdir "${TMPDIR:-/tmp}/a2regrid_${BLOCK}_$$"
+python -m aifsens2_regen.regrid --block "$BLOCK" \
+  --workdir "${TMPDIR:-/tmp}/a2regrid_${BLOCK}_$$" \
+  ${NATIVE_ROOT:+--native-root "$NATIVE_ROOT"} \
+  ${DERIVED_ROOT:+--derived-root "$DERIVED_ROOT"}
 rc=$?
 echo "REGRID_TASK_RC=$rc block=$BLOCK"
 exit $rc

@@ -44,12 +44,12 @@ PAUSE_SECONDS = 600
 def raw_dir(root: str, block: str) -> str:
     """Where the grouped raw files of a block live.
 
-    The summer validation block keeps its raw files under validation/, because
-    that data was probed date by date and is kept separate from the production
+    The validation blocks keep their raw files under validation/, because that
+    data was probed date by date and is kept separate from the production
     calendar.
     """
-    if block == cal.SUMMER_BLOCK:
-        return os.path.join(root, "validation", "ic_raw")
+    if block in cal.VALIDATION_BLOCKS:
+        return cal.validation_dir(root, "ic_raw", block)
     return os.path.join(root, "ic", "raw", block)
 
 

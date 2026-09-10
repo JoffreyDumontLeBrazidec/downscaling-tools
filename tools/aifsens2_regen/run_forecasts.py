@@ -352,8 +352,8 @@ def main(argv=None) -> int:
     ic_root = a.members_root or default_members_root(a.root, a.block)
     if a.native_root:
         native_root = a.native_root
-    elif a.block == cal.SUMMER_BLOCK:
-        native_root = os.path.join(a.root, "validation", "native_n320")
+    elif a.block in cal.VALIDATION_BLOCKS:
+        native_root = cal.validation_dir(a.root, "native_n320", a.block)
     else:
         native_root = os.path.join(a.root, "native_n320")
 

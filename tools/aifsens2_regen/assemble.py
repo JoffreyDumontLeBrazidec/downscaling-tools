@@ -28,6 +28,7 @@ Usage
 -----
     python -m aifsens2_regen.assemble --block pilot_20260101
     python -m aifsens2_regen.assemble --block summer_validation --members-root validation/ic_members
+    python -m aifsens2_regen.assemble --block summer_validation_12utc
 """
 
 from __future__ import annotations
@@ -94,7 +95,7 @@ def is_constants_file(path: str) -> bool:
     return rc == 0 and out.strip().split()[0] == "oper"
 
 
-def split_raw(root: str, block: str, parts: str) -> list[str]:
+def split_raw(root: str, block: str, parts: str, raw: str | None = None) -> list[str]:
     """Split every raw file of the block into per-date, per-time, per-member pieces.
 
     Returns the list of raw files that were used.  A raw file whose split has
@@ -105,9 +106,9 @@ def split_raw(root: str, block: str, parts: str) -> list[str]:
     markers = os.path.join(parts, ".split_done")
     os.makedirs(markers, exist_ok=True)
 
-    d = raw_dir(root, block)
-    # The summer block keeps one directory per date, and four of its groups
-    # live read-only in the earlier study directory.
+    d = raw or raw_dir(root, block)
+    # The validation blocks keep one directory per date, and four of the 00 UTC
+    # block's groups live read-only in the earlier study directory.
     patterns = [os.path.join(d, "*.grib"), os.path.join(d, "*", "*.grib")]
     raws = sorted({p for pat in patterns for p in glob.glob(pat)})
     # The second pattern also matches this stage's own output, and re-splitting
@@ -341,8 +342,8 @@ def build_member(parts: str, dest: str, start: dt.datetime, member: int) -> tupl
 
 
 def members_root(root: str, block: str) -> str:
-    if block == cal.SUMMER_BLOCK:
-        return os.path.join(root, "validation", "ic_members")
+    if block in cal.VALIDATION_BLOCKS:
+        return cal.validation_dir(root, "ic_members", block)
     return os.path.join(root, "ic", "members")
 
 
@@ -351,6 +352,7 @@ def main(argv=None) -> int:
     p.add_argument("--block", required=True)
     p.add_argument("--root", default=os.environ.get("AIFSENS2_ROOT", DEFAULT_ROOT))
     p.add_argument("--members-root", help="override the destination for member files")
+    p.add_argument("--raw-dir", help="override the directory the raw grouped files are read from")
     a = p.parse_args(argv)
 
     starts = cal.block_starts(a.block, a.root)
@@ -359,8 +361,9 @@ def main(argv=None) -> int:
         return 1
     log(f"block {a.block}: {len(starts)} starts, {len(spec.MEMBERS)} members each")
 
-    parts = os.path.join(raw_dir(a.root, a.block), "parts")
-    split_raw(a.root, a.block, parts)
+    raw = a.raw_dir or raw_dir(a.root, a.block)
+    parts = os.path.join(raw, "parts")
+    split_raw(a.root, a.block, parts, raw)
 
     dest_root = a.members_root or members_root(a.root, a.block)
     complete = incomplete = skipped = 0

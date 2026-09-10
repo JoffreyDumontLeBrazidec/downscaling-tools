@@ -47,6 +47,7 @@ together, and that can be restarted on its own.
 |---|---|
 | `pilot_20260101` | 2, both starts of 1 January, used to prove the code |
 | `summer_validation` | the summer 2026 dates the archive can serve, at 00 UTC only |
+| `summer_validation_12utc` | the same five summer days, at 12 UTC |
 | `202601` | 62 |
 | `202602` | 56 |
 | `202603` | 62 |
@@ -222,6 +223,37 @@ validates, so only the new dates are produced.
 The summer block keeps its own directories under `validation/`: `ic_members/`,
 `native_n320/` and `derived_o320/`, with the same shapes as the production
 areas.
+
+The same five summer days again, this time at 12 UTC. This block is simpler to
+retrieve than the 00 UTC one, because a 12 UTC start needs the analysis at 06
+UTC and the analysis at 12 UTC of the same day, so nothing straddles a date
+boundary and nothing has to be borrowed from the earlier study. All five of its
+field groups came from one later probe, which wrote one file per group and date
+holding both input times together, under
+`validation/ic_raw_12utc/<YYYYMMDD>/<group>_<YYYYMMDD>_0600-1200.grib`.
+
+```bash
+python -m aifsens2_regen.select_summer --block summer_validation_12utc
+sbatch assemble.sbatch summer_validation_12utc
+sbatch run_forecasts.sbatch summer_validation_12utc
+sbatch regrid.sbatch summer_validation_12utc
+sbatch verify.sbatch summer_validation_12utc
+```
+
+A date is selected only if all five groups are present and carry exactly the
+expected number of fields at **each** of the two input times: 130 surface, 700
+pressure-level, 130 specific-humidity, 110 wave and 4 invariant fields per time,
+so 260, 1400, 260, 220 and 8 messages per file. The count is checked per input
+time rather than per file, because a file holding the right total at only one
+time would be useless and would not announce itself.
+
+This block writes into `validation/ic_raw_12utc/`, `validation/ic_members_12utc/`,
+`validation/native_n320_12utc/` and `validation/derived_o320_12utc/`. The two
+validation blocks are told apart in exactly one place, the `VALIDATION_BLOCKS`
+table in `calendar.py`, which gives each block its start hour, the name of its
+selection file and the suffix its directories carry. Every stage asks that
+table through `calendar.validation_dir` rather than testing the block name
+itself, so the two blocks can never write into each other's output.
 
 ## A note on the output GRIB headers
 

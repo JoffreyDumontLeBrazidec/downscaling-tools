@@ -1,5 +1,8 @@
 """Decide which summer 2026 validation dates the archive was able to serve.
 
+There are two validation blocks and they were retrieved by two different
+probes, so this module answers the same question twice, once per block.
+
 The summer validation set exists to run the production code on dates outside
 the campaign calendar before the campaign itself is produced.  Its initial
 conditions come from two places.  Five field groups were fetched date by date
@@ -16,9 +19,20 @@ The result is written to validation/selected_dates.json together with the
 criterion used and the per-date evidence, so that the choice can be re-read
 later without re-running the check.
 
+The 12 UTC block is simpler.  All five of its field groups were fetched by one
+later probe, which wrote one file per group and date holding both input times
+together, the analysis at D 06 UTC as t-6 and the analysis at D 12 UTC as t0.
+Nothing is read from the 2026-09-09 study for that block.  The criterion is the
+same in spirit: a date is usable only if every group carries exactly the
+expected number of fields at each of the two input times, and a date that is
+short of even one field is excluded rather than patched.
+
+Its result is written to validation/selected_dates_12utc.json.
+
 Usage
 -----
     python -m aifsens2_regen.select_summer
+    python -m aifsens2_regen.select_summer --block summer_validation_12utc
 """
 
 from __future__ import annotations
@@ -55,6 +69,22 @@ PROBE_GROUPS = {
 }
 
 
+# The five groups the 12 UTC probe fetched.  The value is the number of fields
+# the group must carry at ONE input time; each file holds two input times, so a
+# complete file has twice this many messages.
+PROBE_12UTC_GROUPS = {
+    "sfc": spec.GROUPS["sfc"]["per_date_per_time"],       # 130 per time
+    "pl": spec.GROUPS["pl"]["per_date_per_time"],         # 700 per time
+    "q": spec.GROUPS["q"]["per_date_per_time"],           # 130 per time
+    "wave": spec.GROUPS["wave"]["per_date_per_time"],     # 110 per time
+    "con": spec.N_CON_PER_TIME,                           #   4 per time
+}
+
+# The two input times a 12 UTC start needs, as eccodes prints dataTime: the
+# analysis six hours before the start, and the analysis at the start itself.
+PROBE_12UTC_TIMES = (600, 1200)
+
+
 def index_by_date_and_time(path: str) -> dict[tuple[int, int], int]:
     """Count the messages of a file by analysis date and analysis time.
 
@@ -76,10 +106,102 @@ def index_by_date_and_time(path: str) -> dict[tuple[int, int], int]:
     return dict(c)
 
 
+def select_12utc(root: str) -> int:
+    """Decide which 12 UTC validation dates the archive served completely.
+
+    Counts are checked per input time rather than per file, because a file with
+    the right total but all of its fields at one analysis time would be useless
+    and would not announce itself.
+    """
+    block = cal.SUMMER_BLOCK_12UTC
+    probe_root = cal.validation_dir(root, "ic_raw", block)
+    candidates = cal.VALIDATION_BLOCKS[block]["candidates"]
+
+    evidence = {}
+    selected = []
+    for date in candidates:
+        d = int(date)
+        rec = {"probe": {}, "usable": True, "reasons": []}
+
+        for group, per_time in PROBE_12UTC_GROUPS.items():
+            path = os.path.join(probe_root, date, f"{group}_{date}_0600-1200.grib")
+            counts = index_by_date_and_time(path) if os.path.exists(path) else {}
+            got = {t: counts.get((d, t), 0) for t in PROBE_12UTC_TIMES}
+            rec["probe"][group] = {
+                "path": path,
+                "present": os.path.exists(path),
+                "expected_per_time": per_time,
+                "fields_at_0600": got[600],
+                "fields_at_1200": got[1200],
+                "messages_total": sum(counts.values()),
+                "expected_total": 2 * per_time,
+            }
+            if not os.path.exists(path):
+                rec["usable"] = False
+                rec["reasons"].append(f"{group} file is absent")
+                continue
+            for t in PROBE_12UTC_TIMES:
+                if got[t] != per_time:
+                    rec["usable"] = False
+                    rec["reasons"].append(
+                        f"{group} has {got[t]} of {per_time} fields at {t:04d} UTC"
+                    )
+
+        evidence[date] = rec
+        if rec["usable"]:
+            selected.append(date)
+        log(
+            f"SUMMER12 {date}: {'usable' if rec['usable'] else 'NOT usable'}"
+            + ("" if rec["usable"] else "; " + "; ".join(rec["reasons"]))
+        )
+
+    out_path = os.path.join(
+        root, "validation", cal.VALIDATION_BLOCKS[block]["selection"]
+    )
+    atomic_write_json(
+        out_path,
+        {
+            "criterion": (
+                "a date is selected only if all five initial-condition groups "
+                "fetched by the 12 UTC probe (surface, pressure levels, specific "
+                "humidity, waves and the invariant analysis fields) are present "
+                "and carry exactly the expected number of fields at each of the "
+                "two input times the start needs, the analysis at 06 UTC on that "
+                "date as t-6 and the analysis at 12 UTC on that date as t0. The "
+                "count is checked per input time rather than per file, so a file "
+                "holding the right total at only one time is rejected. A date "
+                "missing any field is excluded rather than completed from "
+                "another source."
+            ),
+            "block": block,
+            "start_hour": cal.VALIDATION_BLOCKS[block]["hour"],
+            "candidates": list(candidates),
+            "dates": selected,
+            "evidence": evidence,
+            "probe_root": probe_root,
+        },
+    )
+    log(
+        f"SUMMER12_SELECTION {len(selected)} of {len(candidates)} dates usable "
+        f"-> {out_path}"
+    )
+    log(f"selected: {selected}")
+    return 0 if selected else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--root", default=os.environ.get("AIFSENS2_ROOT", DEFAULT_ROOT))
+    p.add_argument(
+        "--block",
+        default=cal.SUMMER_BLOCK,
+        choices=[cal.SUMMER_BLOCK, cal.SUMMER_BLOCK_12UTC],
+        help="which validation block to decide the dates for",
+    )
     a = p.parse_args(argv)
+
+    if a.block == cal.SUMMER_BLOCK_12UTC:
+        return select_12utc(a.root)
 
     probe_root = os.path.join(a.root, "validation", "ic_raw")
 

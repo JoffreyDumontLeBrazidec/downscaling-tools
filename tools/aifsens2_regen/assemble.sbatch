@@ -21,7 +21,9 @@ source /home/ecm5702/dev/downscaling-tools-aifsens2-regen/tools/aifsens2_regen/e
 BLOCK="${1:-${BLOCK:-}}"
 : "${BLOCK:?give the block as the first argument, for example: sbatch assemble.sbatch 202601}"
 
-python -m aifsens2_regen.assemble --block "$BLOCK" ${MEMBERS_ROOT:+--members-root "$MEMBERS_ROOT"}
+python -m aifsens2_regen.assemble --block "$BLOCK" \
+  ${MEMBERS_ROOT:+--members-root "$MEMBERS_ROOT"} \
+  ${RAW_DIR:+--raw-dir "$RAW_DIR"}
 rc=$?
 echo "ASSEMBLE_TASK_RC=$rc block=$BLOCK"
 exit $rc
