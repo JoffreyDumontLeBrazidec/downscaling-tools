@@ -26,6 +26,7 @@
 #   --nparts N      number of load array tasks (default 27, about 10 starts each)
 #   --concurrency N how many array tasks run at once (default 14)
 #   --recipes R     space separated list of recipe stems to build (default: all three)
+#   --members M     comma separated MARS ensemble members for the run copy (fixtures only)
 #   --dry-run       write the sbatch files and the run recipes, but do not submit
 #   --tag T         name of the run directory under runs/ (default: early<suffix>)
 set -euo pipefail
@@ -42,12 +43,16 @@ GRIBDIR=""
 NPARTS=27
 CONC=14
 RECIPES="aifs_in_early an_target_early forcings_early"
+MEMBERS=""
 DRYRUN=0
 TAGOPT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --suffix) SUFFIX="$2"; shift 2;;
+    --suffix=*) SUFFIX="${1#*=}"; shift;;
+    --members) MEMBERS="$2"; shift 2;;
+    --members=*) MEMBERS="${1#*=}"; shift;;
     --start) START="$2"; shift 2;;
     --end) END="$2"; shift 2;;
     --origin) ORIGIN="$2"; shift 2;;
@@ -79,6 +84,9 @@ for R in $RECIPES; do
   [ -n "$END" ]    && sed -i "s|^\(  end: \).*$|\1$END|" "$DST"
   [ -n "$ORIGIN" ] && sed -i "s|^\(  fake_forecasts_origin: \).*$|\1$ORIGIN|" "$DST"
   [ -n "$GRIBDIR" ] && sed -i "s|^\(      path: \).*/\([^/]*\)$|\1${GRIBDIR}/\2|" "$DST"
+  # --members restricts the MARS ensemble to the listed members in the run copy only. It is meant
+  # for fixtures, so that a test build stays a small tape retrieval instead of fifty members.
+  [ -n "$MEMBERS" ] && sed -i "s|^\\( *number: \\).*$|\\1[$MEMBERS]|" "$DST"
   echo "recipe -> $DST : $(grep -m1 '^name:' "$DST")"
 done
 
