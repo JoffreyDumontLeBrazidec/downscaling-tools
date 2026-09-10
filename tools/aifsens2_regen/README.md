@@ -184,3 +184,65 @@ twice in separate processes and compares the outputs, confirms that two members
 and two starts give different fields, and confirms by comparing distances in
 two-metre temperature that member m's forecast really came from member m's
 analysis.
+
+## The two test blocks
+
+These exist to prove the code before the campaign is produced, and they use
+exactly the same modules as the monthly blocks.
+
+The January pilot day, both starts of 1 January:
+
+```bash
+sbatch retrieve.sbatch pilot_20260101 atm     # already done, array 35238983
+sbatch assemble.sbatch pilot_20260101
+sbatch run_forecasts.sbatch pilot_20260101
+sbatch regrid.sbatch pilot_20260101
+sbatch verify.sbatch pilot_20260101
+```
+
+The summer validation dates. These do not go through `retrieve.sbatch`: five of
+their nine field groups were fetched date by date by a probe, because a request
+for the whole summer at once failed twice on an unavailable tape, and the other
+four survive from the 2026-09-09 study and are read from there. So the first
+step is to decide which dates the archive actually served:
+
+```bash
+python -m aifsens2_regen.select_summer          # writes validation/selected_dates.json
+sbatch assemble.sbatch summer_validation
+sbatch run_forecasts.sbatch summer_validation
+sbatch regrid.sbatch summer_validation
+sbatch verify.sbatch summer_validation
+```
+
+A date is selected only if all nine groups are present with exactly the
+expected field counts. If more dates arrive from the archive later, re-run
+`select_summer` and then the same four commands: every stage skips what already
+validates, so only the new dates are produced.
+
+The summer block keeps its own directories under `validation/`: `ic_members/`,
+`native_n320/` and `derived_o320/`, with the same shapes as the production
+areas.
+
+## A note on the output GRIB headers
+
+The regenerated fields identify themselves as class `ai`, stream `enfo`, type
+`pf`, expver `rgn2`, generating process identifier 2, with the member number in
+`number` and the accumulated fields carrying `stepType` `accum` from step 0.
+
+Two things about that encoding were established by experiment rather than
+assumed, and both are worth knowing before anyone edits it.
+
+The `number` key cannot simply be set. The templates anemoi falls back on for
+variables that are not in the input are deterministic analyses, whose product
+definition template has no room for an ensemble member, and eccodes rejects
+`number` outright with "Key/value not found". The encoding therefore sets
+`eps: 1` first, which moves the message onto an ensemble product definition;
+anemoi applies keys in the order given by `ORDERING` in `grib/encoding.py`,
+which puts `eps` before `number`, so this ordering is guaranteed rather than
+lucky.
+
+The model name is not in the headers at all. eccodes 2.47.0 has no `model` key
+and rejects both `model` and `modelName`. The name `aifs-ens` is recorded in
+every manifest instead, under `model`, alongside `model_encoded_in_grib: false`
+so that the gap is explicit. If a later eccodes gains the key, add it to the
+encoding dictionary in `run_forecasts.base_config`.
