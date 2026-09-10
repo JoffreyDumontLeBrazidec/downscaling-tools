@@ -89,7 +89,8 @@ def main():
     p.add_argument("--expect-starts", type=int, default=486)
     p.add_argument("--members", type=int, default=10)
     p.add_argument("--no-boundary", action="store_true",
-                   help="skip the 12 May 2026 boundary gate (the fixture holds only January)")
+                   help="the early half is only a block of the period, not all of it: skip the "
+                        "start-contiguity and 12 May 2026 boundary gates")
     args = p.parse_args()
 
     view = yaml.safe_load(open(args.view))
@@ -139,9 +140,14 @@ def main():
         check(len(set(pairs)) == len(pairs), "every (start, lead) pair is used exactly once")
         starts = sorted({datetime.datetime.fromisoformat(s) for s, _ in pairs})
         check(len(starts) == args.expect_starts, f"{args.expect_starts} distinct forecast starts (got {len(starts)})")
-        start_gaps = {(b - a) for a, b in zip(starts, starts[1:])}
-        check(start_gaps == {datetime.timedelta(hours=12)},
-              f"the union of starts is contiguous at 12 h (gaps seen: {sorted(start_gaps)})")
+        # Contiguity of the starts and the 12 May boundary are both properties of the FULL early
+        # period, so they are skipped together when the early half is only a block of it.
+        if args.no_boundary:
+            print("SKIP  start-contiguity gate (the early half is only a block of the period)")
+        else:
+            start_gaps = {(b - a) for a, b in zip(starts, starts[1:])}
+            check(start_gaps == {datetime.timedelta(hours=12)},
+                  f"the union of starts is contiguous at 12 h (gaps seen: {sorted(start_gaps)})")
 
         # the 12 May 2026 boundary
         if args.no_boundary:

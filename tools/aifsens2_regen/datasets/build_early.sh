@@ -150,7 +150,7 @@ for R in $RECIPES; do
   echo "=== INSPECT \$N"
   anemoi-datasets inspect \$N.zarr | head -30
 done
-python $S/verify_early.py --dir $DEST --suffix "$SUFFIX"
+python $S/verify_early.py --dir $DEST --suffix="$SUFFIX"
 echo "EARLY_VERIFY_RC=\$?"
 EOS
 

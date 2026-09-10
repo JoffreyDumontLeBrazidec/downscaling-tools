@@ -1,7 +1,7 @@
 From 0b82aeb8ca6ef8691aaaf3567fba1ef44c63ea24 Mon Sep 17 00:00:00 2001
 From: Joffrey Dumont Le Brazidec <joffreydumont95@gmail.com>
 Date: Thu, 10 Sep 2026 07:38:10 +0000
-Subject: [PATCH] fake_forecasts: optional synthetic-axis origin, and a
+Subject: [PATCH 1/2] fake_forecasts: optional synthetic-axis origin, and a
  fake_grib source
 
 Two small additions on top of feature/aifs-analysis-target, needed to build a second
