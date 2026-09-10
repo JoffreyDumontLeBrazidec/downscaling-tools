@@ -1,6 +1,7 @@
 """Check that the forecasts are reproducible and that members are distinct.
 
-Three questions are answered, all of them on the GPU, one at a time.
+Three questions are answered.  Only the first needs a GPU, so the other two can
+be re-run cheaply with --skip-repeat.
 
 First, does the same start and member run twice give the same numbers?  The two
 runs happen in separate processes so that nothing can be carried over in
@@ -14,14 +15,21 @@ A pipeline that quietly fed the same initial condition to every member would
 pass every field-count check ever written, so this compares fields directly.
 
 Third, and most important, was member m started from member m's own initial
-condition?  This compares the two-metre temperature in the member's initial
-condition at the analysis time against the same field in the runner's input
-state, and also confirms that a member's forecast is closer to its own initial
-condition than to another member's.
+condition?  Comparing a forecast against an analysis cannot answer that: in six
+hours the two-metre temperature moves by about 3.6 K in the root mean square
+while two members' analyses differ by only about 0.9 K, so the comparison is
+swamped by the common evolution.  The question is instead asked in terms of
+differences between members, where that common evolution cancels.  If member i
+started from analysis i, the way member i's forecast differs from member j's
+must carry the imprint of the way analysis i differs from analysis j, so the
+two difference fields should correlate strongly and positively.  Two
+deliberately mismatched pairings are computed as controls, and the matched pair
+has to give the clearly largest correlation.
 
 Usage
 -----
     python -m aifsens2_regen.reproducibility --block pilot_20260101 --start 20260101_00
+    python -m aifsens2_regen.reproducibility --block pilot_20260101 --skip-repeat
 """
 
 from __future__ import annotations
@@ -35,12 +43,19 @@ import sys
 from . import calendar as cal
 from . import gribspec as spec
 from .assemble import members_root
-from .common import DEFAULT_ROOT, atomic_write_json, log, move_aside, sha256_file
+from .common import DEFAULT_ROOT, atomic_write_json, log, read_json, sha256_file
 from .regrid import native_root_for
 
 
-def read_field(path: str, param: int, step: int | None, level: int = 0):
-    """Read one field's values from a GRIB file as a numpy array."""
+def read_field(path: str, param: int, step: int | None, level: int = 0, latest: bool = False):
+    """Read one field's values from a GRIB file as a numpy array.
+
+    With latest=True the message with the greatest date and time is returned
+    rather than the first match.  That matters for the initial-condition files,
+    which hold two analysis times: the analysis at the start is the later of the
+    two, and taking the first match would silently give the analysis six hours
+    earlier instead.
+    """
     import numpy as np
     from eccodes import (
         codes_get,
@@ -49,6 +64,7 @@ def read_field(path: str, param: int, step: int | None, level: int = 0):
         codes_release,
     )
 
+    best_stamp = None
     found = None
     with open(path, "rb") as f:
         while True:
@@ -56,13 +72,35 @@ def read_field(path: str, param: int, step: int | None, level: int = 0):
             if h is None:
                 break
             try:
-                if codes_get(h, "paramId") == param and codes_get(h, "level") == level:
-                    if step is None or codes_get(h, "endStep") == step:
-                        found = np.array(codes_get_values(h))
-                        break
+                if codes_get(h, "paramId") != param or codes_get(h, "level") != level:
+                    continue
+                if step is not None and codes_get(h, "endStep") != step:
+                    continue
+                stamp = (codes_get(h, "dataDate"), codes_get(h, "dataTime"))
+                if not latest:
+                    found = np.array(codes_get_values(h))
+                    break
+                if best_stamp is None or stamp > best_stamp:
+                    best_stamp, found = stamp, np.array(codes_get_values(h))
             finally:
                 codes_release(h)
     return found
+
+
+def correlation(x, y) -> float:
+    """Pearson correlation of two fields, ignoring points that are not finite."""
+    import numpy as np
+
+    m = np.isfinite(x) & np.isfinite(y)
+    if m.sum() < 2:
+        return float("nan")
+    a, b = x[m], y[m]
+    a = a - a.mean()
+    b = b - b.mean()
+    denom = np.sqrt((a * a).sum() * (b * b).sum())
+    if denom == 0:
+        return float("nan")
+    return float((a * b).sum() / denom)
 
 
 def compare_files(a: str, b: str) -> dict:
@@ -143,6 +181,12 @@ def main(argv=None) -> int:
     p.add_argument("--start", help="which start to test, as YYYYMMDD_HH; default the first")
     p.add_argument("--member", type=int, default=1)
     p.add_argument("--other-member", type=int, default=2)
+    p.add_argument(
+        "--skip-repeat",
+        action="store_true",
+        help="do not rerun the forecast twice; keep the earlier result and run "
+             "only the checks that read existing files, which need no GPU",
+    )
     a = p.parse_args(argv)
 
     starts = cal.block_starts(a.block, a.root)
@@ -160,29 +204,41 @@ def main(argv=None) -> int:
     report: dict = {"block": a.block, "start": key, "member": a.member}
 
     # ---- 1. the same forecast twice, in two separate processes ----
-    first = run_single(a.block, a.root, key, a.member, os.path.join(check_root, "run_a"))
-    second = run_single(a.block, a.root, key, a.member, os.path.join(check_root, "run_b"))
-    sha_a, sha_b = sha256_file(first), sha256_file(second)
-    same_bytes = sha_a == sha_b
-    cmp_repeat = compare_files(first, second)
-    report["repeat_run"] = dict(
-        first=first, second=second, sha256_first=sha_a, sha256_second=sha_b,
-        whole_file_identical=same_bytes, **cmp_repeat,
-    )
-    if same_bytes:
-        log(
-            f"REPRODUCIBILITY bit-for-bit identical: the two runs produced the same "
-            f"{cmp_repeat['fields_compared']} fields and the same file checksum {sha_a}"
+    # This is the only part that needs a GPU.  With --skip-repeat the earlier
+    # result is carried over from the saved report, so the checks that only
+    # read files can be re-run on a CPU node.
+    out = os.path.join(a.root, "manifests", f"reproducibility_{a.block}.json")
+    if a.skip_repeat:
+        earlier = read_json(out, {}) or {}
+        report["repeat_run"] = earlier.get(
+            "repeat_run", {"note": "not run, and no earlier result was saved"}
         )
+        log("skipping the repeat run and keeping the earlier result")
     else:
-        log(
-            f"REPRODUCIBILITY not bit-for-bit: {cmp_repeat['fields_bit_identical']} of "
-            f"{cmp_repeat['fields_compared']} fields are identical, the largest "
-            f"absolute difference is {cmp_repeat['max_absolute_difference']:.3e} in "
-            f"{cmp_repeat['max_absolute_difference_field']}; this is CUDA "
-            f"non-determinism, not a seeding failure, if the difference is at the "
-            f"level of floating point rounding"
+        first = run_single(a.block, a.root, key, a.member, os.path.join(check_root, "run_a"))
+        second = run_single(a.block, a.root, key, a.member, os.path.join(check_root, "run_b"))
+        sha_a, sha_b = sha256_file(first), sha256_file(second)
+        same_bytes = sha_a == sha_b
+        cmp_repeat = compare_files(first, second)
+        report["repeat_run"] = dict(
+            first=first, second=second, sha256_first=sha_a, sha256_second=sha_b,
+            whole_file_identical=same_bytes, **cmp_repeat,
         )
+        if same_bytes:
+            log(
+                f"REPRODUCIBILITY bit-for-bit identical: the two runs produced the "
+                f"same {cmp_repeat['fields_compared']} fields and the same file "
+                f"checksum {sha_a}"
+            )
+        else:
+            log(
+                f"REPRODUCIBILITY not bit-for-bit: {cmp_repeat['fields_bit_identical']} "
+                f"of {cmp_repeat['fields_compared']} fields are identical, the largest "
+                f"absolute difference is {cmp_repeat['max_absolute_difference']:.3e} in "
+                f"{cmp_repeat['max_absolute_difference_field']}; this is CUDA "
+                f"non-determinism, not a seeding failure, if the difference is at the "
+                f"level of floating point rounding"
+            )
 
     # ---- 2. two members, and two starts, must differ ----
     mine = os.path.join(nat_root, key, f"m{a.member:02d}.grib")
@@ -211,43 +267,69 @@ def main(argv=None) -> int:
             )
 
     # ---- 3. member m really started from member m's initial condition ----
-    # The two-metre temperature at the analysis time is compared between the
-    # initial condition files and the six-hour forecasts.  A forecast six hours
-    # ahead stays close to its own analysis and further from another member's,
-    # so the ordering of these two distances tells us which analysis was used.
-    import numpy as np
-
-    prov = {}
+    #
+    # Comparing a forecast against an analysis directly does not answer this.
+    # In six hours the two-metre temperature moves by about 3.6 K in the root
+    # mean square, while two ensemble members' analyses differ by only about
+    # 0.9 K, so both distances come out nearly equal and the comparison decides
+    # nothing.  That was the first attempt and it produced a meaningless
+    # "suspect" verdict.
+    #
+    # The question has to be asked in terms of differences between members,
+    # where the common evolution cancels out.  If member i really started from
+    # analysis i, then the way member i's forecast differs from member j's must
+    # carry the imprint of the way analysis i differs from analysis j.  So the
+    # analysis difference field and the forecast difference field should be
+    # strongly and positively correlated.
+    #
+    # Two controls are computed alongside it.  Pairing the analysis difference
+    # between members 1 and 2 with the forecast difference between members 1
+    # and a third member tests whether the correlation is specific to the right
+    # pair, or merely reflects some structure shared by every member.  The
+    # correct pairing must give the clearly largest correlation.
     t2m = 167
-    ic_mine = read_field(os.path.join(ic_root, key, f"m{a.member:02d}.grib"), t2m, None)
-    ic_other = read_field(os.path.join(ic_root, key, f"m{a.other_member:02d}.grib"), t2m, None)
-    fc_mine = read_field(mine, t2m, spec.LEAD_STEPS[0]) if os.path.exists(mine) else None
+    third = next(m for m in spec.MEMBERS if m not in (a.member, a.other_member))
 
-    if ic_mine is not None and ic_other is not None and fc_mine is not None:
-        d_own = float(np.sqrt(np.nanmean((fc_mine - ic_mine) ** 2)))
-        d_other = float(np.sqrt(np.nanmean((fc_mine - ic_other) ** 2)))
-        ic_spread = float(np.sqrt(np.nanmean((ic_mine - ic_other) ** 2)))
+    def ic_field(m):
+        return read_field(
+            os.path.join(ic_root, key, f"m{m:02d}.grib"), t2m, None, latest=True
+        )
+
+    def fc_field(m):
+        p = os.path.join(nat_root, key, f"m{m:02d}.grib")
+        return read_field(p, t2m, spec.LEAD_STEPS[0]) if os.path.exists(p) else None
+
+    A_i, A_j, A_k = ic_field(a.member), ic_field(a.other_member), ic_field(third)
+    F_i, F_j, F_k = fc_field(a.member), fc_field(a.other_member), fc_field(third)
+
+    if all(v is not None for v in (A_i, A_j, A_k, F_i, F_j, F_k)):
+        matched = correlation(A_i - A_j, F_i - F_j)
+        control_one = correlation(A_i - A_j, F_i - F_k)
+        control_two = correlation(A_i - A_k, F_i - F_j)
+        ok = matched > 0.3 and matched > control_one and matched > control_two
         prov = dict(
-            rms_forecast_minus_own_initial_condition=d_own,
-            rms_forecast_minus_other_initial_condition=d_other,
-            rms_between_the_two_initial_conditions=ic_spread,
+            variable="2t",
+            members=[a.member, a.other_member, third],
+            correlation_matched_pair=matched,
+            correlation_control_mismatched_forecast=control_one,
+            correlation_control_mismatched_analysis=control_two,
             verdict=(
-                "member started from its own initial condition"
-                if d_own < d_other
-                else "SUSPECT: the forecast is closer to the other member's analysis"
+                "member m's forecast carries member m's analysis perturbation"
+                if ok
+                else "SUSPECT: the forecast perturbation does not follow the analysis "
+                "perturbation for the matched pair"
             ),
         )
         log(
-            f"PROVENANCE member {a.member} at {key}: the six-hour forecast is "
-            f"{d_own:.3f} K from its own analysis and {d_other:.3f} K from member "
-            f"{a.other_member}'s analysis (the two analyses differ by {ic_spread:.3f} K). "
-            f"{prov['verdict']}"
+            f"PROVENANCE at {key}: the two-metre temperature difference between "
+            f"members {a.member} and {a.other_member} correlates at {matched:.3f} "
+            f"between their analyses and their six-hour forecasts. The mismatched "
+            f"controls give {control_one:.3f} and {control_two:.3f}. {prov['verdict']}"
         )
     else:
         prov = {"note": "could not read the two-metre temperature from every file"}
     report["provenance"] = prov
 
-    out = os.path.join(a.root, "manifests", f"reproducibility_{a.block}.json")
     atomic_write_json(out, report)
     log(f"reproducibility report written to {out}")
     print(json.dumps({k: v for k, v in report.items() if k != "repeat_run"}, indent=2, default=str))
