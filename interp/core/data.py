@@ -130,8 +130,13 @@ EVENTS: dict[str, dict] = {
     # the o2560 hres grid); inject_truth_grib fills the tp channel from it.
     # cp has no truth source and stays zero-filled (recorded by the caller).
     "sep2025_o1280_o2560": {
-        "bundle_dir": ("/home/ecm5702/scratch/eval/o1280_o2560_9d6f73_unified_full_6h/"
-                       "bundles_with_y"),
+        # Repointed 2026-09-11: the scratch run root was deleted as part of the
+        # storage-capacity reclaim. These 1000 bundles (3193.1 GB) were verified
+        # identical in perm first - same names, same byte sizes, no mismatches -
+        # and perm is the durable location, whereas scratch is purged on age.
+        # The neighbouring truth_grib_tpl already pointed at the same perm tree.
+        "bundle_dir": ("/home/ecm5702/perm/data/input_data/o1280_o2560/"
+                       "humberto_6h_20250926_20250930/bundles_with_y"),
         "dates": ["20250926"],
         "members": ["01"],
         "steps": ["024"],
