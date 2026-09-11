@@ -40,6 +40,112 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
     return result
 
 
+def _sampler_keys(config: dict) -> set:
+    """Keys of `predict.sampler` in a config, or an empty set when there is none."""
+    predict = config.get("predict")
+    if not isinstance(predict, dict):
+        return set()
+    sampler = predict.get("sampler")
+    return set(sampler) if isinstance(sampler, dict) else set()
+
+
+def _warn_on_wholesale_sampler_replacement(
+    base_config: dict, child_config: dict, lane_name: str
+) -> None:
+    """Advisory guard for a child that restates a full `predict.sampler` block.
+
+    The top-level merge performed by `_deep_merge` is two levels deep, while the
+    sampler sits three levels down at `predict.sampler`. A child that sets any key
+    under `predict.sampler` therefore REPLACES the base sampler block wholesale, and
+    every base key it does not restate is dropped. Those dropped keys are later
+    filled from the checkpoint's own inference defaults rather than from the base
+    lane, so the result is a silent mixture and not an error. This warns about that
+    and points at `predict.sampler_overrides`, which merges key by key instead.
+
+    This only ever warns. The project has a standing rule against blocking
+    validators, so the whole body is wrapped so that a bug in the check itself can
+    never stop a run.
+    """
+    try:
+        base_keys = _sampler_keys(base_config)
+        child_keys = _sampler_keys(child_config)
+        if not base_keys or not child_keys:
+            return
+        # Keys the child restores through `sampler_overrides` are not dropped.
+        child_predict = child_config.get("predict")
+        if isinstance(child_predict, dict):
+            child_overrides = child_predict.get("sampler_overrides")
+            if isinstance(child_overrides, dict):
+                child_keys = child_keys | set(child_overrides)
+        dropped = sorted(base_keys - child_keys)
+        if not dropped:
+            return
+        print(
+            f"WARNING [load_lane {lane_name}]: 'predict.sampler' restates the sampler "
+            f"block, which replaces the base block wholesale, so base key(s) {dropped} "
+            f"are dropped here and will be filled from the checkpoint's inference "
+            f"defaults instead of from the base lane. If you meant to change only the "
+            f"keys you named, use 'predict.sampler_overrides', which merges key by key.",
+            file=sys.stderr,
+        )
+    except Exception as exc:  # noqa: BLE001 - advisory only, must never stop a run
+        print(
+            f"WARNING [load_lane {lane_name}]: sampler-replacement check failed "
+            f"({type(exc).__name__}: {exc}); continuing.",
+            file=sys.stderr,
+        )
+
+
+def _apply_sampler_overrides(config: dict, lane_name: str) -> None:
+    """Fold `predict.sampler_overrides` key by key onto the resolved sampler.
+
+    `predict.sampler_overrides` is the merging counterpart of `predict.sampler`. Its
+    keys are applied one by one to the sampler resolved from the base chain, so every
+    key the child does not name keeps the value it inherited. `predict.sampler` is
+    left exactly as it was, replacing the base block wholesale, because all existing
+    lane files depend on that behaviour.
+
+    DECISION, both keys present in one config: `predict.sampler` is applied first, as
+    a wholesale replacement of the base block (this already happened in `_deep_merge`
+    by the time we get here), and `predict.sampler_overrides` is then merged on top of
+    that result. So `sampler` decides the block and `sampler_overrides` adjusts
+    individual keys within it, and `sampler_overrides` wins on any key both name.
+
+    The key is consumed at each level of the base chain, so a lane that is itself used
+    as a base hands its successors an already resolved `predict.sampler` and never
+    re-applies its own overrides further down the chain.
+
+    When `predict.sampler_overrides` is absent this is a no-op, which is what keeps
+    every existing lane resolving bit-exactly as it did before.
+    """
+    predict = config.get("predict")
+    if not isinstance(predict, dict) or "sampler_overrides" not in predict:
+        return
+    predict = dict(predict)  # never mutate a dict shared with a base config
+    overrides = predict.pop("sampler_overrides")
+    config["predict"] = predict
+    if not isinstance(overrides, dict):
+        print(
+            f"WARNING [load_lane {lane_name}]: 'predict.sampler_overrides' must be a "
+            f"mapping of sampler key to value, got {type(overrides).__name__}; "
+            f"ignoring it and keeping the inherited sampler.",
+            file=sys.stderr,
+        )
+        return
+    sampler = predict.get("sampler")
+    sampler = dict(sampler) if isinstance(sampler, dict) else {}
+    if not sampler:
+        print(
+            f"WARNING [load_lane {lane_name}]: 'predict.sampler_overrides' is set but "
+            f"no 'predict.sampler' was inherited or declared, so the overrides become "
+            f"the whole sampler block; unnamed keys will come from the checkpoint's "
+            f"inference defaults.",
+            file=sys.stderr,
+        )
+    sampler.update(overrides)
+    predict["sampler"] = sampler
+
+
 def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open() as f:
         data = yaml.safe_load(f)
@@ -220,9 +326,14 @@ def load_lane(name: str, overrides: dict | None = None) -> dict:
     config = _load_yaml(path)
     if "base" in config:
         base_config = load_lane(config.pop("base"))
+        _warn_on_wholesale_sampler_replacement(base_config, config, name)
         config = _deep_merge(base_config, config)
     if overrides:
         config = _deep_merge(config, overrides)
+    # Fold `predict.sampler_overrides` onto the sampler resolved from the base chain
+    # (and from any programmatic `overrides`) before validation, so the key is fully
+    # consumed here and never reaches the rest of the framework.
+    _apply_sampler_overrides(config, name)
     _apply_canonical_anemoi_reference(config, name)
     _validate_lane(config, path)
     return config
