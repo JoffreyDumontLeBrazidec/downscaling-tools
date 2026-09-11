@@ -37,8 +37,17 @@ TIMES="0000 0600 1200 1800"
 
 BLOCKS="202602 202603 202604 202605"
 declare -A ASM=( [202602]=35425645 [202603]=35425679 [202604]=35425700 [202605]=35426012 )
-# retrieval jobs currently responsible for each block (atm and wave arrays, comma separated)
-declare -A LIVE=( [202602]=35597022,35701429 [202603]=35597030,35701430 [202604]=35701524 [202605]=35701526 )
+# Retrieval jobs currently responsible for each block, comma separated. The authority is the file
+# $RAW/<block>/.live_jobs, so that jobs submitted by hand from outside this watcher are picked up
+# without restarting it. The values below are only the fallback when that file does not exist.
+declare -A LIVE=( [202602]=35597022 [202603]="" [202604]=35701524 [202605]=35701526 )
+
+live_ids() {
+    local b=$1 f="$RAW/$1/.live_jobs"
+    if [ -s "$f" ]; then tr -d " \n" < "$f"; else echo "${LIVE[$b]}"; fi
+}
+
+set_live_ids() { printf '%s' "$2" > "$RAW/$1/.live_jobs"; }
 declare -A ROUNDS=( [202602]=0 [202603]=0 [202604]=0 [202605]=0 )
 
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
@@ -61,7 +70,7 @@ live_count() {
 }
 
 log "watcher started; the four assemblies are held and are released only when a block is complete"
-for b in $BLOCKS; do log "  $b assembly ${ASM[$b]} tracked retrieval jobs ${LIVE[$b]}"; done
+for b in $BLOCKS; do log "  $b assembly ${ASM[$b]} tracked retrieval jobs $(live_ids "$b")"; done
 
 remaining="$BLOCKS"
 while [ -n "$remaining" ]; do
@@ -74,7 +83,7 @@ while [ -n "$remaining" ]; do
             continue
         fi
         nmiss=$(echo $miss | wc -w)
-        nq=$(live_count "${LIVE[$b]}")
+        nq=$(live_count "$(live_ids "$b")")
         if [ "$nq" -gt 0 ]; then
             log "$b waiting: $nmiss groups missing ($miss ), $nq retrieval jobs still live"
             still="$still $b"
@@ -102,7 +111,7 @@ while [ -n "$remaining" ]; do
             ROUNDS[$b]=$r   # nothing was actually submitted, so do not spend a round on it
             log "$b nothing could be submitted this round; the round counter is unchanged"
         fi
-        LIVE[$b]="$ids"
+        set_live_ids "$b" "$ids"
         still="$still $b"
     done
     remaining="$still"
