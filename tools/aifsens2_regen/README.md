@@ -22,6 +22,7 @@ forecasts.
 | `gribspec.py` | the composition of every file: parameters, levels, field counts, output encoding |
 | `common.py` | shared helpers, including the rule that nothing is ever deleted |
 | `retrieve.py`, `retrieve.sbatch` | stage 1, fetch the initial-condition fields from MARS |
+| `retrieve_chunk.sbatch` | stage 1 again, for a group the archive will not schedule as a whole month |
 | `assemble.py`, `assemble.sbatch` | stage 2, build one 222-field file per start and member |
 | `run_forecasts.py`, `run_forecasts.sbatch` | stage 3, run the model on one GPU |
 | `regrid.py`, `regrid.sbatch` | stage 4, select 68 variables and regrid N320 to O320 |
@@ -114,6 +115,74 @@ project allows only one GPU in use across everything. Chain the next block's
 forecast job behind the previous one with `--dependency=afterany:$FC` rather
 than submitting both at once.
 
+## When the archive will not schedule a monthly request
+
+The retrieval normally asks for a whole month of one group at one time of day
+in a single MARS request. That is the right shape when it works, because it
+mounts each tape once. It does not always work. The archive schedules small
+requests far more readily than large ones, and a request covering a whole month
+is sometimes never assigned a server task at all: the February and March
+surface and pressure-level requests waited more than seven hours without ever
+being picked up, while per-date wave requests for January were served steadily
+the whole time.
+
+For that case `retrieve.py` has a second mode. It takes one block, one group
+and one input time of day, and cuts the dates into contiguous ranges of a few
+days, eight by default, which is about four chunks per calendar month. Each
+range becomes one MARS request. The requests are built by the same function
+family and from the same group definitions in `gribspec.py` as the monthly
+ones; the `date=` line is the only line of the MARS request that differs. The
+expected field count of a chunk is `per_date_per_time` times the number of
+dates in that chunk, computed the same way as for a month.
+
+Ask for the chunk list first, then submit an array with one task per chunk:
+
+```bash
+cd /home/ecm5702/dev/downscaling-tools-aifsens2-regen/tools/aifsens2_regen
+source env.sh
+
+# What the chunks would be.  Nothing is retrieved.
+python -m aifsens2_regen.retrieve --block 202602 --group pl --time 0000 --list
+
+# Fetch them, one array task per chunk, two at a time.
+sbatch --array=1-4%2 retrieve_chunk.sbatch 202602 pl 0000
+
+# How far it got.
+python -m aifsens2_regen.retrieve --block 202602 --group pl --time 0000 --check
+```
+
+The arguments of `retrieve_chunk.sbatch` are positional, like those of
+`retrieve.sbatch`, because the ECMWF `sbatch` wrapper does not reliably carry
+the caller's environment into the job. They are the block, the group, the input
+time of day, and optionally the chunk width in days. A fifth argument overrides
+the data root and exists only so that a trial run can be kept out of the
+production directories.
+
+The job asks for a time limit of one day rather than the twelve hours the
+monthly script uses. A request can sit in the archive queue for more than
+twelve hours before a single field arrives, and the twelve-hour limit has
+already killed requests that were doing nothing but waiting.
+
+Each chunk is written to
+`ic/raw/<block>/<group>_<time>_bychunk/<group>_<time>_<first>_<last>.grib`, one
+file per chunk, under a temporary name that is renamed into place only after
+the field count has been checked. A chunk whose file already holds exactly the
+expected number of fields is skipped, so the array can be resubmitted as often
+as needed. The grouped monthly file `ic/raw/<block>/<group>_<time>.grib` is
+never written by this mode.
+
+Stage two needs no change to read these files: `assemble.split_raw` already
+globs both `<block>/*.grib` and `<block>/*/*.grib` and ignores directories
+whose name begins with `_aside_`.
+
+**Never run the chunked mode for a group whose grouped monthly request is still
+queued or running.** Both write into the same block directory and stage two
+reads every GRIB file it finds there, so the same fields would appear twice in
+its input. Cancel the monthly request, or wait for it to finish and check
+whether it succeeded, before submitting the chunks. For the same reason, if a
+monthly file for that group and time already exists and is complete, there is
+nothing to chunk.
+
 ## Restarting after an interruption
 
 Resubmit the same command. Every stage is idempotent, and idempotent in the
@@ -121,7 +190,8 @@ strong sense that it re-checks the file rather than trusting that it exists:
 
 - `retrieve` skips a request whose target file already has exactly the expected
   number of fields, and retries up to three times otherwise, with a ten-minute
-  pause between attempts.
+  pause between attempts. This holds for the chunked mode too: each chunk is
+  judged on its own file.
 - `assemble` re-validates each member file it finds and rebuilds any that fails.
 - `run_forecasts` re-validates each output file and skips only those that pass;
   it reloads the checkpoint once and continues through the rest of the block.
