@@ -475,6 +475,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # --- config ---
+    p_cfg = subparsers.add_parser(
+        "config",
+        help="Print a lane's FULLY RESOLVED configuration (after the base: chain is merged).",
+        description=(
+            "Resolve a lane YAML the way every other subcommand resolves it — following "
+            "its base: chain and merging each level — and print the result. This is the "
+            "answer to 'what will actually be used', which a chain of base: lookups does "
+            "not make obvious. Reads configuration only: it never predicts, scores or "
+            "submits anything. Loader warnings (for example a sampler block that drops "
+            "keys from its base) go to stderr, so the printed configuration stays clean "
+            "and pipeable."
+        ),
+    )
+    p_cfg.add_argument("lane", nargs="?", default=None, help="Lane to resolve. Omit when using --samplers.")
+    p_cfg.add_argument("--sampler", action="store_true", default=False, help="Print only predict.sampler.")
+    p_cfg.add_argument(
+        "--samplers", action="store_true", default=False,
+        help="Print the sampler of the four canonical lanes side by side, and say which keys differ.",
+    )
+    p_cfg.add_argument("--json", dest="as_json", action="store_true", default=False, help="Emit JSON instead of YAML.")
+
     return parser
 
 
@@ -1533,6 +1555,67 @@ def _assert_metview_for_regridded_tc(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+CANONICAL_LANES = ("o48_o96", "o96_o320", "o320_o1280", "o1280_o2560")
+
+
+def _run_config_subcommand(args) -> int:
+    """Print a lane's fully resolved configuration, or the canonical lane samplers.
+
+    Read-only. The lane YAMLs are the authority for what a run uses; this prints what
+    they resolve to so nobody has to follow a base: chain by hand or trust a number
+    remembered from somewhere else.
+    """
+    import json as _json
+    import yaml as _yaml
+
+    def _emit(obj) -> None:
+        if args.as_json:
+            print(_json.dumps(obj, indent=2, sort_keys=True, default=str))
+        else:
+            print(_yaml.safe_dump(obj, sort_keys=True, default_flow_style=False).rstrip())
+
+    if args.samplers:
+        resolved = {}
+        for lane in CANONICAL_LANES:
+            try:
+                resolved[lane] = (load_lane(lane).get("predict") or {}).get("sampler") or {}
+            except Exception as exc:  # a broken lane must not hide the others
+                resolved[lane] = {"ERROR": f"{type(exc).__name__}: {exc}"}
+        if args.as_json:
+            _emit(resolved)
+            return 0
+        keys = sorted({k for v in resolved.values() for k in v})
+        shared = {k: resolved[CANONICAL_LANES[0]].get(k) for k in keys
+                  if len({repr(resolved[l].get(k)) for l in CANONICAL_LANES}) == 1}
+        differing = [k for k in keys if k not in shared]
+        width = max((len(k) for k in keys), default=12) + 2
+        print("Canonical lane samplers, resolved from eval/config/lanes/<lane>.yaml")
+        print("(the YAML files are the authority; this is printed from them, not remembered)\n")
+        print("differing across lanes:")
+        print(" " * width + "".join(f"{l:>18}" for l in CANONICAL_LANES))
+        for k in differing:
+            print(f"{k:<{width}}" + "".join(f"{str(resolved[l].get(k)):>18}" for l in CANONICAL_LANES))
+        if shared:
+            print("\nidentical on all four lanes:")
+            for k, v in sorted(shared.items()):
+                print(f"  {k} = {v}")
+        return 0
+
+    if not args.lane:
+        raise SystemExit("config: give a lane name, or use --samplers for the four canonical lanes.")
+    try:
+        cfg = load_lane(args.lane)
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            f"Lane config not found: '{args.lane}'. "
+            f"Available lanes are YAML files in eval/config/lanes/. Error: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise SystemExit(f"Failed to load lane config '{args.lane}': {exc}") from exc
+    _emit((cfg.get("predict") or {}).get("sampler") or {} if args.sampler else cfg)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     """Parse args, resolve config, dispatch to subcommand."""
     parser = build_parser()
@@ -1626,6 +1709,10 @@ def main(argv: list[str] | None = None) -> None:
             forwarded += ["--ckpt-label", args.ckpt_label]
         videogen_main(forwarded)
         return
+
+    # --- config subcommand (reads configuration only; no host config needed) ---
+    if args.subcommand == "config":
+        raise SystemExit(_run_config_subcommand(args))
 
     # --- Resolve config ---
     lane_name = args.lane
