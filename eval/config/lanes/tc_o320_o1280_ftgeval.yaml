@@ -4,7 +4,18 @@
 base: tc_o320_o1280_acok
 default_host: atos_ac_pristine
 predict:
-  sampler:
+  # MIGRATED 2026-09-11 from `sampler:` to `sampler_overrides:`.
+  # `sampler:` REPLACES the base sampler block wholesale (the loader merge is two
+  # levels deep and the sampler sits three levels down), so this file previously
+  # resolved to only the 3 key(s) named below; every other sampler key was absent
+  # and was filled from the CHECKPOINT's inference defaults instead of from the base
+  # lane. `sampler_overrides:` merges key by key, so the keys below now sit on top of
+  # the fully inherited base sampler. No value named here changed — the migration only
+  # restores the keys that were being dropped.
+  # Rows produced by this file BEFORE 2026-09-11 were computed on the partial
+  # resolution described above; do not assume they are reproducible from it now.
+  # Audit: ~/dev/docs/epics/misc/20260911_sampler_config_drift_audit.md
+  sampler_overrides:
     num_steps: 40
     num_steps_high: 20
     num_steps_low: 20
