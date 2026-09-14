@@ -12,7 +12,10 @@
 #      anemoi-inference copies them onto the output GRIB keys and eccodes refuses them on the
 #      IFS O1280 template (job 36801395, 2026-09-14). The prepml sitecustomize patch of
 #      2026-09-14 drops the listed keys; unset, nothing changes.
-# The lane loader merges only two levels deep, so predict.env is restated in full.
+# The lane loader merges only two levels deep, so predict.env is restated in full, and so is the
+# prepml.input opt-in (grid O320_aifs -> class=ai stream=enfo type=pf grid=O320) plus lead_time:
+# without them a third-level lane silently falls back to the od/eefo input of the base (caught on
+# expver jb9u, 2026-09-14, staged the wrong stream; that expver was cleaned and abandoned).
 # Proof of the route (one date, one member, one lead, local GRIB, no FDB): AC job 36843943.
 base: o320_o1280_prepml_aifs_crps_v2_humberto
 
@@ -27,3 +30,6 @@ predict:
 
 prepml:
   venv: /home/ecm5702/hpcperm/lineages/hres-lead/prepml-wrap
+  input:
+    grid: O320_aifs
+  lead_time: 168h
