@@ -167,3 +167,100 @@ OUTPUT_GENERATING_PROCESS = 2
 # run_forecasts.base_config and the outputs will carry it.
 OUTPUT_MODEL = "aifs-ens"
 OUTPUT_MODEL_IS_ENCODED = False
+
+
+# --------------------------------------------------------------------------
+# The broad 108-variable selection.
+#
+# The summer half of the campaign is retrieved straight from the MARS archive
+# with a much wider variable list than the 68 above: fifteen instantaneous
+# surface fields, six accumulations, four soil fields on two layers, and the
+# five upper-air fields on fourteen pressure levels with specific humidity on
+# thirteen.  The early half of the campaign does not exist in the archive and
+# has to be built from the regenerated native forecasts instead.  The lists
+# below describe that same broad selection as it appears in the native output,
+# together with the header changes needed to make the regenerated files carry
+# the parameter identifiers that the archive uses.
+#
+# Nothing here touches the 68-variable lists above: the regeneration still
+# reads those, and the two selections live side by side.
+# --------------------------------------------------------------------------
+
+# Fifteen instantaneous surface fields.  The native file puts 10u, 10v, 2t, 2d
+# on typeOfLevel surface rather than heightAboveGround, and tcc on
+# entireAtmosphere, but the shortName is the same either way and the dataset
+# build names its variables from the shortName, so no header change is needed.
+BROAD_PARAM_SFC_INSTANT = [
+    165, 166, 167, 168, 134, 151, 235, 136, 164,
+    186, 187, 188, 260289, 228246, 228247,
+]
+
+# Six accumulated fields, as the native forecast writes them.
+BROAD_PARAM_SFC_ACCUM = [228, 143, 144, 169, 175, 205]
+
+# Four soil fields.  The native file writes them as swvl1, swvl2, stl1 and stl2
+# on typeOfLevel depthBelowLandLayer, levels 0 and 7.
+BROAD_PARAM_SOIL = [39, 40, 139, 170]
+
+# Upper air.  Geopotential, temperature, the two horizontal wind components and
+# the vertical velocity live on all fourteen levels; specific humidity is absent
+# at 10 hPa and therefore lives on thirteen.
+BROAD_PARAM_PL = [129, 130, 131, 132, 135]
+BROAD_LEVELS_PL = [10, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+BROAD_PARAM_Q = [133]
+BROAD_LEVELS_Q = [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+
+BROAD_FIELDS_PER_MEMBER_PER_STEP = (
+    len(BROAD_PARAM_SFC_INSTANT)
+    + len(BROAD_PARAM_SFC_ACCUM)
+    + len(BROAD_PARAM_SOIL)
+    + len(BROAD_PARAM_PL) * len(BROAD_LEVELS_PL)
+    + len(BROAD_PARAM_Q) * len(BROAD_LEVELS_Q)
+)                                                                # 108
+
+BROAD_FIELDS_PER_START = (
+    BROAD_FIELDS_PER_MEMBER_PER_STEP * len(LEAD_STEPS) * len(MEMBERS)
+)                                                                # 2160
+
+# How a native soil field has to be re-encoded so that it matches the archive.
+# The archive holds volumetric soil water as paramId 260199, shortName vsw, and
+# soil temperature as paramId 260360, shortName sot, both on typeOfLevel
+# soilLayer with the layer number as the level.  The value is
+# (new paramId, new level).  The re-encoding also has to raise the message from
+# GRIB edition 1 to edition 2, because neither the parameter nor the level type
+# exists in edition 1.
+BROAD_SOIL_ENCODING = {
+    39: (260199, 1),
+    40: (260199, 2),
+    139: (260360, 1),
+    170: (260360, 2),
+}
+
+# How a native accumulated field has to be renamed so that it matches the
+# archive.  Solar and thermal radiation already agree, so they are absent here.
+BROAD_ACCUM_PARAM_RENAME = {
+    228: 228228,
+    143: 228143,
+    144: 228144,
+    205: 231002,
+}
+
+# The 108 variable names the finished store holds, in the order the store puts
+# them, which is plain alphabetical order of the remapped param_level name.
+# This list is compared against the store metadata as a final check, and it is
+# also what the validation of an O320 file reconstructs from the GRIB headers.
+BROAD_STORE_VARIABLES = [
+    "100u", "100v", "10u", "10v", "2d", "2t", "cp", "fscov", "hcc", "lcc",
+    "mcc", "msl", "q_100", "q_1000", "q_150", "q_200", "q_250", "q_300",
+    "q_400", "q_50", "q_500", "q_600", "q_700", "q_850", "q_925", "rowe",
+    "sf", "skt", "sot_1", "sot_2", "sp", "ssrd", "strd", "t_10", "t_100",
+    "t_1000", "t_150", "t_200", "t_250", "t_300", "t_400", "t_50", "t_500",
+    "t_600", "t_700", "t_850", "t_925", "tcc", "tcw", "tp", "u_10", "u_100",
+    "u_1000", "u_150", "u_200", "u_250", "u_300", "u_400", "u_50", "u_500",
+    "u_600", "u_700", "u_850", "u_925", "v_10", "v_100", "v_1000", "v_150",
+    "v_200", "v_250", "v_300", "v_400", "v_50", "v_500", "v_600", "v_700",
+    "v_850", "v_925", "vsw_1", "vsw_2", "w_10", "w_100", "w_1000", "w_150",
+    "w_200", "w_250", "w_300", "w_400", "w_50", "w_500", "w_600", "w_700",
+    "w_850", "w_925", "z_10", "z_100", "z_1000", "z_150", "z_200", "z_250",
+    "z_300", "z_400", "z_50", "z_500", "z_600", "z_700", "z_850", "z_925",
+]
