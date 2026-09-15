@@ -1,0 +1,19 @@
+# A matched diagnostic screen; the official lane baseline is unchanged.
+base: o320_o1280_prepml_pw30_season_ft400k_ctrl
+predict:
+  dates: ["20250926"]
+  steps: [24, 120]
+  members: [1, 2, 3]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930
+spectra_ecmwf_v2:
+  truncation: 1279
+  template_root: /home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280
+  weather_states: ["10u", "10v", "2t", "msl"]
+  reference_dir: /home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf
+  steps: [24, 120]
+  members: [1]
+  truth_label: ENFO
+  input_label: EEFO
+  input_bundles_dir: /home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930
+  input_template_grib: /home/ecm5702/hpcperm/data/o1280-template.grib
