@@ -1044,10 +1044,13 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                         seed, lam, skw.get("S_churn", "ckpt"),
                         m.get("msl", float("nan")), m.get("wind10m_max", float("nan")))
 
+    # `dumped` is filled on every rank (None values off rank 0), so this branch is taken
+    # consistently and the collective fields_of call below cannot deadlock.
+    truth_fields = fields_of(y_residual_cond) if dumped else None   # collective when sharded
     if dumped and global_rank == 0:
         _, _, lat_hres, lon_hres = eb.coords
         arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np]}
-        for name, vals in (fields_of(y_residual_cond) or {}).items():
+        for name, vals in (truth_fields or {}).items():
             arrs["truth_%s" % name] = vals
         for seed, fields in dumped.items():
             for name, vals in fields.items():
@@ -1570,13 +1573,28 @@ def run_trajectory(args):
 
     gss_arg = gss if sharded else None
 
-    # --- P1 lock-in capture (single-GPU only): per-call box FIELDS per surface target ---
-    fields_of = None
+    # --- P1 lock-in capture: per-call box FIELDS per surface target ---
+    # fields_of(residual) -> {var: (n_box,) float32 numpy} on rank 0, None elsewhere.
+    # In sharded mode it is a COLLECTIVE (it rides on the phys_full_of gather), so
+    # EVERY rank must call it, exactly like metrics_of; only rank 0 keeps the result.
+    # Before 2026-09-21 this was single-GPU only and --lockin was a silent no-op on a
+    # sharded run (jobs 39291117/39291122 on o320->o1280 produced no lock-in payload).
     if not sharded:
         def fields_of(residual):
             phys = reconstruct_phys_box(bundle, recon_state_box, residual, box_t)
             return {name: phys[0, 0, 0, :, i].detach().float().cpu().numpy()
                     for name, i in target_indices.items()}
+    else:
+        def fields_of(residual):
+            pf = phys_full_of(residual)                      # collective; rank 0 gets it
+            if pf is None:
+                return None
+            box = pf[0, 0, 0, box_t, :]                      # (n_box, n_surf) in surf_idx order
+            return {name: box[:, surf_remap[name]].detach().float().cpu().numpy()
+                    for name in target_indices}
+        if getattr(args, "lockin", False) or getattr(args, "dump_fields", 0):
+            LOGGER.info("rank %d: box-field capture is sharded -> one extra surface-target "
+                        "gather per denoiser call, fields kept on rank 0", global_rank)
 
 
     # References (rank 0): target from the full observed y; x_interp from the raw interp.
@@ -1688,8 +1706,10 @@ def run_trajectory(args):
                 if g_tail is not None:
                     rec["grid_tail"] = g_tail
                 _rec.append(rec)
-            if getattr(args, "lockin", False) and fields_of is not None:
-                _lf.append((float(sigma_scalar), fields_of(D)))
+            if getattr(args, "lockin", False):
+                f = fields_of(D)                             # collective; None off rank 0
+                if f is not None:
+                    _lf.append((float(sigma_scalar), f))
 
         torch.manual_seed(int(seed))
         sampler_ctx = force_fp32_sampler() if args.fp32_sampler else contextlib.nullcontext()
@@ -1707,8 +1727,8 @@ def run_trajectory(args):
             if pf is not None:
                 final_grid_tail = tp_tail_stats(pf, surf_remap)
         lockin = None
-        if getattr(args, "lockin", False) and fields_of is not None and global_rank == 0:
-            fin = fields_of(final_resid)
+        fin = fields_of(final_resid) if getattr(args, "lockin", False) else None  # collective
+        if fin is not None and global_rank == 0 and lock_fields:
             tgt = {name: y0[0, 0, 0, box_t, i].float().cpu().numpy()
                    for name, i in target_indices.items()}
 
@@ -1794,7 +1814,9 @@ def main(argv=None):
     add_event_args(p)
     p.add_argument("--lockin", action="store_true",
                    help="P1: capture per-call box fields and emit per-variable lock-in "
-                        "(pattern-correlation vs own final / vs target) curves")
+                        "(pattern-correlation vs own final / vs target) curves; works on "
+                        "single-GPU and grid-sharded runs (one extra surface-target gather "
+                        "per denoiser call when sharded)")
     p.add_argument("--mode", default="trajectory",
                    choices=["trajectory", "seeding", "residual_diag", "guidance", "tp_sweep"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
