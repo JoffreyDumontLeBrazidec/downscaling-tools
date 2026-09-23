@@ -1599,6 +1599,7 @@ def run_trajectory(args):
 
     # References (rank 0): target from the full observed y; x_interp from the raw interp.
     references = None
+    input_box_fields = None                                  # --save-lockin-fields (rank 0)
     if global_rank == 0:
         references = {"target": reduce_box(y0, target_indices, box_t, has_wind)}
         if getattr(args, "grid_tail", False) or args.mode == "tp_sweep":
@@ -1614,6 +1615,9 @@ def run_trajectory(args):
             u, v = fb_xi[:, name2in["10u"]], fb_xi[:, name2in["10v"]]
             xi_metrics["wind10m"] = _q(torch.sqrt(u * u + v * v), CORE_Q_HIGH)
         references["x_interp"] = xi_metrics
+        if getattr(args, "save_lockin_fields", False):
+            input_box_fields = {name: fb_xi[:, name2in[name]].detach().float().cpu().numpy()
+                                for name in target_indices if name in name2in}
 
     # PARITY SELF-CHECK (env-gated, b785 faithfulness debug): reconstruct the TRUE residual
     # -> must equal the observed target storm-core. metrics_of gathers (collective), so ALL
@@ -1690,6 +1694,7 @@ def run_trajectory(args):
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
     trajectories = []
+    saved_lockin = {}                                        # seed -> arrays (rank 0, opt-in)
     for seed in seeds:
         records = []
         lock_fields = []                                     # [(sigma, {var: box np array})]
@@ -1754,6 +1759,14 @@ def run_trajectory(args):
                     "amp_ratio_anom": [float(np.std(f[name] - ref[name]) / max(np.std(fin_a), 1e-12))
                                          for _, f in lock_fields],
                 }
+        if (getattr(args, "save_lockin_fields", False) and global_rank == 0
+                and fin is not None and lock_fields):
+            saved_lockin[int(seed)] = {
+                "sigmas": np.asarray([s for s, _ in lock_fields], dtype=np.float64),
+                "calls": {name: np.stack([f[name] for _, f in lock_fields]).astype(np.float32)
+                          for name in target_indices},
+                "final": {name: np.asarray(fin[name], dtype=np.float32) for name in target_indices},
+            }
         if global_rank == 0:
             trajectories.append({"seed": int(seed), "steps": records, "final": final_metrics,
                                  "final_grid_tail": final_grid_tail, "lockin": lockin})
@@ -1762,6 +1775,24 @@ def run_trajectory(args):
                 LOGGER.info("seed %d: %d denoiser calls, final msl=%.1f hPa "
                             "(last x̂₀ − final = %+.2f hPa; should be small)",
                             seed, len(records), final_metrics.get("msl", float("nan")), d)
+
+    if saved_lockin and global_rank == 0:
+        _, _, lat_hres, lon_hres = eb.coords
+        arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np],
+                "center_lat": np.float64(clat), "center_lon": np.float64(clon % 360.0)}
+        for name, i in target_indices.items():
+            arrs["truth_%s" % name] = y0[0, 0, 0, box_t, i].float().cpu().numpy()
+        for name, vals in (input_box_fields or {}).items():
+            arrs["input_%s" % name] = vals
+        for seed, d in saved_lockin.items():
+            arrs["s%d_sigmas" % seed] = d["sigmas"]
+            for name in d["calls"]:
+                arrs["s%d_calls_%s" % (seed, name)] = d["calls"][name]    # (n_calls, n_box)
+                arrs["s%d_final_%s" % (seed, name)] = d["final"][name]
+        out_path.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path / "lockin_fields.npz", **arrs)
+        LOGGER.info("saved per-call box fields for %d seeds to %s",
+                    len(saved_lockin), out_path / "lockin_fields.npz")
 
     result = None
     if global_rank == 0:
@@ -1817,6 +1848,10 @@ def main(argv=None):
                         "(pattern-correlation vs own final / vs target) curves; works on "
                         "single-GPU and grid-sharded runs (one extra surface-target gather "
                         "per denoiser call when sharded)")
+    p.add_argument("--save-lockin-fields", action="store_true", default=False,
+                   help="with --lockin (trajectory mode): also save the per-call box fields, the "
+                        "final sample, the truth and the input to lockin_fields.npz (rank 0); "
+                        "off by default, sampling is unchanged")
     p.add_argument("--mode", default="trajectory",
                    choices=["trajectory", "seeding", "residual_diag", "guidance", "tp_sweep"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
