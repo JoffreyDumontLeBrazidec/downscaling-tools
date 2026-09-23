@@ -48,7 +48,20 @@ _JUPITER_RUNTIME_RE = re.compile(
 _JUPITER_RUNTIME_LOCAL = "/home/mlx/ai-ml/datasets/"
 
 # Unified multi-ds predict_step kwarg routing.
-_NOISE_SCHEDULER_KEYS = {"num_steps", "sigma_max", "sigma_min", "rho", "schedule_type"}
+# The piecewise keys of experimental_piecewise (ExperimentalSamplerScheduler) are noise-scheduler
+# keys too. The model's predict_step lifts only _LOOSE_NOISE_SCHEDULER_KEYS out of loose kwargs and
+# ignores every other loose key, so the scheduler keys must travel in the noise_scheduler_params
+# dict (bug of 2026-09-22: the o48_o96_fastlane 5+16 split ran as the scheduler default 11+10).
+_LOOSE_NOISE_SCHEDULER_KEYS = {"num_steps", "sigma_max", "sigma_min", "rho", "schedule_type"}
+_NOISE_SCHEDULER_KEYS = _LOOSE_NOISE_SCHEDULER_KEYS | {
+    "sigma_transition",
+    "high_schedule_type",
+    "low_schedule_type",
+    "num_steps_high",
+    "num_steps_low",
+    "rho_high",
+    "rho_low",
+}
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
 
 
@@ -85,17 +98,40 @@ def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group,
         remaining_params = {
             k: v for k, v in extra_args.items() if k not in _NOISE_SCHEDULER_KEYS | _SAMPLER_KEYS
         }
-        if "noise_scheduler_params" in predict_params and noise_scheduler_params:
+        if noise_scheduler_params and _predict_step_accepts(inference_model, "noise_scheduler_params"):
             predict_kwargs["noise_scheduler_params"] = noise_scheduler_params
         else:
+            not_loose = sorted(set(noise_scheduler_params) - _LOOSE_NOISE_SCHEDULER_KEYS)
+            if not_loose:
+                logging.getLogger(__name__).warning(
+                    "predict_step declares no noise_scheduler_params; %s go as loose kwargs and "
+                    "the model may ignore them (scheduler defaults would then apply)",
+                    not_loose,
+                )
             predict_kwargs.update(noise_scheduler_params)
-        if "sampler_params" in predict_params and sampler_params:
+        if sampler_params and _predict_step_accepts(inference_model, "sampler_params"):
             predict_kwargs["sampler_params"] = sampler_params
         else:
             predict_kwargs.update(sampler_params)
         predict_kwargs.update(remaining_params)
 
     return inference_model.predict_step(batch, **predict_kwargs)
+
+
+def _predict_step_accepts(inference_model, name: str) -> bool:
+    """True iff a predict_step on the call path declares ``name``.
+
+    AnemoiModelInterface.predict_step takes only ``**kwargs`` and forwards them to
+    ``model.predict_step``, so the interface's own signature hides the dict parameters the
+    model accepts; look through it at the inner signature.
+    """
+    params = inspect.signature(inference_model.predict_step).parameters
+    if name in params:
+        return True
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return False
+    inner = getattr(getattr(inference_model, "model", None), "predict_step", None)
+    return inner is not None and name in inspect.signature(inner).parameters
 
 
 def _rewrite_dataset_paths_in_place(node):
