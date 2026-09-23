@@ -14,10 +14,17 @@ keeps every centre search on the right storm is taken from the truth ENSEMBLE ME
 msl (its minimum inside the event box, refined like any centre), and the centre
 displacement of every member of every field is its distance to that first guess.
 
-A (date, lead) is kept as a storm case only if the first guess is a closed low
-inside the box: its minimum lies at least ``storm_edge_km`` from the box edge and
-its central pressure is at most ``storm_max_pmin_hpa``. Otherwise the storm has left
-the box (or there is none) and the case is recorded with ``storm_ok = 0``.
+The first guess is followed as a track along the leads of each initial date. At
+the first lead with a storm it is the deepest low of the truth ensemble-mean msl in
+the event box; at every later lead it is the truth ensemble-mean low within
+``track_km_per_24h`` (900 km per 24 h) of the previous lead's first guess. A
+(date, lead) is kept as a storm case only if that first guess is a closed low
+inside the box: its minimum lies at least ``storm_edge_km`` (50 km) from the box
+edge, not on the edge of the track search disc, and its central pressure is at
+most ``storm_max_pmin_hpa`` (1005 hPa). Once the track has been lost (the storm left
+the box or filled), the later leads of that date are not storm cases; this stops a
+second storm (for example the remnant of Idalia in the Franklin box) from being
+taken for the first. Cases that are not storm cases are recorded with storm_ok = 0.
 
 Outputs in the results directory:
   cases.csv       one row per (event, date, lead, field, member)
@@ -159,13 +166,20 @@ def _fmt(v):
 
 
 def measure_file(path: Path, ymd: int, step: int, events, params: StructureParams, *,
-                 arm: str, storm_edge_km: float, storm_max_pmin_hpa: float, members=None):
-    """All case rows (and profiles) of one prediction file."""
+                 arm: str, storm_edge_km: float, storm_max_pmin_hpa: float,
+                 track_km_per_24h: float = 900.0, track=None, members=None):
+    """All case rows (and profiles) of one prediction file.
+
+    ``track`` maps an event name to the first-guess state left by the previous lead
+    of the same initial date: None (no storm yet), "lost" (the storm was followed and
+    then lost) or (lat, lon, step). Returns (rows, profiles, new track).
+    """
+    track = dict(track or {})
     margin = params.rmax_km / 111.0 + 0.5
     data = _read_region(path, events, margin)
     rows, profiles = [], []
     if data is None:
-        return rows, profiles
+        return rows, profiles, track
     lat, lon = data["lat"], data["lon"]
     nmem = data["truth"].shape[0]
     ks = list(range(nmem)) if members is None else list(members)
@@ -178,11 +192,30 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
             continue
         truth_mean = data["truth"][:, :, 2].mean(axis=0)
         fg_params = replace(params, box_edge_km=storm_edge_km)
-        fg = find_centre(lat, lon, truth_mean, ev_mask, bbox=bbox, params=fg_params)
+        state = track.get(ev.name)
+        if state == "lost":
+            fg = {"found": False, "reason": "storm lost at an earlier lead of this date",
+                  "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
+        elif state is None:
+            # first lead with a storm: the deepest closed low of the truth ensemble mean
+            fg = find_centre(lat, lon, truth_mean, ev_mask, bbox=bbox, params=fg_params)
+        else:
+            # follow the first-guess track: the truth ensemble-mean low within the
+            # distance a storm can travel since the previous lead
+            plat, plon, pstep = state
+            radius = track_km_per_24h * max(int(step) - int(pstep), 1) / 24.0
+            fg = find_centre(lat, lon, truth_mean, ev_mask, bbox=bbox, first_guess=(plat, plon),
+                             params=replace(fg_params, search_km=radius))
+            if not fg["found"] and fg["reason"]:
+                fg["reason"] = "first-guess track: " + fg["reason"]
         storm_ok = bool(fg["found"] and fg["pmin_hpa"] <= storm_max_pmin_hpa)
         fg_reason = "" if storm_ok else (fg["reason"] or
                                          f"truth ensemble-mean Pmin {fg['pmin_hpa']:.1f} hPa "
                                          f"> {storm_max_pmin_hpa} hPa")
+        if storm_ok:
+            track[ev.name] = (fg["lat"], fg["lon"], int(step))
+        elif state is not None:
+            track[ev.name] = "lost"
         for fname, _ in FIELDS:
             arr = data[fname]
             for k in ks:
@@ -211,7 +244,7 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
                 row.update(found=1, **{kk: sc[kk] for kk in sc if kk in CASE_COLS})
                 rows.append(row)
                 profiles.append((len(rows) - 1, vt))
-    return rows, profiles
+    return rows, profiles, track
 
 
 def _num(rows, key):
@@ -278,6 +311,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     params = StructureParams(**(eval_config.get("params") or {}))
     storm_edge_km = float(eval_config.get("storm_edge_km", 50.0))
     storm_max_pmin = float(eval_config.get("storm_max_pmin_hpa", 1005.0))
+    track_speed = float(eval_config.get("track_km_per_24h", 900.0))
     n_boot = int(eval_config.get("n_boot", DEFAULT_N_BOOT))
     seed = int(eval_config.get("seed", DEFAULT_SEED))
     bands = eval_config.get("lead_bands") or DEFAULT_BANDS
@@ -299,13 +333,18 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
              _git_commit())
 
     rows, profs = [], []
-    for path, ymd, step in files:
+    tracks: dict[int, dict] = {}
+    # leads in increasing order within each initial date, so the first-guess track
+    # of a date is followed lead after lead
+    for path, ymd, step in sorted(files, key=lambda f: (f[1], f[2])):
         evs = [e for e in events if select_prediction_files_for_event([(path, ymd, step)], e)]
         if not evs:
             continue
         tf = time.time()
-        r, p = measure_file(Path(path), ymd, step, evs, params, arm=arm,
-                            storm_edge_km=storm_edge_km, storm_max_pmin_hpa=storm_max_pmin)
+        r, p, tracks[ymd] = measure_file(
+            Path(path), ymd, step, evs, params, arm=arm, storm_edge_km=storm_edge_km,
+            storm_max_pmin_hpa=storm_max_pmin, track_km_per_24h=track_speed,
+            track=tracks.get(ymd))
         base = len(rows)
         rows += r
         profs += [(base + i, vt) for i, vt in p]
@@ -329,7 +368,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "predictions_dir": str(predictions_dir), "n_files": len(files),
         "files": [str(f[0]) for f in files], "events": [e.name for e in events],
         "params": asdict(params), "storm_edge_km": storm_edge_km,
-        "storm_max_pmin_hpa": storm_max_pmin, "n_boot": n_boot, "seed": seed,
+        "storm_max_pmin_hpa": storm_max_pmin, "track_km_per_24h": track_speed,
+        "n_boot": n_boot, "seed": seed,
         "seconds": time.time() - t0,
     }
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=1, default=str) + "\n")
