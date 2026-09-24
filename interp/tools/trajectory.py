@@ -716,6 +716,57 @@ def _autoguided_denoiser(strong_fn, weak_fn, w, sig_lo, sig_hi):
     return fn
 
 
+# --- channel pinning (M1 probe, 2026-09-24; opt-in via --pin-groups, off by default) ---
+# mass = msl, sp and the geopotential levels; wind = 10u, 10v and the u/v levels (vertical
+# velocity w is in neither group).
+PIN_GROUPS = ("mass", "wind")
+
+
+def pin_group_channels(bundle, group):
+    """(names, indices) of the out_hres MODEL-OUTPUT channels of one pin group, in index
+    order. Same name->index map as get_surface_target_indices, so the indices address the
+    residual / denoiser-output channel axis."""
+    di = bundle.data_indices
+    d = di["out_hres"] if isinstance(di, dict) else di
+    n2i = getattr(d, "name_to_index_output", None)
+    if n2i is None:
+        n2i = d.model.output.name_to_index
+    if group == "mass":
+        names = [n for n in n2i if n in ("msl", "sp") or n.startswith("z_")]
+    elif group == "wind":
+        names = [n for n in n2i if n in ("10u", "10v") or n.startswith("u_") or n.startswith("v_")]
+    else:
+        raise SystemExit("unknown pin group %r (choose from %s)" % (group, PIN_GROUPS))
+    names = sorted(names, key=lambda n: int(n2i[n]))
+    if not names:
+        raise SystemExit("pin group %r matches no output channel" % group)
+    return names, [int(n2i[n]) for n in names]
+
+
+def _pinned_denoiser(base_fn, pin_idx, truth_residual):
+    """Channel pinning: at EVERY call, overwrite the clean estimate D of the pinned output
+    channels with the TRUE residual (same normalised residual space, this rank's shard).
+    The sampler then drives those channels along the true trajectory x0 + sigma*eps while
+    the other channels sample freely at the shared sigma. Unlike the guidance wrappers this
+    one raises on any mismatch: a silently unpinned run would look like a control."""
+    idx = torch.as_tensor(pin_idx, device=truth_residual.device, dtype=torch.long)
+    truth_sel = truth_residual.index_select(-1, idx)
+
+    def _pin(t):
+        if tuple(t.shape) != tuple(truth_residual.shape):
+            raise RuntimeError("pinning: denoiser output shape %s != truth residual shape %s"
+                               % (tuple(t.shape), tuple(truth_residual.shape)))
+        return t.index_copy(-1, idx, truth_sel.to(t.dtype))
+
+    def pinned(*args, **kwargs):
+        D = base_fn(*args, **kwargs)
+        if isinstance(D, dict):
+            return {k: (_pin(v) if k == "out_hres" else v) for k, v in D.items()}
+        return _pin(D)
+
+    return pinned
+
+
 def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_cond, x_hres_cond,
                    y_residual_cond, start_sigma, seed, mcg, gss, free=False,
                    guidance=None, sampler_kwargs=None, denoise_fn=None, sigmas=None):
@@ -819,6 +870,9 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
     save_fields = bool(getattr(args, "save_seeding_fields", False)) and fields_of is not None
     ladders_used = {}
     seed_sigmas = sorted({float(s) for s in args.seed_sigmas})
+    if getattr(args, "seeding_free_only", False):
+        seed_sigmas = []                                 # no restart sweep: free (+ pinned) runs only
+    pin_groups = list(getattr(args, "pin_groups", None) or [])
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
@@ -987,6 +1041,45 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    # --pin-groups: the same free runs (same seeds, ladder, churn) with one channel group's
+    # clean estimate replaced by the true residual at every denoiser call.
+    pinned = {}                                          # group -> {"channels", "finals", ...}
+    pin_fields = {}                                      # (group, seed) -> {var: box array}
+    for group in pin_groups:
+        pnames, pidx = pin_group_channels(bundle, group)
+        LOGGER.info("pin group %s: %d channels %s", group, len(pidx), pnames)
+        pfn = _pinned_denoiser(inner.fwd_with_preconditioning, pidx, y_residual_cond)
+        pidx_t = torch.as_tensor(pidx, device=device, dtype=torch.long)
+        p_finals, p_err = [], []
+        for seed in seeds:
+            torch.manual_seed(int(seed))
+            yp = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
+                                x_interp_cond, x_hres_cond, y_residual_cond, sigma_max, seed,
+                                mcg, gss_arg, free=True, sampler_kwargs=f_skw, sigmas=f_sig,
+                                denoise_fn=pfn)
+            # the pinned channels must end ON the truth (last step to sigma 0 returns D)
+            err = (yp.index_select(-1, pidx_t)
+                   - y_residual_cond.index_select(-1, pidx_t).to(yp.dtype)).abs().max().reshape(1)
+            if mcg is not None:
+                import torch.distributed as dist
+                dist.all_reduce(err, op=dist.ReduceOp.MAX, group=mcg)
+            p_err.append(float(err[0]))
+            if save_fields:
+                f = fields_of(yp)                        # collective; None off rank 0
+                if f is not None:
+                    pin_fields[(group, int(seed))] = f
+            m = metrics_of(yp)                           # collective; rank 0 gets the dict
+            if m is not None:
+                p_finals.append(m)
+                if global_rank == 0:
+                    LOGGER.info("pinned %s seed=%d -> msl=%.1f hPa, pin max|y-truth|=%.3g",
+                                group, seed, m.get("msl", float("nan")), p_err[-1])
+            del yp
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        pinned[group] = {"channels": pnames, "channel_indices": pidx, "finals": p_finals,
+                         "pin_check_max_abs_residual": p_err}
+
     if save_fields and global_rank == 0:
         _, _, lat_hres, lon_hres = eb.coords
         names = list(target_indices.keys())
@@ -1003,11 +1096,18 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
             arrs["input_%s" % name] = vals
         for name in names:
             # restart_{var}: (n_seed_sigma, n_seed, n_box); free_{var}: (n_seed, n_box)
-            arrs["restart_%s" % name] = np.stack([
-                np.stack([restart_fields[(ss, int(sd))][name] for sd in seeds])
-                for ss in seed_sigmas]).astype(np.float32)
+            if seed_sigmas:                              # absent under --seeding-free-only
+                arrs["restart_%s" % name] = np.stack([
+                    np.stack([restart_fields[(ss, int(sd))][name] for sd in seeds])
+                    for ss in seed_sigmas]).astype(np.float32)
             arrs["free_%s" % name] = np.stack(
                 [free_fields[int(sd)][name] for sd in seeds]).astype(np.float32)
+            for group in pin_groups:
+                # pin_{group}_{var}: (n_seed, n_box), same seeds and order as free_{var}
+                arrs["pin_%s_%s" % (group, name)] = np.stack(
+                    [pin_fields[(group, int(sd))][name] for sd in seeds]).astype(np.float32)
+        if pin_groups:
+            arrs["pin_groups"] = np.asarray(pin_groups)
         out_path.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(out_path / "seeding_fields.npz", **arrs)
         LOGGER.info("saved seeding box fields (%d seed sigmas x %d seeds + free) to %s",
@@ -1073,6 +1173,11 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
             "probe_field": "msl", "window": list(window),
             "references": references, "free": free_mean, "runs": runs, "summary": summary,
         }
+        if pin_groups:
+            for group, rec in pinned.items():
+                rec["final_mean"] = _mean(rec["finals"]) if rec["finals"] else None
+            result["pinned"] = pinned
+            result["seeding_free_only"] = bool(getattr(args, "seeding_free_only", False))
         out_path.mkdir(parents=True, exist_ok=True)
         with open(out_path / "seeding.json", "w") as f:
             json.dump(result, f, indent=2)
@@ -1430,6 +1535,9 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
 
 def run_trajectory(args):
     out_path = Path(args.output_dir)
+    if (getattr(args, "pin_groups", None) or getattr(args, "seeding_free_only", False)) \
+            and args.mode != "seeding":
+        raise SystemExit("--pin-groups / --seeding-free-only apply to --mode seeding only")
 
     # ---- parallel setup: world_size>1 (srun) => grid-shard the model across ranks ----
     from manual_inference.prediction.predict import _get_parallel_info, _init_model_comm_group
@@ -2117,6 +2225,14 @@ def main(argv=None):
                    help="[seeding] save the final box fields of every (seed sigma, seed) "
                         "restart and of every free run, with truth/input/lat/lon/centre, to "
                         "seeding_fields.npz (rank 0); off by default")
+    p.add_argument("--pin-groups", nargs="+", choices=list(PIN_GROUPS), default=None,
+                   help="[seeding] channel-pinning probe: after the free runs, repeat them "
+                        "(same seeds, ladder and churn) once per listed group with that group's "
+                        "clean estimate replaced by the TRUE residual at every denoiser call. "
+                        "mass = msl, sp, z_*; wind = 10u, 10v, u_*, v_*. Off by default")
+    p.add_argument("--seeding-free-only", action="store_true", default=False,
+                   help="[seeding] skip the seed-sigma restart sweep; run only the free runs "
+                        "(and the pinned runs of --pin-groups). Off by default")
     p.add_argument("--seeding-lane-sampler", action="store_true", default=False,
                    help="[seeding] use the lane sampler and schedule given by "
                         "--noise-scheduler-json / --sampler-params-json (on top of the "
