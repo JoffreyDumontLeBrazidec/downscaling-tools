@@ -61,7 +61,18 @@ _ROLE_ORDER = {"truth": 0, "model": 1, "input": 2, "baseline": 3, "reference": 4
 
 SOURCE_QUAVER = ("Source: quaver — FDB, surface vs station observations, "
                  "upper air vs 1.5° analysis")
-SOURCE_LOCAL = "Source: local probabilistic evaluator — truth = ENFO member 0"
+# Text of the local evaluator when the lane is not known. The truth of the local evaluator is
+# member 0 of the target ensemble stored in the bundle (``y``); which forecast system that is
+# depends on the lane, so ``source_local`` names it when the caller can say (see
+# ``eval.evaluators.probabilistic.core.plotting.truth_from_lane``).
+SOURCE_LOCAL = "Source: local probabilistic evaluator — truth = member 0 of the lane's target ensemble"
+
+
+def source_local(truth: str | None = None) -> str:
+    """Figure source line of the local evaluator, naming the truth (for example "ENFO O1280")."""
+    if not truth:
+        return SOURCE_LOCAL
+    return f"Source: local probabilistic evaluator — truth = {truth} member 0"
 
 
 def _as_frame(curves):
@@ -127,7 +138,8 @@ def _y_label(metric: str, variable: str, unit: str | None) -> str:
 
 def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = None,
                               png: bool = True, n_noun: str = "samples", metrics=None, variables=None,
-                              domains=None, footnote: str | None = None) -> list[Path]:
+                              domains=None, footnote: str | None = None,
+                              band_label: str | None = None) -> list[Path]:
     """Draw the probabilistic-score figure and return the files written.
 
     Parameters
@@ -147,8 +159,13 @@ def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = N
         What the optional ``n`` column counts, for the legend ("dates", "samples").
     metrics, variables, domains
         Optional lists that restrict and order what is drawn.
+    band_label
+        Legend text for the shaded band (the ``ci_low`` to ``ci_high`` interval), for example
+        "95 % confidence interval of the mean over dates". When the table has a band and this
+        is given, the legend gets a shaded entry with that text.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
     df = _as_frame(curves)
     df = df.assign(metric=df["metric"].map(_canonical_metric))
@@ -216,6 +233,10 @@ def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = N
                         lab = key[1] + (f" (n = {counts[key]} {n_noun})" if key in counts else "")
                         handles.append(plt.Line2D([], [], color=st["color"], linestyle=st["linestyle"],
                                                   linewidth=st["linewidth"], label=lab))
+                has_band = "ci_low" in dv and "ci_high" in dv and \
+                    bool(np.isfinite(dv["ci_low"].to_numpy(float)).any())
+                if band_label and has_band:
+                    handles.append(Patch(facecolor="0.45", alpha=0.3, linewidth=0, label=band_label))
                 fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 4),
                            bbox_to_anchor=(0.5, 0.0))
                 head = variable_spec(var).name if variable_spec(var).unit else str(var)

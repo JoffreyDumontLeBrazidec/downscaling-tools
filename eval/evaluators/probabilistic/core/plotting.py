@@ -7,11 +7,64 @@ turns the local evaluator's CSV files into the tidy table that function expects.
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
-from eval.plotting.probabilistic import SOURCE_LOCAL, plot_probabilistic_scores
+from eval.plotting.probabilistic import plot_probabilistic_scores, source_local
 
 _METRICS = ("fcrps", "crps", "spread", "rmse_ens_mean")
+
+# What the shaded band of the model curve is (see ``summary_to_curves``).
+BAND_LABEL = "shaded band: 95 % confidence interval of the mean over dates (mean ± 1.96 standard errors)"
+
+# Forecast systems that can be the truth of a lane, named as they appear in file names.
+_STREAM_NAMES = (("iekm", "IEKM"), ("destine", "IEKM"), ("enfo", "ENFO"), ("eefo", "EEFO"))
+
+
+def _find_key(node, key: str) -> str | None:
+    """First non-empty string under ``key`` anywhere in a nested lane configuration."""
+    if isinstance(node, dict):
+        if isinstance(node.get(key), str) and node[key].strip():
+            return node[key].strip()
+        for value in node.values():
+            found = _find_key(value, key)
+            if found:
+                return found
+    return None
+
+
+def _find_label(node) -> str | None:
+    """Forecast system named by the lane: ``truth_label`` first, then the tc ``target_label``
+    (which may carry a grid, as in ``IEKM_O96``, so only its first word is kept)."""
+    label = _find_key(node, "truth_label") or _find_key(node, "target_label")
+    return re.split(r"[_\s]", label.upper())[0] if label else None
+
+
+def truth_from_lane(lane_config: dict | None) -> str | None:
+    """Name of the truth of the local probabilistic evaluator on a lane, for example "ENFO O1280".
+
+    The truth is member 0 of the target ensemble of the bundle (``y``), and the lane says where
+    that comes from: the forecast system in the evaluator sections' ``truth_label`` (or the tc
+    section's ``target_label``, or the name of the target GRIB file in ``prepare``), and the
+    grid in the target file name or, failing that, in the name of the output template of
+    ``prepml``. ``None`` when the lane does not say.
+    """
+    if not lane_config:
+        return None
+    args = ((lane_config.get("prepare") or {}).get("args") or {})
+    target_file = Path(str(args.get("target_sfc_grib") or "")).name.lower()
+
+    stream = _find_label(lane_config)
+    if stream is None:
+        stream = next((name for token, name in _STREAM_NAMES if token in target_file), None)
+    if stream is None:
+        return None
+
+    grid = re.search(r"(?:^|_)(o\d+)(?:_|$)", target_file)
+    if grid is None:
+        template = Path(str((lane_config.get("prepml") or {}).get("output_template") or "")).name.lower()
+        grid = re.match(r"(o\d+)-", template)
+    return f"{stream} {grid.group(1).upper()}" if grid else stream
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -67,8 +120,13 @@ def plot_probabilistic_summary(
     *,
     title_prefix: str = "Probabilistic scores",
     reference_curves: str | Path | None = None,
+    lane_config: dict | None = None,
 ) -> Path:
-    """Create the multi-page lead-time PDF (and page PNGs) from ``summary_by_lead.csv``."""
+    """Create the multi-page lead-time PDF (and page PNGs) from ``summary_by_lead.csv``.
+
+    ``lane_config`` (a resolved lane) tells the figure what the truth is; without it the
+    source line says only "member 0 of the lane's target ensemble".
+    """
     summary_csv = Path(summary_csv)
     output_pdf = Path(output_pdf)
     rows = _read_csv(summary_csv)
@@ -84,9 +142,10 @@ def plot_probabilistic_summary(
     curves = summary_to_curves(rows, refs)
     plot_probabilistic_scores(
         curves,
-        SOURCE_LOCAL,
+        source_local(truth_from_lane(lane_config)),
         output_pdf,
         title=title_prefix if title_prefix and title_prefix != "Probabilistic scores" else None,
         n_noun="dates",
+        band_label=BAND_LABEL,
     )
     return output_pdf

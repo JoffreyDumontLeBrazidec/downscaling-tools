@@ -31,6 +31,7 @@ def plot(
         out_pdf,
         title_prefix=eval_config.get("title", "Probabilistic scores"),
         reference_curves=reference_curves,
+        lane_config=lane_config,
     )
     LOG.info("Probabilistic plot written to %s", out_pdf)
     return out_pdf
