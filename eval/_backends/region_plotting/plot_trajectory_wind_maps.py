@@ -76,7 +76,7 @@ def run(args):
             sources.append({"key": key, "path": str(Path(path).resolve()), "sha256": _hash(path),
                             "saved_seeds": seeds.tolist(), "selected_index": int(selected[0]),
                             "free_sigma": float(z["free_sigma"])})
-    panels.append(("Target (independent ENFO realization)", reference[1]))
+    panels.append(("Truth (independent ENFO realization)", reference[1]))
     geo = reference[0]
     geom = BoxGeometry(geo["lat"], (geo["lon"] + 180) % 360 - 180)
     prepared = []
@@ -121,44 +121,48 @@ def run(args):
         manifest["panels"].append({"title": p["title"], "centre_lat": r["lat_p"], "centre_lon": r["lon_p"],
                                    "offset_from_target_km": p["offset"], "spiral_angle_deg": r["orient_ws_sgn_med"]})
     init = datetime.strptime(str(args.date) + str(args.time).zfill(4), "%Y%m%d%H%M")
+    from eval.plotting import eval_style, save_figure, variable_spec
+
+    ws_spec = variable_spec("10ff")
     for field in ("ws", "band"):
-        fig, axes = plt.subplots(2, 2, figsize=(12, 11))
-        fig.subplots_adjust(left=.075, right=.87, bottom=.11, top=.865, hspace=.29, wspace=.23)
-        vmin, vmax = ((0 if args.vmin is None else args.vmin, 60 if args.vmax is None else args.vmax)
-                      if field == "ws" else (-args.band_vmax, args.band_vmax))
-        for ax, p in zip(axes.flat, prepared):
-            mesh = ax.pcolormesh(p["x"], p["y"], p[field], shading="auto", rasterized=True,
-                                 cmap="viridis" if field == "ws" else "RdBu_r", vmin=vmin, vmax=vmax)
-            ax.set_facecolor("#e6e6e6")
-            ax.plot(0, 0, marker="+", color="black", ms=8, mew=1)
+        with eval_style():
+            fig, axes = plt.subplots(2, 2, figsize=(12, 11))
+            fig.subplots_adjust(left=.075, right=.87, bottom=.11, top=.865, hspace=.29, wspace=.23)
+            vmin, vmax = ((0 if args.vmin is None else args.vmin, 60 if args.vmax is None else args.vmax)
+                          if field == "ws" else (-args.band_vmax, args.band_vmax))
+            for ax, p in zip(axes.flat, prepared):
+                mesh = ax.pcolormesh(p["x"], p["y"], p[field], shading="auto", rasterized=True,
+                                     cmap=ws_spec.field_cmap() if field == "ws" else "RdBu_r", vmin=vmin, vmax=vmax)
+                ax.set_facecolor("#e6e6e6")
+                ax.plot(0, 0, marker="+", color="black", ms=8, mew=1)
+                if field == "ws":
+                    sl = slice(None, None, 12)
+                    X, Y = np.meshgrid(p["x"][sl], p["y"][sl])
+                    q = ax.quiver(X, Y, p["U"][sl, sl], p["V"][sl, sl], color="white",
+                                  scale=650, width=.003, headwidth=3.5)
+                r = p["record"]
+                ax.set_title(f'{p["title"]}\nCentre: {r["lat_p"]:.2f}°N, {abs(r["lon_p"]):.2f}°W; offset {p["offset"]:.0f} km',
+                             fontsize=10, pad=8)
+                ax.set(xlim=(-args.storm_half_width_km, args.storm_half_width_km),
+                       ylim=(-args.storm_half_width_km, args.storm_half_width_km), aspect="equal",
+                       xlabel="East of own centre (km)", ylabel="North of own centre (km)")
+                ax.tick_params(labelsize=9)
+                ax.grid(False)
+            cax = fig.add_axes([.90, .21, .019, .54])
+            cb = fig.colorbar(mesh, cax=cax, extend="max" if field == "ws" else "both")
+            cb.set_label(ws_spec.label if field == "ws" else f"40–150 km wind-speed component ({ws_spec.unit})")
             if field == "ws":
-                sl = slice(None, None, 12)
-                X, Y = np.meshgrid(p["x"][sl], p["y"][sl])
-                q = ax.quiver(X, Y, p["U"][sl, sl], p["V"][sl, sl], color="white",
-                              scale=650, width=.003, headwidth=3.5)
-            r = p["record"]
-            ax.set_title(f'{p["title"]}\nCentre: {r["lat_p"]:.2f}°N, {abs(r["lon_p"]):.2f}°W; offset {p["offset"]:.0f} km',
-                         fontsize=10, pad=8)
-            ax.set(xlim=(-args.storm_half_width_km, args.storm_half_width_km),
-                   ylim=(-args.storm_half_width_km, args.storm_half_width_km), aspect="equal",
-                   xlabel="East of own centre (km)", ylabel="North of own centre (km)")
-            ax.tick_params(labelsize=9)
-        cax = fig.add_axes([.90, .21, .019, .54])
-        cb = fig.colorbar(mesh, cax=cax, extend="max" if field == "ws" else "both")
-        cb.set_label("10 m wind speed (m/s)" if field == "ws" else "40–150 km wind-speed component (m/s)")
-        if field == "ws":
-            axes.flat[-1].quiverkey(q, .50, .072, 30, "30 m/s", coordinates="figure", labelpos="E")
-        view = "Full 10 m wind speed and direction" if field == "ws" else "40–150 km wind-speed features"
-        fig.suptitle(f'{args.region_tag.capitalize()} — {view}', fontsize=17, y=.965)
-        fig.text(.5, .925, f'Initialization {init:%d %b %Y %H:%M} UTC · lead +{args.step} h · member {args.member:02d} · free seed {args.seed}',
-                 ha="center", fontsize=11)
-        note = "Colours show full speed; arrows show wind direction and strength." if field == "ws" else "Colours show a difference-of-Gaussians band-pass, not model-minus-input residuals."
-        fig.text(.5, .044, note, ha="center", fontsize=10)
-        fig.text(.5, .024, "Each storm is recentered. Linear interpolation to a 5 km local grid; grey denotes unavailable data.",
-                 ha="center", fontsize=9)
-        path = out / f'{args.region_tag}_{field}_seed{args.seed}.png'
-        fig.savefig(path, dpi=220)
-        plt.close(fig)
+                axes.flat[-1].quiverkey(q, .50, .072, 30, f"30 {ws_spec.unit}", coordinates="figure", labelpos="E")
+            view = "Full 10 m wind speed and direction" if field == "ws" else "40–150 km wind-speed features"
+            fig.suptitle(f'{args.region_tag.capitalize()}: {view}', fontsize=15, y=.965)
+            fig.text(.5, .925, f'Initialization {init:%d %b %Y %H:%M} UTC · lead +{args.step} h · member {args.member:02d} · free seed {args.seed}',
+                     ha="center", fontsize=11)
+            note = "Colours show full speed; arrows show wind direction and strength." if field == "ws" else "Colours show a difference-of-Gaussians band-pass, not model-minus-input residuals."
+            fig.text(.5, .044, note, ha="center", fontsize=10)
+            fig.text(.5, .024, "Each storm is recentered. Linear interpolation to a 5 km local grid; grey denotes unavailable data.",
+                     ha="center", fontsize=9)
+            path = out / f'{args.region_tag}_{field}_seed{args.seed}.png'
+            save_figure(fig, path, close=True, tight=False)
         manifest["outputs"].append({"path": str(path), "vmin": vmin, "vmax": vmax, "field": field})
         print(path, flush=True)
     manifest["git_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()

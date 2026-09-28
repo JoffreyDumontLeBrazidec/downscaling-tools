@@ -76,23 +76,41 @@ def test_2t_variable_resolves_its_own_scale_and_token():
          "--variable", "2t"]
     )
     spec, vmin, vmax = resolve_scale(args)
-    assert (spec["token"], vmin, vmax) == ("2t", -20.0, 35.0)
+    # Temperatures are shown in K (house rule); same physical range as the former -20..35 degC.
+    assert (spec["token"], vmin, vmax) == ("2t", 253.15, 308.15)
     assert spec["states"] == ("2t",)
 
 
-def test_field_converts_temperature_to_celsius():
+def test_field_keeps_temperature_in_kelvin():
     arr = np.array([[0.0, 0.0, 273.15, 0.0]])
     val = _field(arr, ["10u", "10v", "2t", "msl"], VARIABLES["2t"])
-    assert val[0] == pytest.approx(0.0)
+    assert val[0] == pytest.approx(273.15)
 
 
 def test_every_variable_declares_a_complete_spec():
     keys = {"states", "combine", "token", "scale", "offset", "cmap",
-            "vmin", "vmax", "extend", "subtitle", "cbar_label"}
+            "vmin", "vmax", "extend", "subtitle", "cbar_label", "fine_vmax", "house_key"}
     for name, spec in VARIABLES.items():
         assert set(spec) == keys, name
         assert spec["combine"] in ("hypot", "single"), name
         assert spec["vmin"] < spec["vmax"], name
+
+
+def test_names_units_and_colour_maps_come_from_the_house_table():
+    from eval.plotting import variable_spec
+
+    assert VARIABLES["msl"]["cbar_label"] == "Mean sea level pressure (hPa)"
+    assert VARIABLES["z_500"]["cbar_label"] == "500 hPa geopotential height (dam)"
+    assert VARIABLES["2t"]["cbar_label"] == "2 m temperature (K)"
+    for name, spec in VARIABLES.items():
+        assert spec["cmap"] == variable_spec(spec["house_key"]).cmap, name
+        assert spec["cmap"] not in ("RdBu_r", "RdYlBu_r", "jet", "rainbow"), name
+
+
+def test_z500_conversion_matches_the_house_table():
+    arr = np.array([[5500.0 * 9.80665]])
+    val = _field(arr, ["z_500"], VARIABLES["z_500"])
+    assert val[0] == pytest.approx(550.0)
 
 
 def test_field_wind_speed_matches_the_hypotenuse():

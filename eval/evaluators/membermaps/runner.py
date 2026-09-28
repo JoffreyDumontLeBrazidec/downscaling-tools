@@ -93,6 +93,7 @@ def run(
     fine_cut_deg = float(eval_config.get("fine_cut_deg", 0.6))
     arm = str(eval_config.get("arm_label") or run_label or "model")
     regions = _regions(lane_config, eval_config)
+    model_word = "Model" if arm.lower() == "model" else f"Model, {arm}"
 
     combos = len(dates) * len(steps) * len(members) * len(variables) * len(fields) * len(regions)
     if combos > MAX_COMBINATIONS:
@@ -126,8 +127,8 @@ def run(
                             argv = [
                                 "--run", f"{arm}={predictions_dir}",
                                 "--title", f"{arm}=" + (
-                                    f"{arm} · O1280" if not checkpoint
-                                    else f"{arm} ({Path(str(checkpoint)).name}) · O1280"
+                                    f"{model_word} (O1280)" if not checkpoint
+                                    else f"{model_word} (O1280, {Path(str(checkpoint)).name})"
                                 ),
                                 "--variable", variable,
                                 "--field", field,

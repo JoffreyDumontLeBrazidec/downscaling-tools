@@ -43,7 +43,7 @@ DEFAULT_MARGIN = 8.0
 DEFAULT_HRES_RES = 0.08
 DEFAULT_LRES_RES = 0.28
 DEFAULT_VMAX = 25.0
-RENDER_DPI = 140
+RENDER_DPI = 150  # house PNG resolution (eval.plotting.save_figure); kept for importers
 # Latitude scale factor for the nearest-neighbour lookup: reduced Gaussian
 # rows are denser in latitude than longitude, so an isotropic lookup would
 # smear rows; 1.4 keeps the lookup roughly isotropic in grid spacing.
@@ -57,94 +57,101 @@ LAT_LOOKUP_SCALE = 1.4
 DEFAULT_FINE_CUT_DEG = 0.6
 
 DEFAULT_TITLES = {
-    "eefo": "EEFO input · O320",
-    "enfo": "Operational ENFO · O1280",
-    "control": "Control · O1280",
-    "guided": "Guided · O1280",
+    "eefo": "Input (EEFO O320)",
+    "enfo": "Truth (operational ENFO O1280, same member number)",
+    "control": "Model, control arm (O1280)",
+    "guided": "Model, guided arm (O1280)",
 }
 
+
+def default_title(key: str) -> str:
+    """Panel title for a source key without an explicit --title."""
+    if key.lower() == "model":
+        return "Model (O1280)"
+    return DEFAULT_TITLES.get(key, f"Model, {key} (O1280)")
+
 # Renderable fields. Each entry fixes the source weather states, the filename
-# token, the colour scale and the labels, so adding a field is a table entry
-# rather than a new code path. "wind10m" reproduces the original hard-wired
-# behaviour exactly, including its colour scale and filename token.
+# token and the fixed colour scale, so adding a field is a table entry rather
+# than a new code path. Names, display units, the native-to-display conversion
+# and the field colour maps come from eval.plotting.variables (``_with_house``
+# below): msl in hPa, z_500 in dam, temperatures in K, wind in m s-1. The fixed
+# colour ranges are given in those display units. "wind10m" keeps the original
+# token and 0-25 m s-1 scale.
+_VARIABLE_KEYS = {"wind10m": "10ff", "msl": "msl", "2t": "2t", "t_850": "t_850", "z_500": "z_500"}
+
 VARIABLES: dict[str, dict] = {
     "wind10m": {
         "states": ("10u", "10v"),
         "combine": "hypot",
         "token": "10mwind",
-        "scale": 1.0,
-        "offset": 0.0,
-        "cmap": "viridis",
         "vmin": 0.0,
         "vmax": DEFAULT_VMAX,
         "extend": "max",
-        "subtitle": "10 m wind speed",
-        "cbar_label": "10 m wind speed (m/s)",
         "fine_vmax": 2.5,
     },
     "msl": {
         "states": ("msl",),
         "combine": "single",
         "token": "msl",
-        "scale": 0.01,  # Pa -> hPa
-        "offset": 0.0,
-        "cmap": "RdBu_r",
         "vmin": 960.0,
         "vmax": 1040.0,
         "extend": "both",
-        "subtitle": "Mean sea level pressure",
-        "cbar_label": "Mean sea level pressure (hPa)",
         "fine_vmax": 0.8,
     },
     "2t": {
         "states": ("2t",),
         "combine": "single",
         "token": "2t",
-        "scale": 1.0,
-        "offset": -273.15,  # K -> degC
-        "cmap": "RdYlBu_r",
-        # The bulk of the field over these regions sits between about -13 and
-        # +32 degC; the ends saturate over ice sheets and desert, which is why
-        # extend is "both".
-        "vmin": -20.0,
-        "vmax": 35.0,
+        # The bulk of the field over these regions sits between about 260 and
+        # 305 K (-13 to +32 degC); the ends saturate over ice sheets and desert,
+        # which is why extend is "both". Same range as the former -20..35 degC.
+        "vmin": 253.15,
+        "vmax": 308.15,
         "extend": "both",
-        "subtitle": "2 m temperature",
-        "cbar_label": "2 m temperature (degC)",
         "fine_vmax": 3.0,
     },
     "t_850": {
         "states": ("t_850",),
         "combine": "single",
         "token": "t850",
-        "scale": 1.0,
-        "offset": -273.15,  # K -> degC
-        "cmap": "RdYlBu_r",
         # Observed span over the Europe cutout / wide North Atlantic in late
-        # September 2025 is about -10 to +29 degC; both ends extend.
-        "vmin": -10.0,
-        "vmax": 30.0,
+        # September 2025 is about 263-302 K (-10 to +29 degC); both ends extend.
+        "vmin": 263.15,
+        "vmax": 303.15,
         "extend": "both",
-        "subtitle": "850 hPa temperature",
-        "cbar_label": "850 hPa temperature (degC)",
         "fine_vmax": 1.2,
     },
     "z_500": {
         "states": ("z_500",),
         "combine": "single",
         "token": "z500",
-        "scale": 1.0 / 98.0665,  # m2/s2 -> decametres of geopotential height
-        "offset": 0.0,
-        "cmap": "viridis",
         # Observed span over the same regions and season is about 523-592 dam.
         "vmin": 522.0,
         "vmax": 592.0,
         "extend": "both",
-        "subtitle": "500 hPa geopotential height",
-        "cbar_label": "500 hPa geopotential height (dam)",
         "fine_vmax": 0.3,
     },
 }
+
+
+def _with_house(name: str, spec: dict) -> dict:
+    """Fill name, unit, conversion and colour map of a VARIABLES entry from the house table."""
+    from eval.plotting.variables import variable_spec
+
+    house = variable_spec(_VARIABLE_KEYS[name])
+    scale, offset = house.scale_offset
+    return {
+        **spec,
+        "scale": scale,
+        "offset": offset,
+        "cmap": house.cmap,
+        "subtitle": house.name,
+        "cbar_label": house.label,
+        "house_key": house.key,
+    }
+
+
+VARIABLES = {name: _with_house(name, spec) for name, spec in VARIABLES.items()}
 
 
 def resolve_scale(args: argparse.Namespace) -> tuple[dict, float, float]:
@@ -205,8 +212,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--extent", nargs=4, type=float, default=list(DEFAULT_EXTENT), metavar=("LONMIN", "LONMAX", "LATMIN", "LATMAX"), help=f"Map extent (default: {DEFAULT_EXTENT}).")
     p.add_argument("--variable", choices=sorted(VARIABLES), default="wind10m",
                    help="Field to render (default: wind10m, the 10 m wind speed).")
-    p.add_argument("--vmin", type=float, default=None, help="Colour-scale minimum (default: the variable's own).")
-    p.add_argument("--vmax", type=float, default=None, help=f"Colour-scale maximum (default: the variable's own; {DEFAULT_VMAX} m/s for wind10m).")
+    p.add_argument("--vmin", type=float, default=None, help="Colour-scale minimum in display units (hPa, K, dam, m/s; default: the variable's own).")
+    p.add_argument("--vmax", type=float, default=None, help=f"Colour-scale maximum in display units (default: the variable's own; {DEFAULT_VMAX} m/s for wind10m).")
     p.add_argument(
         "--field", choices=("value", "fine"), default="value",
         help="value (default): the field itself. fine: a high-pass keeping the scales at and "
@@ -221,7 +228,7 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
-    p.add_argument("--proj-lon", type=float, default=5.0, help="Lambert conformal central longitude (default: 5.0).")
+    p.add_argument("--proj-lon", type=float, default=5.0, help="Lambert conformal central longitude (default: 5.0). Ignored when the extent crosses the dateline (plate carree is used).")
     p.add_argument("--proj-lat", type=float, default=50.0, help="Lambert conformal central latitude (default: 50.0).")
     return p
 
@@ -313,6 +320,36 @@ def read_grib_field(path: str | Path, spec: dict) -> tuple[np.ndarray, np.ndarra
     return lat, lon, _combine([comp[s] for s in spec["states"]], spec)
 
 
+def _projection(extent, proj_lon: float, proj_lat: float):
+    """Shared projection rule; an explicit --proj-lon/--proj-lat recentres the Lambert cone."""
+    import cartopy.crs as ccrs
+    from eval.plotting import select_projection
+
+    proj = select_projection(*extent)
+    if isinstance(proj, ccrs.PlateCarree):
+        return proj
+    return ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+
+
+def _style_for(spec: dict, field: str):
+    """(colour map, colour-bar label) for a value or a fine-scale (high-pass) panel."""
+    from eval.plotting import variable_spec
+
+    house = variable_spec(spec["house_key"])
+    if field == "fine":
+        # The high-pass field is a departure from a local mean: zero-centred, RdBu_r.
+        return "RdBu_r", f"{house.name}, fine-scale part ({house.unit})"
+    return house.field_cmap(), spec["cbar_label"]
+
+
+def _fine_note(field: str, fine_cut_deg: float) -> str:
+    # State the real filter response, not just the parameter: the high-pass passes
+    # 99% at fine_cut_deg and 50% at 2.67x it (Gaussian rolloff, not a brick wall).
+    if field != "fine":
+        return ""
+    return f", high-pass (full below {fine_cut_deg:g}°, half at {2.67 * fine_cut_deg:.1f}°)"
+
+
 def _render(
     *,
     out_path: Path,
@@ -334,11 +371,12 @@ def _render(
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
 ) -> None:
+    """One map panel, written as ``out_path`` (PNG, 150 dpi) plus a PDF sibling."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
+    from eval.plotting import add_geography, eval_style, save_figure
 
     gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
     if field == "fine":
@@ -351,42 +389,24 @@ def _render(
         grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
+    cmap, cbar_label = _style_for(spec, field)
 
-    # Render under matplotlib's default rcParams so the output is identical no
-    # matter what the importing context (e.g. eval.cli's import chain) has
-    # tweaked — keeps these maps reproducible pixel-for-pixel across entry
-    # points.
-    # State the real filter response, not just the parameter: the high-pass passes
-    # 99% at fine_cut_deg and 50% at 2.67x it (Gaussian rolloff, not a brick wall).
-    fine_note = (
-        f" · high-pass, full below {fine_cut_deg:g} deg, half at {2.67 * fine_cut_deg:.1f} deg"
-        if field == "fine" else ""
-    )
-    with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items() if k != "backend"}):
-        proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+    with eval_style():
         fig = plt.figure(figsize=(11, 7.5))
-        ax = plt.axes(projection=proj)
+        ax = fig.add_subplot(1, 1, 1, projection=_projection(extent, proj_lon, proj_lat))
         ax.set_extent(extent, crs=ccrs.PlateCarree())
-        cmap = "RdBu_r" if field == "fine" else spec["cmap"]
         mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
                              vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
-        ax.coastlines(resolution="50m", linewidth=1.0)
-        ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.4)
+        add_geography(ax, coast_lw=0.9, label_size=8)
         ax.set_title(
-            f"{title}\n{spec['subtitle']}"
-            f"{fine_note} · member {member}\n"
-            f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
-            fontsize=13,
+            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, member {member}\n"
+            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC",
+            fontsize=12,
         )
-        cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.04, aspect=40,
-                            extend=spec["extend"])
-        cbar.set_label(
-            spec["cbar_label"] + " · fine-scale part" if field == "fine" else spec["cbar_label"]
-        )
-        fig.tight_layout()
-        fig.savefig(out_path, dpi=RENDER_DPI)
-        plt.close(fig)
-
+        cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.06, aspect=40, shrink=0.8,
+                            extend=spec["extend"] if field == "value" else "both")
+        cbar.set_label(cbar_label)
+        save_figure(fig, out_path, close=True)
 
 
 def parse_members(spec: str, available: list[int]) -> list[int]:
@@ -452,7 +472,7 @@ def _render_grid(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
+    from eval.plotting import add_geography, eval_style, save_figure, variable_spec
 
     grids = []
     for val in values:
@@ -466,49 +486,43 @@ def _render_grid(
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
     nrows = int(np.ceil(len(members) / float(ncols)))
-    # State the real filter response, not just the parameter: the high-pass passes
-    # 99% at fine_cut_deg and 50% at 2.67x it (Gaussian rolloff, not a brick wall).
-    fine_note = (
-        f" · high-pass, full below {fine_cut_deg:g} deg, half at {2.67 * fine_cut_deg:.1f} deg"
-        if field == "fine" else ""
-    )
+    cmap, cbar_label = _style_for(spec, field)
+    unit = variable_spec(spec["house_key"]).unit
 
-    with matplotlib.rc_context({k: v for k, v in matplotlib.rcParamsDefault.items()
-                                if k != "backend"}):
-        proj = ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+    with eval_style():
+        proj = _projection(extent, proj_lon, proj_lat)
         fig, axes = plt.subplots(
             nrows, ncols, figsize=(3.5 * ncols, 3.6 * nrows),
-            subplot_kw={"projection": proj},
+            subplot_kw={"projection": proj}, squeeze=False,
         )
         axes = np.atleast_1d(axes).ravel()
-        cmap = "RdBu_r" if field == "fine" else spec["cmap"]
         mesh = None
-        for ax, member, (gx, gy, grid) in zip(axes, members, grids):
+        for i, (ax, member, (gx, gy, grid)) in enumerate(zip(axes, members, grids)):
             ax.set_extent(extent, crs=ccrs.PlateCarree())
             mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
                                  vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
-            ax.coastlines(resolution="50m", linewidth=0.7)
-            ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.3)
+            gl = add_geography(ax, label_size=6.5)
+            if gl is not None:
+                gl.left_labels = i % ncols == 0
+                gl.bottom_labels = i + ncols >= len(members)
             peak = float(np.nanmax(grid)) if field == "value" else float(np.nanmax(np.abs(grid)))
-            ax.set_title(f"member {member} · max {peak:.1f}", fontsize=10)
+            peak_word = "max" if field == "value" else "max |value|"
+            ax.set_title(f"Member {member} ({peak_word} {peak:.1f} {unit})", fontsize=9)
         for ax in axes[len(members):]:
             ax.set_visible(False)
         # y above 1 keeps the three title lines clear of the first row of panel
         # titles; bbox_inches="tight" then crops back to the drawn extent.
         fig.suptitle(
-            f"{title}\n{spec['subtitle']}{fine_note} · {len(members)} members\n"
-            f"init {init_dt:%Y-%m-%d %H} UTC · h{step:03d} · valid {valid_dt:%Y-%m-%d %H} UTC",
-            fontsize=13, y=1.06,
+            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, {len(members)} members\n"
+            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC",
+            y=1.06,
         )
         if mesh is not None:
             cbar = fig.colorbar(mesh, ax=axes.tolist(), orientation="horizontal",
-                                pad=0.04, aspect=50, fraction=0.05, extend=spec["extend"])
-            cbar.set_label(
-                spec["cbar_label"] + " · fine-scale part" if field == "fine"
-                else spec["cbar_label"]
-            )
-        fig.savefig(out_path, dpi=RENDER_DPI, bbox_inches="tight")
-        plt.close(fig)
+                                pad=0.04, aspect=50, fraction=0.05,
+                                extend=spec["extend"] if field == "value" else "both")
+            cbar.set_label(cbar_label)
+        save_figure(fig, out_path, close=True)
 
 
 def run_member_grid(args: argparse.Namespace) -> int:
@@ -561,7 +575,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render_grid(
-            out_path=out_path, title=titles.get(key, f"{key.capitalize()} · O1280"),
+            out_path=out_path, title=titles.get(key, default_title(key)),
             members=member_labels, values=values, date=args.date, time=args.time,
             step=args.step,
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
@@ -636,7 +650,7 @@ def run(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render(
-            out_path=out_path, title=titles.get(key, f"{key.capitalize()} · O1280"),
+            out_path=out_path, title=titles.get(key, default_title(key)),
             member=args.member, date=args.date, time=args.time, step=args.step,
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,
