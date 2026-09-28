@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from eval._backends.probabilistic import compute_probabilistic_scores
+from eval.evaluators.probabilistic.core import compute_probabilistic_scores
 
 LOG = logging.getLogger(__name__)
 

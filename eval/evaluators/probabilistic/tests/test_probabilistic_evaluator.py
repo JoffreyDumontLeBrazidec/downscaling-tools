@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from eval._backends.probabilistic.scoring import crps_ensemble_components
+from eval.evaluators.probabilistic.core.scoring import crps_ensemble_components
 from eval.evaluators.probabilistic.runner import run
 from eval.evaluators.probabilistic.scorer import score
 from eval.evaluators.probabilistic.plotter import plot

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from eval._backends.spread_proxy import plot_all
+from eval.evaluators.spread_proxy.core import plot_all
 
 LOG = logging.getLogger(__name__)
 

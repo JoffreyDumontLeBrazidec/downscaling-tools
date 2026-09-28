@@ -38,7 +38,7 @@ from typing import Any, Iterable
 import numpy as np
 import xarray as xr
 
-from eval._backends.probabilistic.scoring import (
+from eval.evaluators.probabilistic.core.scoring import (
     _as_list,
     _domain_mask,
     _lat_lon,
@@ -584,7 +584,7 @@ def main() -> None:
     )
     LOG.info("spread_proxy: %s rows -> %s", payload["n_rows"], args.output_dir)
     if args.plots:
-        from eval._backends.spread_proxy.plotting import plot_all
+        from eval.evaluators.spread_proxy.core.plotting import plot_all
 
         plot_all(Path(args.output_dir), Path(args.output_dir) / "plots")
 
