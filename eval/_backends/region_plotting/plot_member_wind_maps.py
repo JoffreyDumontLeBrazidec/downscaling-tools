@@ -179,6 +179,12 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
         "--title", action="append", default=[], metavar="KEY=TITLE",
         help="Override the first title line for a panel key (defaults: eefo/enfo/control/guided presets, else KEY · O1280).",
     )
+    p.add_argument("--trajectory-npz", action="append", default=[], metavar="KEY=FILE",
+                   help="Opt-in saved seeding_fields.npz comparison; repeat for three models, with target from the first.")
+    p.add_argument("--rotation-instrument", default=None, help="Path to tc_rotation.py for saved-NPZ panels.")
+    p.add_argument("--seed", type=int, default=1000, help="Saved free-sample seed for --trajectory-npz.")
+    p.add_argument("--storm-half-width-km", type=float, default=350, help="Saved-NPZ panel half width.")
+    p.add_argument("--band-vmax", type=float, default=6, help="Symmetric wind-speed band colour limit in m/s.")
     p.add_argument("--date", required=True, help="Init date YYYYMMDD.")
     p.add_argument("--step", type=int, required=True, help="Lead time in hours (predictions file suffix for --run panels).")
     p.add_argument("--member", type=int, default=1, help="Ensemble member number (selects within --run files; label-only for --grib panels, which are already single-member).")
@@ -579,6 +585,10 @@ def run_member_grid(args: argparse.Namespace) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    if getattr(args, "trajectory_npz", None):
+        from .plot_trajectory_wind_maps import run as trajectory_run
+        return trajectory_run(args)
+
     import xarray as xr
 
     if getattr(args, "members", None):
