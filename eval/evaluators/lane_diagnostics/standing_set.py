@@ -81,8 +81,8 @@ def _load_tc_stats(path: str | Path) -> dict:
 
 def build_tc_set(arms: dict, event: str, out_dir: Path):
     """Eight figures: two arms x two readings x two variables."""
-    from eval._backends.tc.pdf_plot import plot_pdf_single_variable
-    from eval._backends.tc.plot_config import resolve_plot_config
+    from eval.evaluators.tc.core.pdf_plot import plot_pdf_single_variable
+    from eval.evaluators.tc.core.plot_config import resolve_plot_config
     from eval.plotting import eval_style, save_figure
 
     figures, captions = [], {}

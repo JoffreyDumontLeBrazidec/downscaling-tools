@@ -6,8 +6,8 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-from eval._backends.tc.pdf_plot import plot_pdf_distribution_overview, plot_pdf_log, plot_pdf_ratios
-from eval._backends.tc.plot_config import resolve_plot_config
+from eval.evaluators.tc.core.pdf_plot import plot_pdf_distribution_overview, plot_pdf_log, plot_pdf_ratios
+from eval.evaluators.tc.core.plot_config import resolve_plot_config
 from eval.evaluators.tc.comparison_contract import validate_comparison_contracts
 from eval.plotting import FigureBook, readable_label
 

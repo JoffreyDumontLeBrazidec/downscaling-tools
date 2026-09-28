@@ -1,6 +1,6 @@
 """TC evaluator — raw extremes extraction (model / OPER / ENFO / EEFO).
 
-Wraps eval._backends.scoreboard.tc with the standard evaluator interface:
+Wraps eval.evaluators.tc.core.scoreboard with the standard evaluator interface:
 returns list[dict] of {"metric", "value", "unit"} records.
 
 Per the run-trust contract (decided 2026-06-21) TC quality is RAW extremes only —
@@ -16,8 +16,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval._backends.scoreboard.row_matching import bundle_enfo_labels
-from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
+from eval.evaluators.tc.core.row_matching import bundle_enfo_labels
+from eval.evaluators.tc.core.scoreboard import load_tc_extreme_scores_from_json
 
 LOG = logging.getLogger(__name__)
 

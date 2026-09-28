@@ -261,8 +261,8 @@ source /home/ecm5702/dev/.ds-dyn/bin/activate
 module unload ifs || true
 module load ecmwf-toolbox
 export PYTHONPATH="${PROJECT_ROOT}:\${PYTHONPATH:-}"
-python -m eval._backends.tc.workflows legacy-members --expver ${EXPVER} --outdir ${RUN_DIR}
-python -m eval._backends.tc.workflows pdf --outdir ${RUN_DIR} --out-name tc_normed_pdfs_all_events_${EXPVER}.pdf --ml-expids ${TC_EXP_PREFIX}_${EXPVER}
+python -m eval.evaluators.tc.core.workflows legacy-members --expver ${EXPVER} --outdir ${RUN_DIR}
+python -m eval.evaluators.tc.core.workflows pdf --outdir ${RUN_DIR} --out-name tc_normed_pdfs_all_events_${EXPVER}.pdf --ml-expids ${TC_EXP_PREFIX}_${EXPVER}
 EOF
 
 chmod +x "${JOBS_DIR}"/*.sbatch

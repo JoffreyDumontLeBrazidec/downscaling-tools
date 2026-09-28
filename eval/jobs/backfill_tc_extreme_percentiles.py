@@ -38,16 +38,16 @@ from typing import Any
 import numpy as np
 import yaml
 
-from eval._backends.tc.events import EVENTS
-from eval._backends.tc.loading_grib import load_grib_curves, regridded_target_points
-from eval._backends.tc.loading_predictions import (
+from eval.evaluators.tc.core.events import EVENTS
+from eval.evaluators.tc.core.loading_grib import load_grib_curves, regridded_target_points
+from eval.evaluators.tc.core.loading_predictions import (
     discover_prediction_files,
     event_days_steps,
     forecast_dates_for_event,
     load_prediction_curves,
     select_prediction_files_for_event,
 )
-from eval._backends.tc.plot_config import PLOT_CONFIGS
+from eval.evaluators.tc.core.plot_config import PLOT_CONFIGS
 
 LOG = logging.getLogger(__name__)
 

@@ -53,8 +53,8 @@ def test_noop_when_empty():
 
 import json
 
-from eval._backends.scoreboard.row_matching import bundle_enfo_labels
-from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
+from eval.evaluators.tc.core.row_matching import bundle_enfo_labels
+from eval.evaluators.tc.core.scoreboard import load_tc_extreme_scores_from_json
 
 
 def test_bundle_enfo_labels_target_is_enfo():

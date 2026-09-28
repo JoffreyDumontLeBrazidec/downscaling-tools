@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from eval._backends.tc.events import EVENTS
+from eval.evaluators.tc.core.events import EVENTS
 from eval.evaluators.tc.comparison_contract import (
     build_prediction_contract,
     validate_curve_support_contract,

@@ -5,8 +5,8 @@ Public API re-exports from submodules.
 
 from __future__ import annotations
 
-from eval._backends.scoreboard.canonical_data import load_canonical_analysis
-from eval._backends.scoreboard.row_matching import RowClassification, classify_row, find_model_row
+from eval.evaluators.tc.core.canonical_data import load_canonical_analysis
+from eval.evaluators.tc.core.row_matching import RowClassification, classify_row, find_model_row
 from eval._backends.scoreboard.spectra import (
     load_spectra_metrics,
     relative_l2_weighted,
@@ -19,7 +19,7 @@ from eval._backends.scoreboard.surface import (
     surface_variable_nmse,
     surface_weighted_nmse,
 )
-from eval._backends.scoreboard.tc import (
+from eval.evaluators.tc.core.scoreboard import (
     load_tc_extreme_scores_from_json,
     multi_depth_tc_score,
     normalize_tc_rows,

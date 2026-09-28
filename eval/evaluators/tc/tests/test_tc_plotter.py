@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
-from eval._backends.tc import pdf_plot
-from eval._backends.tc.plot_config import REFERENCE_STYLES, TCPlotConfig
+from eval.evaluators.tc.core import pdf_plot
+from eval.evaluators.tc.core.plot_config import REFERENCE_STYLES, TCPlotConfig
 from eval.plotting import INPUT_COLOR, MODEL_COLOR, TRUTH_COLOR, role_style
 from eval.evaluators.tc import plotter
 

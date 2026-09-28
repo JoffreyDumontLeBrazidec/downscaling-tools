@@ -1,7 +1,7 @@
 """tc_structure evaluator: tropical-cyclone structure per storm, valid time, member and field.
 
 For every prediction file (one initial date, one lead, ten members) and every event
-(storm box from ``eval/config/events/*.yaml`` through ``eval._backends.tc.events``)
+(storm box from ``eval/config/events/*.yaml`` through ``eval.evaluators.tc.core.events``)
 whose dates match the file, the evaluator measures the storm in three fields on the
 same native grid points: the model ``y_pred``, the truth ``y`` and the interpolated
 coarse input ``x_interp``. The measurements are defined in ``core.py``.
@@ -48,10 +48,10 @@ from pathlib import Path
 
 import numpy as np
 
-from eval._backends.tc.data_types import BoundingBox
-from eval._backends.tc.events import EVENTS
-from eval._backends.tc.grid import normalize_lon, point_mask
-from eval._backends.tc.loading_predictions import select_prediction_files_for_event
+from eval.evaluators.tc.core.data_types import BoundingBox
+from eval.evaluators.tc.core.events import EVENTS
+from eval.evaluators.tc.core.grid import normalize_lon, point_mask
+from eval.evaluators.tc.core.loading_predictions import select_prediction_files_for_event
 from eval.discovery.predictions import PREDICTION_RE, find_predictions
 from eval.shared.date_bootstrap import (
     DEFAULT_N_BOOT, DEFAULT_SEED, boot_mean, boot_mean_diff, boot_slope,

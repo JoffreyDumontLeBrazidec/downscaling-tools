@@ -48,7 +48,7 @@ eval/evaluators/tc/
 |-- runner.py         # run(): orchestration, calls the backend
 |-- scorer.py         # score(): scoreboard rows from the results
 |-- plotter.py        # plot(): figures from the results
-eval/_backends/tc/    # data loading, statistics, grid operations, plot code
+eval/evaluators/tc/core/    # data loading, statistics, grid operations, plot code
 ```
 
 The full list of evaluators, with their group (scored, standard, diagnostic or
@@ -141,7 +141,7 @@ eval/config/
 ```
 
 **Event boxes/dates have a single source of truth: the `events/*.yaml` files.**
-`eval/_backends/tc/events.py` does not hardcode coordinates — it loads those
+`eval/evaluators/tc/core/events.py` does not hardcode coordinates — it loads those
 YAMLs into the `EVENTS` registry at import (so `from ...events import EVENTS`
 keeps working). To add or change a TC event, edit its YAML, never `events.py`.
 Scoring-event boxes must stay mutually non-overlapping (an overlap makes

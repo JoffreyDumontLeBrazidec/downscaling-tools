@@ -11,7 +11,7 @@ import xarray as xr
 
 from eval._backends.region_plotting.local_plotting import get_region_ds
 from eval._backends.region_plotting.plot_regions import PREDICTION_REGION_BOXES
-from eval._backends.tc.events import EVENTS
+from eval.evaluators.tc.core.events import EVENTS
 
 PRED_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")
 

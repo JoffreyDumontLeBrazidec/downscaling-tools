@@ -9,8 +9,8 @@ from pathlib import Path
 
 
 def _score_tc(args: argparse.Namespace) -> None:
-    from eval._backends.scoreboard.canonical_data import load_canonical_analysis
-    from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
+    from eval.evaluators.tc.core.canonical_data import load_canonical_analysis
+    from eval.evaluators.tc.core.scoreboard import load_tc_extreme_scores_from_json
 
     event_names = tuple(args.events.split(",")) if args.events else None
     canonical = None

@@ -14,23 +14,23 @@ from pathlib import Path
 
 from eval.config.loader import load_event
 from eval.discovery.predictions import find_predictions
-from eval._backends.tc.data_types import BoundingBox
-from eval._backends.tc.events import EVENTS, TCEvent
-from eval._backends.tc.experiment_config import TCExperimentConfig
-from eval._backends.tc.loading_predictions import (
+from eval.evaluators.tc.core.data_types import BoundingBox
+from eval.evaluators.tc.core.events import EVENTS, TCEvent
+from eval.evaluators.tc.core.experiment_config import TCExperimentConfig
+from eval.evaluators.tc.core.loading_predictions import (
     event_days_steps,
     forecast_dates_for_event,
     load_prediction_curves,
     select_prediction_files_for_event,
 )
-from eval._backends.tc.loading_grib import regridded_target_points
-from eval._backends.tc.plot_config import TCPlotConfig, resolve_plot_config
+from eval.evaluators.tc.core.loading_grib import regridded_target_points
+from eval.evaluators.tc.core.plot_config import TCPlotConfig, resolve_plot_config
 from eval.evaluators.tc.comparison_contract import (
     build_prediction_contract,
     validate_curve_support_contract,
     validate_comparison_contracts,
 )
-from eval._backends.tc.workflows import (
+from eval.evaluators.tc.core.workflows import (
     _json_default,
     compute_event_stats,
     load_curves_for_event,

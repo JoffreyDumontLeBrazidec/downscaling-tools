@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping
 import re
 
-from eval._backends.tc.data_types import BoundingBox
+from eval.evaluators.tc.core.data_types import BoundingBox
 
 _O96_O320_ANALYSIS = "OPER_O320_0001"
 _CONTRACT_FIELDS = (

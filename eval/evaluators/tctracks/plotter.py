@@ -470,7 +470,7 @@ def _draw_classification(ax, metrics, basin, scope, *, label_size=8):
 # Report 1: per-basin TC distributions in the eval.cli `tc` PDF style
 # ---------------------------------------------------------------------------
 
-# Styling mirrors eval/_backends/tc/pdf_plot.py (plot_pdf_log): two log-density
+# Styling mirrors eval/evaluators/tc/core/pdf_plot.py (plot_pdf_log): two log-density
 # panels (MSLP left with inverted x so intensity increases rightward, wind
 # right), log-floor instead of gaps, truth drawn black/solid/thick. Line styles
 # are the house role styles (eval.plotting.role_style).

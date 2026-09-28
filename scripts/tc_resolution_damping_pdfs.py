@@ -7,7 +7,7 @@ resolutions to visualize the extreme-value damping at coarse resolution:
   1. Humberto IEKM: O96 vs O2560 (global fields → bbox crop)
   2. Franklin ENFO: O320 vs O1280 (subarea extractions)
 
-Uses the existing TC evaluation infrastructure in eval._backends.tc.
+Uses the existing TC evaluation infrastructure in eval.evaluators.tc.core.
 """
 from __future__ import annotations
 
@@ -23,14 +23,14 @@ from matplotlib.backends.backend_pdf import PdfPages
 # Ensure eval package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from eval._backends.tc.data_types import BoundingBox, CurveVectors
-from eval._backends.tc.events import EVENTS
-from eval._backends.tc.grid import normalize_lon, point_mask
+from eval.evaluators.tc.core.data_types import BoundingBox, CurveVectors
+from eval.evaluators.tc.core.events import EVENTS
+from eval.evaluators.tc.core.grid import normalize_lon, point_mask
 import cmcrameri.cm as cm
 import seaborn as sns
 
-from eval._backends.tc.plot_config import TCPlotConfig
-from eval._backends.tc.stats import _finite_1d, safe_ratio
+from eval.evaluators.tc.core.plot_config import TCPlotConfig
+from eval.evaluators.tc.core.stats import _finite_1d, safe_ratio
 
 sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 

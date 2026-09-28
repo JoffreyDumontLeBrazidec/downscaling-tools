@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from eval._backends.scoreboard.tc import load_tc_extreme_scores_from_json
+from eval.evaluators.tc.core.scoreboard import load_tc_extreme_scores_from_json
 
 
 def _write_stats(tmp_path, events):

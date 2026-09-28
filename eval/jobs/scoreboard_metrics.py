@@ -21,8 +21,8 @@ import numpy as np
 # These re-exports keep existing callers working unchanged.
 # ---------------------------------------------------------------------------
 
-from eval._backends.scoreboard.canonical_data import load_canonical_analysis as _load_canonical_analysis
-from eval._backends.scoreboard.row_matching import (
+from eval.evaluators.tc.core.canonical_data import load_canonical_analysis as _load_canonical_analysis
+from eval.evaluators.tc.core.row_matching import (
     classify_row as _classify_row,
     extract_checkpoint_token,
     find_model_row as _choose_tc_row,
@@ -62,11 +62,11 @@ from eval._backends.scoreboard.surface import (
     load_x_interp_surface_metrics,
     surface_weighted_nmse,
 )
-from eval._backends.scoreboard.tc import (
+from eval.evaluators.tc.core.scoreboard import (
     load_tc_extreme_scores_from_json as _canonical_load_tc_extreme_scores_from_json,
 )
 # NOTE: MSLP_REFERENCE_HPA / mslp_depth / multi_depth_* / normalize_tc_rows were removed
-# from eval._backends.scoreboard.tc under the raw-extremes contract (2026-06-21). They were
+# from eval.evaluators.tc.core.scoreboard under the raw-extremes contract (2026-06-21). They were
 # only re-exported here (never used in this module body), so the imports are dropped.
 
 # Canonical analysis: loaded from YAML for backward compat
