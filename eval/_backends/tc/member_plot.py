@@ -1,32 +1,30 @@
-"""Member spatial maps — per-member 2x3 grid pages (MSLP/Wind x Input/Prediction/Target)."""
+"""Member spatial maps — per-member 2x3 grid pages (MSLP / 10 m wind x input / model / truth)."""
 from __future__ import annotations
 
 import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.backends.backend_pdf import PdfPages
 
 from .data_types import BoundingBox
-from .events import TCEvent
 from .experiment_config import TCExperimentConfig
 from .plot_config import TCPlotConfig
 
+from eval.plotting import (
+    add_geography,
+    axis_label,
+    eval_style,
+    extend_for,
+    select_projection_bbox,
+    shared_norm,
+    shorten_run_label,
+    variable_spec,
+)
+
 LOG = logging.getLogger(__name__)
 
-
-def _select_projection(bbox: BoundingBox):
-    """Pick LambertConformal for non-dateline-crossing bboxes, PlateCarree otherwise."""
-    from cartopy import crs
-
-    if bbox.crosses_dateline:
-        return crs.PlateCarree()
-    central_lon = (bbox.west + bbox.east) / 2.0
-    central_lat = (bbox.south + bbox.north) / 2.0
-    return crs.LambertConformal(
-        central_longitude=central_lon,
-        central_latitude=central_lat,
-    )
+# Folder names that the runner may pass as a run label; they say nothing about the model.
+_LEAKED_RUN_LABELS = {"", "eval_inputs", "predictions", "prediction", "data"}
 
 
 def _source_labels(exp_config: TCExperimentConfig | None) -> tuple[str, str]:
@@ -55,6 +53,20 @@ def _source_labels(exp_config: TCExperimentConfig | None) -> tuple[str, str]:
     return input_src, target_src
 
 
+def _date_text(date_str) -> str:
+    text = str(date_str)
+    return f"{text[:4]}-{text[4:6]}-{text[6:8]} 00 UTC" if len(text) == 8 and text.isdigit() else text
+
+
+def _column_titles(exp_config: TCExperimentConfig | None) -> tuple[str, str, str]:
+    """Descriptive column titles: input, model, truth (source names when they are known)."""
+    input_src, target_src = _source_labels(exp_config)
+    input_title = ("Input (interpolated to the target grid)" if input_src == "Input"
+                   else f"Input ({input_src}, interpolated)")
+    truth_title = "Truth" if target_src == "Target" else f"Truth ({target_src})"
+    return input_title, "Model", truth_title
+
+
 def _plot_member_page(
     fields: dict[str, np.ndarray],
     *,
@@ -68,23 +80,38 @@ def _plot_member_page(
     display_label: str,
     event_name: str,
 ) -> plt.Figure:
-    """Create a 2x3 grid for one member: rows=[MSLP, Wind], cols=[Input, Prediction, Target]."""
-    import cartopy.feature as cfeature
-    import cmcrameri.cm as cmc
+    """Create a 2x3 grid for one member: rows=[MSLP, 10 m wind], cols=[Input, Model, Truth].
+
+    The fields arrive in display units (hPa and m s-1, see ``load_prediction_member_fields``).
+    Each row shares one colour scale across its three panels.
+    """
+    with eval_style():
+        return _draw_member_page(
+            fields, bbox=bbox, plot_config=plot_config, exp_config=exp_config,
+            member_idx=member_idx, member_label=member_label, step_hours=step_hours,
+            date_str=date_str, display_label=display_label, event_name=event_name,
+        )
+
+
+def _draw_member_page(fields, *, bbox, plot_config, exp_config, member_idx, member_label,
+                      step_hours, date_str, display_label, event_name) -> plt.Figure:
     from cartopy import crs
     from matplotlib.gridspec import GridSpec
 
-    proj = _select_projection(bbox)
-    input_src, target_src = _source_labels(exp_config)
+    proj = select_projection_bbox(bbox)
+    input_title, model_title, truth_title = _column_titles(exp_config)
 
-    bbox_aspect = abs(bbox.east - bbox.west) / (bbox.north - bbox.south)
-    fig_height = 13.0 if bbox_aspect <= 1.0 else 13.0 / bbox_aspect
-
-    fig = plt.figure(figsize=(18, fig_height))
+    # Size the page to the box so the three columns sit close together (no wide gaps).
+    lon_span = (bbox.east - bbox.west) % 360.0 or 360.0
+    mid_lat = np.deg2rad((bbox.north + bbox.south) / 2.0)
+    bbox_aspect = lon_span * max(np.cos(mid_lat), 0.3) / (bbox.north - bbox.south)
+    panel_w = float(np.clip(4.6 * bbox_aspect, 3.2, 6.0))
+    panel_h = float(np.clip(panel_w / bbox_aspect, 2.6, 5.0))
+    fig = plt.figure(figsize=(3 * panel_w + 1.6, 2 * panel_h + 3.4))
     gs = GridSpec(
         2, 3,
-        hspace=0.35, wspace=0.12,
-        left=0.08, right=0.97, bottom=0.08, top=0.91,
+        hspace=0.45, wspace=0.16,
+        left=0.06, right=0.98, bottom=0.09, top=0.88,
     )
 
     map_axes = np.empty((2, 3), dtype=object)
@@ -96,60 +123,60 @@ def _plot_member_page(
     lon = fields["lon_axis"]
 
     col_defs = [
-        ("x_interp", f"{input_src} (input)"),
-        ("y_pred", "Prediction (downscaled input)"),
-        ("y", f"{target_src} (target)"),
+        ("x_interp", input_title),
+        ("y_pred", model_title),
+        ("y", truth_title),
     ]
 
+    # Rows: variable-table key, field suffix, fixed range from the event plot config.
     row_defs = [
-        ("msl", "MSLP", cmc.vik, "hPa"),
-        ("wind", "10m Wind Speed", cmc.batlow, "m/s"),
+        ("msl", "msl", plot_config.member_map_msl_range),
+        ("10ff", "wind", plot_config.member_map_wind_range),
     ]
-
-    # Shared color limits
-    msl_keys = [k for k in ["x_interp_msl", "y_pred_msl", "y_msl"] if k in fields]
-    wind_keys = [k for k in ["x_interp_wind", "y_pred_wind", "y_wind"] if k in fields]
-    if plot_config.member_map_msl_range is not None:
-        msl_vmin, msl_vmax = plot_config.member_map_msl_range
-    else:
-        msl_vmin = float(np.nanmin([np.nanmin(fields[k][member_idx]) for k in msl_keys]))
-        msl_vmax = float(np.nanmax([np.nanmax(fields[k][member_idx]) for k in msl_keys]))
-    if plot_config.member_map_wind_range is not None:
-        wind_vmin, wind_vmax = plot_config.member_map_wind_range
-    else:
-        wind_vmin = 0.0
-        wind_vmax = float(np.nanmax([np.nanmax(fields[k][member_idx]) for k in wind_keys]))
-    var_vlims = {"msl": (msl_vmin, msl_vmax), "wind": (wind_vmin, wind_vmax)}
 
     row_images = {}
+    row_extend = {}
 
-    for row_i, (var_suffix, row_label, cmap, unit) in enumerate(row_defs):
-        vmin, vmax = var_vlims[var_suffix]
-        contour_levels = np.linspace(vmin, vmax, 12)
+    for row_i, (var_key, var_suffix, fixed_range) in enumerate(row_defs):
+        spec = variable_spec(var_key)
+        arrays = [fields[f"{p}_{var_suffix}"][member_idx] for p, _ in col_defs if f"{p}_{var_suffix}" in fields]
+        # One colour scale for the whole row (input, model and truth are compared).
+        if fixed_range is not None:
+            norm = shared_norm(vmin=fixed_range[0], vmax=fixed_range[1])
+        elif var_suffix == "wind":
+            # full range: the storm extremes are what these maps are for
+            norm = shared_norm(*arrays, vmin=0.0, q=(0.0, 100.0))
+        else:
+            norm = shared_norm(*arrays, q=(0.0, 100.0))
+        row_extend[row_i] = extend_for(norm, *arrays)
+        contour_levels = np.linspace(norm.vmin, norm.vmax, 12)
+        cmap = spec.field_cmap()
 
         for col_i, (src_prefix, col_title) in enumerate(col_defs):
             ax = map_axes[row_i, col_i]
             field_key = f"{src_prefix}_{var_suffix}"
+            ax.set_extent([bbox.west, bbox.east, bbox.south, bbox.north], crs=crs.PlateCarree())
+            gl = add_geography(ax, label_size=9)
+            if gl is not None and col_i > 0:
+                gl.left_labels = False
+            ax.set_title(f"{col_title}\n{spec.name}", fontsize=11)
 
             if field_key not in fields:
                 ax.text(
-                    0.5, 0.5, "N/A",
+                    0.5, 0.5, "not available",
                     transform=ax.transAxes,
-                    ha="center", va="center", fontsize=16, color="gray",
+                    ha="center", va="center", fontsize=13, color="0.45",
                 )
-                if row_i == 0:
-                    ax.set_title(col_title, fontsize=13)
-                ax.coastlines(linewidth=0.5)
                 continue
 
             arr = fields[field_key][member_idx]
-
             im = ax.pcolormesh(
                 lon, lat, arr,
                 transform=crs.PlateCarree(),
-                vmin=vmin, vmax=vmax,
+                norm=norm,
                 shading="nearest",
                 cmap=cmap,
+                rasterized=True,
             )
             try:
                 ax.contour(
@@ -158,66 +185,30 @@ def _plot_member_page(
                     levels=contour_levels,
                     colors="black",
                     linewidths=0.4,
-                    alpha=0.6,
+                    alpha=0.5,
                 )
             except Exception:
                 pass
+            row_images.setdefault(row_i, im)
 
-            if row_i not in row_images:
-                row_images[row_i] = im
-
-            ax.coastlines(linewidth=0.6)
-            try:
-                ax.add_feature(cfeature.BORDERS, linewidth=0.3, edgecolor="gray")
-            except Exception:
-                pass
-
-            ax.set_extent(
-                [bbox.west, bbox.east, bbox.south, bbox.north],
-                crs=crs.PlateCarree(),
-            )
-
-            gl = ax.gridlines(
-                draw_labels=True, dms=False,
-                x_inline=False, y_inline=False,
-                linewidth=0.3, alpha=0.5,
-            )
-            gl.top_labels = False
-            gl.right_labels = False
-            gl.xlabel_style = {"rotation": 0, "fontsize": 11, "va": "top"}
-            gl.ylabel_style = {"fontsize": 11}
-            gl.xpadding = 8
-            if col_i > 0:
-                gl.left_labels = False
-
-            if row_i == 0:
-                ax.set_title(col_title, fontsize=14)
-            if col_i == 0:
-                ax.text(
-                    -0.14, 0.5, row_label,
-                    transform=ax.transAxes,
-                    ha="center", va="center",
-                    fontsize=14, rotation=90,
-                )
-
-    # Colorbars
+    # One horizontal colour bar per row, centred under the row, with the unit.
     fig.canvas.draw()
-    for row_i, (var_suffix, row_label, cmap, unit) in enumerate(row_defs):
+    for row_i, (var_key, _suffix, _range) in enumerate(row_defs):
         if row_i not in row_images:
             continue
         pos0 = map_axes[row_i, 0].get_position()
         pos2 = map_axes[row_i, 2].get_position()
         row_width = pos2.x1 - pos0.x0
-        cbar_w = row_width * 0.6
-        cbar_x = pos0.x0 + row_width * 0.2
-        cbar_y = pos0.y0 - 0.05
-        cax = fig.add_axes([cbar_x, cbar_y, cbar_w, 0.015])
-        cbar = fig.colorbar(row_images[row_i], cax=cax, orientation="horizontal")
-        cbar.set_label(unit, fontsize=13)
-        cbar.ax.tick_params(labelsize=12)
+        cax = fig.add_axes([pos0.x0 + row_width * 0.2, pos0.y0 - 0.065, row_width * 0.6, 0.014])
+        cbar = fig.colorbar(row_images[row_i], cax=cax, orientation="horizontal",
+                            extend=row_extend[row_i])
+        cbar.set_label(axis_label(var_key))
 
+    run_text = shorten_run_label(str(display_label or "").strip())
+    run_part = "" if run_text.lower() in _LEAKED_RUN_LABELS else f" (model run {run_text})"
     fig.suptitle(
-        f"TC {event_name.capitalize()} | {display_label} | {date_str} +{step_hours}h | member {member_label}",
-        fontsize=16, y=0.96,
+        f"Tropical cyclone {event_name.capitalize()}: ensemble member {member_label}, "
+        f"forecast from {_date_text(date_str)} at lead time +{step_hours} h{run_part}",
+        y=0.97,
     )
     return fig

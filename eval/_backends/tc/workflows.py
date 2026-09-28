@@ -11,9 +11,19 @@ from typing import Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.backends.backend_pdf import PdfPages
 
 from eval.paths import reference_tc_dir
+from eval.plotting import (
+    FigureBook,
+    add_geography,
+    axis_label,
+    eval_style,
+    extend_for,
+    readable_label,
+    save_figure,
+    shared_norm,
+    variable_spec,
+)
 
 from .data_types import BoundingBox, CurveVectors, SupportMode
 from .events import EVENTS, TCEvent
@@ -412,7 +422,7 @@ def run_tc_pdf(
     }
 
     rendered_events = 0
-    with PdfPages(out_pdf) as pdf:
+    with FigureBook(out_pdf, png=True) as book:
         for event_name in selected_events:
             if event_name not in EVENTS:
                 LOG.warning("Unknown event=%s, skipping", event_name)
@@ -510,8 +520,7 @@ def run_tc_pdf(
                     exp_labels[expid] = expid.replace("ENFO_O320_", "")
 
             fig = render_event_figure(event_stats, plot_config=plot_cfg, exp_labels=exp_labels)
-            pdf.savefig(fig, dpi=300)
-            plt.close(fig)
+            book.add(fig, name=event_name)
             payload["events"][event_name] = event_stats
             rendered_events += 1
 
@@ -582,7 +591,7 @@ def run_member_maps(
         pdf_name = f"tc_members_{event_name}_{safe_label}_{date}.pdf"
         pdf_path = out_dir / pdf_name
 
-        with PdfPages(pdf_path) as pdf:
+        with FigureBook(pdf_path, png=True) as book:
             for nc_path, ymd, step in sorted(step_files, key=lambda x: x[2]):
                 LOG.info("Loading event=%s date=%s step=%d", event_name, date, step)
                 try:
@@ -607,8 +616,7 @@ def run_member_maps(
                         display_label=display_label,
                         event_name=event_name,
                     )
-                    pdf.savefig(fig, dpi=200, bbox_inches="tight")
-                    plt.close(fig)
+                    book.add(fig, name=f"step{step:03d}_member{mbr}")
 
         LOG.info("Saved TC member maps PDF: %s", pdf_path)
         generated.append(str(pdf_path))
@@ -725,47 +733,65 @@ def run_tc_member_plots_legacy(
         if not msl_data or not wind_data:
             continue
 
-        from cartopy import crs as crs_mod
-        for var_key, data_dict, levels, title_prefix in [
-            ("msl", msl_data, case["msl_levels"], "Mean Sea Level Pressure"),
-            ("wind10m", wind_data, case["wind_levels"], f"Wind Speed 10m - {month} Lead Time {t_idx}"),
-        ]:
-            filename = f"{case['name']}_{var_key}_fields_{case['dates'][0]}_{month}_step{t_idx}.png"
-            datasets = [(data, key) for key, data in data_dict.items()]
-            ncols, nrows = len(datasets), len(safe_members)
-            fig, axs = plt.subplots(nrows, ncols, figsize=(8 * ncols, 6 * nrows),
-                                    subplot_kw={"projection": crs_mod.PlateCarree()})
-            fig.subplots_adjust(left=0.07, right=0.93, bottom=0.08, top=0.92, wspace=-0.1, hspace=0.15)
+        generated.extend(_plot_legacy_member_fields(
+            case, msl_data, wind_data, safe_members, t_idx, lon2, lat2, month, out_root,
+        ))
+        LOG.info("Generated TC member plots for %s", case["name"])
+
+    return generated
+
+
+def _plot_legacy_member_fields(case, msl_data, wind_data, safe_members, t_idx, lon2, lat2,
+                               month, out_root: Path) -> list[str]:
+    """Draw the legacy GRIB member maps: one PNG (plus PDF) per variable, members x sources.
+
+    Rows are members, columns are sources; one colour scale per figure (the case levels),
+    variable-table colour maps and units, geography and labelled grid lines on every panel.
+    """
+    from cartopy import crs as crs_mod
+
+    written: list[str] = []
+    for var_key, spec_key, data_dict, levels in [
+        ("msl", "msl", msl_data, case["msl_levels"]),
+        ("wind10m", "10ff", wind_data, case["wind_levels"]),
+    ]:
+        spec = variable_spec(spec_key)
+        filename = f"{case['name']}_{var_key}_fields_{case['dates'][0]}_{month}_step{t_idx}.png"
+        datasets = [(data, key) for key, data in data_dict.items()]
+        ncols, nrows = len(datasets), len(safe_members)
+        norm = shared_norm(vmin=float(levels[0]), vmax=float(levels[-1]))
+        with eval_style():
+            fig, axs = plt.subplots(nrows, ncols, figsize=(5.5 * ncols, 4.6 * nrows),
+                                    subplot_kw={"projection": crs_mod.PlateCarree()},
+                                    layout="constrained")
             axs_arr = np.array(axs).reshape(nrows, ncols)
-            images = []
+            shown = []
+            im = None
             for row, member in enumerate(safe_members):
                 for col, (data, label) in enumerate(datasets):
                     ax = axs_arr[row, col]
                     arr = data[0, member, t_idx][10:100, 10:100]
+                    shown.append(arr)
                     im = ax.pcolormesh(lon2[10:100, 10:100], lat2[10:100, 10:100], arr,
-                                       transform=crs_mod.PlateCarree(),
-                                       vmin=float(levels[0]), vmax=float(levels[-1]),
-                                       shading="gouraud", cmap="viridis")
+                                       transform=crs_mod.PlateCarree(), norm=norm,
+                                       shading="gouraud", cmap=spec.field_cmap(), rasterized=True)
                     ax.contour(lon2[10:100, 10:100], lat2[10:100, 10:100], arr,
                                transform=crs_mod.PlateCarree(), levels=levels,
-                               colors="black", linewidths=0.5)
-                    ax.set_title(f"mbr{member} {label}", fontsize=12)
-                    ax.coastlines()
-                    ax.grid(color="white", linestyle="--", linewidth=0.5)
-                    gl = ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False)
-                    gl.top_labels = False
-                    gl.right_labels = False
-                    images.append(im)
-            for row in range(nrows):
-                fig.colorbar(images[row * ncols], ax=axs_arr[row], orientation="vertical", shrink=0.8, pad=0.02)
-            fig.suptitle(title_prefix, fontsize=14)
+                               colors="black", linewidths=0.4, alpha=0.6)
+                    ax.set_title(f"{readable_label(label)}, member {member}", fontsize=10)
+                    gl = add_geography(ax, label_size=7)
+                    if gl is not None and col > 0:
+                        gl.left_labels = False
+            if im is not None:
+                cbar = fig.colorbar(im, ax=axs_arr.ravel().tolist(), shrink=0.8, pad=0.02,
+                                    extend=extend_for(norm, *shown))
+                cbar.set_label(axis_label(spec_key))
+            fig.suptitle(f"Tropical cyclone {case['name'].capitalize()}: {spec.name}, "
+                         f"day {case['dates'][0]} of month {month}, lead-time index {t_idx}")
             out_path = out_root / filename
-            fig.savefig(out_path, dpi=300, bbox_inches="tight")
-            plt.close(fig)
-            generated.append(str(out_path))
-        LOG.info("Generated TC member plots for %s", case["name"])
-
-    return generated
+            save_figure(fig, out_path, close=True)
+        written.append(str(out_path))
+    return written
 
 
 def _json_default(obj):
