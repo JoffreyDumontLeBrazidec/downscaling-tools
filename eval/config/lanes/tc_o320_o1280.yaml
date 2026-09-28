@@ -50,9 +50,9 @@ tc:
     enabled: false
 
 evaluator_groups:
-  default: [tc, local_global]
+  default: [tc]
   parity: [local_global]
-  diagnostics: []
+  diagnostics: [local_global]
 
 local_global:
   # Optional parity baseline against a known full-grid b785 run. Override this per

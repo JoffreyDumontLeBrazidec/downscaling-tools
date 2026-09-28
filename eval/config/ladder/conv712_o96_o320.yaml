@@ -19,21 +19,18 @@ budget:
 
 # Only the missing column is computed. probabilistic/ is symlinked in from the existing
 # study dir, so the pinned probabilistic knobs below are documentation of what produced it.
-evaluators: spectra
+evaluators: spectra_ecmwf_v2
 
-# Ladder spectra pin (same as the o320->o1280 ladder profiles): nside 128 / lmax 512 on the
-# two surface fields. nside 64 + lmax 319 is an INVALID SHT band (healpy needs lmax <= 4*nside).
-# NB: the spectra runner reads `weather_states`, NOT `fields` (the base lane spells it
-# `fields`, which the runner ignores) -- pinning `fields` silently left all 6 lane fields on.
-spectra:
-  weather_states: "10u,2t"
-  fields:
-  - 10u
-  - 2t
-  nside: 128
-  lmax: 512
-  steps:
-  - 120
+# Ladder spectra pin (2026-09-28): spectra_ecmwf_v2 (ECMWF transform, complete grid, AC only)
+# replaced the retired HEALPix proxy. The rung runs it in its own evaluate call without
+# --steps, so these dates, steps and members hold; it costs one gptosp transform per
+# (date, step, member, field). Its rows are named spectra_v2_<field>_* and are not
+# comparable with the spectra_<field>_* rows of rungs scored before 2026-09-28.
+spectra_ecmwf_v2:
+  weather_states: [10u, 2t]
+  dates: ["20230826", "20230827", "20230828", "20230829", "20230830"]
+  steps: [120]
+  members: [10]
 
 slurm:
   qos: ng

@@ -33,7 +33,7 @@ budget:
   steps: '120'
   members: '1,2,3,4,5,6,7,8,9,10'
 
-evaluators: probabilistic,spectra
+evaluators: probabilistic,spectra_ecmwf_v2
 
 # Grid rows are 10u / 10v / 2t. Both wind COMPONENTS are stored weather_states, so BOTH
 # evaluators can score them -- unlike 10ff, which the probabilistic scorer derives as
@@ -50,15 +50,16 @@ probabilistic:
   - t_850
   - z_500
 
-# NB: the spectra runner reads `weather_states`, NOT `fields` (the base lane spells it `fields`,
-# which the runner ignores). Ladder pin: nside 128 / lmax 512 on the two surface fields --
-# cheaper than the lane's nside 187 / 6 fields and the same recipe as the other ladder cards.
-spectra:
-  weather_states: "10u,10v,2t"
-  nside: 128
-  lmax: 512
-  steps:
-  - 120
+# Ladder spectra pin (2026-09-28): spectra_ecmwf_v2 (ECMWF transform, complete grid, AC only)
+# replaced the retired HEALPix proxy. The rung runs it in its own evaluate call without
+# --steps, so these dates, steps and members hold; it costs one gptosp transform per
+# (date, step, member, field). Its rows are named spectra_v2_<field>_* and are not
+# comparable with the spectra_<field>_* rows of rungs scored before 2026-09-28.
+spectra_ecmwf_v2:
+  weather_states: [10u, 10v, 2t]
+  dates: ["20230828", "20230829"]
+  steps: [120]
+  members: [1]
 
 slurm:
   qos: ng

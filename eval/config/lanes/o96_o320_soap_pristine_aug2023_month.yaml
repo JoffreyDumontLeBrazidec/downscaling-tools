@@ -82,6 +82,19 @@ spectra_ecmwf:
   input_label: "EEFO"
   input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
 
+# spectra_ecmwf_v2 (added 2026-09-28): spectra_ecmwf above is retired. Same settings, but staged on the
+# complete-grid template instead of the pole-masked one; the reference cache is keyed
+# by window and template, so it never reuses a version-one reference.
+spectra_ecmwf_v2:
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o320"
+  weather_states: ["10u", "10v", "2t", "sp", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o96_o320/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o96_o320/idalia"
+
 surface:
   weighting: "truth-std"
 
@@ -126,8 +139,8 @@ sigma_loss:
   validation_frequency: null
 
 evaluator_groups:
-  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
-  diagnostics: [sigma, sigma_loss, mechanistic, intermediate, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot]
+  diagnostics: [sigma_loss, mlflow]
 
 prepml:
   runner: anemoi-dev

@@ -33,7 +33,7 @@ over the parent, so a variant only states what differs:
 # o48_o96_debug.yaml -- the whole file
 base: o48_o96
 
-spectra_ecmwf:
+spectra_ecmwf_v2:
   steps: [24]
   members: [1]
 ```
@@ -48,9 +48,8 @@ Depth is unlimited and a base may itself have a base.
 
 These are **not** hand-written and are **not** tracked in git. `eval/jobs/ladder.py::derive_lane`
 materialises them from the ladder profiles in `eval/config/ladder/*.yaml`, because
-`eval.cli --lane` takes a name, so a profile's pinned evaluator knobs (`spectra`,
-`spectra_ecmwf`, `tc`, `probabilistic` — `LANE_OVERRIDE_KEYS`) have no other route into the
-evaluators.
+`eval.cli --lane` takes a name, so a profile's pinned evaluator knobs (`spectra_ecmwf_v2`,
+`tc`, `probabilistic` — `LANE_OVERRIDE_KEYS`) have no other route into the evaluators.
 
 Never hand-edit one; the next `ladder score` overwrites it. Edit the profile instead. If a
 `_ladder_*` file is missing, run `ladder score` and it reappears.
@@ -83,3 +82,12 @@ armed for that grid and the lane's own values are being trusted. Treat it as a s
 See the [retirement convention in `eval/README.md`](../../README.md#retiring-a-lane). The
 short version: a campaign's arms are deleted once the campaign is scored — the scoreboard row
 plus git history is the record, and `git rm` keeps both.
+
+## Evaluator groups
+
+`evaluator_groups.default` holds only scored and standard evaluators, and the
+`diagnostics` group holds diagnostic ones; the group of every evaluator is set in
+`eval/evaluators/registry.py`. Retired evaluators (for example `spectra`,
+`spectra_ecmwf`, `sigma`, `mechanistic`, `intermediate`) were removed from every tracked
+lane on 2026-09-28. If an old or untracked lane still lists one, the CLI skips it with a
+warning; naming one with `--only` stops the CLI with exit status 1.

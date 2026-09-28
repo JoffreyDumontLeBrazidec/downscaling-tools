@@ -98,6 +98,19 @@ spectra_ecmwf:
   input_label: "EEFO"
   input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
 
+# spectra_ecmwf_v2 (added 2026-09-28): spectra_ecmwf above is retired. Same settings, but staged on the
+# complete-grid template instead of the pole-masked one; the reference cache is keyed
+# by window and template, so it never reuses a version-one reference.
+spectra_ecmwf_v2:
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia"
+
 surface:
   weighting: "truth-std"
 
@@ -163,8 +176,8 @@ quaver:
   # input_cache_root: /home/ecm5702/perm/eval/_quaver_input_baseline_cache
 
 evaluator_groups:
-  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot]
+  diagnostics: [mlflow]
 
 resource_profiles:
   predict:

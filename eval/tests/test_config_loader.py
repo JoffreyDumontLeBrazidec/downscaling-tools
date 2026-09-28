@@ -155,8 +155,11 @@ def test_tc_o320_o1280_fast_harness_contract():
     assert tc.get("grib_dir") is None
     assert tc["reference_expids"] == []
 
-    assert config["evaluator_groups"]["default"] == ["tc", "local_global"]
-    assert "spectra" not in config["evaluator_groups"]["default"]
+    # default holds scored/standard evaluators only (registry, 2026-09-28); the
+    # local/global parity check is a diagnostic and stays one --include-diagnostics away.
+    assert config["evaluator_groups"]["default"] == ["tc"]
+    assert "local_global" in config["evaluator_groups"]["diagnostics"]
+    assert "spectra_ecmwf_v2" not in config["evaluator_groups"]["default"]
 
 
 def test_o320_o1280_standard_sampler_uses_sigma100k():

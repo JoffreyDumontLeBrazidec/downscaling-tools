@@ -18,7 +18,7 @@ budget:
   steps: "24,48,72,120"
   members: "1,2,3,4,5,6,7,8,9,10"
 
-evaluators: tc,probabilistic,spectra
+evaluators: tc,probabilistic,spectra_ecmwf_v2
 
 probabilistic:
   weather_states:
@@ -31,12 +31,16 @@ probabilistic:
   - t_850
   - z_500
 
-spectra:
-  weather_states: "10u,10v,2t"
-  nside: 128
-  lmax: 512
-  steps:
-  - 120
+# Ladder spectra pin (2026-09-28): spectra_ecmwf_v2 (ECMWF transform, complete grid, AC only)
+# replaced the retired HEALPix proxy. The rung runs it in its own evaluate call without
+# --steps, so these dates, steps and members hold; it costs one gptosp transform per
+# (date, step, member, field). Its rows are named spectra_v2_<field>_* and are not
+# comparable with the spectra_<field>_* rows of rungs scored before 2026-09-28.
+spectra_ecmwf_v2:
+  weather_states: [10u, 10v, 2t]
+  dates: ["20230828", "20230829"]
+  steps: [120]
+  members: [1]
 
 slurm:
   qos: ng

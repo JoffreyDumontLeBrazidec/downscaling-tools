@@ -109,8 +109,8 @@ sigma:
   residual_statistics_fallback: "o2560_dict_6_72.npy"
 
 evaluator_groups:
-  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot]
+  diagnostics: [mlflow]
 
 resource_profiles:
   predict:

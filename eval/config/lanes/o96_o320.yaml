@@ -109,8 +109,8 @@ sigma_loss:
   validation_frequency: null
 
 evaluator_groups:
-  default: [tc, spectra, spectra_ecmwf, surface, region_plot]
-  diagnostics: [sigma, sigma_loss, mechanistic, intermediate, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot]
+  diagnostics: [sigma_loss, mlflow]
 
 resource_profiles:
   predict:

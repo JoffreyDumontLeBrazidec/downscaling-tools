@@ -11,11 +11,17 @@ budget:
   dates: "20250926"
   steps: "48,120"
   members: "1,2,3,4,5,6,7,8,9,10"
-evaluators: tc,probabilistic,spectra
-spectra:
-  weather_states: "10u,2t"
-  nside: 128           # lmax MUST be <= 4*nside (healpy); 64/319 was an invalid band
-  lmax: 512            # lane default 742/1484 costs >20 min per rung -- not ladder-cheap
+evaluators: tc,probabilistic,spectra_ecmwf_v2
+# Ladder spectra pin (2026-09-28): spectra_ecmwf_v2 (ECMWF transform, complete grid, AC only)
+# replaced the retired HEALPix proxy. The rung runs it in its own evaluate call without
+# --steps, so these dates, steps and members hold; it costs one gptosp transform per
+# (date, step, member, field). Its rows are named spectra_v2_<field>_* and are not
+# comparable with the spectra_<field>_* rows of rungs scored before 2026-09-28.
+spectra_ecmwf_v2:
+  weather_states: [10u, 2t]
+  dates: ["20250926"]
+  steps: [120]
+  members: [1]
 storm_maps_args: ""            # humberto box comes from the lane config
 seed_draws: 0                  # candidate-B mode off for o2560 (predictions too expensive)
 slurm:

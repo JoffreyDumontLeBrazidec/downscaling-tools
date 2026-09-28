@@ -170,8 +170,8 @@ prepare:
 # Restated IN FULL: the config merge is 2 levels deep, so this list REPLACES
 # the base lane's default group. Base default + the three precip evaluators.
 evaluator_groups:
-  default: [tc, spectra, spectra_ecmwf, surface, region_plot, precip_scores, precip_dist, precip_events]
-  diagnostics: [sigma, mechanistic, intermediate, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot, precip_scores]
+  diagnostics: [precip_dist, precip_events, mlflow]
 
 resource_profiles:
   evaluate_precip_scores:
