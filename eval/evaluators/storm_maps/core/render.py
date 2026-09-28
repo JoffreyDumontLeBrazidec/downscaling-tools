@@ -189,7 +189,7 @@ def plot_storm_maps(out_dir, lon_grid, lat_grid, fields: dict, *, eye_lat: float
             ("msl", 1, Normalize(vmin=msl_min, vmax=msl_max)))
     pc = ccrs.PlateCarree()
     with eval_style():
-        fig, ax = map_grid(2, 3, extent, panel_size=(4.3, 4.0), resolution="50m")
+        fig, ax = map_grid(2, 3, extent, panel_size=(4.3, 4.0), resolution="50m", fill=True)
         ax[0, 0].get_gridspec().update(hspace=0.34)   # room for the second row's two-line titles
         for var, k, norm in rows:
             spec = variable_spec(var)

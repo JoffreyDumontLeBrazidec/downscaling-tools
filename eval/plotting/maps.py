@@ -75,14 +75,51 @@ def add_geography(ax, *, coastlines: bool = True, borders: bool = True, gridline
     return gl
 
 
-def new_map_axes(fig, spec, extent, *, projection=None, geography: bool = True, **geo_kwargs):
-    """Add a map panel to ``fig`` at grid position ``spec`` for ``extent=(west, east, south, north)``."""
+def inscribed_extent(proj, extent, n: int = 101) -> tuple[float, float, float, float]:
+    """Largest axis-aligned rectangle, in ``proj`` coordinates, inside the box ``extent``.
+
+    ``extent`` is ``(west, east, south, north)`` in degrees. On a conic projection such as the
+    Lambert conformal one the meridians converge and the parallels are arcs, so the four edges
+    of a latitude-longitude box do not form a rectangle. ``set_extent`` with the box then shows
+    the whole bounding rectangle of the fan-shaped box, and thin white wedges appear where the
+    fan does not reach it. This rectangle lies wholly inside the box, so the axes are filled
+    with data. It returns ``(x0, x1, y0, y1)`` for ``ax.set_extent(..., crs=proj)``.
+    """
+    import cartopy.crs as ccrs
+
+    west, east, south, north = extent
+    lons = np.linspace(west, east, n)
+    lats = np.linspace(south, north, n)
+    pc = ccrs.PlateCarree()
+
+    def edge(lon, lat):
+        pts = proj.transform_points(pc, np.asarray(lon, float), np.asarray(lat, float))
+        return pts[:, 0], pts[:, 1]
+
+    x_left = edge(np.full(n, west), lats)[0].max()
+    x_right = edge(np.full(n, east), lats)[0].min()
+    y_bottom = edge(lons, np.full(n, south))[1].max()
+    y_top = edge(lons, np.full(n, north))[1].min()
+    return float(x_left), float(x_right), float(y_bottom), float(y_top)
+
+
+def new_map_axes(fig, spec, extent, *, projection=None, geography: bool = True, fill: bool = False,
+                 **geo_kwargs):
+    """Add a map panel to ``fig`` at grid position ``spec`` for ``extent=(west, east, south, north)``.
+
+    With ``fill=True`` a Lambert (conic) panel is cropped to the largest rectangle inside the
+    box (see ``inscribed_extent``), so that it has no white wedges at its corners. Plate carree
+    panels are rectangles already and are left alone.
+    """
     import cartopy.crs as ccrs
 
     west, east, south, north = extent
     proj = projection or select_projection(west, east, south, north)
     ax = fig.add_subplot(spec, projection=proj)
-    ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
+    if fill and not isinstance(proj, (ccrs.PlateCarree,)) and east >= west:
+        ax.set_extent(inscribed_extent(proj, extent), crs=proj)
+    else:
+        ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
     if geography:
         add_geography(ax, **geo_kwargs)
     return ax
@@ -152,8 +189,11 @@ def add_row_colorbar(fig, mappable, axes, label: str, *, extend: str = "neither"
     return cb
 
 
-def map_grid(nrows: int, ncols: int, extent, *, panel_size=(3.6, 3.2), projection=None, **geo_kwargs):
-    """Create ``(fig, axes)`` with ``nrows`` x ``ncols`` map panels (axes is a 2-D array)."""
+def map_grid(nrows: int, ncols: int, extent, *, panel_size=(3.6, 3.2), projection=None,
+             fill: bool = False, **geo_kwargs):
+    """Create ``(fig, axes)`` with ``nrows`` x ``ncols`` map panels (axes is a 2-D array).
+
+    ``fill=True`` crops conic panels to the box's inscribed rectangle (see ``new_map_axes``)."""
     import matplotlib.pyplot as plt
 
     west, east, south, north = extent
@@ -163,5 +203,5 @@ def map_grid(nrows: int, ncols: int, extent, *, panel_size=(3.6, 3.2), projectio
     axes = np.empty((nrows, ncols), dtype=object)
     for i in range(nrows):
         for j in range(ncols):
-            axes[i, j] = new_map_axes(fig, gs[i, j], extent, projection=proj, **geo_kwargs)
+            axes[i, j] = new_map_axes(fig, gs[i, j], extent, projection=proj, fill=fill, **geo_kwargs)
     return fig, axes
