@@ -1,16 +1,19 @@
 #!/bin/bash --login
-# ECMWF spectra template — AC-only (requires gptosp.ser).
+# ECMWF spectra template — AC-only (requires gptosp.ser). Runs spectra_ecmwf_v2;
+# version one (spectra_ecmwf) was retired on 2026-09-28.
 #
 # Computes trusted spectral energy spectra from prediction NetCDF files using
 # the ECMWF spectral-transform route (gptosp), via eval.cli evaluate.
 #
-# Pipeline (handled by eval.evaluators.spectra_ecmwf.runner):
-#   1. Stage prediction fields as nopoles GRIB files (from predictions_*.nc)
+# Pipeline (handled by eval.evaluators.spectra_ecmwf_v2.runner):
+#   1. Stage prediction fields as GRIB files on the complete grid (from predictions_*.nc)
 #   2. Convert GRIBs to spectral harmonics via gptosp.ser
 #   3. Compute spectra amplitudes from the staged spectral harmonics
+#   4. Score them against the truth reference (spectra_v2_* rows in metrics.json)
 #
 # All lane-level settings (template_root, weather_states, steps, members,
-# reference_dir) are read from eval/config/lanes/<lane>.yaml.
+# reference_dir) are read from the spectra_ecmwf_v2 section of
+# eval/config/lanes/<lane>.yaml.
 #
 # Resource baselines (empirical):
 #   30 transforms  (6 params × 5 dates × 1 member):  ~2-3h
@@ -22,7 +25,7 @@
 # IMPORTANT: This template is AC-only. gptosp.ser and the required modules
 # (ifs, eclib, pifsenv) are not available on AG nodes.
 
-#SBATCH --job-name=spectra_ecmwf
+#SBATCH --job-name=spectra_ecmwf_v2
 #SBATCH --qos=nf
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
@@ -53,7 +56,7 @@ esac
 source /home/ecm5702/dev/.ds-dyn/bin/activate
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 
-echo "=== Spectra ECMWF (gptosp pipeline) ==="
+echo "=== Spectra ECMWF v2 (gptosp pipeline, complete grid) ==="
 echo "run_root=${RUN_ROOT}"
 echo "predictions_dir=${PREDICTIONS_DIR}"
 echo "lane=${LANE}"
@@ -65,7 +68,7 @@ python -m eval.cli evaluate \
     --predictions-dir "${PREDICTIONS_DIR}" \
     --lane "${LANE}" \
     --host atos_ac \
-    --only spectra_ecmwf \
+    --only spectra_ecmwf_v2 \
     --overwrite
 
 echo "DONE Spectra ECMWF eval run_root=${RUN_ROOT}"

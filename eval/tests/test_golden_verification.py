@@ -6,6 +6,10 @@ to the known-good values in the full 26-30 scoreboard CSV:
 
 Row: "cfec83 k40 oldlike200k" (checkpoint_short: cfec83a3cd)
 
+The spectra (HEALPix proxy) golden test moved to
+eval/_quarantine/20260928/spectra/tests/test_golden_spectra_scorer.py when that
+evaluator was retired on 2026-09-28.
+
 Requires golden data on disk — mark with ``hpc`` since data is only
 available on the HPC filesystem.  No GPU or scheduler needed.
 """
@@ -21,7 +25,6 @@ GOLDEN_ROOT = Path(
     "/home/ecm5702/perm/eval/manual_cfec83a3_new_o96_o320_20260320_oldlike200k"
 )
 GOLDEN_PREDICTIONS = GOLDEN_ROOT / "predictions"
-GOLDEN_SPECTRA = GOLDEN_ROOT / "spectra_step120_5dates_m10_ecmwf"
 GOLDEN_TC_STATS = (
     "tc_normed_pdfs_idalia_franklin_manual_cfec83a3_new_o96_o320_20260320"
     "_oldlike200k_from_predictions.stats.json"
@@ -32,10 +35,6 @@ GOLDEN_RUN_ID = "manual_cfec83a3_new_o96_o320_20260320_oldlike200k"
 # Expected values from full 26-30 scoreboard CSV
 GOLDEN_TC_IDALIA = 0.760870
 GOLDEN_TC_FRANKLIN = 0.834523
-GOLDEN_SPECTRA_10U_SCORE = 0.978893
-GOLDEN_SPECTRA_10V_SCORE = 0.977061
-GOLDEN_SPECTRA_2T_SCORE = 0.984530
-GOLDEN_SPECTRA_MEAN_SCORE = 0.980161
 GOLDEN_SURFACE_MSE = 10646.679560
 
 # Skip all tests if golden data is missing
@@ -81,51 +80,6 @@ class TestTCScorer:
         for r in records:
             assert set(r.keys()) == {"metric", "value", "unit"}
             assert isinstance(r["value"], float)
-
-
-@skip_no_golden
-class TestSpectraScorer:
-    def _score(self):
-        from eval.config.loader import load_lane
-        from eval.evaluators.spectra.scorer import score
-
-        lane_config = load_lane("o96_o320")
-        spectra_config = lane_config.get("spectra", {})
-        return score(GOLDEN_SPECTRA, lane_config, spectra_config)
-
-    def test_spectra_10u_score_exact(self):
-        by_metric = {r["metric"]: r["value"] for r in self._score()}
-        assert by_metric["spectra_10u_score"] == pytest.approx(
-            GOLDEN_SPECTRA_10U_SCORE, abs=1e-6
-        )
-
-    def test_spectra_10v_score_exact(self):
-        by_metric = {r["metric"]: r["value"] for r in self._score()}
-        assert by_metric["spectra_10v_score"] == pytest.approx(
-            GOLDEN_SPECTRA_10V_SCORE, abs=1e-6
-        )
-
-    def test_spectra_2t_score_exact(self):
-        by_metric = {r["metric"]: r["value"] for r in self._score()}
-        assert by_metric["spectra_2t_score"] == pytest.approx(
-            GOLDEN_SPECTRA_2T_SCORE, abs=1e-6
-        )
-
-    def test_spectra_mean_score_exact(self):
-        by_metric = {r["metric"]: r["value"] for r in self._score()}
-        assert by_metric["spectra_mean_score"] == pytest.approx(
-            GOLDEN_SPECTRA_MEAN_SCORE, abs=1e-6
-        )
-
-    def test_spectra_record_pairs(self):
-        records = self._score()
-        metrics = {r["metric"] for r in records}
-        # Each field should have both relative_l2 and score entries
-        for field in ("10u", "10v", "2t"):
-            assert f"spectra_{field}_relative_l2" in metrics
-            assert f"spectra_{field}_score" in metrics
-        assert "spectra_mean_relative_l2" in metrics
-        assert "spectra_mean_score" in metrics
 
 
 @skip_no_golden

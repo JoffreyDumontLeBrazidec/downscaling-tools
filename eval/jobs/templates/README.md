@@ -59,7 +59,7 @@ do not reimplement their logic in ad-hoc scratch scripts.
 |------|------|---------|
 | TC data request | `eval/tc/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
 | Spectra pipeline | `eval/spectra/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
-| ECMWF spectra evaluator | `eval/evaluators/spectra_ecmwf/` | `eval.cli evaluate --only spectra_ecmwf` (AC-only) |
+| ECMWF spectra evaluator | `eval/evaluators/spectra_ecmwf_v2/` | `eval.cli evaluate --only spectra_ecmwf_v2` (AC-only) |
 | MLflow evaluator | `eval/evaluators/mlflow/` | `eval.cli evaluate --only mlflow` (requires `--checkpoint`) |
 
 ## Design Invariants
@@ -125,7 +125,7 @@ Do not edit rendered copies under `/home/ecm5702/dev/jobscripts/submit/` when th
 - Recovery:
   - edit `predict_recovery.sbatch`
 - ECMWF spectra (AC only) on existing predictions:
-  - `python -m eval.cli evaluate --predictions-dir <DIR> --lane <LANE> --only spectra_ecmwf`
+  - `python -m eval.cli evaluate --predictions-dir <DIR> --lane <LANE> --only spectra_ecmwf_v2`
 - MLflow training-loss plots:
   - `python -m eval.cli evaluate --predictions-dir <DIR> --lane <LANE> --only mlflow --checkpoint <CKPT>`
 

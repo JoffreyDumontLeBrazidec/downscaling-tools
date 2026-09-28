@@ -63,7 +63,17 @@ def test_every_evaluator_package_is_registered():
         p.name for p in EVALUATORS_DIR.iterdir()
         if p.is_dir() and (p / "__init__.py").exists()
     }
-    assert packages - NOT_EVALUATORS <= set(registry.names())
+    assert packages - NOT_EVALUATORS == set(registry.runnable_names())
+
+
+def test_retired_packages_are_quarantined_and_not_importable():
+    quarantine = EVALUATORS_DIR.parent / "_quarantine"
+    for name in registry.names(registry.RETIRED):
+        entry = registry.get(name)
+        assert not (EVALUATORS_DIR / name).exists(), name
+        assert (quarantine / entry.retired_on / name / "__init__.py").exists(), name
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(f"eval.evaluators.{name}")
 
 
 def test_only_retired_evaluator_is_a_tombstone(tmp_path, capsys):

@@ -148,7 +148,7 @@ def run_stratified(
     run_label="",
     bands=None,
 ):
-    from eval.evaluators.spectra.proxy_runner import valid_prediction_files
+    from eval.discovery.predictions import valid_prediction_files
     from eval.evaluators.spectra_coherence.runner import (
         _alm, _healpix_binner, _healpix_map, _select_member,
     )

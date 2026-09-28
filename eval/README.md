@@ -250,11 +250,12 @@ print('fail=%d' % len(bad)); [print(' ', b) for b in bad]"
 
 A **new** name in that list means you deleted somebody's `base:`.
 
-## Unwired evaluators
+## Retired evaluators
 
-`eval/evaluators/leadtime/` and `eval/_backends/leadtime/` are complete but deliberately
-absent from `ALL_EVALUATORS` in `eval/cli.py`, so nothing can reach them. They have never
-been validated against a scored run, and a reachable-but-unvalidated evaluator in an eval
-harness is how you get a silently-wrong number weeks later.
+`leadtime`, which was complete but never wired in or validated, was retired on
+2026-09-28 together with `spectra`, `spectra_ecmwf`, `sigma`, `obs_crps`,
+`mechanistic`, `intermediate` and `interp`. Their code is kept, unimportable, under
+`eval/_quarantine/20260928/` (see the README there), and
+`eval/evaluators/registry.py` names what replaces each one. Wiring one back in is
+a change that ships with a validation run, not a one-line registry edit.
 
-Wiring one in is a change that ships with a validation run, not a one-line registry edit.

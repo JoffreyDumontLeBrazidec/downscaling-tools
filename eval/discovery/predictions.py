@@ -61,3 +61,21 @@ def discover_shape(predictions_dir: Path) -> dict:
     steps = sorted({p.step for p in preds})
     members = sorted({p.member for p in preds})
     return {"members": members, "steps": steps, "dates": dates}
+
+
+def valid_prediction_files(pred_dir: Path, *, steps: list[int] | None = None) -> list[Path]:
+    """Sorted ``predictions_*.nc`` files in ``pred_dir``, optionally only these steps.
+
+    Raises FileNotFoundError when there are none (or none for the requested
+    steps). Moved here unchanged from the retired spectra proxy runner, which
+    several evaluators imported it from.
+    """
+    files = sorted(Path(pred_dir).glob("predictions_*.nc"))
+    if not files:
+        raise FileNotFoundError(f"No predictions_*.nc files found in {pred_dir}")
+    if steps:
+        step_suffixes = {f"_step{s:03d}.nc" for s in steps}
+        files = [f for f in files if any(f.name.endswith(sfx) for sfx in step_suffixes)]
+        if not files:
+            raise FileNotFoundError(f"No predictions_*.nc files matched steps={steps} in {pred_dir}")
+    return files

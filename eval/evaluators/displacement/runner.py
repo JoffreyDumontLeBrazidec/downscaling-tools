@@ -364,7 +364,7 @@ def run(
     import netCDF4
     import scipy.sparse as sps
 
-    from eval.evaluators.spectra.proxy_runner import valid_prediction_files
+    from eval.discovery.predictions import valid_prediction_files
 
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "displacement"
