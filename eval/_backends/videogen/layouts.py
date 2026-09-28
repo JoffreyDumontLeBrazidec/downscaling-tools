@@ -14,14 +14,41 @@ import xarray as xr
 
 from .config import SceneConfig
 from .data import Frame, bbox_mask, load_var_slice, resolve_inset_bbox
+from eval.plotting import eval_style
+from eval.plotting.style import PNG_DPI as PNG_DPI_STILL
+from eval.plotting.maps_helpers import octahedral_grid_name, region_projection
+
 from .panels import (
     add_bbox_polyline,
     add_connector,
     cmap_for,
     label_for,
     render_field_panel,
-    select_projection,
+    short_name,
+    to_display,
 )
+
+
+def select_projection(bbox):
+    """Shared projection rule for a ``(lon_min, lon_max, lat_min, lat_max)`` box."""
+    return region_projection(*bbox)
+
+
+def _grids(ds: xr.Dataset) -> tuple[str, str]:
+    """(input grid, output grid) names for titles, e.g. ("O320", "O1280")."""
+    lres = octahedral_grid_name(int(ds.sizes.get("grid_point_lres", 0))) or "input grid"
+    hres = octahedral_grid_name(int(ds.sizes.get("grid_point_hres", 0))) or "output grid"
+    return lres, hres
+
+
+def _display_norm(var: str, norm: tuple[float, float]) -> tuple[float, float]:
+    lo, hi = to_display(var, [norm[0], norm[1]])
+    return float(lo), float(hi)
+
+
+def _save_dpi(scene: SceneConfig, out_png: Path) -> int:
+    """Video frames keep the scene dpi (fixed frame size); the preview still uses 150 dpi."""
+    return PNG_DPI_STILL if Path(out_png) == Path(scene.preview_path) else scene.dpi
 
 
 def _open_inset_fields(
@@ -55,6 +82,11 @@ def _open_inset_fields(
     return inset_bbox, per_var, bg_field
 
 
+def _open_grids(frame: Frame) -> tuple[str, str]:
+    with xr.open_dataset(frame.nc_path) as ds:
+        return _grids(ds)
+
+
 # ---------------------------------------------------------------------------
 # Layout: dual_row (4 zoomed panels in one row + regional bg map below)
 # ---------------------------------------------------------------------------
@@ -69,63 +101,68 @@ def render_dual_row(
         raise ValueError(f"dual_row needs exactly 2 vars, got {vars_list}")
 
     inset_bbox, per_var, (bg_lon, bg_lat, bg_vals) = _open_inset_fields(frame, scene, vars_list)
+    lres_grid, hres_grid = _open_grids(frame)
 
-    fig = plt.figure(figsize=(16, 10), dpi=scene.dpi)
-    proj_inset = select_projection(inset_bbox)
+    with eval_style():
+        fig = plt.figure(figsize=(16, 10), dpi=scene.dpi)
+        proj_inset = select_projection(inset_bbox)
 
-    # Top row.
-    PANEL_Y, PANEL_H, PANEL_W = 0.56, 0.33, 0.20
-    panel_x = [0.040, 0.246, 0.512, 0.718]
-    ax_top = []
-    sc_handles: dict[str, object] = {}
-    for col, x0 in enumerate(panel_x):
-        ax = fig.add_axes([x0, PANEL_Y, PANEL_W, PANEL_H], projection=proj_inset)
-        ax_top.append(ax)
-        v = vars_list[col // 2]
-        is_hres = (col % 2 == 1)
-        lon, lat, vals = per_var[v]["hres" if is_hres else "lres"]
-        res = scene.hres_resolution_deg if is_hres else scene.bg_resolution_deg
-        title = f"{v}  —  {'O1280 prediction' if is_hres else 'O320 input'}"
-        sc = render_field_panel(
-            ax, lon, lat, vals,
-            bbox=inset_bbox, resolution_deg=res,
-            cmap=cmap_for(v), vmin=norms[v][0], vmax=norms[v][1],
-            title=title, label_fontsize=8, left_labels=(col == 0),
+        # Top row.
+        PANEL_Y, PANEL_H, PANEL_W = 0.56, 0.33, 0.20
+        panel_x = [0.040, 0.246, 0.512, 0.718]
+        ax_top = []
+        sc_handles: dict[str, object] = {}
+        for col, x0 in enumerate(panel_x):
+            ax = fig.add_axes([x0, PANEL_Y, PANEL_W, PANEL_H], projection=proj_inset)
+            ax_top.append(ax)
+            v = vars_list[col // 2]
+            is_hres = (col % 2 == 1)
+            lon, lat, vals = per_var[v]["hres" if is_hres else "lres"]
+            res = scene.hres_resolution_deg if is_hres else scene.bg_resolution_deg
+            who = f"Model ({hres_grid})" if is_hres else f"Input ({lres_grid})"
+            title = f"{short_name(v)}\n{who}"
+            vmin, vmax = _display_norm(v, norms[v])
+            sc = render_field_panel(
+                ax, lon, lat, to_display(v, vals),
+                bbox=inset_bbox, resolution_deg=res,
+                cmap=cmap_for(v), vmin=vmin, vmax=vmax,
+                title=title, label_fontsize=8, left_labels=(col == 0),
+            )
+            if is_hres:
+                sc_handles[v] = sc
+
+        # Per-variable colorbars.
+        for i, v in enumerate(vars_list):
+            cax = fig.add_axes([0.05 + i * 0.475, 0.495, 0.41, 0.013])
+            cb = fig.colorbar(sc_handles[v], cax=cax, orientation="horizontal")
+            cb.set_label(label_for(v), fontsize=10)
+            cb.outline.set_edgecolor("black")
+            cb.outline.set_linewidth(1.0)
+            cb.ax.tick_params(labelsize=9)
+
+        # Regional MSL bg.
+        proj_bg = select_projection(scene.bg_bbox)
+        ax_bg = fig.add_axes([0.10, 0.05, 0.80, 0.36], projection=proj_bg)
+        msl_vmin, msl_vmax = _display_norm(
+            "msl", norms.get("msl", (float(bg_vals.min()), float(bg_vals.max()))))
+        render_field_panel(
+            ax_bg, bg_lon, bg_lat, to_display("msl", bg_vals),
+            bbox=scene.bg_bbox, resolution_deg=scene.bg_resolution_deg,
+            cmap=cmap_for("msl"), vmin=msl_vmin, vmax=msl_vmax,
+            title=f"Regional context: input {short_name('msl').lower()} ({lres_grid}, hPa)",
+            label_fontsize=9, n_contours=14,
         )
-        if is_hres:
-            sc_handles[v] = sc
+        add_bbox_polyline(ax_bg, inset_bbox, color="black", linewidth=1.8)
+        add_connector(fig, ax_bg, inset_bbox[0], inset_bbox[3], ax_top[0], (0.0, 0.0))
+        add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[3], ax_top[-1], (1.0, 0.0))
 
-    # Per-variable colorbars.
-    for i, v in enumerate(vars_list):
-        cax = fig.add_axes([0.05 + i * 0.475, 0.495, 0.41, 0.013])
-        cb = fig.colorbar(sc_handles[v], cax=cax, orientation="horizontal")
-        cb.set_label(label_for(v), fontsize=10)
-        cb.outline.set_edgecolor("black")
-        cb.outline.set_linewidth(1.0)
-        cb.ax.tick_params(labelsize=9)
-
-    # Regional MSL bg.
-    proj_bg = select_projection(scene.bg_bbox)
-    ax_bg = fig.add_axes([0.10, 0.05, 0.80, 0.36], projection=proj_bg)
-    msl_vmin, msl_vmax = norms.get("msl", (float(bg_vals.min()), float(bg_vals.max())))
-    render_field_panel(
-        ax_bg, bg_lon, bg_lat, bg_vals,
-        bbox=scene.bg_bbox, resolution_deg=scene.bg_resolution_deg,
-        cmap=cmap_for("msl"), vmin=msl_vmin, vmax=msl_vmax,
-        title="Regional context — O320 MSL",
-        label_fontsize=9, n_contours=14,
-    )
-    add_bbox_polyline(ax_bg, inset_bbox, color="red", linewidth=1.8)
-    add_connector(fig, ax_bg, inset_bbox[0], inset_bbox[3], ax_top[0], (0.0, 0.0))
-    add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[3], ax_top[-1], (1.0, 0.0))
-
-    fig.suptitle(
-        f"{scene.title}   ({scene.ckpt_label})   |   {frame.label()}",
-        fontsize=15, y=0.965,
-    )
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=scene.dpi, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+        fig.suptitle(
+            f"{scene.title}   ({scene.ckpt_label})   |   {frame.label()}",
+            fontsize=15, y=0.965,
+        )
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=_save_dpi(scene, out_png), bbox_inches="tight", facecolor="white")
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -150,41 +187,45 @@ def render_single_inset(
         m_ins = bbox_mask(lon_h, lat_h, inset_bbox)
         ins_lon, ins_lat, ins_vals = lon_h[m_ins], lat_h[m_ins], vals_h[m_ins]
 
-    fig = plt.figure(figsize=(15, 8.5), dpi=scene.dpi)
-    proj_bg = select_projection(scene.bg_bbox)
-    proj_ins = select_projection(inset_bbox)
-    ax_bg = fig.add_axes([0.045, 0.13, 0.43, 0.76], projection=proj_bg)
-    ax_hr = fig.add_axes([0.55,  0.13, 0.40, 0.76], projection=proj_ins)
+    with xr.open_dataset(frame.nc_path) as ds:
+        lres_grid, hres_grid = _grids(ds)
 
-    vmin, vmax = norms[var]
-    cmap = cmap_for(var)
-    sc = render_field_panel(
-        ax_bg, bg_lon, bg_lat, bg_vals,
-        bbox=scene.bg_bbox, resolution_deg=scene.bg_resolution_deg,
-        cmap=cmap, vmin=vmin, vmax=vmax, title="O320 input  (x)",
-    )
-    render_field_panel(
-        ax_hr, ins_lon, ins_lat, ins_vals,
-        bbox=inset_bbox, resolution_deg=scene.hres_resolution_deg,
-        cmap=cmap, vmin=vmin, vmax=vmax, title="O1280 prediction  (y_pred)",
-    )
-    add_bbox_polyline(ax_bg, inset_bbox, color="black", linewidth=1.8)
-    add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[3], ax_hr, (0.0, 1.0), color="black")
-    add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[2], ax_hr, (0.0, 0.0), color="black")
+    with eval_style():
+        fig = plt.figure(figsize=(15, 8.5), dpi=scene.dpi)
+        proj_bg = select_projection(scene.bg_bbox)
+        proj_ins = select_projection(inset_bbox)
+        ax_bg = fig.add_axes([0.045, 0.13, 0.43, 0.76], projection=proj_bg)
+        ax_hr = fig.add_axes([0.55,  0.13, 0.40, 0.76], projection=proj_ins)
 
-    fig.suptitle(
-        f"{scene.title}   ({scene.ckpt_label})   |   {frame.label()}",
-        fontsize=14, y=0.97,
-    )
-    cax = fig.add_axes([0.22, 0.05, 0.56, 0.018])
-    cb = fig.colorbar(sc, cax=cax, orientation="horizontal")
-    cb.set_label(label_for(var), fontsize=11)
-    cb.outline.set_edgecolor("black")
-    cb.outline.set_linewidth(1.0)
-    cb.ax.tick_params(labelsize=10)
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_png, dpi=scene.dpi, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
+        vmin, vmax = _display_norm(var, norms[var])
+        cmap = cmap_for(var)
+        sc = render_field_panel(
+            ax_bg, bg_lon, bg_lat, to_display(var, bg_vals),
+            bbox=scene.bg_bbox, resolution_deg=scene.bg_resolution_deg,
+            cmap=cmap, vmin=vmin, vmax=vmax, title=f"Input ({lres_grid})",
+        )
+        render_field_panel(
+            ax_hr, ins_lon, ins_lat, to_display(var, ins_vals),
+            bbox=inset_bbox, resolution_deg=scene.hres_resolution_deg,
+            cmap=cmap, vmin=vmin, vmax=vmax, title=f"Model ({hres_grid}), boxed area",
+        )
+        add_bbox_polyline(ax_bg, inset_bbox, color="black", linewidth=1.8)
+        add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[3], ax_hr, (0.0, 1.0), color="black")
+        add_connector(fig, ax_bg, inset_bbox[1], inset_bbox[2], ax_hr, (0.0, 0.0), color="black")
+
+        fig.suptitle(
+            f"{scene.title}   ({scene.ckpt_label})   |   {frame.label()}",
+            fontsize=14, y=0.97,
+        )
+        cax = fig.add_axes([0.22, 0.05, 0.56, 0.018])
+        cb = fig.colorbar(sc, cax=cax, orientation="horizontal")
+        cb.set_label(label_for(var), fontsize=11)
+        cb.outline.set_edgecolor("black")
+        cb.outline.set_linewidth(1.0)
+        cb.ax.tick_params(labelsize=10)
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_png, dpi=_save_dpi(scene, out_png), bbox_inches="tight", facecolor="white")
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
