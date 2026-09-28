@@ -1,7 +1,8 @@
 """sigma_loss evaluator — plotter (View A).
 
 View A: per-sigma F-space loss curve (total + per-variable) on log-x, log-y.
-Writes under <results_dir>/plots/sigma_loss/.
+Writes under <results_dir>/plots/sigma_loss/ (PNG at 150 dpi plus a PDF of the same name),
+in the house style of ``eval.plotting``.
 
 M0+ STUB: View B (sigma x variable heatmap) — see TODO at the bottom.
 """
@@ -18,10 +19,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+from eval.plotting import AXIS, eval_style, save_figure, sequence_style, variable_spec  # noqa: E402
+
 LOG = logging.getLogger(__name__)
 
 DATA_SUBDIR = ("data", "sigma_loss")
 PLOTS_SUBDIR = ("plots", "sigma_loss")
+# The total is an aggregate, not a role: a near-black grey keeps it apart from the truth black.
+TOTAL_COLOR = "#333333"
+_VAR_ORDER = ("10u", "10v", "10ff", "2t", "2d", "skt", "sp", "msl", "tcw", "tp", "cp")
 
 
 def _read_rows(csv_path: Path) -> dict[str, list[tuple[float, float]]]:
@@ -35,6 +41,30 @@ def _read_rows(csv_path: Path) -> dict[str, list[tuple[float, float]]]:
     for v in by_var.values():
         v.sort(key=lambda p: p[0])
     return by_var
+
+
+def _var_sort_key(var: str) -> tuple:
+    """Surface variables in a fixed order first, then pressure-level fields by name and level."""
+    key = variable_spec(var).key
+    if key in _VAR_ORDER:
+        return (0, _VAR_ORDER.index(key), 0)
+    fam, _, lev = key.partition("_")
+    return (1, fam, int(lev) if lev.isdigit() else 0)
+
+
+def _total_batches(csv_path: Path) -> int | None:
+    """Number of validation batches behind the total curve (largest n_batches), if recorded."""
+    best = None
+    with csv_path.open() as fh:
+        for row in csv.DictReader(fh):
+            if row.get("variable") != "__total__":
+                continue
+            try:
+                n = int(float(row.get("n_batches") or ""))
+            except ValueError:
+                continue
+            best = n if best is None else max(best, n)
+    return best
 
 
 def plot(
@@ -73,39 +103,46 @@ def plot(
         return []
 
     outputs: list[Path] = []
-    fig, ax = plt.subplots(figsize=(9, 6))
-
-    # per-variable curves (thin, background)
-    for var, pts in sorted(by_var.items()):
-        if var == "__total__":
-            continue
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, lw=0.8, alpha=0.45)
-
-    # total curve (bold, foreground)
-    tot = by_var["__total__"]
-    ax.plot([p[0] for p in tot], [p[1] for p in tot],
-            lw=2.6, color="black", marker="o", ms=4, label="total (F-space)")
-
-    ax.axvline(sigma_data, color="crimson", ls="--", lw=1.2,
-               label=f"sigma_data={sigma_data:g}")
-
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("sigma")
-    ax.set_ylabel("F-space loss  (weighted MSE, weights=1/c_out^2)")
-    title = "Per-sigma F-space loss"
-    if run_id:
-        title += f"  [{run_id[:8]} step {ckpt_step}]"
-    ax.set_title(title)
-    ax.grid(True, which="both", alpha=0.25)
-    ax.legend(loc="best", fontsize=8)
-    fig.tight_layout()
-
+    n_batches = _total_batches(csv_path)
     view_a = plots_dir / "view_a_per_sigma_loss.png"
-    fig.savefig(view_a, dpi=130)
-    plt.close(fig)
+    with eval_style():
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # per-variable curves (thin, background); colour and dash from the neutral sequence,
+        # because the variables are quantities, not roles
+        for i, (var, pts) in enumerate(sorted(by_var.items(), key=lambda kv: _var_sort_key(kv[0]))):
+            if var == "__total__":
+                continue
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            ax.plot(xs, ys, label=variable_spec(var).name,
+                    **sequence_style(i, linewidth=1.1, alpha=0.8, zorder=2))
+
+        # total curve (bold, foreground)
+        tot = by_var["__total__"]
+        total_label = "Total over all variables"
+        if n_batches:
+            total_label += f" (n = {n_batches} validation batches)"
+        ax.plot([p[0] for p in tot], [p[1] for p in tot], color=TOTAL_COLOR, linewidth=3.0,
+                marker="o", markersize=4.5, zorder=5, label=total_label)
+
+        ax.axvline(sigma_data, color="0.45", ls=(0, (5, 2)), lw=1.3, zorder=1,
+                   label=f"σ_data = {sigma_data:g}")
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(AXIS["sigma"])
+        ax.set_ylabel("Loss in F-space (weighted MSE, weight 1 / c_out²)")
+        title = "Training loss per noise level"
+        if run_id:
+            title += f": run {run_id[:8]}, step {ckpt_step}"
+        ax.set_title(title)
+        ax.grid(True, which="minor", color="0.93", linewidth=0.4)
+        ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), fontsize=8.5)
+        fig.tight_layout()
+
+        # PNG (the deliverable) plus a PDF of the same name
+        save_figure(fig, view_a, close=True)
     outputs.append(view_a)
     LOG.info("sigma_loss plotter: wrote %s", view_a)
 

@@ -16,7 +16,6 @@ from typing import Iterable, Sequence
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 
 # ----------------------------
 # Config: base dir for run ids
@@ -146,6 +145,21 @@ def print_available_metrics(df: pd.DataFrame, *, max_show: int = 200) -> None:
 # ----------------------------
 
 
+_METRIC_NAMES = {
+    "loss": "Loss",
+    "diff_all_var_non_weighted": "Unweighted mean difference, all variables",
+}
+
+
+def metric_label(metric: str) -> str:
+    """Readable name of a sigma-table metric column ("metric__loss" -> "Loss")."""
+    key = metric[len("metric__"):] if metric.startswith("metric__") else metric
+    if key in _METRIC_NAMES:
+        return _METRIC_NAMES[key]
+    text = key.replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
+
+
 def save_sigma_curves_pdf(
     all_df: pd.DataFrame,
     metrics: Sequence[str],
@@ -154,16 +168,22 @@ def save_sigma_curves_pdf(
     sigma_min: float = 0.02,
     pred_flags: Sequence[bool] = (False, True),
     agg: str = "mean",  # "mean" or "median"
-    figsize: tuple[float, float] = (22, 10),
-    title_size: int = 26,
-    label_size: int = 22,
-    tick_size: int = 18,
-    legend_size: int = 18,
-    line_width: float = 2.5,
-    marker_size: float = 7.0,
+    figsize: tuple[float, float] = (11, 6),
+    title_size: int = 12,
+    label_size: int = 10,
+    tick_size: int = 9,
+    legend_size: int = 9,
+    line_width: float = 2.2,
+    marker_size: float = 5.0,
     legend_outside: bool = True,
-    pdf_dpi: int = 300,  # only matters for rasterized artists; vector PDF zooms well anyway
+    pdf_dpi: int = 150,  # only matters for rasterized artists; vector PDF zooms well anyway
+    png: bool = True,
 ) -> Path:
+    """One page per (metric, prediction_on_pure_noise flag): metric against noise level σ,
+    one curve per experiment, in the house style of ``eval.plotting``. With ``png=True`` every
+    page is also written as a PNG under ``<pdf stem>_pages/``."""
+    from eval.plotting import AXIS, FigureBook, eval_style, sequence_style
+
     pdf_path = Path(pdf_path)
 
     # validate metrics
@@ -174,8 +194,11 @@ def save_sigma_curves_pdf(
     if agg not in {"mean", "median"}:
         raise ValueError("agg must be 'mean' or 'median'")
 
+    exps = sorted(all_df["exp"].unique(), key=str)
+    style_of = {exp: sequence_style(i) for i, exp in enumerate(exps)}
+
     n_pages = 0
-    with PdfPages(pdf_path) as pdf:
+    with eval_style(), FigureBook(pdf_path, png=png, dpi=pdf_dpi) as book:
         for metric in metrics:
             for pred_flag in pred_flags:
                 sub = all_df[all_df["prediction_on_pure_noise"] == pred_flag]
@@ -188,30 +211,34 @@ def save_sigma_curves_pdf(
                     )
                     continue
 
-                if agg == "mean":
-                    g = sub.groupby(["exp", "sigma"], as_index=False)[metric].mean()
-                else:
-                    g = sub.groupby(["exp", "sigma"], as_index=False)[metric].median()
+                grouped = sub.groupby(["exp", "sigma"], as_index=False)[metric]
+                g = grouped.mean() if agg == "mean" else grouped.median()
+                counts = sub.groupby(["exp", "sigma"])[metric].count()
 
                 fig, ax = plt.subplots(figsize=figsize)
 
                 for exp, gg in g.groupby("exp"):
                     gg = gg.sort_values("sigma")
+                    n = int(counts.loc[exp].max()) if exp in counts.index.get_level_values(0) else 0
+                    style = dict(style_of[exp])
+                    style["linewidth"] = line_width
                     ax.plot(
                         gg["sigma"],
                         gg[metric],
                         marker="o",
-                        linewidth=line_width,
                         markersize=marker_size,
-                        label=exp,
+                        label=f"{exp} (n = {n} samples per σ)",
+                        **style,
                     )
 
                 ax.set_xscale("log")
                 ax.set_yscale("log")
-                ax.set_xlabel("sigma", fontsize=label_size)
-                ax.set_ylabel(metric, fontsize=label_size)
+                ax.set_xlabel(AXIS["sigma"], fontsize=label_size)
+                ax.set_ylabel(metric_label(metric), fontsize=label_size)
+                start = "pure noise" if pred_flag else "the noised target"
                 ax.set_title(
-                    f"{metric} – prediction_on_pure_noise={pred_flag}, σ > {sigma_min} ({agg})",
+                    f"{metric_label(metric)}, prediction from {start}, σ > {sigma_min:g} "
+                    f"({agg} over samples)",
                     fontsize=title_size,
                 )
                 ax.tick_params(labelsize=tick_size)
@@ -220,23 +247,21 @@ def save_sigma_curves_pdf(
                     ax.legend(
                         loc="center left",
                         bbox_to_anchor=(1.02, 0.5),
-                        frameon=True,
                         fontsize=legend_size,
                     )
-                    fig.tight_layout(rect=[0, 0, 0.8, 1])
                 else:
                     ax.legend(fontsize=legend_size)
-                    fig.tight_layout()
+                fig.tight_layout()
 
-                # Write this page to the PDF (vector by default)
-                pdf.savefig(fig, bbox_inches="tight", dpi=pdf_dpi)
-                plt.close(fig)
+                book.add(fig, name=f"{metric}_{'pure_noise' if pred_flag else 'noised_target'}")
                 n_pages += 1
 
         # optional: embed metadata
-        d = pdf.infodict()
-        d["Title"] = "Sigma evaluation curves"
-        d["Creator"] = "matplotlib"
+        pdf = getattr(book, "_pdf", None)
+        if pdf is not None:
+            d = pdf.infodict()
+            d["Title"] = "Sigma evaluation curves"
+            d["Creator"] = "matplotlib"
 
     if n_pages == 0:
         raise RuntimeError("No pages were written (all plots empty after filtering).")
