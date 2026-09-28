@@ -7,7 +7,7 @@ expected not to pass is marked `xfail` with a reason, and the table below lists 
 so a red test means something is broken.
 
 Result on 2026-09-28 (branch `refactor/evalcli-structure-20260928`):
-`783 passed, 76 skipped, 24 xfailed, 0 failed` in about three minutes (`python -m pytest -m "not gpu"`, batch job on the `nf` queue). The 76 skips are the GPU tests, the golden-data tests whose data is absent, and the legacy ds tests that run in a subprocess instead (see "The legacy tree").
+`798 passed, 76 skipped, 24 xfailed, 0 failed` in about three minutes (`python -m pytest -m "not gpu"`, batch job on the `nf` queue). The 76 skips are the GPU tests, the golden-data tests whose data is absent, and the legacy ds tests that run in a subprocess instead (see "The legacy tree").
 
 ## Commands
 
