@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from eval._backends.local_global_parity import compute_parity
+from eval.evaluators.local_global.core.parity import compute_parity
 
 LOG = logging.getLogger(__name__)
 
