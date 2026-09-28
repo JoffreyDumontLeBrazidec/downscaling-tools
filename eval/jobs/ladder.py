@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -656,19 +657,72 @@ def _loss_sort_key(metric: str) -> tuple:
 
 
 def _loss_title(metric: str) -> str:
-    """'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0' -> 'val MSE sfc_2t'."""
+    """'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0' -> 'Validation MSE: 2 m temperature'."""
     leaf = metric.rsplit("/", 1)[-1]
     for suf in ("_scale_0",):
         leaf = leaf[: -len(suf)] if leaf.endswith(suf) else leaf
     if "mse_metric" in metric:
-        return f"val MSE {leaf}"
-    return leaf
+        from eval.plotting import variable_spec
+
+        var = leaf[4:] if leaf.startswith("sfc_") else leaf
+        name = "all variables" if var == "all" else variable_spec(var).name
+        return f"Validation MSE: {name}"
+    return leaf.replace("_", " ")
+
+
+# Display wording for the score bands (the band keys above stay as they are).
+_BAND_DISPLAY = {
+    "RMSE (ens mean)": ("RMSE of the ensemble mean", "RMSE"),
+    "CRPS / fair-CRPS": ("CRPS and fair CRPS", "CRPS"),
+    "Spread": ("Ensemble spread", "Spread"),
+    "Spectra v2 (rel-L2)": ("Spectra: relative L2 distance", "Relative L2 distance"),
+    "Spectra proxy (rel-L2, retired)": ("Spectra, retired proxy: relative L2 distance",
+                                        "Relative L2 distance"),
+    "Fine band 40-150 km": ("Fine band 40-150 km: power ratio to truth", "Ratio"),
+    "Fine-band slope": ("Fine-band spectral slope", "Slope"),
+    "TC extremes": ("Tropical cyclone extremes", "Value"),
+    "Seed draws (candidate B)": ("Seed draws (candidate B)", "Value"),
+}
+_UNIT_DISPLAY = {"m/s": "m s⁻¹", "rel-L2": "", "ratio": "", "slope": "", "native": ""}
+_REGION_DISPLAY = {"n.hem": "N. Hemisphere", "tropics": "Tropics"}
+
+
+def _series_label(label: str) -> str:
+    """'n.hem fcrps' -> 'N. Hemisphere, fair CRPS'."""
+    words = label.split(" ", 1)
+    region = _REGION_DISPLAY.get(words[0], words[0])
+    if len(words) == 1:
+        return region
+    stat = {"crps": "CRPS", "fcrps": "fair CRPS"}.get(words[1], words[1])
+    return f"{region}, {stat}"
+
+
+def _panel_units(p: dict) -> tuple[str, float]:
+    """(display unit, extra scale) for a panel: native probabilistic scores of a known variable
+    are shown in the variable's display unit (hPa for pressure); others keep their unit."""
+    from eval.plotting import convert_difference, variable_spec
+
+    unit = p["unit"]
+    if unit == "native" and p["band"] in {b for b, _, _ in PROB_BANDS}:
+        spec = variable_spec(p["title"])
+        if spec.unit:
+            return spec.unit, float(convert_difference(p["title"], 1.0))
+    return _UNIT_DISPLAY.get(unit, unit), 1.0
 
 
 def cmd_plot(args: argparse.Namespace) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    from eval.plotting import (
+        AXIS, BETTER_COLOR, WORSE_COLOR, eval_style, role_style, save_figure, sequence_style,
+        variable_spec,
+    )
+    from eval.plotting.spec_helpers import format_steps, tint
 
     prof = load_profile(args.profile)
     ladder = load_ladder(prof)
@@ -703,104 +757,145 @@ def cmd_plot(args: argparse.Namespace) -> None:
     nloss_rows = (len(loss_panels) + NCOL - 1) // NCOL
     nrow = len(grid) + nloss_rows
 
-    fig, axes = plt.subplots(nrow, NCOL, figsize=(3.4 * NCOL, 2.85 * nrow), squeeze=False)
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    # Panel backgrounds: colour-blind-safe blue (better) / orange (worse) tints, never
+    # green/red; each tinted panel also says so in words, so the encoding survives greyscale.
+    better_bg, worse_bg = tint(BETTER_COLOR, 0.86), tint(WORSE_COLOR, 0.80)
     better = worse = mixed = 0
     seen_bands: set = set()
 
-    for ri, (band, ps) in enumerate(grid):
-        for ci in range(NCOL):
-            ax = axes[ri][ci]
-            if ci >= len(ps):
-                ax.axis("off")
-                continue
-            p = ps[ci]
-            votes = []
-            for si, (label, key, scale) in enumerate(sorted(p["series"])):
-                c = colors[si % len(colors)]
-                ls = "--" if "n.hem" in label else "-"
-                vals = [(r["metrics"][key] * scale if r["metrics"].get(key) is not None else None)
-                        for r in rows]
-                ax.plot(steps, vals, marker="o", ms=4, lw=1.4, color=c, ls=ls, label=label)
-                rv = ref_metrics.get(key)
-                if rv is None:
+    with eval_style():
+        fig, axes = plt.subplots(nrow, NCOL, figsize=(3.5 * NCOL, 3.0 * nrow), squeeze=False)
+
+        for ri, (band, ps) in enumerate(grid):
+            band_title, short = _BAND_DISPLAY.get(band, (band, "Value"))
+            for ci in range(NCOL):
+                ax = axes[ri][ci]
+                if ci >= len(ps):
+                    ax.axis("off")
                     continue
-                rv *= scale
-                ax.axhline(rv, color=c, ls=":", lw=1.2, alpha=0.9)
-                # replica-noise band: LEVELS only (a std is not a level -- shading +/-7 hPa
-                # around a 3 hPa std would drive the axis negative)
-                if p["unit"] == "hPa" and not key.endswith("_std"):
-                    ax.axhspan(rv - HPA_BAND, rv + HPA_BAND, color=c, alpha=0.10, lw=0)
-                if vals and vals[-1] is not None and p["direction"]:
-                    last = vals[-1]
-                    votes.append(abs(last - 1.0) < abs(rv - 1.0) if p["direction"] == "target1"
-                                 else (last < rv if p["direction"] == "lower" else last > rv))
-            # every series votes; tint only on agreement, so a panel is never green while
-            # one of its curves is worse
-            if votes and all(votes):
-                ax.set_facecolor("#eaf6ec"); better += 1
-            elif votes and not any(votes):
-                ax.set_facecolor("#fdeceb"); worse += 1
-            elif votes:
-                mixed += 1
-            ax.set_title(p["title"], fontsize=9.5)
-            ax.set_ylabel(p["unit"], fontsize=8)
-            ax.tick_params(labelsize=7.5)
-            ax.grid(alpha=0.2)
-            if len(p["series"]) > 1 and band not in seen_bands:
-                ax.legend(fontsize=6.5, loc="best")
-                seen_bands.add(band)
-            if ri == len(grid) - 1 or grid[ri + 1][0] != band:
-                ax.set_xlabel("training step", fontsize=8)
-            if ci == 0 and (ri == 0 or grid[ri - 1][0] != band):
-                ax.text(-0.36, 0.5, band, transform=ax.transAxes, rotation=90,
-                        va="center", ha="center", fontsize=9.5, fontweight="bold")
+                p = ps[ci]
+                unit, extra = _panel_units(p)
+                votes = []
+                series_list = sorted(p["series"])
+                single = len(series_list) == 1
+                for si, (label, key, scale) in enumerate(series_list):
+                    if single:
+                        st = role_style("model", linewidth=1.8)
+                        ref_st = role_style("baseline", linewidth=1.4)
+                    else:
+                        st = sequence_style(si, linewidth=1.8)
+                        st["linestyle"] = (0, (5, 2)) if "n.hem" in label else "-"
+                        ref_st = dict(color=st["color"], linestyle=":", linewidth=1.4, zorder=2)
+                    vals = [(r["metrics"][key] * scale * extra
+                             if r["metrics"].get(key) is not None else None) for r in rows]
+                    ax.plot(steps, [np.nan if v is None else v for v in vals], marker="o",
+                            markersize=3.5, label=_series_label(label) if not single else "model",
+                            **st)
+                    rv = ref_metrics.get(key)
+                    if rv is None:
+                        continue
+                    rv *= scale * extra
+                    ax.axhline(rv, **ref_st)
+                    # replica-noise band: LEVELS only (a std is not a level -- shading +/-7 hPa
+                    # around a 3 hPa std would drive the axis negative)
+                    if p["unit"] == "hPa" and not key.endswith("_std"):
+                        ax.axhspan(rv - HPA_BAND, rv + HPA_BAND, color=ref_st["color"],
+                                   alpha=0.10, lw=0)
+                    if vals and vals[-1] is not None and p["direction"]:
+                        last = vals[-1]
+                        votes.append(abs(last - 1.0) < abs(rv - 1.0) if p["direction"] == "target1"
+                                     else (last < rv if p["direction"] == "lower" else last > rv))
+                # every series votes; tint only on agreement, so a panel is never "better"
+                # while one of its curves is worse
+                verdict = None
+                if votes and all(votes):
+                    ax.set_facecolor(better_bg); better += 1; verdict = "better"
+                elif votes and not any(votes):
+                    ax.set_facecolor(worse_bg); worse += 1; verdict = "worse"
+                elif votes:
+                    mixed += 1
+                spec = variable_spec(p["title"])
+                ax.set_title(spec.name if spec.unit else p["title"], fontsize=9.5, loc="left")
+                if verdict:
+                    ax.set_title(verdict, loc="right", fontsize=8.5, fontweight="bold",
+                                 color=BETTER_COLOR if verdict == "better" else "#9A5B00")
+                ax.set_ylabel(f"{short} ({unit})" if unit else short, fontsize=8.5)
+                ax.tick_params(labelsize=8)
+                format_steps(ax)
+                if len(p["series"]) > 1 and band not in seen_bands:
+                    ax.legend(fontsize=7, loc="best")
+                    seen_bands.add(band)
+                if ri == len(grid) - 1 or grid[ri + 1][0] != band:
+                    ax.set_xlabel(AXIS["step"], fontsize=8.5)
+                if ci == 0 and (ri == 0 or grid[ri - 1][0] != band):
+                    ax.text(-0.42, 0.5, textwrap.fill(band_title, 26), transform=ax.transAxes,
+                            rotation=90, va="center", ha="center", fontsize=9.5,
+                            fontweight="bold")
 
-    for li, (metric, by_label) in enumerate(loss_panels):
-        ri, ci = len(grid) + li // NCOL, li % NCOL
-        ax = axes[ri][ci]
-        for si, (label, s) in enumerate(sorted(by_label.items())):
-            ax.plot(s["step"], s["value"], lw=1.2, color=colors[si % len(colors)],
-                    ls="-" if si == 0 else "--", label=label)
-        ax.set_title(_loss_title(metric), fontsize=9)
-        ax.set_ylabel("MLflow value (raw)", fontsize=7.5)
-        ax.set_xlabel("training step", fontsize=8)
-        ax.tick_params(labelsize=7.5)
-        ax.grid(alpha=0.2)
-        if len(by_label) > 1 and li == 0:
-            ax.legend(fontsize=6.5, loc="best")
-        if ci == 0:
-            band = ("MLflow: sigma-WEIGHTED LOSS\n(diagnostic, NOT skill)"
-                    if _is_sigma_weighted(metric) else "MLflow: per-variable val MSE")
-            ax.text(-0.36, 0.5, band, transform=ax.transAxes, rotation=90,
-                    va="center", ha="center", fontsize=8, fontweight="bold")
-    for li in range(len(loss_panels), nloss_rows * NCOL):
-        axes[len(grid) + li // NCOL][li % NCOL].axis("off")
+        for li, (metric, by_label) in enumerate(loss_panels):
+            ri, ci = len(grid) + li // NCOL, li % NCOL
+            ax = axes[ri][ci]
+            for si, (label, s) in enumerate(sorted(by_label.items())):
+                ax.plot(s["step"], s["value"], label=label, **sequence_style(si, linewidth=1.4))
+            ax.set_title(_loss_title(metric), fontsize=9)
+            ax.set_ylabel("MLflow value (as logged)", fontsize=8)
+            ax.set_xlabel(AXIS["step"], fontsize=8.5)
+            ax.tick_params(labelsize=8)
+            format_steps(ax)
+            if len(by_label) > 1 and li == 0:
+                ax.legend(fontsize=7, loc="best")
+            if ci == 0:
+                band = ("MLflow: sigma-weighted loss\n(diagnostic, NOT skill)"
+                        if _is_sigma_weighted(metric) else "MLflow: validation MSE\nper variable")
+                ax.text(-0.42, 0.5, band, transform=ax.transAxes, rotation=90,
+                        va="center", ha="center", fontsize=8.5, fontweight="bold")
+        for li in range(len(loss_panels), nloss_rows * NCOL):
+            axes[len(grid) + li // NCOL][li % NCOL].axis("off")
 
-    # Run-identity guard: a ladder line only means "training evolution" if every rung comes
-    # from the SAME run. Rows carry the checkpoint path, so the parent dir is the run id.
-    runs = sorted({Path(r["checkpoint"]).parent.name for r in rows if r.get("checkpoint")})
-    run_warning = ("" if len(runs) <= 1 else
-                   f"  ||  WARNING: rows span {len(runs)} DIFFERENT runs ({', '.join(runs)}) "
-                   f"- the lines are NOT a training trajectory")
+        # Run-identity guard: a ladder line only means "training evolution" if every rung comes
+        # from the SAME run. Rows carry the checkpoint path, so the parent dir is the run id.
+        runs = sorted({Path(r["checkpoint"]).parent.name for r in rows if r.get("checkpoint")})
+        run_warning = ("" if len(runs) <= 1 else
+                       f"  ||  WARNING: rows span {len(runs)} DIFFERENT runs ({', '.join(runs)}) "
+                       f"- the lines are NOT a training trajectory")
 
-    drift = [k for k in ref_metrics if _is_invariant(k)
-             and any(r["metrics"].get(k) is not None
-                     and abs(r["metrics"][k] - ref_metrics[k]) > 1e-9 for r in rows)]
-    shas = {r.get("eval_core_sha", "?")[:12] for r in rows} | ({ref.get("eval_core_sha", "?")[:12]}
-                                                              if ref_label else set())
-    integrity = (f"invariants: {'DRIFTED ' + ','.join(drift[:3]) if drift else 'OK'}"
-                 f"  |  eval anemoi-core: {','.join(sorted(shas))}")
-    fig.suptitle(
-        f"Ladder - {ladder['card_id']} (profile {prof['_name']})   "
-        f"dotted = reference '{ref_label or 'none'}'; green = every curve better, red = every "
-        f"curve worse, white = mixed/no direction ({better} / {worse} / {mixed}); "
-        f"hPa level panels shaded +/-{HPA_BAND:g} hPa replica noise\n{integrity}{run_warning}",
-        fontsize=11)
-    fig.tight_layout(rect=[0.01, 0, 1, 0.97 if nrow > 3 else 0.93])
-    out = Path(args.out) if args.out else ladder_paths(prof)["png"]
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=130)
+        drift = [k for k in ref_metrics if _is_invariant(k)
+                 and any(r["metrics"].get(k) is not None
+                         and abs(r["metrics"][k] - ref_metrics[k]) > 1e-9 for r in rows)]
+        shas = {r.get("eval_core_sha", "?")[:12] for r in rows} | (
+            {ref.get("eval_core_sha", "?")[:12]} if ref_label else set())
+        integrity = (f"invariants: {'DRIFTED ' + ','.join(drift[:3]) if drift else 'OK'}"
+                     f"  |  eval anemoi-core: {','.join(sorted(shas))}")
+        fig.suptitle(
+            f"Ladder {ladder['card_id']} (profile {prof['_name']}): scores against training step, "
+            f"baseline '{ref_label or 'none'}' as horizontal lines\n"
+            f"{integrity}{run_warning}",
+            fontsize=11, color=WORSE_COLOR if run_warning else "black")
+        key_handles = [
+            Patch(facecolor=better_bg, edgecolor="0.6",
+                  label=f"every curve better than the baseline ({better} panels)"),
+            Patch(facecolor=worse_bg, edgecolor="0.6",
+                  label=f"every curve worse than the baseline ({worse} panels)"),
+            Patch(facecolor="white", edgecolor="0.6",
+                  label=f"curves disagree ({mixed} panels), or no better direction"),
+        ]
+        if ref_label:
+            key_handles += [
+                Line2D([0], [0], label=f"baseline '{ref_label}' (one curve)",
+                                        **role_style("baseline", linewidth=1.4)),
+                Line2D([0], [0], color="0.4", linestyle=":", linewidth=1.4,
+                                        label="baseline of the same-coloured curve"),
+                Patch(facecolor="0.5", alpha=0.15,
+                      label=f"±{HPA_BAND:g} hPa replica noise around the baseline (hPa levels)"),
+            ]
+        fig.legend(handles=key_handles, loc="lower center", ncol=3, fontsize=9,
+                   bbox_to_anchor=(0.5, 0.0))
+        top = 0.975 if nrow > 3 else 0.93
+        fig.tight_layout(rect=[0.015, 0.045 if nrow > 3 else 0.09, 1, top])
+        out = Path(args.out) if args.out else ladder_paths(prof)["png"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # ladder.png as before, plus ladder.pdf next to it; 150 dpi
+        save_figure(fig, out, close=True)
     print(f"ladder plot -> {out}  ({len(panels)} panels; {better} better / {worse} worse / "
           f"{mixed} mixed; {integrity}){run_warning}")
 

@@ -155,3 +155,18 @@ def test_mlflow_plot_all_writes_png_and_pdf(tmp_path):
     for name in ("key_vars", "overview", "all_vars"):
         assert (tmp_path / f"{name}.png").exists()
         assert (tmp_path / f"{name}.pdf").exists()
+
+
+# --------------------------------------------------------------------------- ladder wording
+
+def test_ladder_display_helpers():
+    from eval.jobs import ladder
+
+    assert ladder._loss_title("val_out_hres_mse_metric/out_hres/sfc_2t_scale_0") == (
+        "Validation MSE: 2 m temperature")
+    assert ladder._series_label("n.hem fcrps") == "N. Hemisphere, fair CRPS"
+    assert ladder._series_label("tropics") == "Tropics"
+    unit, scale = ladder._panel_units({"unit": "native", "band": "RMSE (ens mean)", "title": "msl"})
+    assert unit == "hPa" and scale == pytest.approx(0.01)
+    assert ladder._panel_units({"unit": "hPa", "band": "TC extremes", "title": "x"}) == ("hPa", 1.0)
+    assert ladder._panel_units({"unit": "m/s", "band": "TC extremes", "title": "x"}) == ("m s⁻¹", 1.0)
