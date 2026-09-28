@@ -20,7 +20,7 @@ Method (identical to the T24 regional box-FFT audit, tc_o320_o1280):
 Figures are drawn in the house style of ``eval.plotting`` (role colours, variable-table colour
 maps and units) by ``plot_full_spectra`` and ``plot_storm_maps``, which only draw.
 
-CLI:  python -m eval._backends.storm_maps.render <predictions_dir> --out <dir> \
+CLI:  python -m eval.evaluators.storm_maps.core.render <predictions_dir> --out <dir> \
         [--event-box lat0,lat1,lon0,lon1] [--event-name idalia] [--step 072]
 """
 from __future__ import annotations

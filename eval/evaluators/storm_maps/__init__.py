@@ -4,7 +4,7 @@ Renders a storm-map figure (10 m wind and sea-level pressure, truth against mode
 against input, zoomed on the deepest-eye storm) and the full radial power spectra
 at all wavenumbers for 10u, 10v and msl. Reads the event and storm box from the
 lane's `tc` block, and falls back to the tc_atlantic_mdr_west box. Diagnostic
-only; no scoreboard row. Backend: eval._backends.storm_maps.render.
+only; no scoreboard row. Backend: eval.evaluators.storm_maps.core.render.
 
 Lane configuration, all keys optional (the `storm_maps:` block of the lane file):
 

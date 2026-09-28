@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from eval._backends.storm_maps import render as backend
+from eval.evaluators.storm_maps.core import render as backend
 from eval.evaluators.storm_maps import runner
 
 # The values that were hard-coded before the keys became configurable.

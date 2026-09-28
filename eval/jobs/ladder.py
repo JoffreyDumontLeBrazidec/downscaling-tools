@@ -138,7 +138,7 @@ module load ecmwf-toolbox || true
 cd {repo}
 export METVIEW_PYTHON_START_TIMEOUT=300
 {predict_block}
-{evaluate_block}python -m eval._backends.storm_maps.render {evaldir}/predictions \\
+{evaluate_block}python -m eval.evaluators.storm_maps.core.render {evaldir}/predictions \\
   --out {evaldir}/evaluators/storm_maps {storm_args} || echo "storm_maps failed (non-fatal)"
 python -m eval.jobs.ladder collect --profile {profile} --step {step} --eval-dir {evaldir} {collect_extra}
 """

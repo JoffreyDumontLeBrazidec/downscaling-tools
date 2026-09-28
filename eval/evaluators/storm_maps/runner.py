@@ -1,4 +1,4 @@
-"""storm_maps evaluator runner — thin wrapper over eval._backends.storm_maps.render.
+"""storm_maps evaluator runner — thin wrapper over eval.evaluators.storm_maps.core.render.
 
 Mirrors the region_plot runner signature so eval.cli can dispatch it. The event box, the storm
 search box and the lead times can be set in the lane's ``storm_maps:`` block (see the package
@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from eval._backends.storm_maps.render import render
+from eval.evaluators.storm_maps.core.render import render
 
 LOG = logging.getLogger(__name__)
 

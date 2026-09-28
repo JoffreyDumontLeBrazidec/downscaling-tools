@@ -1,5 +1,5 @@
 """Small pure helpers used by the diagnostic figures (storm_maps, spectra_coherence, displacement)."""
-from eval._backends.storm_maps.render import _column_titles, _ogrid
+from eval.evaluators.storm_maps.core.render import _column_titles, _ogrid
 from eval.evaluators.displacement.plotter import _box_text, _run_text
 from eval.evaluators.spectra_coherence.plot_stratified import _band_label
 
