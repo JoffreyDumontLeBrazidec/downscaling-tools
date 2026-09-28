@@ -62,7 +62,7 @@ python -m eval.cli evaluate \
     --lane o96_o320 --only probabilistic
 ```
 
-The `probabilistic` evaluator reads local `predictions_YYYYMMDD_stepNNN.nc` files directly and writes `scores_by_lead.csv`, `summary_by_lead.csv`, `metrics.json`, and `plots/probabilistic_scores.pdf` under `evaluators/probabilistic/`. It computes CRPS, fair CRPS, spread, and ensemble-mean RMSE by lead time, variable, and domain without writing forecasts or scores to FDB. Quaver comparison curves can be overlaid from an exported local CSV, but quaver is not part of the evaluator runtime.
+The `probabilistic` evaluator reads local `predictions_YYYYMMDD_stepNNN.nc` files directly and writes `scores_by_lead.csv`, `summary_by_lead.csv`, `metrics.json`, and `plots/probabilistic_scores.pdf` under `evaluators/probabilistic/`. It computes CRPS, fair CRPS, spread, and ensemble-mean RMSE by lead time, variable, and domain without writing forecasts or scores to FDB. Quaver comparison curves can be overlaid from an exported local CSV, but quaver is not part of the evaluator runtime. Its figure is drawn by the same shared function as the quaver evaluator's (see Plot style below).
 
 To compare the local summary with a quaver-exported CSV using the same `step,weather_state,domain,metric` keys:
 
@@ -171,6 +171,17 @@ Contains: `tc/`, `spectra/`, `region_plotting/`, `sigma_evaluator/`, `weight_dia
 These modules were moved here from their original top-level `eval/` locations as part of the
 legacy quarantine. All imports have been updated. Old import paths (`eval.tc.*`, `eval.spectra.*`,
 etc.) will fail immediately — this is intentional.
+
+## Plot style (`eval/plotting/`)
+
+Every figure the framework draws uses one house style, defined in `eval/plotting/` (importing it changes no global Matplotlib setting; figures are drawn inside `with eval_style():`).
+
+- **Roles** (`roles.py`): truth is black, solid and thick; the model is red (`#d62728`), solid; the driving input is blue (`#1f77b4`), dashed; a baseline is dark grey, dash-dot; every other anchor curve takes a distinct muted colour and dash from `REFERENCE_STYLES`. Several checkpoints or arms in one figure use `sequence_style(i)`, an Okabe-Ito based colour-blind-safe sequence that avoids the role colours. Better/worse is blue/orange, never red/green.
+- **Variables** (`variables.py`): one table gives each variable its display name, unit, native-to-display conversion (msl and sp in hPa, z in dam, temperatures in K, wind in m s-1, tp in mm), a perceptually uniform field colour map, and an error colour map (`RdBu_r`, `BrBG` for precipitation) that is always centred on zero.
+- **Wording and labels** (`labels.py`): one wording for axes (`AXIS`) and `readable_label()` to turn raw keys such as `od_enfo_0001` or `eval_inputs` into legend text.
+- **Maps** (`maps.py`): the single projection rule, coastlines, borders, labelled grid lines, and shared colour scales per row.
+- **Saving** (`style.py`): `save_figure()` writes a PNG (150 dpi) and a PDF; `FigureBook` writes a multi-page PDF with optional per-page PNGs.
+- **Probabilistic scores** (`probabilistic.py`): `plot_probabilistic_scores(curves, source, out)` draws the one probabilistic figure used by both the local `probabilistic` evaluator and `quaver`.
 
 ## Notebooks
 - `eval/notebooks/00_eval_overview.ipynb`
