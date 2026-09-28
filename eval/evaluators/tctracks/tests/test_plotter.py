@@ -85,3 +85,30 @@ def test_haversine_and_latlon_format():
     assert plotter._fmt_latlon(-10.0, 100.0) == "10S 100E"
     d = plotter._haversine_km(0.0, 0.0, 0.0, 1.0)
     assert np.isclose(d, 111.19, atol=0.5)
+
+
+def test_role_styles_follow_the_house_roles():
+    from eval.plotting import INPUT_COLOR, MODEL_COLOR, TRUTH_COLOR
+
+    assert plotter.role_color("target") == TRUTH_COLOR
+    assert plotter.role_color("model") == MODEL_COLOR
+    assert plotter.role_color("input") == INPUT_COLOR
+    assert plotter.role_color("ctrl") not in (TRUTH_COLOR, MODEL_COLOR, INPUT_COLOR)
+    assert plotter.role_color("extra", 0) not in (TRUTH_COLOR, MODEL_COLOR, INPUT_COLOR)
+
+
+def test_source_and_role_labels_are_readable():
+    assert plotter.source_name({"provenance": {"source_id": "od_enfo_0001"}}, "target") == "ENFO"
+    assert plotter.source_name({"provenance": {"source_id": "ai_enfo_0001"}}, "target") == "AI ENFO"
+    assert plotter.role_label("target", {"provenance": {"source_id": "od_enfo_0001"}}) == "truth (ENFO)"
+    assert plotter.role_label("model", {"provenance": {"source_id": "ja6g"}}) == "model (ja6g)"
+    assert plotter.month_text("202509") == "September 2025"
+    assert plotter.basin_title("wnp") == "Western North Pacific (WNP)"
+
+
+def test_render_all_writes_png_and_pdf_siblings(tmp_path):
+    sources = _sources()
+    metrics = scorer.score_sources(sources, months=["202509"], basins=["atl"])
+    plotter.render_all(sources, metrics, ["202509"], ["atl"], tmp_path, top_k_cases=1)
+    assert (tmp_path / "figures" / "dist_atl.png").exists()
+    assert (tmp_path / "figures" / "dist_atl.pdf").exists()
