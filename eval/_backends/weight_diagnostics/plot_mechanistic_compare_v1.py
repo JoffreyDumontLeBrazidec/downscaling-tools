@@ -9,15 +9,18 @@ import pandas as pd
 
 plt.switch_backend("Agg")
 
+from eval.plotting import SEQUENCE, save_figure, styled  # noqa: E402
+
 CATEGORY_ORDER = ["extreme", "moderate", "control"]
 CHECKPOINT_ORDER = ["lowdec", "highdec"]
 CHECKPOINT_LABELS = {
     "lowdec": "wd=0.01",
     "highdec": "wd=0.1",
 }
+# two checkpoints of the same model: the first two colours of the house sequence
 COLORS = {
-    "lowdec": "#c65d00",
-    "highdec": "#1f4e79",
+    "lowdec": SEQUENCE[0],
+    "highdec": SEQUENCE[1],
 }
 
 
@@ -48,6 +51,7 @@ def _setup_category_axes(title: str):
     return fig, axes
 
 
+@styled
 def plot_activation(per_block_df: pd.DataFrame, out_path: Path) -> Path:
     fig, axes = _setup_category_axes("Block Output RMS by Depth")
     means = _mean_by_depth(per_block_df, "block_output_rms")
@@ -65,18 +69,19 @@ def plot_activation(per_block_df: pd.DataFrame, out_path: Path) -> Path:
                 label=CHECKPOINT_LABELS[checkpoint],
             )
         ax.set_title(category)
-        ax.set_xlabel("Depth")
+        ax.set_xlabel("Block depth")
         ax.grid(alpha=0.3)
-    axes[0].set_ylabel("RMS")
+    axes[0].set_ylabel("RMS activation")
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.tight_layout(rect=[0, 0, 1, 0.92])
-    fig.savefig(out_path, dpi=180)
+        fig.legend(handles, labels, loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=[0, 0.07, 1, 0.95])
+    save_figure(fig, out_path)   # PNG at 150 dpi plus a PDF
     plt.close(fig)
     return out_path
 
 
+@styled
 def plot_residuals(per_block_df: pd.DataFrame, out_path: Path) -> Path:
     fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
     fig.suptitle("Residual Update Ratios by Depth")
@@ -103,18 +108,19 @@ def plot_residuals(per_block_df: pd.DataFrame, out_path: Path) -> Path:
             ax.set_title(f"{category} | {row_title}")
             ax.grid(alpha=0.3)
             if row_idx == 1:
-                ax.set_xlabel("Depth")
-    axes[0, 0].set_ylabel("delta / input")
-    axes[1, 0].set_ylabel("delta / input")
+                ax.set_xlabel("Block depth")
+    axes[0, 0].set_ylabel("Residual update / input (ratio)")
+    axes[1, 0].set_ylabel("Residual update / input (ratio)")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(out_path, dpi=180)
+        fig.legend(handles, labels, loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    save_figure(fig, out_path)   # PNG at 150 dpi plus a PDF
     plt.close(fig)
     return out_path
 
 
+@styled
 def plot_attention(per_block_df: pd.DataFrame, out_path: Path) -> Path:
     fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True)
     fig.suptitle("Attention Concentration by Depth")
@@ -141,18 +147,19 @@ def plot_attention(per_block_df: pd.DataFrame, out_path: Path) -> Path:
             ax.set_title(f"{category} | {row_title}")
             ax.grid(alpha=0.3)
             if row_idx == 1:
-                ax.set_xlabel("Depth")
+                ax.set_xlabel("Block depth")
     axes[0, 0].set_ylabel("Entropy")
     axes[1, 0].set_ylabel("Mean max weight")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.tight_layout(rect=[0, 0, 1, 0.94])
-    fig.savefig(out_path, dpi=180)
+        fig.legend(handles, labels, loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    save_figure(fig, out_path)   # PNG at 150 dpi plus a PDF
     plt.close(fig)
     return out_path
 
 
+@styled
 def plot_sensitivity(sensitivity_df: pd.DataFrame, out_path: Path) -> Path:
     fig, axes = _setup_category_axes("Finite-Difference Sensitivity")
     summary = (
@@ -184,9 +191,9 @@ def plot_sensitivity(sensitivity_df: pd.DataFrame, out_path: Path) -> Path:
     axes[0].set_ylabel("||delta output|| / ||delta input||")
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False)
-    fig.tight_layout(rect=[0, 0, 1, 0.92])
-    fig.savefig(out_path, dpi=180)
+        fig.legend(handles, labels, loc="lower center", ncol=2, bbox_to_anchor=(0.5, 0.0))
+    fig.tight_layout(rect=[0, 0.07, 1, 0.95])
+    save_figure(fig, out_path)   # PNG at 150 dpi plus a PDF
     plt.close(fig)
     return out_path
 

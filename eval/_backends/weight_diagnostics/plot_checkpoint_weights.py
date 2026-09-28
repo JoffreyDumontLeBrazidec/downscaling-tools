@@ -29,6 +29,8 @@ import numpy as np
 import torch
 from scipy.stats import gaussian_kde
 
+from eval.plotting import MODEL_COLOR, reference_style, save_figure, styled
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -216,6 +218,7 @@ def compute_family_norms(state_dict: dict) -> dict[str, float | None]:
     return result
 
 
+@styled
 def plot_weight_distributions(data: list[dict], out_dir: Path | str) -> Path:
     """
     4x2 KDE grid. Rows = (decoder_attn, decoder_mlp, proc_attn, proc_mlp).
@@ -228,10 +231,13 @@ def plot_weight_distributions(data: list[dict], out_dir: Path | str) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _style: dict[str, tuple[str, str]] = {
-        "target":      ("black",   "-"),
-        "high_wd_ref": ("red",     "--"),
-        "low_wd_ref":  ("#1565C0", "-."),
+    # house roles: the checkpoint under study is the model (red); the two weight-decay
+    # reference checkpoints are anchors with their own reference styles
+    _ref0, _ref1 = reference_style(0), reference_style(2)
+    _style: dict[str, tuple[str, object]] = {
+        "target":      (MODEL_COLOR, "-"),
+        "high_wd_ref": (_ref0["color"], _ref0["linestyle"]),
+        "low_wd_ref":  (_ref1["color"], _ref1["linestyle"]),
     }
 
     panel_rows = [
@@ -305,12 +311,12 @@ def plot_weight_distributions(data: list[dict], out_dir: Path | str) -> Path:
 
     plt.tight_layout()
     out_path = out_dir / "weight_distributions.png"
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    save_figure(fig, out_path, close=True)   # the PNG as before plus a PDF
     log.info("Saved: %s", out_path)
     return out_path
 
 
+@styled
 def plot_norm_summary(data: list[dict], lane: str, out_dir: Path | str) -> Path:
     """
     Horizontal grouped bar chart: one group per family, bars per checkpoint.
@@ -332,9 +338,9 @@ def plot_norm_summary(data: list[dict], lane: str, out_dir: Path | str) -> Path:
         title_suffix = str(thresholds["title_suffix"])  # type: ignore[index]
 
     role_style: dict[str, tuple[str, float]] = {
-        "target":      ("black",   0.90),
-        "high_wd_ref": ("red",     0.65),
-        "low_wd_ref":  ("#1565C0", 0.65),
+        "target":      (MODEL_COLOR, 0.90),
+        "high_wd_ref": (reference_style(0)["color"], 0.75),
+        "low_wd_ref":  (reference_style(2)["color"], 0.75),
     }
 
     n_fam    = len(NORM_SUMMARY_FAMILIES)
@@ -378,10 +384,12 @@ def plot_norm_summary(data: list[dict], lane: str, out_dir: Path | str) -> Path:
 
     if boundaries:
         # Zone background bands (subtle shading)
-        zone_bg = ["#ef9a9a", "#fff176", "#a5d6a7", "#ce93d8"]
+        # alternating neutral greys (no red/yellow/green traffic light); the zones are named
+        # in text above the axis
+        zone_bg = ["#000000", "#FFFFFF"]
         edges = [0.0] + boundaries + [x_max]
         for i, (lo, hi) in enumerate(zip(edges[:-1], edges[1:])):
-            ax.axvspan(lo, hi, alpha=0.07, color=zone_bg[i % len(zone_bg)], zorder=0)
+            ax.axvspan(lo, hi, alpha=0.06, color=zone_bg[i % len(zone_bg)], zorder=0, lw=0)
 
         # Threshold boundary lines
         for bnd in boundaries:
@@ -416,14 +424,14 @@ def plot_norm_summary(data: list[dict], lane: str, out_dir: Path | str) -> Path:
             else:
                 zone_str = f"decoder_attn = {v:.1f}"
 
-    ax.set_title(f"Weight L2 norms by family  |  {zone_str}", fontsize=10)
+    ax.set_title(f"Weight L2 norms by family: {zone_str}", fontsize=10,
+                 pad=34 if boundaries else 6)
     ax.legend(fontsize=8, framealpha=0.85, loc="lower right")
     ax.grid(axis="x", linewidth=0.4, alpha=0.5, zorder=2)
 
     plt.tight_layout()
     out_path = out_dir / "weight_norms_by_family.png"
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    save_figure(fig, out_path, close=True)   # the PNG as before plus a PDF
     log.info("Saved: %s", out_path)
     return out_path
 
