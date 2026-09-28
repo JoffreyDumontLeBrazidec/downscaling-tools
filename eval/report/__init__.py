@@ -22,11 +22,18 @@ LOG = logging.getLogger(__name__)
 
 # Tab name assignment by filename pattern (order matters — first match wins)
 _TAB_PATTERNS: list[tuple[str, str]] = [
+    ("spectra_ecmwf_ratio", "Spectra: ratio to truth"),
     ("spectra", "Spectra"),
-    ("region", "Region Plots"),
-    ("tc_pdfs", "TC Distributions"),
+    ("region", "Region plots"),
+    ("tc_pdfs", "TC distributions"),
 ]
 # tc_members_<event>_... gets special handling below
+
+# Words written in a fixed form when a file stem is turned into a tab name.
+_ACRONYMS = {"tc": "TC", "pdf": "PDF", "pdfs": "PDFs", "crps": "CRPS", "rmse": "RMSE",
+             "mslp": "MSLP", "ecmwf": "ECMWF", "enfo": "ENFO", "eefo": "EEFO", "iekm": "IEKM",
+             "mlflow": "MLflow", "ssr": "SSR", "cdf": "CDF", "nmse": "NMSE", "mse": "MSE",
+             "l2": "L2", "mslp": "MSLP"}
 
 
 def _tab_name(filename: str) -> str:
@@ -39,9 +46,14 @@ def _tab_name(filename: str) -> str:
     m = re.match(r"tc_members_([a-zA-Z]+)", stem)
     if m:
         event = m.group(1).capitalize()
-        return f"TC {event} Members"
-    # Fallback: humanise the stem
-    return stem.replace("_", " ").title()
+        return f"TC {event} members"
+    # Fallback: humanise the stem in sentence case, keeping known acronyms upper case
+    words = [w for w in re.split(r"[_\s]+", stem) if w]
+    if not words:
+        return stem
+    out = [_ACRONYMS.get(w.lower(), w.lower()) for w in words]
+    out[0] = out[0][:1].upper() + out[0][1:]
+    return " ".join(out)
 
 
 def _discover_pdfs(run_dir: Path) -> list[Path]:
@@ -163,60 +175,70 @@ def _load_identity(run_dir: Path) -> dict[str, str]:
 # HTML rendering
 # ---------------------------------------------------------------------------
 
+# Page styling. Colours and fonts mirror the figure style of ``eval.plotting`` (DejaVu Sans,
+# the role colours truth / model / input / baseline, the colour-blind-safe sequence and the
+# better / worse pair), exposed as CSS custom properties so every element uses the same tokens.
 _CSS = """\
-:root { --bg:#0f172a; --fg:#e2e8f0; --card:#1e293b; --muted:#94a3b8;
-        --accent:#38bdf8; --border: rgba(255,255,255,.06); }
+:root {
+  --font: "DejaVu Sans", "Bitstream Vera Sans", Verdana, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: "DejaVu Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --truth: #000000; --model: #d62728; --input: #1f77b4; --baseline: #4d4d4d;
+  --seq-1: #E69F00; --seq-2: #009E73; --seq-3: #CC79A7; --seq-4: #56B4E9;
+  --seq-5: #8C6D31; --seq-6: #6A3D9A;
+  --better: #0072B2; --worse: #E69F00; --neutral: #BDBDBD;
+  --bg: #f6f6f4; --fg: #1a1a1a; --card: #ffffff; --muted: #595959;
+  --accent: var(--better); --border: #d9d9d9; --stripe: #f7f7f7; --hover: #eaf2f8;
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background:var(--bg); color:var(--fg);
-       font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font);
        padding: 0 1rem 4rem; }
 .wrap { max-width: 1400px; margin: 0 auto; }
-header { margin: 2rem 0 1.25rem; padding: 1.35rem 1.65rem; border-radius: 14px;
-         background: linear-gradient(135deg,#1e3a8a 0%,#312e81 60%,#1e293b 100%);
-         box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); }
-header h1 { font-size: 1.65rem; font-weight: 700; letter-spacing:-.01em;
-            background: linear-gradient(90deg,#38bdf8,#a78bfa); -webkit-background-clip:text;
-            background-clip:text; color: transparent; }
-header .meta { margin: .4rem 0 0; color:#cbd5e1; font-size: .85rem; }
-header .meta code { background: rgba(255,255,255,.06); padding: 1px 5px;
-                    border-radius: 4px; font-size: .85em;
-                    font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+header { margin: 1.75rem 0 1.25rem; padding: 1.2rem 1.5rem; border-radius: 8px;
+         background: var(--card); border: 1px solid var(--border);
+         border-left: 6px solid var(--model); }
+header h1 { font-size: 1.5rem; font-weight: 700; color: var(--fg); letter-spacing: -.005em; }
+header .meta { margin: .45rem 0 0; color: var(--muted); font-size: .88rem; }
+header .meta code { background: var(--stripe); padding: 1px 5px; border-radius: 4px;
+                    border: 1px solid var(--border); font-size: .85em; font-family: var(--mono);
+                    color: var(--fg); overflow-wrap: anywhere; }
 .cards { display: flex; flex-wrap: wrap; gap: .65rem; margin: 1rem 0; }
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-        padding: .7rem 1rem; min-width: 160px; flex: 1 1 160px; max-width: 220px; }
-.card .card-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
-                    color: var(--muted); }
-.card .card-value { font-size: 1.15rem; font-weight: 700; color: var(--accent);
-                    font-family: ui-monospace, "SF Mono", Menlo, monospace; margin-top: .15rem; }
-.card .card-unit { font-size: .7rem; color: var(--muted); }
-section.metrics-table { background: var(--card); border-radius: 12px; overflow-x: auto;
-                        border:1px solid var(--border); margin-top: .75rem; }
-section.metrics-table h2 { padding: .65rem 1rem 0; font-size: .8rem; text-transform: uppercase;
-                           letter-spacing: .08em; color: var(--accent); font-weight: 600; }
-table { width: 100%; border-collapse: collapse; font-size: .8rem;
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        border-top: 3px solid var(--accent);
+        padding: .7rem 1rem; min-width: 170px; flex: 1 1 170px; max-width: 240px; }
+.card .card-label { font-size: .8rem; color: var(--muted); }
+.card .card-value { font-size: 1.25rem; font-weight: 700; color: var(--fg);
+                    font-family: var(--mono); margin-top: .15rem; }
+.card .card-unit { font-size: .78rem; color: var(--muted); }
+section.metrics-table { background: var(--card); border-radius: 8px; overflow: auto;
+                        max-height: 70vh; border: 1px solid var(--border); margin-top: .75rem; }
+section.metrics-table h2 { padding: .75rem 1rem .4rem; font-size: 1rem; color: var(--fg);
+                           font-weight: 700; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem;
         font-variant-numeric: tabular-nums; }
-thead th { position: sticky; top: 0; background: #0f172a; color: var(--muted);
-           font-weight: 500; font-size: .7rem; text-transform: uppercase;
-           letter-spacing: .04em; padding: .5rem .6rem; text-align: left;
-           border-bottom: 1px solid var(--border); white-space: nowrap; }
-tbody td { padding: .3rem .6rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-tbody tr:hover { background: rgba(56,189,248,.05); }
-td.num { text-align: right; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-.tabs { margin: 1.25rem 0; }
-.tabs h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em;
-           color: var(--accent); font-weight: 600; margin-bottom: .5rem; }
-.tab-bar { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
-.tab-btn { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-           padding: .35rem .85rem; color: var(--muted); cursor: pointer; font-size: .78rem;
-           transition: background .15s, color .15s; }
-.tab-btn:hover { background: rgba(56,189,248,.1); color: var(--fg); }
-.tab-btn.active { background: rgba(56,189,248,.15); color: var(--accent);
-                  border-color: var(--accent); }
+thead th { position: sticky; top: 0; background: #ececea; color: var(--fg);
+           font-weight: 700; font-size: .85rem; padding: .5rem .75rem; text-align: left;
+           border-bottom: 2px solid #bdbdbd; white-space: nowrap; }
+tbody td { padding: .35rem .75rem; border-bottom: 1px solid var(--border);
+           white-space: nowrap; }
+tbody tr:nth-child(even) { background: var(--stripe); }
+tbody tr:hover { background: var(--hover); }
+td.num { text-align: right; font-family: var(--mono); }
+.tabs { margin: 1.5rem 0; }
+.tabs h2 { font-size: 1rem; color: var(--fg); font-weight: 700; margin-bottom: .6rem; }
+.tab-bar { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem; }
+.tab-btn { background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+           padding: .4rem .9rem; color: var(--fg); cursor: pointer; font: inherit;
+           font-size: .88rem; transition: background .15s, border-color .15s; }
+.tab-btn:hover { background: var(--hover); border-color: var(--accent); }
+.tab-btn.active { background: var(--accent); color: #ffffff; border-color: var(--accent);
+                  font-weight: 700; }
+.tab-btn:focus-visible { outline: 3px solid var(--worse); outline-offset: 1px; }
 .tab-panel { display: none; background: var(--card); border: 1px solid var(--border);
-             border-radius: 12px; overflow: hidden; }
+             border-radius: 8px; overflow: hidden; }
 .tab-panel.active { display: block; }
-.tab-panel iframe { width: 100%; height: 85vh; border: none; }
-footer { color: var(--muted); font-size: .77rem; margin: 1.25rem 0 0; padding: 0 .5rem; }
+.tab-panel iframe { width: 100%; height: 85vh; border: none; background: #ffffff; }
+footer { color: var(--muted); font-size: .82rem; margin: 1.25rem 0 0; padding: 0 .5rem; }
+footer code { font-family: var(--mono); overflow-wrap: anywhere; }
 """
 
 _TAB_JS = """\
@@ -248,6 +270,17 @@ def _key_metrics(metrics: list[tuple[str, str, float, str]]) -> list[tuple[str, 
     if not result:
         result = metrics[:4]
     return result
+
+
+# Display spelling of the unit strings stored in scores.csv (the stored strings are unchanged).
+_UNIT_DISPLAY = {
+    "m/s": "m s⁻¹", "m s-1": "m s⁻¹", "relative_l2": "relative L2 distance",
+    "score_0_1": "score from 0 to 1", "nmse": "normalised MSE", "mse": "MSE",
+}
+
+
+def _display_unit(unit: str) -> str:
+    return _UNIT_DISPLAY.get(unit, unit.replace("_", " "))
 
 
 def _format_value(v: float) -> str:
@@ -338,11 +371,13 @@ def generate_report(
     if key:
         parts.append('<div class="cards">')
         for evaluator, metric, value, unit in key:
-            display_name = metric.replace("_", " ").title()
+            words = [_ACRONYMS.get(w.lower(), w) for w in metric.split("_") if w]
+            display_name = " ".join(words)
+            display_name = display_name[:1].upper() + display_name[1:]
             parts.append('<div class="card">')
             parts.append(f'<div class="card-label">{html.escape(display_name)}</div>')
             parts.append(f'<div class="card-value">{_format_value(value)}</div>')
-            parts.append(f'<div class="card-unit">{html.escape(unit)}</div>')
+            parts.append(f'<div class="card-unit">{html.escape(_display_unit(unit))}</div>')
             parts.append("</div>")
         parts.append("</div>")
 
@@ -358,7 +393,7 @@ def generate_report(
             parts.append(f"<td>{html.escape(evaluator)}</td>")
             parts.append(f"<td>{html.escape(metric)}</td>")
             parts.append(f'<td class="num">{_format_value(value)}</td>')
-            parts.append(f"<td>{html.escape(unit)}</td>")
+            parts.append(f"<td>{html.escape(_display_unit(unit))}</td>")
             parts.append("</tr>")
         parts.append("</tbody></table></section>")
 
