@@ -46,3 +46,13 @@ Dead jobs, quarantined after checking that nothing live calls them:
 `eval/jobs/templates/finalize_lean_eval_layout.sbatch` still imports
 `build_run_scoreboard_metrics` from it. The finalize test that lived in
 `test_o48_o96_flow_helper.py` moved to `eval/jobs/tests/test_finalize_lean_eval_layout.py`.
+
+## Tests moved here during the test triage (`jobs/tests/`)
+
+These tests cannot pass against the code as it is today, so they were moved out of the
+collected folders instead of being deleted.
+
+| File | Why it is here |
+|---|---|
+| `jobs/tests/test_scoreboard_metrics_anchored_scores.py` | Tests of the anchored TC scores (analysis-anchored score, reach, ENFO match, tail ratios). The raw-extremes contract of 2026-06-21 removed those scores. The live replacements are in `eval/jobs/tests/test_scoreboard_metrics.py`. |
+| `jobs/tests/test_predictions_dir_spectra.py`, `jobs/tests/test_spectra_plot_pdf.py`, `jobs/tests/test_launch_proxy_eval_spectra_helper.py` | Tests of the helpers `predictions_dir_spectra.py` and `spectra_plot_pdf.py`, which were deleted when the spectra templates were archived. They are recoverable from git history. |

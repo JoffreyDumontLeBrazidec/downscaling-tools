@@ -9,7 +9,7 @@ codebase evolves to match this document.
 ```
 Input sources
   |-- checkpoint (research)  -> eval.predict -> predictions_*.nc
-  |-- MARS expver (prepml)   -> eval.run mars-expver -> predictions + region plots
+  |-- MARS expver (prepml)   -> eval.cli predict/run --mode prepml -> predictions
                                         |
                               predictions directory
                                         |
@@ -18,6 +18,7 @@ Input sources
                     eval.evaluators.<name>.run()    (computation)
                     eval.evaluators.<name>.score()  (metrics extraction)
                     eval.evaluators.<name>.plot()   (visualization)
+                    -- the same three calls for every evaluator: eval/evaluators/base.py
                                         |
                     eval.scoreboard.aggregator      (collect metrics.json)
                     eval.scoreboard.formatter       (CSV / markdown)
@@ -31,100 +32,92 @@ Supporting layers:
 - `eval/shared/` -- common grid and plotting utilities
 - `eval/paths.py` -- canonical path resolution
 
-**Current state**: The prepml path (`eval.run mars-expver`) is the legacy CLI,
-still used by the full-suite launcher. The checkpoint path flows through
-`eval.cli`. Both produce a predictions directory that the evaluator framework
-consumes.
+**Current state**: Both input paths go through `eval.cli`: the checkpoint path
+(`--mode manual`, the default) and the MARS/FDB path (`--mode prepml`). Both produce
+a predictions directory that the evaluator framework consumes. The legacy
+`eval.run mars-expver` entry point lives in `eval/archive/run.py`.
 
 ## 2. Evaluator Architecture
 
-Each evaluator is a self-contained package under `eval/evaluators/<name>/`:
+Each evaluator is a thin package under `eval/evaluators/<name>/`; the computation
+behind it lives in `eval/_backends/<name>/`:
 
 ```
 eval/evaluators/tc/
-|-- __init__.py       # Exports: run(), score(), plot(); EVALUATOR_SPEC
-|-- runner.py         # Orchestration -- calls kernel functions
-|-- scorer.py         # Metrics extraction -- calls kernel scoring math
-|-- plotter.py        # Visualization
-|-- kernel/           # Domain logic (data loading, statistics, grid ops)
-    |-- workflows.py
-    |-- stats.py
-    |-- data_types.py
-    |-- events.py
-    |-- grid.py
-    |-- loading_grib.py
-    |-- loading_predictions.py
-    |-- member_plot.py
-    |-- pdf_plot.py
-    |-- plot_config.py
+|-- __init__.py       # exports run, score, plot and EVALUATOR_SPEC (the contract)
+|-- runner.py         # run(): orchestration, calls the backend
+|-- scorer.py         # score(): scoreboard rows from the results
+|-- plotter.py        # plot(): figures from the results
+eval/_backends/tc/    # data loading, statistics, grid operations, plot code
 ```
 
-The same pattern applies to all evaluators:
-
-| Evaluator | Kernel contents |
-|---|---|
-| `tc` | TC workflows, stats, loading, plotting |
-| `spectra_ecmwf_v2` | ECMWF spectral transform (gptosp) on the complete grid, comparison plots |
-| `surface` | Surface nMSE scoring math, normalization (self-contained; no separate legacy runner) |
-| `region_plot` | Six-panel region plotting, coordinate/variable utils |
-| `sigma_loss` | Per-noise-level denoiser loss from single forward passes |
-
 The full list of evaluators, with their group (scored, standard, diagnostic or
-retired) and the question each one answers, is `eval/evaluators/registry.py`.
+retired), the question each one answers and the host it is limited to, is
+`eval/evaluators/registry.py`. To see it, and one evaluator in detail, run
+`python -m eval.cli list` and `python -m eval.cli describe <name>`; both are
+generated from the registry and the packages, so there is no second catalogue.
 
 `eval/scoreboard/` contains only the canonical aggregation layer
 (`aggregator.py`, `formatter.py`, `types.py`). Per-domain scoring math lives
-inside the respective evaluator's `kernel/` or `scorer.py`.
+inside the evaluator's `scorer.py` or its backend.
 
-### Evaluator Convention
+### Evaluator Contract
 
-Each `__init__.py` exports up to three functions:
+The contract is written down once, in `eval/evaluators/base.py` (typing Protocols
+plus a checker). Every registered, non-retired evaluator package exports exactly:
 
 ```python
-def run(predictions_dir, lane_config, eval_config) -> Path:
-def score(results_dir, lane_config, eval_config) -> list[dict]:
-def plot(results_dir, lane_config, eval_config, output_dir) -> list[Path]:
-
 EVALUATOR_SPEC = {
-    "name": "tc",
-    "requires": ["predictions"],
+    "name": "tc",                    # the package name
+    "requires": ["predictions"],     # or ["checkpoint"] when the evaluator runs the model
+    "outputs": ["stats.json: ...", ...],   # what run() writes; shown by `describe`
+    "deliverables": {...},           # optional: files promoted to the run root
 }
+
+def run(predictions_dir, lane_config, eval_config, *, output_dir=None, overwrite=False,
+        checkpoint=None, run_label="", **kwargs): ...
+def score(results_dir, lane_config, eval_config, *, predictions_dir=None, **kwargs) -> list[dict]: ...
+def plot(results_dir, lane_config, eval_config, *, output_dir=None, **kwargs) -> None: ...
 ```
 
-Not every evaluator needs all three. This is convention, not a base class.
+An evaluator with nothing to score or nothing to plot uses the adapters `no_score`
+and `no_plot` from `base.py`, so `score` and `plot` always exist and `eval.cli`
+never has to test for them. `eval/tests/test_evaluator_contract.py` binds every
+evaluator's functions against the exact call `eval/cli/evaluate.py` makes.
 
 ### Evaluator Rules
 
-- Each evaluator writes data under `data/<name>/` and plots under `plots/<name>/`.
-- No evaluator writes outside its own subdirectories.
+- Each evaluator writes only under its own results directory,
+  `<run>/evaluators/<name>/`.
 - No cross-evaluator imports.
 - Evaluators import from `eval.config`, `eval.discovery`, `eval.shared`, their
-  own `kernel/`, and stdlib. Never from `eval.jobs` or another evaluator.
+  own backend, and stdlib. Never from `eval.jobs` or another evaluator.
 
-**Current state**: the consolidation is done. Compute kernels live in
-`eval/_backends/<name>/` and the thin evaluator wrappers in
-`eval/evaluators/<name>/` (`runner.py` / `scorer.py` / `plotter.py`, each
-exporting `EVALUATOR_SPEC`). `eval/cli.py` dispatches by name through
-`importlib.import_module(f"eval.evaluators.{name}")` over `ALL_EVALUATORS`, which is
-derived from the one registry `eval/evaluators/registry.py`, so an evaluator is
-reachable if and only if the registry lists it and it is not retired. Whether an
-evaluator feeds the scoreboard is also read from the registry, not from its spec.
-The old top-level paths (`eval/tc/`, `eval/spectra/`, ...) no longer exist and
-their import paths fail immediately, which is intentional.
+**Current state**: the consolidation is done. `eval/cli/evaluate.py` dispatches by
+name through `importlib.import_module(f"eval.evaluators.{name}")` over
+`ALL_EVALUATORS`, which is derived from the one registry
+`eval/evaluators/registry.py`, so an evaluator is reachable if and only if the
+registry lists it and it is not retired. Whether an evaluator feeds the scoreboard
+is also read from the registry, not from its spec. The old top-level paths
+(`eval/tc/`, `eval/spectra/`, ...) no longer exist and their import paths fail
+immediately, which is intentional.
 
 Three further facts a reader needs:
 
 - `eval/lean_layout.py` projects the lean run-root layout natively in the
-  harness; `eval/cli.py` delegates run-root resolution and plot consolidation
-  to it.
+  harness; `eval/cli/evaluate.py` delegates run-root resolution and plot
+  consolidation to it.
 - `eval/archive/` is frozen but **not** dead --
   `eval/_backends/weight_diagnostics/mechanistic_compare_v1.py` and
-  `eval/tests/test_eval_run.py` still import from it, so it cannot be removed
+  `eval/tests/test_eval_run.py` still import from it, and a few tests in
+  `eval/jobs/tests/` exercise the archived jobs, so it cannot be removed
   without untangling those first.
 - `manual_inference/` and `manual_inference_legacy_ds/` are a deliberate fork,
   not an accident: `eval/predict/_mi.py` routes between them on the
   `KEYSTONE_LEGACY_DS` environment variable so cfec83a3-era single-dataset
-  checkpoints keep working. Both are load-bearing.
+  checkpoints keep working. Both are load-bearing. The legacy tree is written to
+  be installed under the name `manual_inference`, which is why its tests only run
+  in a subprocess with that alias (see `TESTING.md`).
 
 ## 3. Configuration
 
@@ -225,40 +218,57 @@ data/plots separation:
 
 ## 5. CLI
 
-Single entry point: `python -m eval.cli <subcommand>`. Never bare `eval`.
+Single entry point: `python -m eval.cli <command>`. Never bare `eval`. The
+package `eval/cli/` has one module per command; each publishes a `Command` record
+(name, group, summary, `register`, `run`) and `eval/cli/__init__.py` collects
+them. Commands that need a lane and a host go through `eval/cli/_session.py`, which
+loads the configuration, exports the host environment, chooses the evaluators and
+the output directory, writes `effective_config.json` (or prints it for `--dry-run`)
+and afterwards writes the `--vs-baseline` diff.
+
+| Group | Commands |
+|---|---|
+| discovery | `list`, `describe <evaluator>` |
+| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard`, `report` |
+| comparison | `evolution` |
+| tropical cyclone tracks | `tctracker`, `tccompare` |
+| figures | `membermaps`, `videogen` |
+| maintenance | `prepml-cleanup`, `config` |
 
 ```bash
+# What can be evaluated, and how does one evaluator work?
+python -m eval.cli list
+python -m eval.cli describe tc
+
 # Full pipeline: predict + evaluate + scoreboard
-python -m eval.cli run --checkpoint <path> --lane o96_o320 [--host atos_ac] [--only tc,spectra]
+python -m eval.cli run --checkpoint <path> --lane o96_o320 [--host atos_ac] [--only tc,surface]
 
 # Predictions only
 python -m eval.cli predict --checkpoint <path> --lane o96_o320
 
 # Evaluate existing predictions
-python -m eval.cli evaluate --predictions-dir <dir> --lane o96_o320 [--only tc,spectra,surface]
+python -m eval.cli evaluate --predictions-dir <dir> --lane o96_o320 [--only tc,surface]
 
-# Include diagnostics group
+# Include the lane's diagnostics group
 python -m eval.cli evaluate --predictions-dir <dir> --lane o96_o320 --include-diagnostics
 
-# Scoreboard from existing evaluation results
-python -m eval.cli scoreboard --eval-dir <dir> --lane o96_o320
+# Scoreboard from existing evaluation results, diffed against the lane baseline
+python -m eval.cli scoreboard --eval-dir <dir> --lane o96_o320 --vs-baseline
 
 # Dry run (print resolved config, don't execute)
 python -m eval.cli run --checkpoint <path> --lane o96_o320 --dry-run
 ```
 
-**Evaluator selection** follows three-step resolution:
-1. `--only tc,spectra` -- run exactly those evaluators
+**Evaluator selection** follows three-step resolution (`eval/cli/_selection.py`):
+1. `--only tc,surface` -- run exactly those evaluators
 2. `--include-diagnostics` -- default + diagnostics groups from lane YAML
 3. Neither -- default group only
 
 **Overrides**: `--members`, `--steps`, `--dates` override lane YAML predict
 defaults. CLI always wins over YAML.
 
-**Current state**: `eval.cli` is operational for all four subcommands. The prepml
-path remains on the legacy CLI (`python -m eval.run mars-expver`) used by
-`launch_full_eval_suite.sh`. Production sbatch templates have not migrated to
-`eval.cli` yet -- they still call per-pillar legacy entry points directly.
+**Current state**: `eval.cli` is operational for all commands, including the prepml
+path (`--mode prepml`).
 
 ## 6. HPC Job Orchestration
 
@@ -296,16 +306,15 @@ python -m eval.jobs.pipeline --lane o96_o320 --host atos_ac --checkpoint <path>
 
 # Render a single sbatch (dry run)
 python -m eval.jobs.renderer --lane o96_o320 --host atos_ac --checkpoint <path> --dry-run
-
-# One-command full eval suite (prepml/MARS expver path)
-eval/jobs/launch_full_eval_suite.sh --expver <expver>
 ```
 
-**Current state**: `pipeline.py` and `renderer.py` exist but are never invoked by
-production workflows. The five `submit_*_flow.sh` scripts each re-implement their
-own renderer and dependency chaining in bash + inline Python. The completeness
-plan consolidates these into `pipeline.py`. `launch_full_eval_suite.sh` remains
-the prepml front door and uses the legacy CLI internally.
+**Current state**: `pipeline.py` and `renderer.py` render the chains described
+above. The older shell flow scripts and per-step scoreboard templates were archived
+(`eval/archive/jobs/`, which still holds `launch_full_eval_suite.sh`) or, on
+2026-09-28, quarantined under `eval/_quarantine/20260928/jobs/`.
+`eval/jobs/README.md` maps what is left in `eval/jobs/`: orchestration modules,
+`scripts/` for one-off jobs and `templates/` for the sbatch templates the framework or
+people copy.
 
 ## 7. Naming Conventions and Contracts
 
@@ -323,11 +332,13 @@ the directory name under `eval/evaluators/`.
 **Score record**: `{"metric": str, "value": float, "unit": str}` -- the handoff
 format between evaluator scorers and the scoreboard aggregator.
 
-**EVALUATOR_SPEC**: every evaluator's `__init__.py` exports this dict:
+**EVALUATOR_SPEC**: every evaluator's `__init__.py` exports this dict (see section 2
+and `eval/evaluators/base.py`):
 ```python
 EVALUATOR_SPEC = {
     "name": "tc",
     "requires": ["predictions"],
+    "outputs": ["stats.json: raw extremes per event ...", ...],
 }
 ```
 
@@ -337,6 +348,6 @@ EVALUATOR_SPEC = {
 
 **Import rules**:
 - Evaluators import from `eval.config`, `eval.discovery`, `eval.shared`, their
-  own `kernel/`, and stdlib.
+  own backend under `eval/_backends/`, and stdlib.
 - No cross-evaluator imports.
 - No evaluator imports from `eval.jobs`.

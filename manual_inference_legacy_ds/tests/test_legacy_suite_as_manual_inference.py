@@ -28,10 +28,13 @@ def test_legacy_suite_passes_when_installed_as_manual_inference(tmp_path: Path):
     alias_root.mkdir()
     (alias_root / "manual_inference").symlink_to(LEGACY_ROOT, target_is_directory=True)
 
+    # A private pytest.ini makes alias_root the rootdir, so the subprocess collects only the alias.
+    (alias_root / "pytest.ini").write_text("[pytest]\nmarkers =\n    gpu: test needs a GPU\n")
+
     env = {**os.environ, "PYTHONPATH": str(alias_root), "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run(
         [sys.executable, "-m", "pytest", str(alias_root / "manual_inference" / "tests"),
-         "-q", "-p", "no:cacheprovider", "--rootdir", str(alias_root), "-c", os.devnull],
+         "-q", "-p", "no:cacheprovider", "-c", str(alias_root / "pytest.ini")],
         cwd=str(alias_root), env=env, capture_output=True, text=True, timeout=900,
     )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
