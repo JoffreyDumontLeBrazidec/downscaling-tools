@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 
 
 def _load_module(module_name: str):
@@ -31,7 +31,7 @@ class _DummyMove:
 def test_run_sigma_evaluator_injects_checkpoint_compat_profile_before_load(
     tmp_path: Path, monkeypatch
 ):
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
 
     created_loaders = []
 
@@ -111,7 +111,7 @@ def test_run_sigma_evaluator_injects_checkpoint_compat_profile_before_load(
 def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
     tmp_path: Path, monkeypatch
 ):
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
 
     bundle_root = tmp_path / "bundles"
     bundle_root.mkdir()
@@ -235,7 +235,7 @@ def test_run_sigma_evaluator_bundle_root_uses_checkpoint_metadata_loader(
 def test_resolve_downscaler_cls_prefers_unified_tasks_export(monkeypatch):
     import types
 
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
 
     class _DummyDownscaler:
         pass
@@ -248,7 +248,7 @@ def test_resolve_downscaler_cls_prefers_unified_tasks_export(monkeypatch):
 
 
 def test_load_downscaler_from_checkpoint_metadata_uses_trusted_pickle_load(monkeypatch):
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
     seen = {}
 
     class _DummyDownscaler:
@@ -285,7 +285,7 @@ def test_load_downscaler_from_checkpoint_metadata_uses_trusted_pickle_load(monke
 def test_localize_external_checkpoint_paths_rewrites_existing_inter_mat(
     tmp_path: Path, monkeypatch
 ):
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
 
     inter_mat_dir = tmp_path / "inter_mat"
     inter_mat_dir.mkdir()
@@ -341,7 +341,7 @@ def test_run_sigma_evaluator_preserves_four_gpu_model_parallel_for_o1280_family(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval._backends.sigma_evaluator.run_sigma_evaluator",
+        "eval.tools.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -436,7 +436,7 @@ def test_run_sigma_evaluator_defaults_to_single_gpu_for_lower_res_lanes(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval._backends.sigma_evaluator.run_sigma_evaluator",
+        "eval.tools.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -529,7 +529,7 @@ def test_run_sigma_evaluator_applies_o1280_o2560_residual_stats_fallback(
     tmp_path: Path, monkeypatch
 ):
     mod = _load_module(
-        "eval._backends.sigma_evaluator.run_sigma_evaluator",
+        "eval.tools.sigma_evaluator.run_sigma_evaluator",
     )
 
     created_loaders = []
@@ -646,7 +646,7 @@ def test_sigma_evaluator_single_variable_model():
 
     import torch
 
-    se_mod = _load_module("eval._backends.sigma_evaluator.sigma_evaluator")
+    se_mod = _load_module("eval.tools.sigma_evaluator.sigma_evaluator")
     SigmaEvaluator = se_mod.SigmaEvaluator
 
     name_to_index = {"2t": 0}  # single-variable model
@@ -680,7 +680,7 @@ def test_sigma_evaluator_missing_data_indices():
 
     import torch
 
-    se_mod = _load_module("eval._backends.sigma_evaluator.sigma_evaluator")
+    se_mod = _load_module("eval.tools.sigma_evaluator.sigma_evaluator")
     SigmaEvaluator = se_mod.SigmaEvaluator
 
     evaluator = SigmaEvaluator.__new__(SigmaEvaluator)
@@ -706,7 +706,7 @@ def test_sigma_evaluator_missing_data_indices():
 
 def test_adapt_config_hpc_missing_hardware_key(tmp_path: Path, monkeypatch):
     """When adapt_config_hpc raises due to missing hardware key, fallback is used."""
-    mod = _load_module("eval._backends.sigma_evaluator.run_sigma_evaluator")
+    mod = _load_module("eval.tools.sigma_evaluator.run_sigma_evaluator")
 
     created_loaders = []
     inject_called = []

@@ -31,19 +31,18 @@ import numpy as np
 
 from eval.paths import reference_tc_dir
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / '_backends'))
 
-from tc.events import EVENTS, TCEvent
-from tc.data_types import CurveVectors, SupportMode
-from tc.experiment_config import EXPERIMENT_CONFIGS
-from tc.plot_config import PLOT_CONFIGS
-from tc.loading_predictions import (
+from eval.evaluators.tc.core.events import EVENTS, TCEvent
+from eval.evaluators.tc.core.data_types import CurveVectors, SupportMode
+from eval.evaluators.tc.core.experiment_config import EXPERIMENT_CONFIGS
+from eval.evaluators.tc.core.plot_config import PLOT_CONFIGS
+from eval.evaluators.tc.core.loading_predictions import (
     analysis_dates_for_event,
     discover_prediction_files,
     load_prediction_curves,
     select_prediction_files_for_event,
 )
-from tc.loading_grib import regridded_target_points
+from eval.evaluators.tc.core.loading_grib import regridded_target_points
 
 LOG = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from eval._backends.spectra.calibrate_fast_spectra_proxy import (
+from eval.tools.spectra_analysis.calibrate_fast_spectra_proxy import (
     apply_log_model,
     cl_from_unstructured,
     read_grib_latlon_values,

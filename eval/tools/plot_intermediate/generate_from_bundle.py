@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import xarray as xr
 
-from eval._backends.plot_intermediate.plot_intermediate import _predict_with_intermediates_single_member
+from eval.tools.plot_intermediate.plot_intermediate import _predict_with_intermediates_single_member
 from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 from manual_inference.input_data_construction.bundle import (
     extract_target_from_bundle,

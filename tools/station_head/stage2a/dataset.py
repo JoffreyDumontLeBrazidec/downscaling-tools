@@ -15,7 +15,7 @@ target variable, applying every rule the design note fixed:
 * the gross-error screen of quaver is applied exactly as the `obs_crps` backend
   applies it, that is the hard physical limits of `toss.yaml` and the maximum
   departure from the operational analysis, whose values are copied here from
-  `/home/ecm5702/dev/downscaling-tools/eval/_backends/obs_crps/obs_crps_compute.py`
+  `/home/ecm5702/dev/downscaling-tools/eval/tools/obs_crps/obs_crps_compute.py`
   (read only, never modified);
 * the hold-out stations are flagged so that training can drop them.
 
@@ -54,7 +54,7 @@ ANALYSIS = PERM / "analysis_at_stations"
 MANIFESTS = PERM / "manifests"
 DATASET_ROOT = Path("/home/ecm5702/scratch/eval/station_head_2a/datasets")
 
-# Copied from eval/_backends/obs_crps/obs_crps_compute.py so that the head is scored
+# Copied from eval/tools/obs_crps/obs_crps_compute.py so that the head is scored
 # under the same rules as every station scorecard of the epic. That file is read only.
 LAPSE_RATE = 0.0065
 HARD_LIMITS = {

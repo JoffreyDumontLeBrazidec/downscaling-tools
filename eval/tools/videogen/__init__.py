@@ -1,14 +1,14 @@
-"""eval._backends.videogen — modular MP4 video generator for downscaling predictions.
+"""eval.tools.videogen — modular MP4 video generator for downscaling predictions.
 
 Quick start::
 
-    from eval._backends.videogen import SCENES, make_video
+    from eval.tools.videogen import SCENES, make_video
     make_video(SCENES["franklin_dual"])
 
 Or from the CLI::
 
     python -m eval.cli videogen --scene franklin_dual --mode all
-    python -m eval._backends.videogen --scene franklin_dual --mode preview
+    python -m eval.tools.videogen --scene franklin_dual --mode preview
 
 Module layout
 -------------

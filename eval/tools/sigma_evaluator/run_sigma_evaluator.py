@@ -12,7 +12,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-from eval._backends.checkpoint_utils import infer_lane_from_config
+from eval.tools.sigma_evaluator.checkpoint_utils import infer_lane_from_config
 
 from manual_inference.checkpoints import (
     ObjectFromCheckpointLoader,

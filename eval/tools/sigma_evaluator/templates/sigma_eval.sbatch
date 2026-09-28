@@ -99,7 +99,7 @@ if [[ -n "$BUNDLE_ROOT" ]]; then
     BUNDLE_ARGS=(--bundle-root "$BUNDLE_ROOT")
 fi
 
-srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+srun python -u -m eval.tools.sigma_evaluator.run_sigma_evaluator \
     --name_exp "$CHECKPOINT_REF" \
     --name_ckpt "$CKPT_NAME" \
     --out_csv "$OUT_CSV" \

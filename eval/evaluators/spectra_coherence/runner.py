@@ -82,7 +82,7 @@ def _healpix_binner(lat, lon, nside):
 def _healpix_map(values, pix, counts, valid, npix):
     """Bin one field onto the precomputed HEALPix grid; mean-remove over valid pixels.
 
-    Matches eval._backends.spectra.calibrate_fast_spectra_proxy.build_healpix_mean_map
+    Matches eval.tools.spectra_analysis.calibrate_fast_spectra_proxy.build_healpix_mean_map
     so this evaluator sits on exactly the same support as the `spectra` evaluator.
     """
     sums = np.bincount(pix, weights=np.asarray(values, dtype=np.float64), minlength=npix)

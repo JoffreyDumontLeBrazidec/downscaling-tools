@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from eval._backends.spectra.calibrate_fast_spectra_proxy import cl_from_unstructured
+from eval.tools.spectra_analysis.calibrate_fast_spectra_proxy import cl_from_unstructured
 
 
 SCOPE_LABELS = {

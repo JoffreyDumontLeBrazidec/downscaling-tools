@@ -8,7 +8,7 @@ import pytest
 import xarray as xr
 
 try:
-    from eval._backends.plot_intermediate.plot_intermediate import (
+    from eval.tools.plot_intermediate.plot_intermediate import (
         plot_intermediate_trajectory,
         resolve_capture_steps,
         select_sampling_steps,
@@ -22,7 +22,7 @@ except (ImportError, RuntimeError) as exc:  # collected as xfail, not as a colle
 # which the backend's diffusion-sampler import needs.
 pytestmark = pytest.mark.xfail(
     _IMPORT_ERROR is not None,
-    reason=f"eval._backends.plot_intermediate cannot be imported in this environment: {_IMPORT_ERROR}",
+    reason=f"eval.tools.plot_intermediate cannot be imported in this environment: {_IMPORT_ERROR}",
     raises=TypeError,
     strict=False,
 )

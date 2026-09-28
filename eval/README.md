@@ -236,7 +236,7 @@ See [`eval/predict/README.md`](predict/README.md) for full documentation.
 ## Archive (`eval/archive/`)
 
 Frozen legacy scripts and one old template. Not used in live workflows, but not dead:
-`eval/_backends/weight_diagnostics/mechanistic_compare_v1.py`, `eval/tests/test_eval_run.py`
+`eval/tools/weight_diagnostics/mechanistic_compare_v1.py`, `eval/tests/test_eval_run.py`
 and a few tests in `eval/jobs/tests/` still import from it. Code retired on purpose goes
 to `eval/_quarantine/<date>/` instead (see the README there).
 

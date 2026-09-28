@@ -84,7 +84,7 @@ def _run_sigma_for_checkpoint(
     run_pure_noise: bool,
     run_noised: bool,
 ) -> Path:
-    from eval._backends.sigma_evaluator.run_sigma_evaluator import main as sigma_main
+    from eval.tools.sigma_evaluator.run_sigma_evaluator import main as sigma_main
 
     argv = [
         "--name_exp",

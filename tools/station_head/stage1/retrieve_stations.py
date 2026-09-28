@@ -1,7 +1,7 @@
 """Retrieve STVL station observations for every valid time of the pairing manifest.
 
 Reproduces retrieve_observations() of
-/home/ecm5702/dev/downscaling-tools/eval/_backends/obs_crps/obs_crps_compute.py:
+/home/ecm5702/dev/downscaling-tools/eval/tools/obs_crps/obs_crps_compute.py:
 table "observation", forecast length zero, the valid time as the reference time.
 Accumulated precipitation needs the `period` key instead (six hours here), as
 established in the 2026-09-08 observation inventory.

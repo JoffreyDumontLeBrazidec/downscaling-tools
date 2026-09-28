@@ -128,7 +128,7 @@ def load_model_for_lane(
     # datamodule pre-shard each batch grid by that factor. On one rank that
     # yields a fractional grid that the (unsharded) interpolation matrix
     # rejects. Pin both to 1 so the batch carries the full grid. Mirrors
-    # eval._backends.sigma_evaluator.run_sigma_evaluator.
+    # eval.tools.sigma_evaluator.run_sigma_evaluator.
     for cfg in (loader.config_checkpoint, loader.config_for_datamodule):
         hw = getattr(cfg, "hardware", None)
         if hw is not None and hasattr(hw, "num_gpus_per_model"):

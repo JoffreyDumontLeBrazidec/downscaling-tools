@@ -108,7 +108,7 @@ Three further facts a reader needs:
   harness; `eval/cli/evaluate.py` delegates run-root resolution and plot
   consolidation to it.
 - `eval/archive/` is frozen but **not** dead --
-  `eval/_backends/weight_diagnostics/mechanistic_compare_v1.py` and
+  `eval/tools/weight_diagnostics/mechanistic_compare_v1.py` and
   `eval/tests/test_eval_run.py` still import from it, and a few tests in
   `eval/jobs/tests/` exercise the archived jobs, so it cannot be removed
   without untangling those first.

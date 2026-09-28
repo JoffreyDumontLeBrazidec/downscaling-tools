@@ -25,7 +25,7 @@ from eval.evaluators.tc.core.scoreboard import (
     normalize_tc_rows,
     rescale_with_eefo_floor,
 )
-from eval._backends.scoreboard.types import (
+from eval.scoreboard.types import (
     SpectraMetrics,
     SurfaceMetrics,
     TCScoreResult,

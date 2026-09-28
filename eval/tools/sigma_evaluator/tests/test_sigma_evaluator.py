@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from eval._backends.sigma_evaluator.sigma_evaluator import SigmaEvaluator
-from eval._backends.sigma_evaluator.sigma_evaluator import _disable_first_run_checks_for_nan_free_sigma_eval
-from eval._backends.sigma_evaluator.sigma_evaluator import _localize_data_index_tensors
-from eval._backends.sigma_evaluator.sigma_evaluator import _use_spatial_sigma_sharding
+from eval.tools.sigma_evaluator.sigma_evaluator import SigmaEvaluator
+from eval.tools.sigma_evaluator.sigma_evaluator import _disable_first_run_checks_for_nan_free_sigma_eval
+from eval.tools.sigma_evaluator.sigma_evaluator import _localize_data_index_tensors
+from eval.tools.sigma_evaluator.sigma_evaluator import _use_spatial_sigma_sharding
 
 
 class _IdentityProcessor:
@@ -131,7 +131,7 @@ def test_per_field_metrics_handles_missing_truth():
 def test_evaluate_sigma_routes_through_predict_from_bundle(monkeypatch):
     """evaluate_sigma calls the model's predict_step (via _predict_from_bundle) per bundle,
     forcing a 1-step sampler at sigma, and averages per-field MSE vs the bundle truth y."""
-    import eval._backends.sigma_evaluator.sigma_evaluator as se_mod
+    import eval.tools.sigma_evaluator.sigma_evaluator as se_mod
 
     calls = []
 

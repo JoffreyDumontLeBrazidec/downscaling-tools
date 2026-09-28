@@ -1,4 +1,4 @@
-"""CLI entry — ``python -m eval._backends.videogen``.
+"""CLI entry — ``python -m eval.tools.videogen``.
 
 Also called from ``eval.cli videogen`` (see ``eval/cli.py``).
 
@@ -6,16 +6,16 @@ Examples
 --------
 Preview the franklin_dual scene at a specific valid time::
 
-    python -m eval._backends.videogen --scene franklin_dual --mode preview \
+    python -m eval.tools.videogen --scene franklin_dual --mode preview \
         --preview-valid 2023-08-29
 
 Render the full video::
 
-    python -m eval._backends.videogen --scene franklin_dual --mode all
+    python -m eval.tools.videogen --scene franklin_dual --mode all
 
 Override scene defaults at the CLI::
 
-    python -m eval._backends.videogen --scene franklin --mode all \
+    python -m eval.tools.videogen --scene franklin --mode all \
         --predictions-dir /path/to/other/predictions \
         --output-dir /tmp/my_videos
 """
@@ -36,7 +36,7 @@ def _parse_valid_time(s: str) -> datetime:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m eval._backends.videogen")
+    parser = argparse.ArgumentParser(prog="python -m eval.tools.videogen")
     parser.add_argument("--scene", required=True, choices=sorted(SCENES))
     parser.add_argument("--mode", choices=("preview", "all"), default="preview")
     parser.add_argument(
