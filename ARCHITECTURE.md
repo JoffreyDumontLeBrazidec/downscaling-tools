@@ -66,6 +66,9 @@ evaluator owned what. There is now one convention, and it has three parts.
    tests in `eval/evaluators/<name>/tests/`. Small evaluators may have no `core/`.
    The private helper modules an evaluator already had at the top of its package
    (for example `spectra_ecmwf_v2/_grib_stager.py`) stay there.
+   Evaluators that never had a backend folder keep their helper modules where they are
+   (`tc_structure/core.py`, `sigma_loss/kernel/`, the `mlflow`, `shape` and
+   `spectra_coherence` modules); renaming them was outside this change.
 2. Code that several evaluators need goes to `eval/shared/`, in a module or package
    named for what it does: `precip/` (the precipitation truth source), `manifest.py`,
    `toolchain.py` with `toolchain.sh`, `json_utils.py`, `grid.py`, `plotting.py`,
