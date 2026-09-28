@@ -306,7 +306,7 @@ def collect_metrics(evaldir: Path, steps_csv: str) -> dict:
             out[k] = v
     out.update(_metric_rows(ev / "spectra" / "metrics.json"))    # 1 relative_l2 per field
     out.update(_metric_rows(ev / "tc" / "metrics.json"))         # tail keys per event
-    # storm_maps: fine-band (20-100 km) power ratio + log-log slope, nested 2 deep
+    # storm_maps: fine-band (40-150 km) power ratio + log-log slope, nested 2 deep
     for k, v in _flatten("", _read_json(ev / "storm_maps" / "storm_maps_spectra.json")).items():
         if any(t in k for t in ("fine_band", "slope", "storm_box_min")):
             out[f"storm_{k}"] = v
@@ -576,9 +576,9 @@ def _panels(rows: list, ref_metrics: dict) -> list:
         elif k.startswith("spectra_"):
             continue                                    # _score is 1 - rel_l2, redundant
         elif "fine_band" in k:
-            cell("Fine band 20-100 km", k.rsplit(".", 1)[-1], k, "model", "target1")
+            cell("Fine band 40-150 km", k.rsplit(".", 1)[-1], k, "model", "target1")
         elif "slope_fine" in k:
-            # storm_slope_fine_20_100km.<field>.model -> subject is <field>
+            # storm_slope_fine_40_150km.<field>.model -> subject is <field>
             parts = k.split(".")
             cell("Fine-band slope", parts[-2] if len(parts) > 2 else parts[-1], k, "model", None)
         elif k.startswith("tc_"):
@@ -589,7 +589,7 @@ def _panels(rows: list, ref_metrics: dict) -> list:
             cell("Seed draws (candidate B)", k[len("seed_"):], k, "model",
                  None if k.endswith("_std") else ("lower" if "eye" in k else "higher"))
 
-    order = [b for b, _, _ in PROB_BANDS] + ["Spectra (rel-L2)", "Fine band 20-100 km",
+    order = [b for b, _, _ in PROB_BANDS] + ["Spectra (rel-L2)", "Fine band 40-150 km",
                                              "Fine-band slope", "TC extremes",
                                              "Seed draws (candidate B)"]
     return sorted(panels.values(), key=lambda p: (order.index(p["band"]) if p["band"] in order
