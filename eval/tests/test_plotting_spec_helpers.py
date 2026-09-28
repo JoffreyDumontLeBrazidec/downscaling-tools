@@ -121,3 +121,37 @@ def test_build_pdf_modes(tmp_path: Path):
                                          "scopes": {"full_field": scope, "residual": scope}}}}
     (proxy / "spectra_curve_summary.json").write_text(json.dumps(summary), encoding="utf-8")
     assert build_pdf(proxy, tmp_path / "proxy.pdf") == 2
+
+
+# --------------------------------------------------------------------------- training curves
+
+def test_mlflow_panel_titles_and_metric_aliases():
+    from eval.evaluators.mlflow import _plot
+
+    assert _plot._var_title("val_mse_metric/sfc_10u/1") == "10 m zonal wind"
+    assert _plot._var_title("val_out_hres_mse_metric/out_hres/sfc_msl_scale_0") == "Mean sea level pressure"
+    assert _plot._var_title("val_out_hres_mse_metric/out_hres/pl_t_scale_0") == (
+        "Temperature, all pressure levels")
+    new_style = {"metrics": {
+        "train_multi_dataset_loss_epoch": {"steps": [1], "vals": [1.0]},
+        "val_out_hres_mse_metric/out_hres/sfc_2t_scale_0": {"steps": [1], "vals": [2.0]},
+    }}
+    assert _plot._metric(new_style, _plot.TRAIN_KEY)["vals"] == [1.0]
+    assert _plot._metric(new_style, "val_mse_metric/sfc_2t/1")["vals"] == [2.0]
+    assert _plot._metric(new_style, "val_mse_metric/sfc_10u/1") is None
+
+
+def test_mlflow_plot_all_writes_png_and_pdf(tmp_path):
+    from eval.evaluators.mlflow import _plot
+
+    runs = {"demo": {"run_id": "x", "max_step": 2, "metrics": {
+        "train_weighted_mse_loss_epoch": {"steps": [1, 2], "vals": [2.0, 1.0]},
+        "val_weighted_mse_loss_epoch": {"steps": [1, 2], "vals": [2.5, 1.2]},
+        "lr-AdamW": {"steps": [1, 2], "vals": [1e-3, 5e-4]},
+        "val_mse_metric/all/1": {"steps": [1, 2], "vals": [5.0, 2.0]},
+        "val_mse_metric/sfc_10u/1": {"steps": [1, 2], "vals": [1.5, 0.8]},
+    }}}
+    _plot.plot_all(runs, output_dir=tmp_path)
+    for name in ("key_vars", "overview", "all_vars"):
+        assert (tmp_path / f"{name}.png").exists()
+        assert (tmp_path / f"{name}.pdf").exists()

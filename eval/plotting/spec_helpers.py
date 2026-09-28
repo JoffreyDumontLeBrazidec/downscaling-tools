@@ -12,6 +12,7 @@ that it can be reviewed and merged on its own. Nothing here touches Matplotlib's
 * ``smooth_series``  trailing exponential moving average used for faint-raw + bold-smoothed
   training curves.
 * ``tint``  a light tint of a colour, for panel backgrounds.
+* ``format_steps``  training-step tick labels in thousands ("250k").
 """
 from __future__ import annotations
 
@@ -108,3 +109,17 @@ def tint(color: str, amount: float = 0.85) -> tuple[float, float, float]:
 
     r, g, b = to_rgb(color)
     return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
+def _step_text(x, _pos=None) -> str:
+    if abs(x) >= 1000:
+        return f"{x / 1000:g}k"
+    return f"{x:g}"
+
+
+def format_steps(ax, axis: str = "x") -> None:
+    """Write training-step ticks as "0, 50k, 100k" instead of "0, 50000, 100000"."""
+    from matplotlib.ticker import FuncFormatter
+
+    target = ax.xaxis if axis == "x" else ax.yaxis
+    target.set_major_formatter(FuncFormatter(_step_text))

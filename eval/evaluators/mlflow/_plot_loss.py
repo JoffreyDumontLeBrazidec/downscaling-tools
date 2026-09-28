@@ -20,18 +20,27 @@ EXAMPLES:
 WHAT IT DOES:
     - Reads metric files directly from the filesystem (no mlflow server)
     - Merges parent + child (resumed) runs into one continuous curve
-    - Plots train and val loss vs step
+    - Plots train and val loss vs step in the house style of eval.plotting
+      (one colour-blind-safe colour per run; PNG at 150 dpi plus a PDF of the same name)
 """
 
 import sys
 from pathlib import Path
 import matplotlib.pyplot as plt
 
+if __package__ in (None, ""):  # run as a script: make `eval.plotting` importable
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 # ── which metrics to plot ──────────────────────────────────────────────────────
 METRICS = [
     "train_weighted_mse_loss_epoch",
     "val_weighted_mse_loss_epoch",
 ]
+
+_METRIC_TITLES = {
+    "train_weighted_mse_loss_epoch": "Training loss (weighted MSE, per epoch)",
+    "val_weighted_mse_loss_epoch": "Validation loss (weighted MSE, per epoch)",
+}
 
 # runs with this name are skipped
 SKIP_NAMES = {"to_delete", ""}
@@ -145,30 +154,35 @@ def plot(experiment_dir, name_filter=None, output="loss_curves.png"):
     for name in sorted(roots):
         print(f"  {name}")
 
-    fig, axs = plt.subplots(len(METRICS), 1, figsize=(12, 4 * len(METRICS)), sharex=True)
-    if len(METRICS) == 1:
-        axs = [axs]
+    from eval.plotting import AXIS, eval_style, save_figure, sequence_style, shorten_run_label
+    from eval.plotting.spec_helpers import format_steps
 
-    for name, root_id in sorted(roots.items()):
-        merged = merge_family(runs, root_id)
+    with eval_style():
+        fig, axs = plt.subplots(len(METRICS), 1, figsize=(11, 3.6 * len(METRICS)), sharex=True)
+        if len(METRICS) == 1:
+            axs = [axs]
+
+        for i, (name, root_id) in enumerate(sorted(roots.items())):
+            merged = merge_family(runs, root_id)
+            for ax, metric in zip(axs, METRICS):
+                if metric in merged:
+                    steps, vals = merged[metric]
+                    ax.plot(steps, vals, label=f"{shorten_run_label(name)} ({len(steps)} points)",
+                            **sequence_style(i, linewidth=1.8))
+
         for ax, metric in zip(axs, METRICS):
-            if metric in merged:
-                steps, vals = merged[metric]
-                ax.plot(steps, vals, label=name, linewidth=1.5)
+            ax.set_ylabel(AXIS["loss"])
+            ax.set_title(_METRIC_TITLES.get(metric, metric.replace("_", " ")))
+            ax.legend(loc="upper right")
+            format_steps(ax)
 
-    for ax, metric in zip(axs, METRICS):
-        ax.set_ylabel(metric.replace("_", " "), fontsize=9)
-        ax.legend(fontsize=8, loc="upper right")
-        ax.grid(True, alpha=0.3)
+        axs[-1].set_xlabel(AXIS["step"])
+        exp_label = Path(experiment_dir).name
+        fig.suptitle(f"Loss curves, MLflow experiment {exp_label}")
+        fig.tight_layout()
 
-    axs[-1].set_xlabel("Step")
-    exp_label = Path(experiment_dir).name
-    fig.suptitle(f"Loss curves — experiment {exp_label}", fontsize=11)
-    plt.tight_layout()
-
-    plt.savefig(output, dpi=150, bbox_inches="tight")
-    print(f"Saved: {Path(output).resolve()}")
-    plt.close()
+        written = save_figure(fig, output, close=True)
+    print(f"Saved: {Path(written[0]).resolve()} (+ PDF)")
 
 
 # ── main ───────────────────────────────────────────────────────────────────────
