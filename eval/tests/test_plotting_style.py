@@ -131,3 +131,11 @@ def test_probabilistic_figure(tmp_path):
     written = plot_probabilistic_scores(pd.DataFrame(rows), SOURCE_LOCAL, tmp_path / "prob")
     assert (tmp_path / "prob.pdf") in written
     assert list((tmp_path / "prob_pages").glob("*.png"))
+
+
+def test_projection_for_southern_box_can_show_the_box():
+    import cartopy.crs as ccrs
+
+    proj = P.select_projection(165, 180, -48, -34)  # New Zealand: south of 30 S
+    x, y = proj.transform_point(172.0, -41.0, ccrs.PlateCarree())
+    assert np.isfinite(x) and np.isfinite(y)

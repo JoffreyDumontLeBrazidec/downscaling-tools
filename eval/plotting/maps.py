@@ -19,16 +19,20 @@ def select_projection(west: float, east: float, south: float, north: float):
     """Cartopy projection for a bounding box (degrees).
 
     Lambert conformal centred on the box for boxes that do not cross the dateline, plate
-    carrée for those that do (``east < west``).
+    carrée for those that do (``east < west``). Southern-hemisphere boxes get the mirrored cone.
     """
     from cartopy import crs
 
     if east < west:
         return crs.PlateCarree()
-    return crs.LambertConformal(
-        central_longitude=(west + east) / 2.0,
-        central_latitude=(south + north) / 2.0,
-    )
+    central_lon = (west + east) / 2.0
+    central_lat = (south + north) / 2.0
+    if central_lat < 0:
+        # Cartopy's default Lambert cone opens northwards and cuts off everything south of 30 S;
+        # mirror it for boxes in the southern hemisphere.
+        return crs.LambertConformal(central_longitude=central_lon, central_latitude=central_lat,
+                                    standard_parallels=(-33.0, -45.0), cutoff=30)
+    return crs.LambertConformal(central_longitude=central_lon, central_latitude=central_lat)
 
 
 def select_projection_bbox(bbox):
