@@ -6,6 +6,10 @@ ratio on the same axes. The point of the pairing is that the bottom row is flat
 at one everywhere while the top row is not: the model puts the same amount of
 fine-scale energy into every surface type and only gets it in the right PLACE
 where the orography it is given tells it where to put it.
+
+Colour encodes the wavenumber BAND (neutral colours from ``eval.plotting.SEQUENCE``); the
+line style encodes the source (solid with dots = model, dotted with crosses = the
+interpolated input). Red and blue keep their framework meaning and are not used for bands.
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from eval.plotting import SEQUENCE, eval_style, save_figure, shorten_run_label, variable_spec
+
 LOG = logging.getLogger(__name__)
 
 CLASS_ORDER = ["ocean", "flat_land", "coast", "rolling_land", "complex_land"]
@@ -29,12 +35,23 @@ CLASS_LABEL = {
     "complex_land": "complex terrain",
 }
 BAND_STYLE = {
-    "synoptic": ("tab:blue", "-"),
-    "meso": ("tab:green", "-"),
-    "fine": ("tab:red", "-"),
-    "very_fine": ("tab:purple", "-"),
-    "near_grid": ("tab:brown", "-"),
+    "synoptic": (SEQUENCE[0], "-"),
+    "meso": (SEQUENCE[1], "-"),
+    "fine": (SEQUENCE[2], "-"),
+    "very_fine": (SEQUENCE[3], "-"),
+    "near_grid": (SEQUENCE[4], "-"),
 }
+
+
+def _band_label(name: str, bands) -> str:
+    """"fine (ℓ 300–500)" from the band table stored in the payload."""
+    for b in bands or []:
+        if isinstance(b, dict) and b.get("name") == name:
+            lo, hi = b.get("lo"), b.get("hi")
+            if lo is not None and hi is not None:
+                rng = f"ℓ ≥ {lo:g}" if hi >= 10000 else f"ℓ {lo:g}–{hi:g}"
+                return f"{name.replace('_', ' ')} ({rng})"
+    return name.replace("_", " ")
 
 
 def plot_stratified(results_dir, *, output_dir=None):
@@ -65,39 +82,51 @@ def plot_stratified(results_dir, *, output_dir=None):
         for c in classes
     ]
 
-    fig, axes = plt.subplots(2, len(states), figsize=(4.4 * len(states), 8.0), squeeze=False)
-    for j, st in enumerate(states):
-        for bd in bands:
-            col, ls = BAND_STYLE.get(bd, ("k", "-"))
-            c_model = [idx[(st, bd, c)]["correlation"] if (st, bd, c) in idx else np.nan for c in classes]
-            c_interp = [idx[(st, bd, c)].get("interp_correlation", np.nan) if (st, bd, c) in idx else np.nan for c in classes]
-            r_model = [idx[(st, bd, c)]["amplitude_ratio"] if (st, bd, c) in idx else np.nan for c in classes]
-            axes[0][j].plot(xs, c_model, color=col, ls=ls, marker="o", ms=4, lw=1.7, label=bd)
-            axes[0][j].plot(xs, c_interp, color=col, ls=":", marker="x", ms=4, lw=1.1, alpha=0.75)
-            axes[1][j].plot(xs, r_model, color=col, ls=ls, marker="o", ms=4, lw=1.7, label=bd)
+    with eval_style():
+        fig, axes = plt.subplots(2, len(states), figsize=(4.6 * len(states), 8.6), squeeze=False,
+                                 layout="constrained")
+        for j, st in enumerate(states):
+            for k, bd in enumerate(bands):
+                col, ls = BAND_STYLE.get(bd, (SEQUENCE[k % len(SEQUENCE)], "-"))
+                c_model = [idx[(st, bd, c)]["correlation"] if (st, bd, c) in idx else np.nan for c in classes]
+                c_interp = [idx[(st, bd, c)].get("interp_correlation", np.nan) if (st, bd, c) in idx else np.nan for c in classes]
+                r_model = [idx[(st, bd, c)]["amplitude_ratio"] if (st, bd, c) in idx else np.nan for c in classes]
+                axes[0][j].plot(xs, c_model, color=col, ls=ls, marker="o", ms=5, lw=2.0,
+                                label=_band_label(bd, d.get("bands")))
+                axes[0][j].plot(xs, c_interp, color=col, ls=":", marker="x", ms=5, lw=1.4, alpha=0.85)
+                axes[1][j].plot(xs, r_model, color=col, ls=ls, marker="o", ms=5, lw=2.0,
+                                label=_band_label(bd, d.get("bands")))
 
-        for row, ylab, lo, hi in ((0, "phase agreement C", -0.05, 1.05), (1, "amplitude ratio R", 0.5, 1.5)):
-            ax = axes[row][j]
-            ax.set_xticks(xs)
-            ax.set_xticklabels(ticks, fontsize=7)
-            ax.set_ylim(lo, hi)
-            ax.grid(alpha=0.25)
-            if row == 1:
-                ax.axhline(1.0, color="0.4", lw=0.9, ls=":")
+            for row, ylab, lo, hi in ((0, "Phase agreement C (correlation with truth)", -0.05, 1.05),
+                                      (1, "Amplitude ratio R (model / truth)", 0.5, 1.5)):
+                ax = axes[row][j]
+                ax.set_xticks(xs)
+                ax.set_xticklabels(ticks, fontsize=7.5)
+                ax.set_ylim(lo, hi)
+                ax.grid(alpha=0.25)
+                if row == 1:
+                    ax.axhline(1.0, color="0.4", lw=0.9, ls=":")
+                if j == 0:
+                    ax.set_ylabel(ylab)
+            axes[0][j].set_title(variable_spec(st).name)
             if j == 0:
-                ax.set_ylabel(ylab)
-        axes[0][j].set_title(st)
-        if j == 0:
-            axes[0][j].legend(fontsize=7, loc="upper left", title="band (dotted = interp)", title_fontsize=7)
+                # the amplitude row is flat near 1, so its upper half is free for the legend
+                handles, labels = axes[0][j].get_legend_handles_labels()
+                axes[1][j].legend(handles, labels, fontsize=7.5, loc="upper left", ncol=2,
+                                  title="wavenumber band (top row: solid = model,\n"
+                                        "dotted = interpolated input)",
+                                  title_fontsize=7.5)
 
-    fig.suptitle(
-        "Phase agreement by surface type  --  %s\nx-axis ordered by median orographic standard deviation"
-        % d.get("run_label", ""), fontsize=11,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    out = output_dir / "coherence_by_surface.pdf"
-    fig.savefig(out, dpi=150)
-    fig.savefig(output_dir / "coherence_by_surface.png", dpi=140)
-    plt.close(fig)
-    LOG.info("stratified plot: wrote %s", out)
+        raw = str(d.get("run_label") or "")
+        run = raw if len(raw) <= 60 and not raw.startswith(("manual_", "anemoi_")) else shorten_run_label(raw)
+        n_files = d.get("n_member_files")
+        fig.suptitle(
+            "Phase agreement and amplitude by surface type" + (f", {run}" if run and run != "predictions" else "")
+            + (f" (n = {n_files} member files)" if n_files else "")
+            + "\nsurface classes ordered by the median standard deviation of the orography (m, under each name)",
+            fontsize=12,
+        )
+        out = output_dir / "coherence_by_surface.pdf"
+        save_figure(fig, out, close=True)
+    LOG.info("stratified plot: wrote %s (and .png)", out)
     return output_dir
