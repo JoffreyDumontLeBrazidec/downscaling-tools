@@ -78,7 +78,7 @@ For quaver references that already exist in the score DB, export a CSV first:
 ```bash
 module load quaver
 export TMPDIR=/path/to/scratch/tmp
-quaver eval/jobs/export_quaver_probabilistic_reference.py \
+quaver eval/jobs/scripts/export_quaver_probabilistic_reference.py \
     --out-csv /path/to/quaver_reference.csv
 ```
 

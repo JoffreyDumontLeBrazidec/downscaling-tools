@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-TEMPLATE_DIR="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/templates/validation"
+TEMPLATE_DIR="/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/jobs/scripts/validation"
 SUBMIT_DIR="/home/ecm5702/dev/jobscripts/submit/validation_suite"
 VALIDATE_SCRIPT="${TEMPLATE_DIR}/validate_checkpoint.py"
 CHECKPOINT_BASE="/ec/res4/scratch/ecm5702/aifs/checkpoint"
