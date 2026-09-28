@@ -21,8 +21,8 @@ from pathlib import Path
 
 import numpy as np
 
-from eval._backends.precip import metrics as M
-from eval._backends.precip.sources import (
+from eval.evaluators.precip_scores.core import metrics as M
+from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     is_degenerate_channel,
@@ -250,7 +250,7 @@ def run(
 def aggregate_rows(rows: list[dict]) -> dict:
     """Per-step aggregates over (date, step) rows in the run() row schema.
 
-    Shared with the GRIB-route scorer (eval._backends.precip.score_gribs), so
+    Shared with the GRIB-route scorer (eval.evaluators.precip_scores.core.score_gribs), so
     manual-inference NetCDF runs and prepml/FDB GRIB runs report identical
     metric definitions.
     """

@@ -5,8 +5,8 @@ import json
 
 import numpy as np
 
-from eval._backends.precip import score_gribs as SG
-from eval._backends.precip.sources import LresInterpBaseline, PrecipTruthSource
+from eval.evaluators.precip_scores.core import score_gribs as SG
+from eval.shared.precip.sources import LresInterpBaseline, PrecipTruthSource
 
 N = 200
 LATS = np.linspace(-10.0, 10.0, N)

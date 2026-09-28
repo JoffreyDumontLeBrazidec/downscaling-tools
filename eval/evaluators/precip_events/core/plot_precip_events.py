@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot intense precipitation events from downscaling prediction files.
 
-Selection is delegated to eval._backends.region_plotting.precip_events
+Selection is delegated to eval.evaluators.precip_events.core.precip_events
 (find_precip_events), so the pages always match the evaluator's events.json.
 
 Each event page shows, zoomed tightly around the event centre, as Cartopy maps:
@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from eval._backends.precip.sources import (
+from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     is_degenerate_channel,

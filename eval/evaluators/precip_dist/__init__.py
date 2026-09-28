@@ -1,6 +1,6 @@
 """Precipitation value-distribution evaluator.
 
-Wraps eval._backends.precip.tp_histogram_comparison. For each lead time it
+Wraps eval.evaluators.precip_dist.core.tp_histogram_comparison. For each lead time it
 compares the histogram of the model's precipitation values with the truth's, and
 writes one multi-page PDF. Reads lane_config["precip_dist"] for tunables and
 lane_config["precip"] for the truth and baseline GRIB fallbacks. Diagnostic only;

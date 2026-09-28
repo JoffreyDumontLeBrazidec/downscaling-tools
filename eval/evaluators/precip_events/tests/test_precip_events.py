@@ -7,7 +7,7 @@ import numpy as np
 import xarray as xr
 import pytest
 
-from eval._backends.region_plotting.precip_events import find_precip_events
+from eval.evaluators.precip_events.core.precip_events import find_precip_events
 
 
 def _write_nc(path: Path, *, date: str, step: int, peak_value: float,

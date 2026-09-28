@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from eval._backends.precip.sources import (
+from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     build_nn_index,

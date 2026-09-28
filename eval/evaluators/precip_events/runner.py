@@ -4,7 +4,7 @@ Reads lane_config[precip_events]: n_events / dlat / dlon / rank_by, and
 lane_config[precip] for the truth/baseline GRIB fallbacks (used when the
 predictions embed no tp truth / no usable x_interp tp — the o1280->o2560
 main-lane case).
-Uses eval._backends.region_plotting.plot_precip_events to produce tight,
+Uses eval.evaluators.precip_events.core.plot_precip_events to produce tight,
 event-centered local pages.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from eval._backends.region_plotting.precip_events import find_precip_events
+from eval.evaluators.precip_events.core.precip_events import find_precip_events
 
 LOG = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def run(
 
     out_pdf = plots_dir / "precip_events_local.pdf"
     cmd = [
-        sys.executable, "-m", "eval._backends.region_plotting.plot_precip_events",
+        sys.executable, "-m", "eval.evaluators.precip_events.core.plot_precip_events",
         "--predictions-dir", str(predictions_dir),
         "--out", str(out_pdf),
         "--var", var,

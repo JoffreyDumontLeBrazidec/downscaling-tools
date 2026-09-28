@@ -20,7 +20,7 @@ model red, interpolated input blue dashed. The pages go to one PDF plus a PNG
 per page in ``<name>_pages/``.
 
 Usage:
-    python -m eval._backends.precip.tp_histogram_comparison \\
+    python -m eval.evaluators.precip_dist.core.tp_histogram_comparison \\
         --predictions-dir /path/to/predictions/ \\
         --out-pdf /path/to/tp_histograms.pdf \\
         --run-label "o2560 pristine 300k"
@@ -37,7 +37,7 @@ import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
-from eval._backends.precip.sources import (
+from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     is_degenerate_channel,

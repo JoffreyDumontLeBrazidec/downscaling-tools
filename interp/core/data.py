@@ -266,7 +266,7 @@ def inject_truth_grib(bundle, eb: BundleBatch, truth_grib_tpl: str,
     inject it. Reuses the eval backend's PrecipTruthSource: deaccumulated 6h
     window ENDING at each step, grid verified identical to the bundle hres grid.
     Bundle order matches find_bundles' dates->members->steps nesting."""
-    from eval._backends.precip.sources import PrecipTruthSource
+    from eval.shared.precip.sources import PrecipTruthSource
 
     vn = get_variable_names(bundle)
     out_n2i = {name: idx for idx, name in vn["output"].items()}

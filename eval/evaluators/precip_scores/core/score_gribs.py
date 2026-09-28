@@ -19,7 +19,7 @@ o2560 prepml month exists yet to score for real — the live Sept-2025 months
 per-step log lines against the manual-route numbers.
 
 Usage:
-    python -m eval._backends.precip.score_gribs \
+    python -m eval.evaluators.precip_scores.core.score_gribs \
         --model-grib-tpl  "/path/model_o2560_tp_date{date}.grib" \
         --truth-grib-tpl  "/path/..._date{date}_..._y_tp_dea.grib" \
         --baseline-grib-tpl "/path/..._date{date}_..._input_tp_dea.grib" \
@@ -35,8 +35,8 @@ from pathlib import Path
 
 import numpy as np
 
-from eval._backends.precip import metrics as M
-from eval._backends.precip.sources import (
+from eval.evaluators.precip_scores.core import metrics as M
+from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
     _read_grib_var,

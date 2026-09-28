@@ -101,7 +101,7 @@ def _nn_index_great_circle(src_lat, src_lon, dst_lat, dst_lon) -> np.ndarray:
     Distances are great-circle: both grids are projected onto the unit sphere
     before the KD-tree query, so the result does not distort near the poles or
     across the +/-180 longitude seam.  Same construction as build_nn_index in
-    eval/_backends/precip/sources.py, kept local so this stager stays a
+    eval/shared/precip/sources.py, kept local so this stager stays a
     standalone script.
     """
     from scipy.spatial import cKDTree
@@ -196,7 +196,7 @@ def main() -> None:
                 #
                 # Nearest neighbour is measured as a GREAT-CIRCLE distance on
                 # the unit sphere, matching the project's gate-verified
-                # build_nn_index (eval/_backends/precip/sources.py).  A KD-tree
+                # build_nn_index (eval/shared/precip/sources.py).  A KD-tree
                 # on raw (lat, lon) is wrong near the poles, where a degree of
                 # longitude is far shorter than a degree of latitude, and
                 # across the +/-180 seam, where 179.9 and -179.9 are adjacent

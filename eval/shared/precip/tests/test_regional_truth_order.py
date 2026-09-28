@@ -13,10 +13,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from eval._backends.precip import sources
-from eval._backends.precip.sources import PrecipTruthSource
-from eval._backends.precip.tp_histogram_comparison import accumulate_tp_by_step
-from eval._backends.region_plotting.precip_events import find_precip_events
+from eval.shared.precip import sources
+from eval.shared.precip.sources import PrecipTruthSource
+from eval.evaluators.precip_dist.core.tp_histogram_comparison import accumulate_tp_by_step
+from eval.evaluators.precip_events.core.precip_events import find_precip_events
 
 N_FULL = 400
 REGION = np.arange(150, 230)          # a contiguous box of 80 of the 400 rows
@@ -121,8 +121,8 @@ def test_precip_events_ranked_by_truth_on_a_regional_run(
 
 def test_event_plot_data_uses_the_region_on_its_first_load(
         regional_predictions, fake_truth_grib):
-    from eval._backends.region_plotting.plot_precip_events import _EventData
-    from eval._backends.region_plotting.precip_events import Event
+    from eval.evaluators.precip_events.core.plot_precip_events import _EventData
+    from eval.evaluators.precip_events.core.precip_events import Event
 
     data = _EventData(fake_truth_grib, "", "", "tp", 0)
     path = regional_predictions / "predictions_20250926_step024.nc"

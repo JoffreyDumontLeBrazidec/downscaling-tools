@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from eval._backends.precip import metrics as M
+from eval.evaluators.precip_scores.core import metrics as M
 
 
 def test_hist_quantiles_match_percentile():

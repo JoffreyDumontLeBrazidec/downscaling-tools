@@ -46,7 +46,7 @@ def run(
     precip_cfg = dict(lane_config.get("precip", {}))
 
     cmd = [
-        sys.executable, "-m", "eval._backends.precip.tp_histogram_comparison",
+        sys.executable, "-m", "eval.evaluators.precip_dist.core.tp_histogram_comparison",
         "--predictions-dir", str(predictions_dir),
         "--out-pdf", str(out_pdf),
         "--ensemble-member-index", str(ensemble_member_index),

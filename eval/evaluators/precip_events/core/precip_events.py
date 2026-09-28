@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from eval._backends.precip.sources import PrecipTruthSource
+from eval.shared.precip.sources import PrecipTruthSource
 
 _FNAME_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc")
 

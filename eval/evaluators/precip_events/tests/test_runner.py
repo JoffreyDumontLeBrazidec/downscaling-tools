@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from eval.evaluators.precip_events import runner
-from eval._backends.region_plotting.precip_events import Event
+from eval.evaluators.precip_events.core.precip_events import Event
 
 
 def _fake_events(tmp_path):
@@ -39,7 +39,7 @@ def test_run_invokes_precip_event_plotter_once(tmp_path):
     mock_find.assert_called_once()
     assert mock_run.call_count == 1
     first_cmd = mock_run.call_args_list[0].args[0]
-    assert "eval._backends.region_plotting.plot_precip_events" in first_cmd
+    assert "eval.evaluators.precip_events.core.plot_precip_events" in first_cmd
     assert "--predictions-dir" in first_cmd
     assert str(predictions_dir) in first_cmd
     assert "--out" in first_cmd

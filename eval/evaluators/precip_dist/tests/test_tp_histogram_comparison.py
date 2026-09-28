@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-from eval._backends.precip.tp_histogram_comparison import (
+from eval.evaluators.precip_dist.core.tp_histogram_comparison import (
     StreamingDist,
     accumulate_tp_by_step,
 )

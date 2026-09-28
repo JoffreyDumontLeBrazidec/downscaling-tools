@@ -138,7 +138,7 @@ def loss_budget(
     cannot see the tail" is not an available explanation.
     """
     import xarray as xr
-    from eval._backends.precip.sources import PrecipTruthSource
+    from eval.shared.precip.sources import PrecipTruthSource
 
     files = sorted(glob.glob(os.path.join(str(predictions_dir), "predictions_*_step*.nc")))
     files = files[::stride]

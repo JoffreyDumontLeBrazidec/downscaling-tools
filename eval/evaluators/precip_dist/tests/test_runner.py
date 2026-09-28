@@ -23,7 +23,7 @@ def test_run_invokes_tp_histogram_comparison_module(tmp_path):
     args, _ = mock_run.call_args
     cmd = args[0]
     assert "-m" in cmd
-    assert "eval._backends.precip.tp_histogram_comparison" in cmd
+    assert "eval.evaluators.precip_dist.core.tp_histogram_comparison" in cmd
     assert "--predictions-dir" in cmd
     assert str(predictions_dir) in cmd
     assert "--out-pdf" in cmd
