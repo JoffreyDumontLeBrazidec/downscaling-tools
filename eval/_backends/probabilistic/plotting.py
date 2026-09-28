@@ -1,9 +1,17 @@
-"""Plot local probabilistic scores in a quaver-like lead-time style."""
+"""Plot local probabilistic scores through the shared probabilistic figure.
+
+The figure itself (layout, role styles, units, wording) lives in
+``eval.plotting.probabilistic`` and is shared with the ``quaver`` evaluator; this module only
+turns the local evaluator's CSV files into the tidy table that function expects.
+"""
 from __future__ import annotations
 
 import csv
-from collections import defaultdict
 from pathlib import Path
+
+from eval.plotting.probabilistic import SOURCE_LOCAL, plot_probabilistic_scores
+
+_METRICS = ("fcrps", "crps", "spread", "rmse_ens_mean")
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -18,6 +26,41 @@ def _float(row: dict[str, str], key: str, default: float = 0.0) -> float:
         return default
 
 
+def summary_to_curves(rows: list[dict[str, str]], ref_rows: list[dict[str, str]] | None = None,
+                      *, model_label: str = "model ensemble") -> list[dict]:
+    """Tidy rows (see ``eval.plotting.probabilistic``) from ``summary_by_lead.csv`` rows.
+
+    The model curve carries a 95 percent band (mean plus or minus 1.96 standard errors over
+    dates) when the standard error is positive. Reference rows (from an exported quaver
+    curve file) become "reference" series, one per label.
+    """
+    curves: list[dict] = []
+    for r in rows:
+        if r["metric"] not in _METRICS:
+            continue
+        mean = _float(r, "mean")
+        se = _float(r, "stderr")
+        curves.append({
+            "metric": r["metric"], "variable": r["weather_state"], "domain": r["domain"],
+            "lead_h": _float(r, "step"), "series_role": "model", "series_label": model_label,
+            "value": mean,
+            "ci_low": mean - 1.96 * se if se > 0.0 else None,
+            "ci_high": mean + 1.96 * se if se > 0.0 else None,
+            "n": _float(r, "n_dates", float("nan")),
+        })
+    for r in ref_rows or []:
+        if r.get("metric", "") not in _METRICS:
+            continue
+        curves.append({
+            "metric": r["metric"], "variable": r.get("weather_state", ""), "domain": r.get("domain", ""),
+            "lead_h": _float(r, "step"), "series_role": "reference",
+            "series_label": r.get("label") or "reference",
+            "value": _float(r, "value", _float(r, "mean")),
+            "ci_low": None, "ci_high": None, "n": float("nan"),
+        })
+    return curves
+
+
 def plot_probabilistic_summary(
     summary_csv: str | Path,
     output_pdf: str | Path,
@@ -25,13 +68,7 @@ def plot_probabilistic_summary(
     title_prefix: str = "Probabilistic scores",
     reference_curves: str | Path | None = None,
 ) -> Path:
-    """Create a multi-page lead-time PDF from ``summary_by_lead.csv``."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-
+    """Create the multi-page lead-time PDF (and page PNGs) from ``summary_by_lead.csv``."""
     summary_csv = Path(summary_csv)
     output_pdf = Path(output_pdf)
     rows = _read_csv(summary_csv)
@@ -44,49 +81,12 @@ def plot_probabilistic_summary(
         if ref_path.exists():
             refs = _read_csv(ref_path)
 
-    grouped: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-    for row in rows:
-        grouped[(row["weather_state"], row["domain"])].append(row)
-
-    ref_grouped: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
-    for row in refs:
-        ref_grouped[(row.get("weather_state", ""), row.get("domain", ""), row.get("metric", ""))].append(row)
-
-    palette = {
-        "crps": "#377eb8",
-        "fcrps": "#4daf4a",
-        "spread": "#984ea3",
-        "rmse_ens_mean": "#e41a1c",
-    }
-    metrics = ["fcrps", "crps", "spread", "rmse_ens_mean"]
-    output_pdf.parent.mkdir(parents=True, exist_ok=True)
-
-    with PdfPages(output_pdf) as pdf:
-        for (weather_state, domain), group_rows in sorted(grouped.items()):
-            fig, axes = plt.subplots(2, 2, figsize=(11, 8.5), constrained_layout=True)
-            axes_flat = axes.ravel()
-            for ax, metric in zip(axes_flat, metrics):
-                metric_rows = [r for r in group_rows if r["metric"] == metric]
-                metric_rows.sort(key=lambda r: _float(r, "step"))
-                if metric_rows:
-                    steps = [_float(r, "step") for r in metric_rows]
-                    means = [_float(r, "mean") for r in metric_rows]
-                    stderrs = [_float(r, "stderr") for r in metric_rows]
-                    color = palette.get(metric, "black")
-                    ax.plot(steps, means, marker="o", color=color, label="local")
-                    if any(v > 0.0 for v in stderrs):
-                        lower = [m - 1.96 * s for m, s in zip(means, stderrs)]
-                        upper = [m + 1.96 * s for m, s in zip(means, stderrs)]
-                        ax.fill_between(steps, lower, upper, color=color, alpha=0.18, linewidth=0)
-                for ref in ref_grouped.get((weather_state, domain, metric), []):
-                    label = ref.get("label") or "reference"
-                    ax.scatter([_float(ref, "step")], [_float(ref, "value", _float(ref, "mean"))], label=label, marker="x")
-                ax.set_title(metric)
-                ax.set_xlabel("Lead time (h)")
-                ax.set_ylabel(metric)
-                ax.grid(True, alpha=0.25)
-                ax.legend(loc="best", fontsize="small")
-            fig.suptitle(f"{title_prefix}: {weather_state} / {domain}")
-            pdf.savefig(fig)
-            plt.close(fig)
+    curves = summary_to_curves(rows, refs)
+    plot_probabilistic_scores(
+        curves,
+        SOURCE_LOCAL,
+        output_pdf,
+        title=title_prefix if title_prefix and title_prefix != "Probabilistic scores" else None,
+        n_noun="dates",
+    )
     return output_pdf

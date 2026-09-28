@@ -126,7 +126,7 @@ def _y_label(metric: str, variable: str, unit: str | None) -> str:
 
 
 def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = None,
-                              png: bool = True, metrics=None, variables=None,
+                              png: bool = True, n_noun: str = "samples", metrics=None, variables=None,
                               domains=None, footnote: str | None = None) -> list[Path]:
     """Draw the probabilistic-score figure and return the files written.
 
@@ -143,6 +143,8 @@ def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = N
         when ``png`` is true, one PNG per page to ``<out>_pages/``.
     title
         Optional second line (for example the run name and date window).
+    n_noun
+        What the optional ``n`` column counts, for the legend ("dates", "samples").
     metrics, variables, domains
         Optional lists that restrict and order what is drawn.
     """
@@ -211,7 +213,7 @@ def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = N
                 for key in order:
                     if key in present:
                         st = styles[key]
-                        lab = key[1] + (f" (n = {counts[key]})" if key in counts else "")
+                        lab = key[1] + (f" (n = {counts[key]} {n_noun})" if key in counts else "")
                         handles.append(plt.Line2D([], [], color=st["color"], linestyle=st["linestyle"],
                                                   linewidth=st["linewidth"], label=lab))
                 fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 4),

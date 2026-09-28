@@ -1,7 +1,11 @@
 """Quaver evaluator — plot phase.
 
-Renders the surface and upper-air CRPS/spread scorecards as PDFs by patching the
-backend q_plot_{sfc,pl}.py templates and running them under the `quaver` binary.
+Runs the patched backend q_plot_{sfc,pl}.py templates under the `quaver` binary exactly as
+before (same FDB queries, fair mean, scalings), but asks quaver to store the data of every
+panel in a JSON file instead of using its Magics rendering. The stored curves are turned into a
+tidy table (``curves.py``) and drawn by the one probabilistic figure shared with the local
+``probabilistic`` evaluator (``eval.plotting.probabilistic``): ``quaver_<expver>_probabilistic_scores.pdf``
+plus one PNG per page, and ``quaver_<expver>_curves.csv`` with the plotted numbers.
 
 Default deliverable is the **3-curve** comparison — input (coarse op. ENS) ->
 ML (downscaled) -> reference (op. IFS-O1280) — for both CRPS *and spread*. The
@@ -214,21 +218,32 @@ def _patch_threecurve(
     return src
 
 
+_DOC_CALL = "        data=documentdata(),\n"
+
+
+def _with_storage(src: str, dump: Path) -> str:
+    """Make quaver store the plotted curves as JSON next to its (unused) Magics output."""
+    if src.count(_DOC_CALL) != 1:
+        raise RuntimeError(f"quaver plot: document() call not found uniquely (n={src.count(_DOC_CALL)})")
+    return src.replace(
+        _DOC_CALL, _DOC_CALL + f'        storage="filestorer:file={dump},format=json",\n', 1)
+
+
 def _render(tag: str, script: Path, params: dict, results_dir: Path, build_src) -> Path | None:
+    """Run the patched template under quaver; return the JSON dump of its curves (or None)."""
     work = results_dir / f"_q_plot_{tag}.py"
-    work.write_text(build_src(script.read_text()))
+    dump = results_dir / f"_q_curves_{tag}.json"
+    dump.unlink(missing_ok=True)
+    work.write_text(_with_storage(build_src(script.read_text()), dump))
     plot_dir = results_dir / "plots" / tag
     plot_dir.mkdir(parents=True, exist_ok=True)
     inner = "quaver " + shlex.quote(str(work))
     LOG.info("quaver plot %s: %s (cwd=%s)", tag, inner, plot_dir)
     subprocess.run(["bash", "-lc", f"module load quaver && {inner}"], check=True, cwd=str(plot_dir))
-    dst = results_dir / f"quaver_{params['expver']}_{tag}_crps_spread.pdf"
-    for cand in (plot_dir / "quaver.pdf", _HOME_QUAVER):
-        if cand.exists():
-            dst.write_bytes(cand.read_bytes())
-            LOG.info("quaver plot %s -> %s", tag, dst)
-            return dst
-    LOG.warning("quaver plot %s: no quaver.pdf produced", tag)
+    if dump.exists() and dump.stat().st_size > 0:
+        LOG.info("quaver plot %s -> curves %s", tag, dump)
+        return dump
+    LOG.warning("quaver plot %s: quaver stored no curves", tag)
     return None
 
 
@@ -249,6 +264,9 @@ def plot(results_dir, lane_config, eval_config, *, output_dir=None, **kwargs):
     three_curve = eval_config.get("three_curve", True) and input_file.exists()
     include_ref_spread = bool(eval_config.get("spread_include_reference", True))
 
+    input_params = None
+    ref_params = None
+    dumps: list[Path | None] = []
     if three_curve:
         input_params = json.loads(input_file.read_text())
         have_ref = ref_file.exists()
@@ -259,14 +277,48 @@ def plot(results_dir, lane_config, eval_config, *, output_dir=None, **kwargs):
                  "3-curve mode" if have_ref else "2-curve mode (reference not computed)",
                  input_params["grid"], params["grid"],
                  f" -> ref {ref_params.get('grid')}" if have_ref else "")
-        _render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
-                lambda s: _patch_threecurve(s, "sfc", params, input_params, ref_params, include_ref_spread, have_ref))
-        _render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
-                lambda s: _patch_threecurve(s, "pl", params, input_params, ref_params, include_ref_spread, have_ref))
+        dumps.append(_render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
+                lambda s: _patch_threecurve(s, "sfc", params, input_params, ref_params, include_ref_spread, have_ref)))
+        dumps.append(_render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
+                lambda s: _patch_threecurve(s, "pl", params, input_params, ref_params, include_ref_spread, have_ref)))
+        if not have_ref:
+            ref_params = None
     else:
         LOG.info("quaver plot: experiment-only mode (no input baseline).")
-        _render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
-                lambda s: _patch_experiment_only(s, params, params["grid"]))
-        _render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
-                lambda s: _patch_experiment_only(s, params, _PL_GRID))
+        dumps.append(_render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
+                lambda s: _patch_experiment_only(s, params, params["grid"])))
+        dumps.append(_render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
+                lambda s: _patch_experiment_only(s, params, _PL_GRID)))
+
+    return _draw(results_dir, params, input_params, ref_params, [d for d in dumps if d])
+
+
+def _draw(results_dir: Path, params: dict, input_params, ref_params, dumps: list[Path]) -> Path:
+    """Draw the shared probabilistic figure from the curves quaver stored."""
+    import csv
+
+    from eval.plotting.probabilistic import SOURCE_QUAVER, plot_probabilistic_scores
+
+    from .curves import dump_to_curves
+
+    if not dumps:
+        LOG.warning("quaver plot: no curves were stored, no figure drawn.")
+        return results_dir
+    curves = dump_to_curves(dumps, params, input_params, ref_params)
+    if not curves:
+        LOG.warning("quaver plot: the stored curves held no ensemble scores, no figure drawn.")
+        return results_dir
+    expver = params["expver"]
+    csv_path = results_dir / f"quaver_{expver}_curves.csv"
+    fields = ["metric", "variable", "domain", "lead_h", "series_role", "series_label", "value", "native_unit"]
+    with csv_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(curves)
+    window = f"{params['first_reference_date']} to {params['last_reference_date']}"
+    written = plot_probabilistic_scores(
+        curves, SOURCE_QUAVER, results_dir / f"quaver_{expver}_probabilistic_scores",
+        title=f"Experiment {expver}, reference dates {window}", n_noun="dates",
+    )
+    LOG.info("quaver plot -> %s", written[0])
     return results_dir

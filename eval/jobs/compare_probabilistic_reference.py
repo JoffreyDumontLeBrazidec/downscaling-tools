@@ -82,31 +82,34 @@ def _summarize(rows: list[dict[str, Any]], *, missing_local: int, missing_refere
 
 
 def _plot(rows: list[dict[str, Any]], out_pdf: Path) -> None:
+    """One page per (variable, domain, metric): local curve (model) against the reference."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
+
+    from eval.plotting import AXIS, FigureBook, eval_style, reference_style, role_style, variable_spec
+    from eval.plotting.probabilistic import DOMAIN_NAMES, METRIC_NAMES
 
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         grouped[(row["weather_state"], row["domain"], row["metric"])].append(row)
-    with PdfPages(out_pdf) as pdf:
+    with eval_style(), FigureBook(out_pdf, png=True) as book:
         for (weather_state, domain, metric), group in sorted(grouped.items()):
             group.sort(key=lambda r: int(r["step"]))
             steps = [int(r["step"]) for r in group]
             local = [float(r["local"]) for r in group]
             ref = [float(r["reference"]) for r in group]
-            fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-            ax.plot(steps, local, marker="o", label="local")
-            ax.plot(steps, ref, marker="x", linestyle="--", label="reference")
-            ax.set_title(f"{weather_state} / {domain} / {metric}")
-            ax.set_xlabel("Lead time (h)")
-            ax.set_ylabel(metric)
-            ax.grid(True, alpha=0.25)
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.plot(steps, local, marker="o", markersize=4, label="local evaluator (model)", **role_style("model"))
+            ax.plot(steps, ref, marker="x", label="quaver reference", **reference_style(0))
+            spec = variable_spec(weather_state)
+            ax.set_title(f"{spec.name if spec.unit else weather_state}: "
+                         f"{METRIC_NAMES.get(metric, metric)}, {DOMAIN_NAMES.get(domain, domain)}")
+            ax.set_xlabel(AXIS["lead"])
+            ax.set_ylabel(METRIC_NAMES.get(metric, metric) + (f" ({spec.native_unit})" if spec.native_unit else ""))
             ax.legend(loc="best")
-            pdf.savefig(fig)
-            plt.close(fig)
+            book.add(fig, name=f"{weather_state}_{domain}_{metric}")
 
 
 def compare(
