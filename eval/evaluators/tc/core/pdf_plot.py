@@ -306,6 +306,13 @@ def _legend(ax, var_data: dict, keys, oper_key: str, **kw) -> None:
     ax.legend(handles, labels, title=title, title_fontsize=7.5, **kw)
 
 
+def _legend_below(ax, var_data: dict, keys, oper_key: str) -> None:
+    """Legend under the axes, so it never covers a curve (used by the ratio figures, whose
+    curves fill the whole data area)."""
+    _legend(ax, var_data, keys, oper_key, loc="upper center", bbox_to_anchor=(0.5, -0.17),
+            frameon=False)
+
+
 def _plot_curve(ax, x, y, *, key, label, style, alpha=None):
     kw = dict(style)
     if alpha is not None:
@@ -470,7 +477,7 @@ def plot_pdf_ratios(
     denom_label, denom_phrase, denom_short, denom_style = _denominator(oper_key, roles, styles, exp_labels)
 
     with eval_style():
-        fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+        fig, axs = plt.subplots(1, 2, figsize=(12, 6.8))
         for ax, variable, ylim in ((axs[0], "mslp_hpa", plot_config.mslp_ylim),
                                    (axs[1], "wind10m_ms", plot_config.wind_ylim)):
             var_data = event_stats["variables"][variable]
@@ -486,7 +493,7 @@ def plot_pdf_ratios(
             _apply_distribution_xlim(ax, var_data, variable=variable)
             _ratio_ylim(ax, ylim)
             _ratio_axes(ax, variable, denom_short)
-            _legend(ax, var_data, [oper_key, *keys], oper_key)
+            _legend_below(ax, var_data, [oper_key, *keys], oper_key)
         fig.suptitle(_title(plot_config, f"TC distributions divided by {denom_phrase}"))
         fig.tight_layout()
     return fig
@@ -567,7 +574,7 @@ def plot_pdf_single_variable(
     ylim = plot_config.wind_ylim if is_wind else plot_config.mslp_ylim
 
     with eval_style():
-        fig, ax = plt.subplots(figsize=(8.6, 5.6))
+        fig, ax = plt.subplots(figsize=(8.6, 5.6 if mode == "log" else 6.8))
         if mode == "log":
             floor = _log_density_floor(*(_hist(var_data, k, oper_key) for k in keys))
             for key in keys:
@@ -592,7 +599,10 @@ def plot_pdf_single_variable(
 
         _apply_distribution_xlim(ax, var_data, variable=variable)
         ax.set_title(f"{_var_meta(variable)[2]}: {kind}")
-        _legend(ax, var_data, legend_keys, oper_key)
+        if mode == "log":
+            _legend(ax, var_data, legend_keys, oper_key)
+        else:
+            _legend_below(ax, var_data, legend_keys, oper_key)
         fig.suptitle((_title(plot_config, "TC distributions") + " " + title_suffix).strip())
         fig.tight_layout()
     return fig
