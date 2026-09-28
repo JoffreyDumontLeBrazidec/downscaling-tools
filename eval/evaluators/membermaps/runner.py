@@ -67,7 +67,7 @@ def run(
     run_label: str = "",
     **kwargs,
 ) -> Path:
-    from eval._backends.region_plotting.plot_member_wind_maps import (
+    from eval.evaluators.membermaps.core.plot_member_wind_maps import (
         build_arg_parser, run as membermaps_run,
     )
 

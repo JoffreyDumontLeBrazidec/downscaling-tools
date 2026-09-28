@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
-from eval._backends.region_plotting.local_plotting import get_region_ds
-from eval._backends.region_plotting.plot_regions import PREDICTION_REGION_BOXES
+from eval.evaluators.region_plot.core.local_plotting import get_region_ds
+from eval.evaluators.region_plot.core.plot_regions import PREDICTION_REGION_BOXES
 from eval.evaluators.tc.core.events import EVENTS
 
 PRED_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")

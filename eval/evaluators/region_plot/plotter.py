@@ -1,6 +1,6 @@
 """Region plot evaluator — plot-only re-rendering of the region map grids.
 
-The runner renders the figures in a subprocess (``eval._backends.region_plotting.plot_regions``)
+The runner renders the figures in a subprocess (``eval.evaluators.region_plot.core.plot_regions``)
 and records what it drew in ``manifest.json``. ``plot`` reads that manifest and renders the
 same figures again with the current plotting code: the same predictions file, regions,
 panel keys, weather states, sample and member. Nothing is scored or rewritten except the
@@ -42,7 +42,7 @@ def plot(
     if regions:
         boxes = {name: box for name, box in boxes.items() if name in set(regions)}
 
-    from eval._backends.region_plotting.plot_regions import render_region_suite_from_predictions_file
+    from eval.evaluators.region_plot.core.plot_regions import render_region_suite_from_predictions_file
 
     LOG.info("Region plot: re-rendering %d region(s) from %s into %s", len(boxes),
              manifest.get("predictions_file"), output_dir)

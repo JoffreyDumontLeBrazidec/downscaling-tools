@@ -1,7 +1,7 @@
 """``eval.cli membermaps``: single-member 10 m wind-speed cutout maps.
 
 The flags come from the backend's own parser
-(``eval._backends.region_plotting.plot_member_wind_maps``), which this command
+(``eval.evaluators.membermaps.core.plot_member_wind_maps``), which this command
 inherits, so the two cannot drift apart. It reads no lane or host configuration.
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ def _escape_bare_percent(parser: argparse.ArgumentParser) -> None:
 
 
 def register(subparsers) -> argparse.ArgumentParser:
-    from eval._backends.region_plotting.plot_member_wind_maps import build_arg_parser as _membermaps_parser
+    from eval.evaluators.membermaps.core.plot_member_wind_maps import build_arg_parser as _membermaps_parser
     parser = subparsers.add_parser(
         "membermaps",
         parents=[_membermaps_parser(add_help=False)],
@@ -54,7 +54,7 @@ def register(subparsers) -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> None:
-    from eval._backends.region_plotting.plot_member_wind_maps import run as membermaps_run
+    from eval.evaluators.membermaps.core.plot_member_wind_maps import run as membermaps_run
     raise SystemExit(membermaps_run(args))
 
 

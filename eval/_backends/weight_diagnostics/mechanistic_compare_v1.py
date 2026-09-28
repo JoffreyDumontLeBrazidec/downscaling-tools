@@ -21,8 +21,8 @@ from torch_geometric.utils import scatter
 
 from eval.archive.jobs.generate_predictions_25_files import BundleKey
 from eval.archive.jobs.generate_predictions_25_files import discover_bundles
-from eval._backends.region_plotting.local_plotting import get_region_ds
-from eval._backends.region_plotting.plot_regions import PREDICTION_REGION_BOXES
+from eval.evaluators.region_plot.core.local_plotting import get_region_ds
+from eval.evaluators.region_plot.core.plot_regions import PREDICTION_REGION_BOXES
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
 from manual_inference.prediction.predict import _load_objects

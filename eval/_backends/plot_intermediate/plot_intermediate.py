@@ -21,7 +21,7 @@ def _ensure_plot_libs():
         return
     import matplotlib.pyplot as _plt
     import matplotlib.ticker as _ticker
-    from eval._backends.region_plotting.local_plotting import get_region_ds as _get_region_ds
+    from eval.evaluators.region_plot.core.local_plotting import get_region_ds as _get_region_ds
     globals()["plt"] = _plt
     globals()["ticker"] = _ticker
     globals()["get_region_ds"] = _get_region_ds

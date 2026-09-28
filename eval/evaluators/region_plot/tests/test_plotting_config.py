@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from eval._backends.region_plotting.plotting.config import (
+from eval.evaluators.region_plot.core.plotting.config import (
     DEFAULT_MODEL_VARIABLES,
     DEFAULT_WEATHER_STATES,
     KNOWN_REGION_BOXES,

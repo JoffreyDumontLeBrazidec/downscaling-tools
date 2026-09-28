@@ -16,7 +16,7 @@ EVALUATOR_SPEC = {
     "name": "membermaps",
     "requires": ["predictions"],
     "outputs": [
-        "<region>/: one sub-directory per lane region holding the rendered maps (file names come from eval/_backends/region_plotting/plot_member_wind_maps.py).",
+        "<region>/: one sub-directory per lane region holding the rendered maps (file names come from eval/evaluators/membermaps/core/plot_member_wind_maps.py).",
     ],
 }
 

@@ -26,7 +26,7 @@ paired); the panel is labelled "Operational ENFO" accordingly.
 Diagnostic maps only — nothing here scores anything.
 
 Canonical invocation: ``python -m eval.cli membermaps ...`` (also runnable as
-``python -m eval._backends.region_plotting.plot_member_wind_maps``).
+``python -m eval.evaluators.membermaps.core.plot_member_wind_maps``).
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .plotting.manifest import write_manifest
+from eval.evaluators.region_plot.core.plotting.manifest import write_manifest
 
 DEFAULT_EXTENT = (-45.0, 55.0, 27.0, 72.0)
 DEFAULT_MARGIN = 8.0
