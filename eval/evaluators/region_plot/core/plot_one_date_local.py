@@ -12,7 +12,7 @@ from eval.plotting.maps_helpers import dataset_grid_names
 from .local_plotting import plot_x_y
 from .plotting.config import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES, RENDER_DPI  # noqa: F401
 from .plotting.coordinate_utils import default_region_for_grid, get_region_ds, infer_grid_type
-from .plotting.manifest import write_manifest
+from eval.shared.manifest import write_manifest
 from .plotting.metadata import build_run_plot_title
 from .plotting.preprocessing import ensure_x_interp_for_plotting
 from .plotting.variable_utils import supports_plot_variable

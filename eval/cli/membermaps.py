@@ -1,7 +1,7 @@
 """``eval.cli membermaps``: single-member 10 m wind-speed cutout maps.
 
-The flags come from the backend's own parser
-(``eval.evaluators.membermaps.core.plot_member_wind_maps``), which this command
+The flags come from the parser of
+``eval.evaluators.membermaps.core.plot_member_wind_maps``, which this command
 inherits, so the two cannot drift apart. It reads no lane or host configuration.
 """
 from __future__ import annotations
@@ -25,11 +25,11 @@ def _escape_bare_percent(parser: argparse.ArgumentParser) -> None:
     """Make every help string safe for argparse's %-formatting.
 
     argparse formats each help text with ``%``, so a literal percent sign has to be
-    written ``%%``. One help text of the backend's parser says "99% of ..." with a single
+    written ``%%``. One help text of that parser says "99% of ..." with a single
     percent sign, which made ``eval.cli membermaps --help`` crash with a TypeError. The
-    backend file is being restyled on another branch, so the escape is done here. A help
+    file of the parser is being restyled on another branch, so the escape is done here. A help
     text that already formats correctly is not touched, so the fix stays harmless once the
-    backend is corrected.
+    parser is corrected.
     """
     for action in parser._actions:
         text = action.help

@@ -1,4 +1,4 @@
-"""storm_maps backend — regional storm maps + full radial power spectra.
+"""storm_maps core — regional storm maps + full radial power spectra.
 
 Self-contained (numpy/scipy/xarray/matplotlib). For a downscaling eval run it renders,
 on TOP of the usual regional plots:

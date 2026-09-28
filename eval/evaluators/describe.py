@@ -48,8 +48,10 @@ def config_keys_read(name: str) -> list[str]:
     """Keys the evaluator's own code looks up in its lane block, found by reading the source.
 
     Matches ``eval_config.get("key")`` and ``eval_config["key"]`` (and the same on
-    the other names in ``_CONFIG_NAMES``) in every non-test module of the package.
-    It cannot see keys passed on to a backend as a whole dict, so it can miss some;
+    the other names in ``_CONFIG_NAMES``) in every module of the package except its
+    tests and its ``core/`` subpackage. The functions of ``core/`` receive their
+    settings as arguments, so a name such as ``cfg`` there is not the lane block.
+    It cannot see keys passed on to ``core`` as a whole dict, so it can miss some;
     ``lane_keys_set`` shows what the lane files actually set.
     """
     pkg = _package_dir(name)
@@ -57,7 +59,7 @@ def config_keys_read(name: str) -> list[str]:
     if pkg is None or not pkg.is_dir():
         return []
     for path in sorted(pkg.rglob("*.py")):
-        if "tests" in path.relative_to(pkg).parts:
+        if {"tests", "core"} & set(path.relative_to(pkg).parts):
             continue
         try:
             tree = ast.parse(path.read_text())

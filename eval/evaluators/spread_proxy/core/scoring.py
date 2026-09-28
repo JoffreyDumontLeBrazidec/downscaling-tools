@@ -2,7 +2,7 @@
 
 Motivation (spec: docs epics/training-diagnostics/metric-skill-gap/in-progress/
 20260826_spread_proxy_overspread_spec.md): the champion class measured 3-25%
-over-dispersed vs the calibrated ENFO target on quaver; this backend answers the
+over-dispersed vs the calibrated ENFO target on quaver; this module answers the
 same question locally, without FDB, by comparing the spread of ``y_pred`` (ML
 members) against the spread of ``y`` (the ENFO target members carried in the
 same file) on identical support.
@@ -19,7 +19,7 @@ the finite-ensemble bias cancels. When an external ENFO ensemble with more
 members is used (Phase 2, months from MARS), pass ``enfo_n_members`` to
 subsample and ``enfo_exclude_members`` to drop the verifying member.
 
-Unlike the ``probabilistic`` backend, ``y`` is NOT collapsed to member 0: the
+Unlike the ``probabilistic`` core, ``y`` is NOT collapsed to member 0: the
 full target ensemble is the reference. No truth field enters any metric here,
 so the ENFO-is-the-truth guard does not apply to the ratio itself; exclusions
 are still recorded in the summary for auditability.

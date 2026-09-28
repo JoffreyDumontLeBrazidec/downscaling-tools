@@ -12,8 +12,8 @@ target variable, applying every rule the design note fixed:
   valid times of the window for that parameter, which is what keeps the validation
   window comparable with the training window across the Italian feed interruption of
   late August; the full network is carried beside it, never instead of it;
-* the gross-error screen of quaver is applied exactly as the `obs_crps` backend
-  applies it, that is the hard physical limits of `toss.yaml` and the maximum
+* the gross-error screen of quaver is applied exactly as the `obs_crps` tool
+  (eval/tools/obs_crps) applies it, that is the hard physical limits of `toss.yaml` and the maximum
   departure from the operational analysis, whose values are copied here from
   `/home/ecm5702/dev/downscaling-tools/eval/tools/obs_crps/obs_crps_compute.py`
   (read only, never modified);

@@ -7,7 +7,7 @@ Per the run-trust contract (decided 2026-06-21) TC quality is RAW extremes only 
 no score, no ratio, no anchor. For each event we emit four physical quantities
 (min MSLP, MSLP p0.1, max 10m wind, wind p99.9) for the model and the OPER / ENFO /
 EEFO baselines from the SAME stats JSON (same grid). The baseline sources are
-classified lane-agnostically by the backend (row prefix), so a lane only emits the
+classified lane-agnostically by the tc core (row prefix), so a lane only emits the
 sources its stats JSON actually carries. Reading is by eye.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ def score(
     records: list[dict[str, Any]] = []
     for event_name in event_names:
         # model (bare), OPER, ENFO, EEFO — raw extremes side by side on the same grid.
-        # Sources the backend didn't find (no matching row in this lane's stats JSON)
+        # Sources the tc core didn't find (no matching row in this lane's stats JSON)
         # are absent from `scores` and skipped by the `score_key in scores` guard below.
         for src_tag in ("", "oper", "enfo", "eefo"):
             for raw_key, unit in _RAW_METRICS:

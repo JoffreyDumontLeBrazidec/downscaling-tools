@@ -57,7 +57,7 @@ def _arm_caption(arm_label: str, event_stats: dict, variable: str, mode: str) ->
 
 
 def _stamp(fig, caption: str) -> None:
-    """Lay a caption under a figure that was built by a shared backend plotter."""
+    """Lay a caption under a figure that was built by a plotter of the tc core."""
     wrapped = "\n".join(textwrap.fill(part, 118) for part in caption.split("\n"))
     n_lines = wrapped.count("\n") + 1
     fig.set_size_inches(fig.get_size_inches()[0], fig.get_size_inches()[1] + 0.16 * n_lines)

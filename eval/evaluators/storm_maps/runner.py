@@ -106,7 +106,7 @@ def run(
             predictions_dir, output_dir,
             event_box=box, event_name=name, step=steps[0], storm_box=storm,
         )
-    # Several lead times: the backend writes fixed file names, so each gets its own folder.
+    # Several lead times: the renderer writes fixed file names, so each gets its own folder.
     for step in steps:
         step_dir = output_dir / f"step{step}"
         step_dir.mkdir(parents=True, exist_ok=True)

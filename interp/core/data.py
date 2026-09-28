@@ -263,7 +263,7 @@ def inject_truth_grib(bundle, eb: BundleBatch, truth_grib_tpl: str,
 
     The o2560 6h bundle pool embeds no tp truth (x_interp tp = 0 trap; the
     bundles predate the target_hres_tp sidecar), so teacher-forced probes must
-    inject it. Reuses the eval backend's PrecipTruthSource: deaccumulated 6h
+    inject it. Reuses PrecipTruthSource of eval.shared.precip.sources: deaccumulated 6h
     window ENDING at each step, grid verified identical to the bundle hres grid.
     Bundle order matches find_bundles' dates->members->steps nesting."""
     from eval.shared.precip.sources import PrecipTruthSource

@@ -16,7 +16,7 @@ except ImportError as exc:  # collected as xfail, not as a collection error
 
 # The backend imports _validate_bundle_hres_contract from manual_inference.prediction.predict,
 # which no longer has it, so the module cannot be imported. Its evaluator (mechanistic) was
-# retired on 2026-09-28; the backend is dead code and a candidate for quarantine.
+# retired on 2026-09-28; the tool is dead code and a candidate for quarantine.
 pytestmark = pytest.mark.xfail(
     _IMPORT_ERROR is not None,
     reason=f"eval.tools.weight_diagnostics.mechanistic_compare_v1 cannot be imported: {_IMPORT_ERROR}",

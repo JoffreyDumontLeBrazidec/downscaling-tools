@@ -1,4 +1,4 @@
-"""Shared manifest-writing helpers for region plotting scripts."""
+"""Shared manifest-writing helper for the region_plot, membermaps and tc-contour plotting scripts."""
 from __future__ import annotations
 
 import json

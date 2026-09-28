@@ -1,4 +1,4 @@
-"""ECMWF tctracker integration backend."""
+"""ECMWF tctracker integration: the computation behind tctracks and ``eval.cli tctracker``."""
 
 from .parsing import BASIN_LAT_SIGN, parse_basin_text, parse_tar, records_from_tracks, step_hours
 from .sources import (

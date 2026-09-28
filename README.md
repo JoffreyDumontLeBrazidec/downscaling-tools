@@ -73,7 +73,7 @@ lane's configuration after its `base:` chain is merged.
 | `eval/jobs/` | SLURM orchestration (`pipeline.py`, `renderer.py`, `resources.py`), the ladder and evolution figures, `scripts/` for one-off jobs, `templates/` for sbatch templates |
 | `eval/tools/` | `parity/`, a checker that diffs two scoreboards |
 | `eval/tests/` | The unit tests of the framework as a whole |
-| `eval/archive/` | Frozen legacy scripts that a few tests and one backend still import |
+| `eval/archive/` | Frozen legacy scripts that a few tests and one tool still import |
 | `eval/notebooks/` | Example notebooks |
 | `eval/_quarantine/` | Retired code, see below |
 

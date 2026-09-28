@@ -36,7 +36,7 @@ def _regions(lane_config: dict, eval_config: dict) -> dict[str, list[float] | No
 
     Falls back to the `texture` evaluator's regions so the two diagnostics of the
     fine-scale epic always speak about the same boxes, and finally to a single
-    entry with no box, which lets the backend use its own default extent.
+    entry with no box, which lets the membermaps core use its own default extent.
     """
     boxes = eval_config.get("regions")
     if not boxes:
@@ -45,7 +45,7 @@ def _regions(lane_config: dict, eval_config: dict) -> dict[str, list[float] | No
 
 
 def _extent_args(box: list[float] | None) -> list[str]:
-    """Translate a lane region box into the backend's extent and projection flags."""
+    """Translate a lane region box into the extent and projection flags of the membermaps core."""
     if box is None:
         return []
     lat_min, lat_max, lon_min, lon_max = (float(v) for v in box)

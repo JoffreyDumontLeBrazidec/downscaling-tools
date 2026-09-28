@@ -1,7 +1,7 @@
 """``eval.cli videogen``: render MP4 videos of downscaling predictions.
 
-The backend is ``eval.tools.videogen``. Scenes are not listed here so that
-this module stays cheap to import; the backend validates ``--scene`` against its
+The implementation is ``eval.tools.videogen``. Scenes are not listed here so that
+this module stays cheap to import; that package validates ``--scene`` against its
 own ``SCENES`` registry.
 """
 from __future__ import annotations

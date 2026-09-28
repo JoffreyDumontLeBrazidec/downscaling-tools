@@ -1,1 +1,1 @@
-"""storm_maps backend: regional storm maps + full radial power spectra."""
+"""storm_maps core: regional storm maps + full radial power spectra."""

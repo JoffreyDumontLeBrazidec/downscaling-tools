@@ -2,7 +2,7 @@
 
 Reuses the canonical manual_inference loader entry point
 ``manual_inference.checkpoints.ObjectFromCheckpointLoader`` — the exact same
-class the existing ``sigma`` evaluator backend uses to obtain a loaded model +
+class the existing sigma_evaluator tool (eval/tools/sigma_evaluator) uses to obtain a loaded model +
 datamodule from a checkpoint for a lane. We add only the thin glue M0 needs:
 single-rank shard-attr neutralisation, validation-frequency / worker capping,
 device placement, and Leonardo->local dataset path rewriting (via

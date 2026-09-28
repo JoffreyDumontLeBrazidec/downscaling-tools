@@ -1,7 +1,7 @@
 """Region plot evaluator: model, truth and input fields side by side.
 
 A subprocess wrapper around eval.evaluators.region_plot.core.plot_regions. It passes
-every region box of the lane's `regions` block to the backend, which renders the
+every region box of the lane's `regions` block to plot_regions, which renders the
 six-panel comparison of each box for the first prediction file. Diagnostic only;
 no scoreboard row.
 """

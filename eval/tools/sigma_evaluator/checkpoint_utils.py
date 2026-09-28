@@ -1,7 +1,7 @@
 """Utilities for inferring lane and other metadata from checkpoint configs.
 
 Extracted from eval/archive/jobs/checkpoint_profile.py so that active
-backends (e.g. sigma_evaluator) no longer depend on the archived module.
+tools (e.g. sigma_evaluator) no longer depend on the archived module.
 """
 from __future__ import annotations
 

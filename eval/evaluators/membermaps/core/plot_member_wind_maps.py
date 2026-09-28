@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.evaluators.region_plot.core.plotting.manifest import write_manifest
+from eval.shared.manifest import write_manifest
 
 DEFAULT_EXTENT = (-45.0, 55.0, 27.0, 72.0)
 DEFAULT_MARGIN = 8.0

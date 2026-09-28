@@ -20,7 +20,7 @@ from .plotting.config import (
 )
 from .plotting.coordinate_utils import get_region_ds
 from .plotting.datetime_utils import safe_datetime_str
-from .plotting.manifest import write_manifest
+from eval.shared.manifest import write_manifest
 from .plotting.metadata import sample_meta_title, step_meta_title
 from .plotting.preprocessing import ensure_x_interp_for_plotting
 from .plotting.variable_utils import supports_plot_variable

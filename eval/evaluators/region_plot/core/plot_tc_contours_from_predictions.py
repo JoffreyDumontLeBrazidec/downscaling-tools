@@ -12,7 +12,7 @@ import xarray as xr
 from .plotting.config import KNOWN_REGION_BOXES as PREDICTION_REGION_BOXES
 from .plotting.config import RENDER_DPI  # noqa: F401  (kept for importers)
 from .plotting.coordinate_utils import get_region_ds
-from .plotting.manifest import write_manifest
+from eval.shared.manifest import write_manifest
 from .plotting.metadata import sample_meta_title
 from .plotting.preprocessing import ensure_x_interp_for_plotting
 
