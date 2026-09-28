@@ -815,10 +815,18 @@ def cmd_plot(args: argparse.Namespace) -> None:
                 elif votes:
                     mixed += 1
                 spec = variable_spec(p["title"])
-                ax.set_title(spec.name if spec.unit else p["title"], fontsize=9.5, loc="left")
+                # With a baseline the "better"/"worse" word sits at the right edge of the
+                # axes, and the panel name is lifted one line above it in every panel. On one
+                # line the two met in the middle of the 3.5 inch panel and nearly touched.
+                ax.set_title(spec.name if spec.unit else p["title"], fontsize=9.5, loc="left",
+                             pad=14 if ref_label else 6)
                 if verdict:
-                    ax.set_title(verdict, loc="right", fontsize=8.5, fontweight="bold",
-                                 color=BETTER_COLOR if verdict == "better" else "#9A5B00")
+                    # an annotation, not a title: all titles of an axes share one vertical
+                    # offset, so a right title could not sit lower than the left one
+                    ax.annotate(verdict, xy=(1.0, 1.0), xycoords="axes fraction",
+                                xytext=(0, 3), textcoords="offset points", ha="right",
+                                va="bottom", fontsize=8.5, fontweight="bold",
+                                color=BETTER_COLOR if verdict == "better" else "#9A5B00")
                 ax.set_ylabel(f"{short} ({unit})" if unit else short, fontsize=8.5)
                 ax.tick_params(labelsize=8)
                 format_steps(ax)
