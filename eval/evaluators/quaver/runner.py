@@ -2,7 +2,7 @@
 
 Resolves the FDB scoring window (expver, dates, members, lead times, grid) from
 the run's effective_config.json and invokes the quaver probabilistic compute
-backend under the `quaver` module binary. Heavy + FDB-bound: keep on the FDB
+scripts (eval/evaluators/quaver/core) under the `quaver` module binary. Heavy + FDB-bound: keep on the FDB
 host (atos_ac) and budget time accordingly. No-op for manual runs.
 
 Beyond the experiment (ML) ensemble, this also computes the INPUT baseline so
@@ -27,8 +27,8 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
-_BACKEND = Path(__file__).resolve().parent.parent.parent / "_backends" / "quaver"
-_Q_COMPUTE = _BACKEND / "q_compute_probabilistic.py"
+_CORE = Path(__file__).resolve().parent / "core"
+_Q_COMPUTE = _CORE / "q_compute_probabilistic.py"
 _PL_GRID = "1.5/1.5"  # upper-air scores are always computed on the regridded 1.5deg grid
 
 # Owner decision 2026-08-24: quaver must score out to 10 forecast days by default.

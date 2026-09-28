@@ -1,6 +1,6 @@
 """Quaver evaluator — plot phase.
 
-Runs the patched backend q_plot_{sfc,pl}.py templates under the `quaver` binary exactly as
+Runs the patched q_plot_{sfc,pl}.py templates under the `quaver` binary exactly as
 before (same FDB queries, fair mean, scalings), but asks quaver to store the data of every
 panel in a JSON file instead of using its Magics rendering. The stored curves are turned into a
 tidy table (``curves.py``) and drawn by the one probabilistic figure shared with the local
@@ -11,7 +11,7 @@ Default deliverable is the **3-curve** comparison — input (coarse op. ENS) ->
 ML (downscaled) -> reference (op. IFS-O1280) — for both CRPS *and spread*. The
 input baseline is computed by the run phase (see runner.py), so it is always
 present for the window and never poisons the fair-mean panels. For the upper-air
-spread/skill panel (which the backend template renders for the experiment only),
+spread/skill panel (which the q_plot template renders for the experiment only),
 the input's (and optionally the reference's) spread + ensemble-mean error are
 injected explicitly — that is the "spread of input too" view.
 
@@ -41,7 +41,7 @@ from pathlib import Path
 
 LOG = logging.getLogger(__name__)
 
-_BACKEND = Path(__file__).resolve().parent.parent.parent / "_backends" / "quaver"
+_CORE = Path(__file__).resolve().parent / "core"
 _HOME_QUAVER = Path.home() / "quaver.pdf"
 _PL_GRID = "1.5/1.5"  # upper-air scores are computed on the regridded 1.5deg grid
 
@@ -277,17 +277,17 @@ def plot(results_dir, lane_config, eval_config, *, output_dir=None, **kwargs):
                  "3-curve mode" if have_ref else "2-curve mode (reference not computed)",
                  input_params["grid"], params["grid"],
                  f" -> ref {ref_params.get('grid')}" if have_ref else "")
-        dumps.append(_render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
+        dumps.append(_render("sfc", _CORE / "q_plot_sfc.py", params, results_dir,
                 lambda s: _patch_threecurve(s, "sfc", params, input_params, ref_params, include_ref_spread, have_ref)))
-        dumps.append(_render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
+        dumps.append(_render("pl", _CORE / "q_plot_pl.py", params, results_dir,
                 lambda s: _patch_threecurve(s, "pl", params, input_params, ref_params, include_ref_spread, have_ref)))
         if not have_ref:
             ref_params = None
     else:
         LOG.info("quaver plot: experiment-only mode (no input baseline).")
-        dumps.append(_render("sfc", _BACKEND / "q_plot_sfc.py", params, results_dir,
+        dumps.append(_render("sfc", _CORE / "q_plot_sfc.py", params, results_dir,
                 lambda s: _patch_experiment_only(s, params, params["grid"])))
-        dumps.append(_render("pl", _BACKEND / "q_plot_pl.py", params, results_dir,
+        dumps.append(_render("pl", _CORE / "q_plot_pl.py", params, results_dir,
                 lambda s: _patch_experiment_only(s, params, _PL_GRID)))
 
     return _draw(results_dir, params, input_params, ref_params, [d for d in dumps if d])
