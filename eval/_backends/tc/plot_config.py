@@ -91,11 +91,24 @@ def resolve_plot_config(event_name: str, eval_config: dict | None = None) -> TCP
     return replace(base, **coerced)
 
 
+def _reference_entry(label: str, index: int) -> dict:
+    """Readable legend label plus the ``index``-th house reference style (eval.plotting)."""
+    from eval.plotting import reference_style
+
+    style = reference_style(index)
+    return {"label": label, "color": style["color"], "linestyle": style["linestyle"],
+            "linewidth": style["linewidth"]}
+
+
+# Anchor curves drawn next to the model on the TC distribution figures. Each entry has its own
+# colour and dash pattern taken from ``eval.plotting.REFERENCE_STYLES`` (none of them uses the
+# black, red or blue that mean truth, model and input). The indices follow the house names
+# where one exists (ENFO O320 = 0, ENFO O96 = 1, EEFO O96 = 2, IEKM = 3, ENFO O48 = 5).
 REFERENCE_STYLES: dict[str, dict] = {
-    "ENFO_O320_0001": {"label": "enfo_o320", "color": "#E69F00", "linestyle": "-.", "linewidth": 2},
-    "ENFO_O48_0001": {"label": "enfo_o48", "color": "black", "linestyle": "-.", "linewidth": 2},
-    "EEFO_O96_0001": {"label": "eefo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
-    "ENFO_O96_0001": {"label": "enfo_o96", "color": "red", "linestyle": "--", "linewidth": 2},
-    "ENFO_O320_ip6y": {"label": "ip6y", "color": "orange", "linestyle": ":", "linewidth": 2},
-    "IEKM_O96_TARGET": {"label": "iekm-o96", "color": "steelblue", "linestyle": "--", "linewidth": 2},
+    "ENFO_O320_0001": _reference_entry("ENFO O320", 0),
+    "ENFO_O48_0001": _reference_entry("ENFO O48", 5),
+    "EEFO_O96_0001": _reference_entry("EEFO O96", 2),
+    "ENFO_O96_0001": _reference_entry("ENFO O96", 1),
+    "ENFO_O320_ip6y": _reference_entry("ENFO O320 (ip6y)", 7),
+    "IEKM_O96_TARGET": _reference_entry("IEKM O96", 3),
 }

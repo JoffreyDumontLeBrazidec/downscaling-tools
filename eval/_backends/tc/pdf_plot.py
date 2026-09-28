@@ -1,41 +1,47 @@
-"""PDF ratio visualization — matplotlib rendering only."""
+"""PDF ratio visualization — matplotlib rendering only.
+
+Every curve is drawn by the role it plays (``eval.plotting.roles``): the analysis the
+statistics are normalised by is the truth (black, solid, thick); the downscaling run is the
+model (red; several runs take ``sequence_style``); the model's own input is blue and dashed;
+operational forecasts on other grids and other anchors take distinct reference styles.
+Legends use readable names, never raw curve keys, and axes carry their units.
+"""
 from __future__ import annotations
 
 import logging
+import re
 import warnings
 
-import cmcrameri.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
+
+from eval.plotting import (
+    SEQUENCE,
+    REFERENCE_STYLES as HOUSE_REFERENCE_STYLES,
+    axis_label,
+    eval_style,
+    pdf_label,
+    readable_label,
+    reference_style,
+    role_style,
+    sequence_style,
+    shorten_run_label,
+)
 
 from .plot_config import REFERENCE_STYLES, TCPlotConfig
 from .stats import safe_ratio
 
 logger = logging.getLogger(__name__)
 
+# Named anchors that are not in plot_config.REFERENCE_STYLES. A curve whose key equals the
+# analysis key is always drawn as the truth instead.
 NAMED_DISTRIBUTION_STYLES: dict[str, dict[str, object]] = {
-    "ENFO_O1280_0001": {
-        "label": "ENFO O1280",
-        "color": "#E69F00",
-        "linestyle": "--",
-        "linewidth": 2.3,
-    },
-    "IEKM": {
-        "label": "IEKM",
-        "color": "#009E73",
-        "linestyle": "-.",
-        "linewidth": 2.3,
-    },
+    "ENFO_O1280_0001": {"label": "ENFO O1280", **reference_style(6)},
+    "IEKM": {"label": "IEKM", **reference_style(3)},
 }
 
-MODEL_DISTRIBUTION_COLORS = [
-    "#8E24AA",
-    "#0072B2",
-    "#D55E00",
-    "#CC79A7",
-    "#56B4E9",
-]
+# Colours for several model runs in one figure (Okabe-Ito based, no black, red or blue).
+MODEL_DISTRIBUTION_COLORS = list(SEQUENCE)
 
 warnings.filterwarnings(
     "ignore",
@@ -44,8 +50,14 @@ warnings.filterwarnings(
     module="cfgrib.xarray_plugin",
 )
 
-sns.set_theme(style="ticks", rc={"font.family": "DejaVu Sans"})
 np.seterr(divide="ignore", invalid="ignore")
+
+_STYLE_KEYS = ("color", "linestyle", "linewidth", "zorder")
+
+# Keys that name where predictions were read from rather than which model produced them.
+_LEAKED_MODEL_KEYS = {"eval_inputs", "predictions", "prediction", "data", "y_pred", "model", "ml", ""}
+
+_STREAM_KEY = re.compile(r"^(od_)?(enfo|eefo|iekm|oper)(_o\d+)?(_\w+)?$", re.I)
 
 
 def _shorten_run_label(label: str) -> str:
@@ -56,7 +68,6 @@ def _shorten_run_label(label: str) -> str:
         manual_59e40596_new_o96_o320_20260422_pw20_t10_h7_l13 -> 59e405 pw20_t10_h7_l13
         anemoi_cfec83a3_new_o96_o320_20260323_karras40_direct -> cfec83 karras40_direct
     """
-    import re
     m = re.match(r"(?:manual|anemoi)_([0-9a-f]{8})_\w+_o\d+_o\d+_\d{8}_(.+)", label)
     if m:
         return f"{m.group(1)[:6]} {m.group(2)}"
@@ -66,51 +77,141 @@ def _shorten_run_label(label: str) -> str:
     return label
 
 
-def curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
+# ---------------------------------------------------------------------------
+# Roles, styles and labels
+# ---------------------------------------------------------------------------
+
+def curve_role(curve_key: str, *, analysis_key: str | None = None,
+               curve_roles: dict[str, str] | None = None) -> str:
+    """Role of a TC curve: ``truth``, ``model``, ``input`` or ``reference``.
+
+    ``curve_roles`` overrides the guess for named keys. Otherwise: the analysis key is the
+    truth; keys starting with "input" (or ``x_interp``) are the input; stream/grid keys
+    (``ENFO_O320_0001``, ``OPER_O1280_0001``, ``IEKM...``), "target ..." and "OPER-AN ..."
+    curves that are not the analysis are references; everything else is a model run.
+    """
+    if curve_roles and curve_key in curve_roles:
+        return curve_roles[curve_key]
+    if analysis_key is not None and curve_key == analysis_key:
+        return "truth"
+    low = str(curve_key).strip().lower()
+    if low.startswith("input") or low in ("x", "x_interp", "x_interp_0"):
+        return "input"
+    if (curve_key in REFERENCE_STYLES or curve_key in NAMED_DISTRIBUTION_STYLES
+            or _STREAM_KEY.match(low) or low.startswith(("target", "truth", "oper-an", "oper an"))):
+        return "reference"
+    return "model"
+
+
+def _reference_style_map(ref_keys) -> dict[str, dict]:
+    """Distinct house reference styles for the reference curves of one figure.
+
+    Keys with a fixed entry (plot_config.REFERENCE_STYLES, NAMED_DISTRIBUTION_STYLES) keep it;
+    the others take the first house reference style whose colour and dash are still unused.
+    """
+    out: dict[str, dict] = {}
+    used: set[tuple[str, str]] = set()
+    pending = []
+    for key in ref_keys:
+        fixed = REFERENCE_STYLES.get(key) or NAMED_DISTRIBUTION_STYLES.get(key)
+        sig = (str(fixed["color"]).lower(), str(fixed["linestyle"])) if fixed else None
+        if fixed and sig not in used:
+            out[key] = {k: fixed[k] for k in _STYLE_KEYS if k in fixed}
+            used.add(sig)
+        else:
+            pending.append(key)
+    free = [s for s in HOUSE_REFERENCE_STYLES if (s.color.lower(), str(s.linestyle)) not in used]
+    for n, key in enumerate(pending):
+        style = free[n % len(free)] if free else HOUSE_REFERENCE_STYLES[n % len(HOUSE_REFERENCE_STYLES)]
+        out[key] = style.kwargs()
+    return out
+
+
+def _figure_styles(keys, *, analysis_key, curve_roles=None) -> tuple[dict[str, dict], dict[str, str]]:
+    """``({key: plot kwargs}, {key: role})`` for every curve drawn in one figure."""
+    roles = {k: curve_role(k, analysis_key=analysis_key, curve_roles=curve_roles) for k in keys}
+    models = [k for k in keys if roles[k] == "model"]
+    refs = [k for k in keys if roles[k] == "reference"]
+    ref_map = _reference_style_map(refs)
+    styles: dict[str, dict] = {}
+    for key in keys:
+        role = roles[key]
+        if role in ("truth", "input"):
+            styles[key] = role_style(role)
+        elif role == "model":
+            styles[key] = role_style("model") if len(models) == 1 else sequence_style(models.index(key))
+        elif role == "baseline":
+            styles[key] = role_style("baseline")
+        else:
+            styles[key] = ref_map[key]
+    return styles, roles
+
+
+def _plain_name(curve_key: str) -> str:
+    """Readable name of a source key: stream/grid ids become 'ENFO O320', others stay."""
+    if curve_key in REFERENCE_STYLES:
+        return str(REFERENCE_STYLES[curve_key]["label"])
     if curve_key in NAMED_DISTRIBUTION_STYLES:
         return str(NAMED_DISTRIBUTION_STYLES[curve_key]["label"])
-    if curve_key in REFERENCE_STYLES:
-        return REFERENCE_STYLES[curve_key]["label"]
-    if curve_key == oper_key:
-        return "OPER AN"
-    if curve_key in exp_labels:
+    if _STREAM_KEY.match(str(curve_key).lower()):
+        return readable_label(curve_key)
+    return str(curve_key).replace("_", " ").strip()
+
+
+def _strip_word(name: str, *words: str) -> str:
+    low = name.lower()
+    for w in words:
+        if low.startswith(w + " "):
+            return name[len(w) + 1:].strip()
+    return name
+
+
+def _role_label(curve_key: str, role: str, exp_labels: dict[str, str], *, n_models: int = 1) -> str:
+    if curve_key in exp_labels and exp_labels[curve_key]:
         return exp_labels[curve_key]
-    return _shorten_run_label(curve_key)
+    if role == "truth":
+        return f"truth ({_strip_word(_plain_name(curve_key), 'target', 'truth')})"
+    if role == "input":
+        rest = _strip_word(_plain_name(curve_key), "input")
+        return "input" if rest.lower() in ("", "input") else f"input ({rest})"
+    if role == "model":
+        if str(curve_key).strip().lower() in _LEAKED_MODEL_KEYS:
+            return "model"
+        short = shorten_run_label(str(curve_key))
+        return short if n_models > 1 else f"model ({short})"
+    name = _plain_name(curve_key)
+    if name.lower().startswith("target "):
+        return f"{_strip_word(name, 'target')} target"
+    return name
+
+
+def curve_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str,
+                curve_roles: dict[str, str] | None = None, n_models: int = 1) -> str:
+    """Readable legend label for a curve key (never the raw key)."""
+    role = curve_role(curve_key, analysis_key=oper_key, curve_roles=curve_roles)
+    return _role_label(curve_key, role, exp_labels or {}, n_models=n_models)
 
 
 def curve_style(
     curve_key: str,
     *,
-    ml_palette: np.ndarray,
-    ml_index: int,
+    ml_palette: np.ndarray | None = None,
+    ml_index: int = 0,
+    analysis_key: str | None = None,
+    n_models: int = 1,
+    curve_roles: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    if curve_key == "OPER_O1280_0001":
-        return {"color": "#111827", "linestyle": "-", "linewidth": 2.3}
-    if curve_key in NAMED_DISTRIBUTION_STYLES:
-        return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
-    if curve_key in REFERENCE_STYLES:
-        return dict(REFERENCE_STYLES[curve_key])
-    return {
-        "color": MODEL_DISTRIBUTION_COLORS[ml_index % len(MODEL_DISTRIBUTION_COLORS)],
-        "linestyle": "-",
-        "linewidth": 3,
-    }
+    """Line style of one curve by its role (``ml_palette`` is kept for old callers, unused)."""
+    role = curve_role(curve_key, analysis_key=analysis_key, curve_roles=curve_roles)
+    if role in ("truth", "input", "baseline"):
+        return role_style(role)
+    if role == "model":
+        return role_style("model") if n_models <= 1 else sequence_style(ml_index)
+    return _reference_style_map([curve_key])[curve_key]
 
 
 def _clean_distribution_label(curve_key: str, exp_labels: dict[str, str], *, oper_key: str) -> str:
-    if curve_key == oper_key:
-        return "OPER O320" if "O320" in curve_key else "OPER AN"
-    if curve_key in NAMED_DISTRIBUTION_STYLES:
-        return str(NAMED_DISTRIBUTION_STYLES[curve_key]["label"])
-    if curve_key == "ENFO_O320_0001":
-        return "ENFO O320"
-    if curve_key == "EEFO_O96_0001":
-        return "EEFO O96"
-    if curve_key in REFERENCE_STYLES:
-        return str(REFERENCE_STYLES[curve_key]["label"]).replace("_", " ").upper()
-    if curve_key in exp_labels:
-        return exp_labels[curve_key]
-    return _shorten_run_label(curve_key)
+    return curve_label(curve_key, exp_labels, oper_key=oper_key)
 
 
 def _distribution_ml_palette(count: int) -> np.ndarray:
@@ -122,18 +223,85 @@ def _distribution_ml_palette(count: int) -> np.ndarray:
 
 
 def _distribution_style(curve_key: str, *, oper_key: str, ml_palette: np.ndarray, ml_index: int) -> dict[str, object]:
-    if curve_key == oper_key:
-        return {"color": "#000000", "linestyle": "-", "linewidth": 3.0}
-    if curve_key in NAMED_DISTRIBUTION_STYLES:
-        return dict(NAMED_DISTRIBUTION_STYLES[curve_key])
-    if curve_key == "ENFO_O320_0001":
-        return {"color": "#E69F00", "linestyle": "-.", "linewidth": 2.0}
-    if curve_key in REFERENCE_STYLES:
-        base = dict(REFERENCE_STYLES[curve_key])
-        if curve_key.startswith("EEFO"):
-            base.update({"color": "red", "linestyle": "--", "linewidth": 2.0})
-        return base
-    return {"color": ml_palette[ml_index], "linestyle": "-", "linewidth": 2.8}
+    return curve_style(curve_key, analysis_key=oper_key, ml_index=ml_index,
+                       n_models=len(ml_palette) if ml_palette is not None else 1)
+
+
+# ---------------------------------------------------------------------------
+# Shared drawing helpers
+# ---------------------------------------------------------------------------
+
+_VARIABLES = {
+    "mslp_hpa": ("msl", "hPa", "Mean sea level pressure"),
+    "wind10m_ms": ("10ff", "m s⁻¹", "10 m wind speed"),
+}
+
+
+def _var_meta(variable: str) -> tuple[str, str, str]:
+    """(variable-table key, unit, title) for an event_stats variable key."""
+    if variable in _VARIABLES:
+        return _VARIABLES[variable]
+    return ("10ff", "m s⁻¹", "10 m wind speed") if variable.startswith("wind") else ("msl", "hPa", "Mean sea level pressure")
+
+
+def _ordered_curves(event_stats: dict, *, include_truth: bool, curve_roles=None) -> tuple[list[str], dict, dict]:
+    """Curve keys in legend order (truth, models, input, references) with styles and roles."""
+    oper_key = event_stats["analysis_key"]
+    keys = list(dict.fromkeys(([oper_key] if include_truth else []) + list(event_stats["curve_order"])))
+    if not include_truth:
+        keys = [k for k in keys if k != oper_key]
+    styles, roles = _figure_styles(keys, analysis_key=oper_key, curve_roles=curve_roles)
+    rank = {"truth": 0, "model": 1, "input": 2, "baseline": 3, "reference": 4}
+    keys = sorted(keys, key=lambda k: (rank.get(roles[k], 5), keys.index(k)))
+    return keys, styles, roles
+
+
+def _curve_count(var_data: dict, key: str, oper_key: str):
+    summ = (var_data.get("oper") or {}) if key == oper_key else (var_data.get("curves", {}).get(key) or {})
+    n = (summ.get("summary") or {}).get("n")
+    return int(n) if isinstance(n, (int, float)) and n == n else None
+
+
+def _fmt_count(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1e6:.1f} million"
+    return f"{n:,}".replace(",", " ")
+
+
+def _legend(ax, var_data: dict, keys, oper_key: str, **kw) -> None:
+    """Legend whose title states the sample count (one line when every curve has the same n)."""
+    counts = {k: _curve_count(var_data, k, oper_key) for k in keys}
+    known = {n for n in counts.values() if n is not None}
+    handles, labels = ax.get_legend_handles_labels()
+    title = None
+    if len(known) == 1:
+        title = f"n = {_fmt_count(known.pop())} grid-point values per curve"
+    elif known:
+        by_label = {}
+        for line in ax.get_lines():
+            k = getattr(line, "_tc_key", None)
+            if k is not None and counts.get(k) is not None:
+                by_label[line.get_label()] = counts[k]
+        labels = [f"{lab} (n = {_fmt_count(by_label[lab])})" if lab in by_label else lab for lab in labels]
+    kw.setdefault("fontsize", 8.5)
+    ax.legend(handles, labels, title=title, title_fontsize=7.5, **kw)
+
+
+def _plot_curve(ax, x, y, *, key, label, style, alpha=None):
+    kw = dict(style)
+    if alpha is not None:
+        kw["alpha"] = alpha
+    (line,) = ax.plot(x, y, label=label, **kw)
+    line._tc_key = key  # used by _legend for per-curve counts
+    return line
+
+
+def _title(plot_config: TCPlotConfig, kind: str) -> str:
+    """Figure title from the per-event plot title, with the old 'normed pdfs' wording replaced."""
+    raw = (plot_config.plot_title or "").strip()
+    if not raw:
+        return kind[:1].upper() + kind[1:]
+    return re.sub(r"(?i)normed pdfs|TC distributions", kind, raw)
 
 
 def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
@@ -178,85 +346,73 @@ def _floor_for_log(values: np.ndarray, *, floor: float) -> np.ndarray:
     return np.where(np.isfinite(arr) & (arr > 0.0), arr, floor)
 
 
+def _hist(var_data: dict, key: str, oper_key: str) -> np.ndarray:
+    if key == oper_key:
+        return np.asarray(var_data["oper_histogram"])
+    return np.asarray(var_data["curves"][key]["histogram"])
+
+
+def _n_models(roles: dict) -> int:
+    return sum(1 for r in roles.values() if r == "model")
+
+
+def _density_axes(ax, variable: str) -> None:
+    vkey, unit, title = _var_meta(variable)
+    ax.set_xlabel(axis_label(vkey))
+    ax.set_ylabel(pdf_label(unit))
+    ax.set_title(title)
+
+
+def _ratio_axes(ax, variable: str, truth_label: str) -> None:
+    vkey, _unit, title = _var_meta(variable)
+    ax.set_xlabel(axis_label(vkey))
+    ax.set_ylabel("Probability density ratio to the truth")
+    ax.set_title(title)
+
+
+def _ratio_ylim(ax, ylim) -> None:
+    ydata_max = max(
+        (np.nanmax(line.get_ydata()) for line in ax.get_lines() if np.size(line.get_ydata())),
+        default=0.0,
+    )
+    if np.isfinite(ydata_max) and ydata_max > ylim[1]:
+        ax.set_yscale("symlog", linthresh=ylim[1])
+        ax.set_ylim(0, None)
+    else:
+        ax.set_ylim(*ylim)
+
+
+# ---------------------------------------------------------------------------
+# Figures
+# ---------------------------------------------------------------------------
+
 def plot_pdf_distribution_overview(
     plot_config: TCPlotConfig,
     *,
     event_stats: dict,
     exp_labels: dict[str, str] | None = None,
+    curve_roles: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Render raw TC distributions with log-density styling for quick visual comparison."""
     exp_labels = exp_labels or {}
     oper_key = event_stats["analysis_key"]
-    curve_order = event_stats["curve_order"]
-    var_mslp = event_stats["variables"]["mslp_hpa"]
-    var_wind = event_stats["variables"]["wind10m_ms"]
+    keys, styles, roles = _ordered_curves(event_stats, include_truth=True, curve_roles=curve_roles)
+    n_models = _n_models(roles)
 
-    mids_msl = np.asarray(var_mslp["bin_mids"])
-    mids_wind = np.asarray(var_wind["bin_mids"])
-
-    ml_like_keys = [
-        k for k in curve_order
-        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES and k != oper_key
-    ]
-    ml_palette = _distribution_ml_palette(len(ml_like_keys))
-    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
-
-    fig, axs = plt.subplots(1, 2, figsize=(13.8, 5.2), constrained_layout=True)
-
-    series = [oper_key, *curve_order]
-    seen: set[str] = set()
-    for key in series:
-        if key in seen:
-            continue
-        seen.add(key)
-        label = _clean_distribution_label(key, exp_labels, oper_key=oper_key)
-        style = _distribution_style(
-            key,
-            oper_key=oper_key,
-            ml_palette=ml_palette,
-            ml_index=ml_indices.get(key, 0),
-        )
-
-        if key == oper_key:
-            hist_msl = np.asarray(var_mslp["oper_histogram"])
-            hist_wind = np.asarray(var_wind["oper_histogram"])
-        else:
-            hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
-            hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
-
-        axs[0].plot(
-            mids_msl,
-            _positive_for_log(hist_msl),
-            label=label,
-            color=style["color"],
-            linestyle=style["linestyle"],
-            linewidth=style["linewidth"],
-            alpha=0.96,
-        )
-        axs[1].plot(
-            mids_wind,
-            _positive_for_log(hist_wind),
-            label=label,
-            color=style["color"],
-            linestyle=style["linestyle"],
-            linewidth=style["linewidth"],
-            alpha=0.96,
-        )
-
-    for ax, var_data, variable, xlabel, title in [
-        (axs[0], var_mslp, "mslp_hpa", "hPa", "Mean sea level pressure (PDF)"),
-        (axs[1], var_wind, "wind10m_ms", "m/s", "Wind speed (PDF)"),
-    ]:
-        ax.set_yscale("log")
-        ax.set_xlabel(xlabel, fontsize=12)
-        ax.set_ylabel("density", fontsize=12)
-        ax.set_title(title, fontsize=14)
-        ax.grid(True, alpha=0.25)
-        ax.legend(loc="best", fontsize=9)
-        _apply_distribution_xlim(ax, var_data, variable=variable)
-
-    title = plot_config.plot_title.replace("normed pdfs", "TC distributions")
-    fig.suptitle(title, fontsize=16)
+    with eval_style():
+        fig, axs = plt.subplots(1, 2, figsize=(13.8, 5.2), constrained_layout=True)
+        for ax, variable in zip(axs, ("mslp_hpa", "wind10m_ms")):
+            var_data = event_stats["variables"][variable]
+            mids = np.asarray(var_data["bin_mids"])
+            for key in keys:
+                _plot_curve(ax, mids, _positive_for_log(_hist(var_data, key, oper_key)), key=key,
+                            label=_role_label(key, roles[key], exp_labels, n_models=n_models),
+                            style=styles[key], alpha=0.96)
+            ax.set_yscale("log")
+            _density_axes(ax, variable)
+            _legend(ax, var_data, keys, oper_key, loc="best")
+            _apply_distribution_xlim(ax, var_data, variable=variable)
+        fig.suptitle(_title(plot_config, "TC distributions"))
     return fig
 
 
@@ -265,82 +421,39 @@ def plot_pdf_ratios(
     *,
     event_stats: dict,
     exp_labels: dict[str, str] | None = None,
+    curve_roles: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Render pre-computed event stats as a PDF ratio figure.
 
-    Takes the output of workflows.compute_event_stats().
+    Takes the output of workflows.compute_event_stats(). Every curve is divided by the
+    analysis (the truth), which is drawn as the constant 1 line.
     """
     exp_labels = exp_labels or {}
     oper_key = event_stats["analysis_key"]
-    curve_order = event_stats["curve_order"]
-    var_mslp = event_stats["variables"]["mslp_hpa"]
-    var_wind = event_stats["variables"]["wind10m_ms"]
+    keys, styles, roles = _ordered_curves(event_stats, include_truth=False, curve_roles=curve_roles)
+    n_models = _n_models(roles)
+    truth_label = _role_label(oper_key, "truth", exp_labels)
 
-    oper_hist_msl = np.asarray(var_mslp["oper_histogram"])
-    oper_hist_wind = np.asarray(var_wind["oper_histogram"])
-    mids_msl = np.asarray(var_mslp["bin_mids"])
-    mids_wind = np.asarray(var_wind["bin_mids"])
-
-    ml_like_keys = [
-        k for k in curve_order
-        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
-    ]
-    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
-    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
-
-    fig, axs = plt.subplots(1, 2, figsize=(12, 5))
-
-    for key in curve_order:
-        label = curve_label(key, exp_labels, oper_key=oper_key)
-        style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
-
-        hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
-        axs[0].plot(
-            mids_msl,
-            safe_ratio(hist_msl, oper_hist_msl),
-            label=label,
-            color=style["color"],
-            linestyle=style["linestyle"],
-            linewidth=style["linewidth"],
-        )
-
-        hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
-        axs[1].plot(
-            mids_wind,
-            safe_ratio(hist_wind, oper_hist_wind),
-            label=label,
-            color=style["color"],
-            linestyle=style["linestyle"],
-            linewidth=style["linewidth"],
-        )
-
-    # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
-    _apply_distribution_xlim(axs[0], var_mslp, variable="mslp_hpa")
-    _apply_distribution_xlim(axs[1], var_wind, variable="wind10m_ms")
-
-    for ax, mids, ylim, xlabel, title in [
-        (axs[0], mids_msl, plot_config.mslp_ylim,
-         "Mean Sea Level Pressure (hPa)", "Normalized (by analysis) Distribution MSLP"),
-        (axs[1], mids_wind, plot_config.wind_ylim,
-         "10m wind speed (m/s)", "Normalized (by analysis) Distribution 10m Wind Speed"),
-    ]:
-        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="#111827", label="OPER AN")
-        ydata_max = max(
-            (np.nanmax(line.get_ydata()) for line in ax.get_lines() if line.get_ydata().size),
-            default=0.0,
-        )
-        if np.isfinite(ydata_max) and ydata_max > ylim[1]:
-            ax.set_yscale("symlog", linthresh=ylim[1])
-            ax.set_ylim(0, None)
-        else:
-            ax.set_ylim(*ylim)
-        ax.set_xlabel(xlabel, fontsize=14)
-        ax.set_ylabel("Normalized Probability Density", fontsize=14)
-        ax.set_title(title, fontsize=14)
-        ax.legend()
-
-    fig.suptitle(plot_config.plot_title)
-    fig.tight_layout()
+    with eval_style():
+        fig, axs = plt.subplots(1, 2, figsize=(12, 5))
+        for ax, variable, ylim in ((axs[0], "mslp_hpa", plot_config.mslp_ylim),
+                                   (axs[1], "wind10m_ms", plot_config.wind_ylim)):
+            var_data = event_stats["variables"][variable]
+            mids = np.asarray(var_data["bin_mids"])
+            oper_hist = np.asarray(var_data["oper_histogram"])
+            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=truth_label,
+                        style=role_style("truth"))
+            for key in keys:
+                _plot_curve(ax, mids, safe_ratio(_hist(var_data, key, oper_key), oper_hist), key=key,
+                            label=_role_label(key, roles[key], exp_labels, n_models=n_models),
+                            style=styles[key])
+            # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
+            _apply_distribution_xlim(ax, var_data, variable=variable)
+            _ratio_ylim(ax, ylim)
+            _ratio_axes(ax, variable, truth_label)
+            _legend(ax, var_data, [oper_key, *keys], oper_key)
+        fig.suptitle(_title(plot_config, "TC distributions divided by the truth"))
+        fig.tight_layout()
     return fig
 
 
@@ -349,68 +462,31 @@ def plot_pdf_log(
     *,
     event_stats: dict,
     exp_labels: dict[str, str] | None = None,
+    curve_roles: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Render raw PDFs (no analysis normalisation) with log y-axis."""
     exp_labels = exp_labels or {}
     oper_key = event_stats["analysis_key"]
-    curve_order = event_stats["curve_order"]
-    var_mslp = event_stats["variables"]["mslp_hpa"]
-    var_wind = event_stats["variables"]["wind10m_ms"]
+    keys, styles, roles = _ordered_curves(event_stats, include_truth=True, curve_roles=curve_roles)
+    n_models = _n_models(roles)
 
-    oper_hist_msl = np.asarray(var_mslp["oper_histogram"])
-    oper_hist_wind = np.asarray(var_wind["oper_histogram"])
-    mids_msl = np.asarray(var_mslp["bin_mids"])
-    mids_wind = np.asarray(var_wind["bin_mids"])
-
-    ml_like_keys = [
-        k for k in curve_order
-        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
-    ]
-    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
-    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
-
-    fig, axs = plt.subplots(1, 2, figsize=(13.8, 5))
-
-    msl_series = [oper_hist_msl, *(np.asarray(var_mslp["curves"][key]["histogram"]) for key in curve_order)]
-    wind_series = [oper_hist_wind, *(np.asarray(var_wind["curves"][key]["histogram"]) for key in curve_order)]
-    msl_floor = _log_density_floor(*msl_series)
-    wind_floor = _log_density_floor(*wind_series)
-
-    oper_label = _clean_distribution_label(oper_key, exp_labels, oper_key=oper_key)
-    axs[0].plot(mids_msl, _floor_for_log(oper_hist_msl, floor=msl_floor), "-", linewidth=3.0, color="#000000", label=oper_label)
-    axs[1].plot(mids_wind, _floor_for_log(oper_hist_wind, floor=wind_floor), "-", linewidth=3.0, color="#000000", label=oper_label)
-
-    for key in curve_order:
-        label = curve_label(key, exp_labels, oper_key=oper_key)
-        style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
-
-        hist_msl = np.asarray(var_mslp["curves"][key]["histogram"])
-        axs[0].plot(mids_msl, _floor_for_log(hist_msl, floor=msl_floor), label=label,
-                    color=style["color"], linestyle=style["linestyle"],
-                    linewidth=style["linewidth"])
-
-        hist_wind = np.asarray(var_wind["curves"][key]["histogram"])
-        axs[1].plot(mids_wind, _floor_for_log(hist_wind, floor=wind_floor), label=label,
-                    color=style["color"], linestyle=style["linestyle"],
-                    linewidth=style["linewidth"])
-
-    _apply_distribution_xlim(axs[0], var_mslp, variable="mslp_hpa")
-    _apply_distribution_xlim(axs[1], var_wind, variable="wind10m_ms")
-
-    for ax, floor, xlabel, title in [
-        (axs[0], msl_floor, "Mean Sea Level Pressure (hPa)", "Mean sea level pressure (PDF)"),
-        (axs[1], wind_floor, "10m wind speed (m/s)", "Wind speed (PDF)"),
-    ]:
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=floor)
-        ax.grid(False)
-        ax.set_xlabel(xlabel, fontsize=14)
-        ax.set_ylabel("Probability Density", fontsize=14)
-        ax.set_title(title, fontsize=14)
-        ax.legend()
-
-    fig.suptitle(plot_config.plot_title.replace("normed pdfs", "TC distributions"))
-    fig.subplots_adjust(left=0.07, right=0.985, bottom=0.16, top=0.83, wspace=0.24)
+    with eval_style():
+        fig, axs = plt.subplots(1, 2, figsize=(13.8, 5))
+        for ax, variable in zip(axs, ("mslp_hpa", "wind10m_ms")):
+            var_data = event_stats["variables"][variable]
+            mids = np.asarray(var_data["bin_mids"])
+            floor = _log_density_floor(*(_hist(var_data, k, oper_key) for k in keys))
+            for key in keys:
+                _plot_curve(ax, mids, _floor_for_log(_hist(var_data, key, oper_key), floor=floor), key=key,
+                            label=_role_label(key, roles[key], exp_labels, n_models=n_models),
+                            style=styles[key])
+            _apply_distribution_xlim(ax, var_data, variable=variable)
+            ax.set_yscale("log")
+            ax.set_ylim(bottom=floor)
+            _density_axes(ax, variable)
+            _legend(ax, var_data, keys, oper_key)
+        fig.suptitle(_title(plot_config, "TC distributions"))
+        fig.subplots_adjust(left=0.07, right=0.985, bottom=0.14, top=0.86, wspace=0.24)
     return fig
 
 
@@ -422,6 +498,7 @@ def plot_pdf_single_variable(
     mode: str = "ratio",
     exp_labels: dict[str, str] | None = None,
     title_suffix: str = "",
+    curve_roles: dict[str, str] | None = None,
 ) -> plt.Figure:
     """Render ONE variable's tropical-cyclone distribution on its own figure.
 
@@ -437,69 +514,50 @@ def plot_pdf_single_variable(
     or ``wind10m_ms``.  ``mode`` is ``"ratio"`` for curves normalised by the
     analysis, matching ``plot_pdf_ratios``, or ``"log"`` for raw densities on a
     logarithmic axis, matching ``plot_pdf_log``.
+
+    The figure uses no layout engine (only ``tight_layout``), so callers may still
+    enlarge it and call ``subplots_adjust`` to add a caption.
     """
     if mode not in ("ratio", "log"):
         raise ValueError(f"mode must be 'ratio' or 'log', got {mode!r}")
     exp_labels = exp_labels or {}
     oper_key = event_stats["analysis_key"]
-    curve_order = event_stats["curve_order"]
     var_data = event_stats["variables"][variable]
-
     oper_hist = np.asarray(var_data["oper_histogram"])
     mids = np.asarray(var_data["bin_mids"])
-
-    ml_like_keys = [
-        k for k in curve_order
-        if k not in REFERENCE_STYLES and k not in NAMED_DISTRIBUTION_STYLES
-    ]
-    ml_palette = _distribution_ml_palette(max(1, len(ml_like_keys)))
-    ml_indices = {k: idx for idx, k in enumerate(ml_like_keys)}
-
+    keys, styles, roles = _ordered_curves(event_stats, include_truth=(mode == "log"), curve_roles=curve_roles)
+    n_models = _n_models(roles)
+    truth_label = _role_label(oper_key, "truth", exp_labels)
     is_wind = variable.startswith("wind")
-    xlabel = "10 m wind speed (m/s)" if is_wind else "Mean sea level pressure (hPa)"
     ylim = plot_config.wind_ylim if is_wind else plot_config.mslp_ylim
 
-    fig, ax = plt.subplots(figsize=(8.6, 5.6))
-
-    if mode == "log":
-        series = [oper_hist, *(np.asarray(var_data["curves"][k]["histogram"]) for k in curve_order)]
-        floor = _log_density_floor(*series)
-        ax.plot(mids, _floor_for_log(oper_hist, floor=floor), "-", linewidth=3.0,
-                color="#000000",
-                label=_clean_distribution_label(oper_key, exp_labels, oper_key=oper_key))
-
-    for key in curve_order:
-        label = curve_label(key, exp_labels, oper_key=oper_key)
-        style = curve_style(key, ml_palette=ml_palette, ml_index=ml_indices.get(key, 0))
-        hist = np.asarray(var_data["curves"][key]["histogram"])
-        values = (safe_ratio(hist, oper_hist) if mode == "ratio"
-                  else _floor_for_log(hist, floor=floor))
-        ax.plot(mids, values, label=label, color=style["color"],
-                linestyle=style["linestyle"], linewidth=style["linewidth"])
-
-    _apply_distribution_xlim(ax, var_data, variable=variable)
-    if mode == "ratio":
-        ax.plot(mids, np.ones_like(mids), "--", linewidth=2, color="#111827", label="OPER AN")
-        ydata_max = max(
-            (np.nanmax(line.get_ydata()) for line in ax.get_lines() if line.get_ydata().size),
-            default=0.0,
-        )
-        if np.isfinite(ydata_max) and ydata_max > ylim[1]:
-            ax.set_yscale("symlog", linthresh=ylim[1])
-            ax.set_ylim(0, None)
+    with eval_style():
+        fig, ax = plt.subplots(figsize=(8.6, 5.6))
+        if mode == "log":
+            floor = _log_density_floor(*(_hist(var_data, k, oper_key) for k in keys))
+            for key in keys:
+                _plot_curve(ax, mids, _floor_for_log(_hist(var_data, key, oper_key), floor=floor), key=key,
+                            label=_role_label(key, roles[key], exp_labels, n_models=n_models),
+                            style=styles[key])
+            ax.set_yscale("log")
+            _density_axes(ax, variable)
+            kind = "probability density, logarithmic axis"
+            legend_keys = keys
         else:
-            ax.set_ylim(*ylim)
-        ax.set_ylabel("Probability density divided by the analysis's", fontsize=12)
-        kind = "normalised by the analysis"
-    else:
-        ax.set_yscale("log")
-        ax.set_ylabel("Probability density", fontsize=12)
-        kind = "raw density, logarithmic axis"
+            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=truth_label,
+                        style=role_style("truth"))
+            for key in keys:
+                _plot_curve(ax, mids, safe_ratio(_hist(var_data, key, oper_key), oper_hist), key=key,
+                            label=_role_label(key, roles[key], exp_labels, n_models=n_models),
+                            style=styles[key])
+            _ratio_ylim(ax, ylim)
+            _ratio_axes(ax, variable, truth_label)
+            kind = "probability density divided by the truth"
+            legend_keys = [oper_key, *keys]
 
-    ax.set_xlabel(xlabel, fontsize=12)
-    ax.set_title(f"{'10 m wind speed' if is_wind else 'Sea level pressure'} — {kind}",
-                 fontsize=12)
-    ax.legend(fontsize=8.5)
-    fig.suptitle((plot_config.plot_title + " " + title_suffix).strip())
-    fig.tight_layout()
+        _apply_distribution_xlim(ax, var_data, variable=variable)
+        ax.set_title(f"{_var_meta(variable)[2]}: {kind}")
+        _legend(ax, var_data, legend_keys, oper_key)
+        fig.suptitle((_title(plot_config, "TC distributions") + " " + title_suffix).strip())
+        fig.tight_layout()
     return fig

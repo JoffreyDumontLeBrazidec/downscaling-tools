@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from eval._backends.tc import pdf_plot
-from eval._backends.tc.plot_config import TCPlotConfig
+from eval._backends.tc.plot_config import REFERENCE_STYLES, TCPlotConfig
+from eval.plotting import INPUT_COLOR, MODEL_COLOR, TRUTH_COLOR, role_style
 from eval.evaluators.tc import plotter
 
 
@@ -45,8 +46,8 @@ def test_tc_plotter_writes_only_overview_pages_in_canonical_order(tmp_path: Path
 
     saved_pages: list[str] = []
 
-    class RecordingPdfPages:
-        def __init__(self, path):
+    class RecordingFigureBook:
+        def __init__(self, path, *, png=False):
             self.path = path
 
         def __enter__(self):
@@ -55,15 +56,16 @@ def test_tc_plotter_writes_only_overview_pages_in_canonical_order(tmp_path: Path
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def savefig(self, fig, *, dpi=None):
+        def add(self, fig, name=None, **kwargs):
             saved_pages.append(fig._tc_page_kind)  # type: ignore[attr-defined]
+            plt.close(fig)
 
     def _figure(event_stats: dict):
         fig = plt.figure()
         fig._tc_page_kind = f"overview:{event_stats['event']}:{event_stats['support_mode']}"  # type: ignore[attr-defined]
         return fig
 
-    monkeypatch.setattr(plotter, "PdfPages", RecordingPdfPages)
+    monkeypatch.setattr(plotter, "FigureBook", RecordingFigureBook)
     monkeypatch.setattr(
         plotter,
         "plot_pdf_distribution_overview",
@@ -113,11 +115,13 @@ def test_tc_log_plot_labels_oper_o320_explicitly():
     labels = [text.get_text() for ax in fig.axes for text in ax.get_legend().get_texts()]
     plt.close(fig)
 
-    assert "OPER O320" in labels
+    # the analysis is the truth and is named by its grid, never by the raw key or "OPER AN"
+    assert "truth (operational analysis O320)" in labels
     assert "OPER AN" not in labels
+    assert "OPER_O320_0001" not in labels
 
 
-def test_tc_log_plot_uses_high_contrast_orange_for_enfo_o320():
+def test_tc_log_plot_uses_the_fixed_reference_style_for_enfo_o320():
     style = pdf_plot.curve_style(
         "ENFO_O320_0001",
         ml_palette=None,  # This reference style does not consume the model palette.
@@ -125,8 +129,9 @@ def test_tc_log_plot_uses_high_contrast_orange_for_enfo_o320():
     )
 
     assert isinstance(style["color"], str)
-    assert style["color"] == "#E69F00"
-    assert style["linestyle"] == "-."
+    assert style["color"] == REFERENCE_STYLES["ENFO_O320_0001"]["color"]
+    assert style["linestyle"] == REFERENCE_STYLES["ENFO_O320_0001"]["linestyle"]
+    assert style["color"].lower() not in {TRUTH_COLOR, MODEL_COLOR.lower(), INPUT_COLOR.lower()}
 
 
 def test_tc_overview_plot_matches_operational_distribution_style():
@@ -162,18 +167,25 @@ def test_tc_overview_plot_matches_operational_distribution_style():
         mslp_ax, wind_ax = fig.axes
         assert mslp_ax.get_xlim()[0] > mslp_ax.get_xlim()[1]
         assert wind_ax.get_xlim()[0] < wind_ax.get_xlim()[1]
-        assert mslp_ax.get_title() == "Mean sea level pressure (PDF)"
-        assert wind_ax.get_title() == "Wind speed (PDF)"
+        assert mslp_ax.get_title() == "Mean sea level pressure"
+        assert wind_ax.get_title() == "10 m wind speed"
+        assert mslp_ax.get_xlabel() == "Mean sea level pressure (hPa)"
+        assert wind_ax.get_xlabel() == "10 m wind speed (m s⁻¹)"
         assert any(line.get_visible() for ax in fig.axes for line in [*ax.get_xgridlines(), *ax.get_ygridlines()])
 
         oper_line = mslp_ax.lines[0]
-        assert oper_line.get_color() == "#000000"
+        assert oper_line.get_color() == TRUTH_COLOR
         assert oper_line.get_linestyle() == "-"
-        assert oper_line.get_linewidth() >= 3.0
+        assert oper_line.get_linewidth() == role_style("truth")["linewidth"]
 
-        enfo_line = mslp_ax.lines[1]
-        assert enfo_line.get_color() == "#E69F00"
-        assert enfo_line.get_linestyle() == "-."
+        # legend order is truth, model, input, references: the model comes second
+        model_line = mslp_ax.lines[1]
+        assert model_line.get_color() == MODEL_COLOR
+
+        enfo_line = mslp_ax.lines[2]
+        assert enfo_line.get_color() == REFERENCE_STYLES["ENFO_O320_0001"]["color"]
+        labels = [t.get_text() for t in mslp_ax.get_legend().get_texts()]
+        assert "ENFO O320" in labels and "ENFO_O320_0001" not in labels
 
         assert any(np.isnan(line.get_ydata()).any() for ax in fig.axes for line in ax.lines)
         assert all(np.all(np.asarray(line.get_ydata())[np.isfinite(line.get_ydata())] > 0.0) for ax in fig.axes for line in ax.lines)
@@ -191,3 +203,43 @@ def test_tc_plotter_rejects_stats_without_a_comparison_contract(tmp_path: Path, 
 
     with pytest.raises(ValueError, match="comparison contract"):
         plotter.plot(results_dir, {}, {"events": ["idalia"]})
+
+
+def test_tc_reference_styles_are_unique_and_avoid_role_colours():
+    pairs = [(str(v["color"]).lower(), str(v["linestyle"])) for v in REFERENCE_STYLES.values()]
+    assert len(set(pairs)) == len(pairs)
+    colours = {c for c, _ in pairs}
+    assert not colours & {TRUTH_COLOR, MODEL_COLOR.lower(), INPUT_COLOR.lower(), "black", "red"}
+    assert all("_" not in str(v["label"]) for v in REFERENCE_STYLES.values())
+
+
+def test_tc_curve_roles_and_labels_hide_raw_keys():
+    role = pdf_plot.curve_role
+    assert role("target O1280", analysis_key="target O1280") == "truth"
+    assert role("input O320", analysis_key="target O1280") == "input"
+    assert role("eval_inputs", analysis_key="target O1280") == "model"
+    assert role("ENFO_O1280_0001", analysis_key="OPER_O1280_0001") == "reference"
+    assert role("OPER_O1280_0001", analysis_key="ENFO_O1280_0001") == "reference"
+    assert role("x", analysis_key="y", curve_roles={"x": "model"}) == "model"
+    assert pdf_plot.curve_label("eval_inputs", {}, oper_key="target O1280") == "model"
+    assert pdf_plot.curve_label("input O320", {}, oper_key="target O1280") == "input (O320)"
+    assert pdf_plot.curve_label("ENFO_O1280_0001", {}, oper_key="OPER_O1280_0001") == "ENFO O1280"
+
+
+def test_tc_several_models_take_distinct_sequence_colours():
+    styles, roles = pdf_plot._figure_styles(["an", "run_a", "run_b", "input"], analysis_key="an")
+    assert roles == {"an": "truth", "run_a": "model", "run_b": "model", "input": "input"}
+    assert styles["run_a"]["color"] != styles["run_b"]["color"]
+    assert MODEL_COLOR not in (styles["run_a"]["color"], styles["run_b"]["color"])
+
+
+def test_tc_plotter_labels_bundle_curves_from_the_lane():
+    lane = {"prepare": {"args": {
+        "lres_sfc_grib": "r/eefo_o320_0001_date{d}_sfc.grib",
+        "target_sfc_grib": "r/enfo_o1280_0001_date{d}_sfc_y.grib",
+    }}}
+    ev_cfg = {"input_label": "input O320", "target_nc_label": "target O1280"}
+    stats = {"analysis_key": "target O1280", "curve_order": ["eval_inputs", "input O320"]}
+    labels, roles = plotter.curve_labels_and_roles(stats, lane, ev_cfg)
+    assert labels == {"target O1280": "truth (ENFO O1280)", "input O320": "input (EEFO O320)"}
+    assert roles == {"input O320": "input"}

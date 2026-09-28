@@ -6,12 +6,10 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-
 from eval._backends.tc.pdf_plot import plot_pdf_distribution_overview, plot_pdf_log, plot_pdf_ratios
 from eval._backends.tc.plot_config import resolve_plot_config
 from eval.evaluators.tc.comparison_contract import validate_comparison_contracts
+from eval.plotting import FigureBook, readable_label
 
 LOG = logging.getLogger(__name__)
 
@@ -58,6 +56,55 @@ def _validate_event_contract(event_stats: dict) -> None:
     validate_comparison_contracts({"prediction": candidate, "reference": reference})
 
 
+def _bundle_source_names(lane_config: dict) -> tuple[str | None, str | None]:
+    """Readable names ("EEFO O320", "ENFO O1280") of the lane's input and target GRIB products."""
+    from eval.evaluators.tc.runner import _expid_from_grib_path
+
+    args = ((lane_config or {}).get("prepare") or {}).get("args") or {}
+    names = []
+    for key in ("lres_sfc_grib", "target_sfc_grib"):
+        expid = _expid_from_grib_path(args.get(key))
+        names.append(readable_label(expid) if expid else None)
+    return names[0], names[1]
+
+
+def curve_labels_and_roles(event_stats: dict, lane_config: dict, eval_config: dict):
+    """Legend labels and roles for the curves of one event, from the lane configuration.
+
+    The bundle's target (``target_nc_label``) is the truth when it is the analysis the
+    statistics are normalised by; the bundle's input (``input_label``) is the input; the
+    remaining non-reference curve is the model run, whatever key it was stored under
+    (for example the predictions folder name ``eval_inputs``).
+    """
+    input_name, target_name = _bundle_source_names(lane_config)
+    analysis_key = event_stats.get("analysis_key")
+    input_label = eval_config.get("input_label", "input")
+    target_labels = {eval_config.get("target_nc_label"), eval_config.get("analysis_display_label"),
+                     eval_config.get("target_label")} - {None}
+    labels: dict[str, str] = {}
+    roles: dict[str, str] = {}
+    if analysis_key and target_name and analysis_key in target_labels:
+        labels[analysis_key] = f"truth ({target_name})"
+    for key in event_stats.get("curve_order", []):
+        if key == input_label:
+            roles[key] = "input"
+            if input_name:
+                labels[key] = f"input ({input_name})"
+        elif key in target_labels and key != analysis_key:
+            roles[key] = "reference"
+            if target_name:
+                labels[key] = f"{target_name} target"
+    run_label = eval_config.get("run_label")
+    if run_label and run_label in event_stats.get("curve_order", []):
+        roles.setdefault(run_label, "model")
+    return labels, roles
+
+
+def _page_title(plot_cfg, event: str, mode: str) -> str:
+    base = plot_cfg.plot_title.replace("normed pdfs", "").strip() or event.capitalize()
+    return f"{base}: TC distributions of grid-point values in the event box ({mode} support)"
+
+
 def plot(
     results_dir: str | Path,
     lane_config: dict,
@@ -87,15 +134,16 @@ def plot(
         _validate_event_contract(event_stats)
 
     pdf_path = plots_dir / "all_tc_distributions.pdf"
-    with PdfPages(pdf_path) as pdf:
+    with FigureBook(pdf_path, png=True) as book:
         for event_stats in ordered_events:
             event = str(event_stats["event"])
             mode = str(event_stats["support_mode"])
             plot_cfg = resolve_plot_config(event, eval_config)
-            plot_cfg = replace(plot_cfg, plot_title=f"{plot_cfg.plot_title.replace('normed pdfs', 'TC distributions')} [{mode}]")
-            fig = plot_pdf_distribution_overview(plot_cfg, event_stats=event_stats)
-            pdf.savefig(fig, dpi=300)
-            plt.close(fig)
+            plot_cfg = replace(plot_cfg, plot_title=_page_title(plot_cfg, event, mode))
+            labels, roles = curve_labels_and_roles(event_stats, lane_config, eval_config)
+            fig = plot_pdf_distribution_overview(plot_cfg, event_stats=event_stats,
+                                                 exp_labels=labels, curve_roles=roles)
+            book.add(fig, name=f"{event}_{mode}")
             LOG.info("Plotted overview TC distribution for event=%s mode=%s", event, mode)
 
     LOG.info("TC plots written to %s", pdf_path)
