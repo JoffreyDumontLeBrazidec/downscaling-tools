@@ -3,9 +3,10 @@
 Self-contained (numpy/scipy/xarray/matplotlib). For a downscaling eval run it renders,
 on TOP of the usual regional plots:
 
-  1. <out>/storm_maps.png       : 10 m wind + MSL fields, TRUTH vs MODEL vs INPUT, zoomed on
-                                  the deepest-eye storm instance (same colour scale per row).
-  2. <out>/full_spectra.png     : full radial power spectrum at ALL wavenumbers for 10u/10v/msl,
+  1. <out>/storm_maps.png (+ .pdf) : 10 m wind speed + MSL pressure maps (coastlines, borders,
+                                  labelled grid lines), TRUTH vs MODEL vs INPUT, zoomed on the
+                                  deepest-eye storm instance (one shared colour scale per row).
+  2. <out>/full_spectra.png (+ .pdf) : full radial power spectrum at ALL wavenumbers for 10u/10v/msl,
                                   model vs truth vs input, with the 40-150 km fine band shaded (off the 16.7 km Nyquist).
   3. <out>/storm_maps_spectra.json : fine-band (40-150 km, off-Nyquist) power ratio to truth + log-log slope.
 
@@ -15,6 +16,9 @@ Method (identical to the T24 regional box-FFT audit, tc_o320_o1280):
   binning into log-spaced wavenumber bins -> PER-MEMBER spectra averaged (never the ensemble mean).
   Truth = each member's target `y`; input = `x_interp`. Windowed box-FFT powers are the model/truth
   ratio under byte-identical processing only (NOT comparable to global healpix C_l boards).
+
+Figures are drawn in the house style of ``eval.plotting`` (role colours, variable-table colour
+maps and units) by ``plot_full_spectra`` and ``plot_storm_maps``, which only draw.
 
 CLI:  python -m eval._backends.storm_maps.render <predictions_dir> --out <dir> \
         [--event-box lat0,lat1,lon0,lon1] [--event-name idalia] [--step 072]
@@ -102,6 +106,109 @@ class BoxSpectra:
         return float(np.nansum(spec_m[fine]) / np.nansum(spec_t[fine]))
 
 
+def _ogrid(npoints: int) -> str | None:
+    """Name of the octahedral reduced Gaussian grid with ``npoints`` points (4N^2 + 36N), if any."""
+    n = int(round((-36.0 + np.sqrt(1296.0 + 16.0 * float(npoints))) / 8.0))
+    return f"O{n}" if n > 0 and 4 * n * n + 36 * n == int(npoints) else None
+
+
+def _column_titles(grids: dict | None) -> dict:
+    """Panel titles for truth / model / input, naming their grids when they are known."""
+    g = grids or {}
+    hres, lres = g.get("hres"), g.get("lres")
+    on = f" ({hres})" if hres else ""
+    if lres and hres:
+        inp = f"Input ({lres} interpolated to {hres})"
+    else:
+        inp = "Input (interpolated to the target grid)"
+    return {"truth": f"Truth{on}", "model": f"Model{on}", "input": inp}
+
+
+def plot_full_spectra(out_dir, wavelengths_km, spec: dict, jout: dict, *, run_name: str = "",
+                      step: str = "", grid_shape=None, max_nn_km: float | None = None,
+                      n_curves: int | None = None, grids: dict | None = None):
+    """``full_spectra.png`` (+ ``.pdf``): radial box-FFT power spectra per field, roles styled."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from eval.plotting import AXIS, eval_style, role_style, save_figure, variable_spec
+
+    titles = _column_titles(grids)
+    labels = {"truth": titles["truth"].replace("Truth", "truth"),
+              "model": titles["model"].replace("Model", "model"),
+              "input": titles["input"].replace("Input", "input")}
+    nlab = f" (n = {n_curves} member fields)" if n_curves else ""
+    with eval_style():
+        fig, axes = plt.subplots(1, len(FIELDS), figsize=(16.5, 5.6), layout="constrained")
+        for ax, f in zip(np.atleast_1d(axes), FIELDS):
+            ax.axvspan(40, 150, color="0.88", zorder=0, lw=0,
+                       label="40-150 km band of the fine-band ratio")
+            for c in ("truth", "model", "input"):
+                ax.loglog(wavelengths_km, spec[f][c], label=labels[c] + nlab, **role_style(c))
+            ax.invert_xaxis()
+            ax.grid(which="both", alpha=.3)
+            ratio = jout["fine_band_40_150km_ratio_to_truth"][f]
+            sl = jout["slope_fine_40_150km"][f]
+            ax.set_title(f"{variable_spec(f).name}\nfine-band power model / truth {ratio:.2f}; "
+                         f"slope model {sl['model']:.2f}, truth {sl['truth']:.2f}", fontsize=10)
+            ax.set_xlabel(AXIS["wavelength"] + ", large scales left, fine scales right")
+            if f == FIELDS[0]:
+                ax.set_ylabel("Spectral power, mean over members (arbitrary units)")
+                ax.legend(fontsize=8, loc="lower left")
+        where = f"{run_name}, " if run_name else ""
+        shape = f"regular {grid_shape[0]} x {grid_shape[1]} grid of {GRID_DEG} degrees" if grid_shape else ""
+        nn = f", largest nearest-neighbour distance {max_nn_km:.1f} km" if max_nn_km is not None else ""
+        fig.suptitle(f"Full radial power spectra in the storm box, {where}{'lead time ' + str(int(step)) + ' h' if str(step).isdigit() else 'step ' + str(step)}\n"
+                     f"box FFT on a {shape}{nn}; per-member spectra averaged", fontsize=11)
+        save_figure(fig, Path(out_dir) / "full_spectra.png", close=True)
+
+
+def plot_storm_maps(out_dir, lon_grid, lat_grid, fields: dict, *, eye_lat: float, eye_lon: float,
+                    event_name: str = "storm", file_name: str = "", member: int = 0,
+                    deepest_hpa: float | None = None, wind_max: float, msl_min: float,
+                    msl_max: float, grids: dict | None = None):
+    """``storm_maps.png`` (+ ``.pdf``): wind speed and MSL pressure, truth / model / input.
+
+    ``fields`` maps ``truth``/``model``/``input`` to ``(wind_ms, msl_hpa)`` 2-D arrays on the
+    regular ``lat_grid`` x ``lon_grid`` (1-D, degrees). Each row shares one colour scale; the
+    limits are the ones the caller computed from the truth.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import cartopy.crs as ccrs
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from eval.plotting import (add_row_colorbar, axis_label, eval_style, extend_for, map_grid,
+                               save_figure, variable_spec)
+
+    order = ("truth", "model", "input")
+    titles = _column_titles(grids)
+    extent = (float(np.min(lon_grid)), float(np.max(lon_grid)),
+              float(np.min(lat_grid)), float(np.max(lat_grid)))
+    rows = (("10ff", 0, Normalize(vmin=0.0, vmax=wind_max)),
+            ("msl", 1, Normalize(vmin=msl_min, vmax=msl_max)))
+    pc = ccrs.PlateCarree()
+    with eval_style():
+        fig, ax = map_grid(2, 3, extent, panel_size=(4.3, 4.0), resolution="50m")
+        ax[0, 0].get_gridspec().update(hspace=0.34)   # room for the second row's two-line titles
+        for var, k, norm in rows:
+            spec = variable_spec(var)
+            mesh = None
+            for j, c in enumerate(order):
+                a = ax[k, j]
+                mesh = a.pcolormesh(lon_grid, lat_grid, fields[c][k], cmap=spec.field_cmap(),
+                                    norm=norm, shading="nearest", transform=pc, rasterized=True)
+                a.plot(eye_lon, eye_lat, "+", color="k", ms=11, mew=1.8, transform=pc, zorder=7)
+                a.set_title(f"{titles[c]}\n{spec.name}", fontsize=10)
+            add_row_colorbar(fig, mesh, ax[k, :], axis_label(var),
+                             extend=extend_for(norm, *[fields[c][k] for c in order]))
+        deep = f", truth minimum {deepest_hpa:.1f} hPa" if deepest_hpa is not None else ""
+        fig.suptitle(f"Storm maps, {event_name}: {file_name}, member {member + 1}{deep}\n"
+                     "member and time where the truth storm is deepest; one colour scale per row; "
+                     "+ marks the truth pressure minimum", fontsize=11)
+        save_figure(fig, Path(out_dir) / "storm_maps.png", close=True)
+
+
 def _open(nc):
     import xarray as xr
     return xr.open_dataset(nc, decode_timedelta=False)
@@ -109,9 +216,6 @@ def _open(nc):
 
 def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="storm",
            step="072", storm_box=None):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     predictions_dir = Path(predictions_dir)
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     ncs = sorted(predictions_dir.glob(f"predictions_*_step{step}.nc"))
@@ -124,7 +228,10 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
     d0 = _open(ncs[0])
     lat = d0.lat_hres.values.astype(np.float64); lon = d0.lon_hres.values.astype(np.float64)
     ws = list(d0.weather_state.values); si = {f: ws.index(f) for f in FIELDS}
-    nmem = int(d0.sizes["ensemble_member"]); d0.close()
+    nmem = int(d0.sizes["ensemble_member"])
+    grids = {"hres": d0.attrs.get("grid") or _ogrid(d0.sizes.get("grid_point_hres", lat.size)),
+             "lres": _ogrid(d0.sizes["grid_point_lres"]) if "grid_point_lres" in d0.sizes else None}
+    d0.close()
     box_mask = ((lat >= event_box[0] - RIM_DEG) & (lat <= event_box[1] + RIM_DEG) &
                 (lon >= event_box[2] - RIM_DEG) & (lon <= event_box[3] + RIM_DEG))
     bidx = np.where(box_mask)[0]
@@ -161,23 +268,9 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
         jout["slope_fine_40_150km"][f] = {c: round(bs.slope(spec[f][c]), 3) for c in ("model", "truth", "input")}
     (out_dir / "storm_maps_spectra.json").write_text(json.dumps(jout, indent=2))
 
-    col = {"model": "#1a73e8", "truth": "#2e7d32", "input": "#9aa0a6"}
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5.2), dpi=130)
-    for ax, f in zip(axes, FIELDS):
-        for c, lab in (("truth", "truth (target y)"), ("model", "model"), ("input", "input (interp)")):
-            ax.loglog(bs.wl, spec[f][c], color=col[c], lw=2.4 if c == "truth" else 1.8,
-                      ls=":" if c == "input" else "-", label=lab)
-        ax.axvspan(40, 150, color="#f1c40f", alpha=.13)
-        ax.invert_xaxis(); ax.grid(which="both", alpha=.18)
-        ax.set_title(f"{f}  (fine ratio {jout['fine_band_40_150km_ratio_to_truth'][f]:.2f}, "
-                     f"slope {jout['slope_fine_40_150km'][f]['model']:.2f} vs truth {jout['slope_fine_40_150km'][f]['truth']:.2f})",
-                     fontsize=9.5)
-        ax.set_xlabel("wavelength (km) — large ← → fine")
-        if f == "10u":
-            ax.set_ylabel("radial power (per-member avg)"); ax.legend(fontsize=8, loc="lower left")
-    fig.suptitle(f"Full radial power spectra — {predictions_dir.parent.name} (box-FFT, step {step}, "
-                 f"grid {bs.ny}x{bs.nx}, maxNN {bs.max_nn_km:.1f}km)", fontsize=10.5, y=1.02)
-    fig.tight_layout(); fig.savefig(out_dir / "full_spectra.png", bbox_inches="tight"); plt.close(fig)
+    plot_full_spectra(out_dir, bs.wl, spec, jout, run_name=predictions_dir.parent.name, step=step,
+                      grid_shape=(bs.ny, bs.nx), max_nn_km=bs.max_nn_km,
+                      n_curves=len(acc[FIELDS[0]]["model"]), grids=grids)
 
     # --- maps: deepest storm instance, wind + msl, truth vs model vs input ---
     from scipy.spatial import cKDTree
@@ -204,21 +297,10 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
 
     wmax = np.nanpercentile(wind("truth"), 99.7)
     mmin, mmax = np.nanmin(mslf("truth")), np.nanpercentile(mslf("truth"), 98)
-    ext = [lo.min(), lo.max(), la.min(), la.max()]
-    order = [("truth", "TRUTH (target)"), ("model", "MODEL"), ("input", "input (interp)")]
-    fig, ax = plt.subplots(2, 3, figsize=(13, 8.2), dpi=130)
-    for j, (c, lab) in enumerate(order):
-        im0 = ax[0, j].imshow(wind(c), origin="lower", extent=ext, cmap="turbo", vmin=0, vmax=wmax, aspect="auto")
-        im1 = ax[1, j].imshow(mslf(c), origin="lower", extent=ext, cmap="viridis", vmin=mmin, vmax=mmax, aspect="auto")
-        ax[0, j].set_title(lab, fontsize=11)
-        for a in (ax[0, j], ax[1, j]):
-            a.plot(elon, elat, "k+", ms=9, mew=1.4); a.set_xticks([]); a.set_yticks([])
-    ax[0, 0].set_ylabel("10 m wind (m/s)", fontsize=11); ax[1, 0].set_ylabel("MSL (hPa)", fontsize=11)
-    fig.colorbar(im0, ax=ax[0, :].tolist(), fraction=0.013, pad=0.01, label="m/s")
-    fig.colorbar(im1, ax=ax[1, :].tolist(), fraction=0.013, pad=0.01, label="hPa")
-    fig.suptitle(f"Storm maps — {event_name}, {nc.name}, member {mem + 1} (truth-deepest, "
-                 f"{deepest[0] / 100.0:.1f} hPa) · same colour scale per row · '+' = truth eye", fontsize=10.5, y=0.99)
-    fig.savefig(out_dir / "storm_maps.png", bbox_inches="tight"); plt.close(fig)
+    plot_storm_maps(out_dir, lo, la, {c: (wind(c), mslf(c)) for c in ("truth", "model", "input")},
+                    eye_lat=float(elat), eye_lon=float(elon), event_name=event_name,
+                    file_name=nc.name, member=mem, deepest_hpa=deepest[0] / 100.0,
+                    wind_max=float(wmax), msl_min=float(mmin), msl_max=float(mmax), grids=grids)
     LOG.info("storm_maps wrote %s", out_dir)
     return out_dir
 
