@@ -1,6 +1,7 @@
 """Saved trajectory panels, invoked only by the opt-in eval.cli membermaps mode."""
 from __future__ import annotations
 
+from datetime import datetime
 import hashlib
 import importlib.util
 import json
@@ -90,6 +91,8 @@ def run(args):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             rec, _, _, _ = T.analyse_case(geom, fld, "franklin", first_guess=(latg, long))
+        if not all(np.isfinite(rec[k]) for k in ("lat_p", "lon_p")):
+            raise ValueError(f"Invalid pressure centre: {title}")
         L = T.LocalGrid(geom, latg, long)
         up, vp = L.wind_to_plane(fld["10u"][L.idx], fld["10v"][L.idx])
         gr = L.interp(np.c_[up, vp])
@@ -117,6 +120,7 @@ def run(args):
         p["offset"] = float(T.gc_dist(target["lat_p"], target["lon_p"], r["lat_p"], r["lon_p"]))
         manifest["panels"].append({"title": p["title"], "centre_lat": r["lat_p"], "centre_lon": r["lon_p"],
                                    "offset_from_target_km": p["offset"], "spiral_angle_deg": r["orient_ws_sgn_med"]})
+    init = datetime.strptime(str(args.date) + str(args.time).zfill(4), "%Y%m%d%H%M")
     for field in ("ws", "band"):
         fig, axes = plt.subplots(2, 2, figsize=(12, 11))
         fig.subplots_adjust(left=.075, right=.87, bottom=.11, top=.865, hspace=.29, wspace=.23)
@@ -146,7 +150,7 @@ def run(args):
             axes.flat[-1].quiverkey(q, .50, .072, 30, "30 m/s", coordinates="figure", labelpos="E")
         view = "Full 10 m wind speed and direction" if field == "ws" else "40–150 km wind-speed features"
         fig.suptitle(f'{args.region_tag.capitalize()} — {view}', fontsize=17, y=.965)
-        fig.text(.5, .925, f'Initialization {args.date} {args.time} UTC · lead +{args.step} h · member {args.member:02d} · free seed {args.seed}',
+        fig.text(.5, .925, f'Initialization {init:%d %b %Y %H:%M} UTC · lead +{args.step} h · member {args.member:02d} · free seed {args.seed}',
                  ha="center", fontsize=11)
         note = "Colours show full speed; arrows show wind direction and strength." if field == "ws" else "Colours show a difference-of-Gaussians band-pass, not model-minus-input residuals."
         fig.text(.5, .044, note, ha="center", fontsize=10)
