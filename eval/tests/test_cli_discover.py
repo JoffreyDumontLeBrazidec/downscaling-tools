@@ -76,3 +76,12 @@ def test_describe_reads_lane_keys_from_the_lane_files(capsys):
     info = json.loads(_run(["describe", "tc", "--json"], capsys))
     assert "support_mode" in info["lane_keys_set"]
     assert "support_mode" in info["config_keys_read"]
+
+
+@pytest.mark.parametrize("name", sorted(cli.commands()))
+def test_every_command_renders_its_help(name, capsys):
+    """--help must print and exit 0 for every command (membermaps once crashed on a bare percent sign)."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main([name, "--help"])
+    assert exc.value.code == 0
+    assert "usage: python -m eval.cli " + name in capsys.readouterr().out
