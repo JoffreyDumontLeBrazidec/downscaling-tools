@@ -15,7 +15,9 @@ nearest-neighbour index (--baseline-grib-tpl / --interp-index-cache); tp is
 output-only on the o2560 lane, so its exported x_interp is all zero and is
 never plotted as data.
 
-All axes are in mm per 6h window.
+All axes are in mm per 6h window. Colours follow the house roles: truth black,
+model red, interpolated input blue dashed. The pages go to one PDF plus a PNG
+per page in ``<name>_pages/``.
 
 Usage:
     python -m eval._backends.precip.tp_histogram_comparison \\
@@ -44,8 +46,11 @@ from eval._backends.precip.sources import (
 HIGHLIGHT_STEPS = [6, 24, 48, 72, 120]
 
 SERIES = ("input", "truth", "pred")
-SERIES_LABEL = {"input": "Interp input", "truth": "Truth", "pred": "Pred"}
-SERIES_COLOR = {"input": "#555555", "truth": "C0", "pred": "C1"}
+SERIES_LABEL = {"input": "Input (interpolated)", "truth": "Truth", "pred": "Model"}
+# Colours by role (eval.plotting.roles): truth black, model red, input blue dashed.
+SERIES_ROLE = {"input": "input", "truth": "truth", "pred": "model"}
+SERIES_COLOR = {"input": "#1f77b4", "truth": "#000000", "pred": "#d62728"}
+TP_LABEL = "Total precipitation, 6 h accumulation (mm)"
 
 MM = 1000.0
 
@@ -220,14 +225,43 @@ def _overall(step_data: dict, key: str) -> StreamingDist:
     return total
 
 
+def _count_text(n: int) -> str:
+    """Compact sample count: 1234 -> "1234", 2.5e6 -> "2.5 M"."""
+    if n >= 1_000_000:
+        return f"{n / 1e6:.1f} M"
+    if n >= 10_000:
+        return f"{n / 1e3:.0f} k"
+    return str(n)
+
+
+def _series_label(key: str, dist: StreamingDist) -> str:
+    return f"{SERIES_LABEL[key]} (n = {_count_text(dist.n)} values)"
+
+
+def _series_style(key: str, **overrides) -> dict:
+    from eval.plotting import role_style
+
+    return role_style(SERIES_ROLE[key], **overrides)
+
+
+def _emit(pdf, fig, name: str) -> None:
+    """Add a page to a FigureBook (PDF + PNG) or, for old callers, to a PdfPages."""
+    if hasattr(pdf, "add"):
+        pdf.add(fig, name=name)
+    else:
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 def _plot_density(ax, dist: StreamingDist, label: str, color: str, *,
-                  xlim, log: bool):
+                  xlim, log: bool, **style):
     if dist.empty:
         return
     centers = 0.5 * (dist.EDGES[:-1] + dist.EDGES[1:])
     mask = (centers >= xlim[0]) & (centers <= xlim[1])
-    ax.step(centers[mask], dist.density()[mask], where="mid",
-            color=color, linewidth=1.4, label=label)
+    kw = {"color": color, "linewidth": 1.4}
+    kw.update(style)
+    ax.step(centers[mask], dist.density()[mask], where="mid", label=label, **kw)
     if log:
         ax.set_yscale("log")
     ax.set_xlim(*xlim)
@@ -235,105 +269,119 @@ def _plot_density(ax, dist: StreamingDist, label: str, color: str, *,
 
 def matrix_page(pdf: PdfPages, step_data: dict, run_label: str):
     """Rows x 3 cols (linear / log / CDF), one row per HIGHLIGHT_STEP."""
+    from eval.plotting import AXIS, eval_style
+    from eval.plotting.labels import pdf_label
+
     rows = [s for s in HIGHLIGHT_STEPS if s in step_data]
     if not rows:
         return
     n = len(rows)
-    fig, axes = plt.subplots(n, 3, figsize=(15, 3.0 * n + 1.0), squeeze=False)
-    fig.suptitle(f"TP distributions per lead — input / truth / pred — {run_label}",
-                 fontsize=11)
-    for r, step in enumerate(rows):
-        truth = step_data[step]["truth"]
-        vmax = max(truth.quantile(99.9), 1.0) if not truth.empty else \
-            max(step_data[step]["pred"].quantile(99.9), 1.0)
-        ax_lin, ax_log, ax_cdf = axes[r]
-        for k in SERIES:
-            dist = step_data[step][k]
-            _plot_density(ax_lin, dist, SERIES_LABEL[k], SERIES_COLOR[k],
-                          xlim=(0, vmax), log=False)
-            _plot_density(ax_log, dist, SERIES_LABEL[k], SERIES_COLOR[k],
-                          xlim=(0, vmax), log=True)
-            if not dist.empty:
-                centers = 0.5 * (dist.EDGES[:-1] + dist.EDGES[1:])
-                ax_cdf.plot(centers, dist.cdf(), color=SERIES_COLOR[k],
-                            linewidth=1.2, label=SERIES_LABEL[k])
-                ax_cdf.set_xlim(0, vmax)
-        ax_lin.set_ylabel(f"step {step:03d}h\nDensity", fontsize=9)
-        ax_cdf.set_ylabel("CDF", fontsize=9)
-        if r == 0:
-            ax_lin.set_title("Linear", fontsize=10)
-            ax_log.set_title("Log-y", fontsize=10)
-            ax_cdf.set_title("CDF", fontsize=10)
-            ax_lin.legend(fontsize=8, loc="upper right")
-        if r == n - 1:
-            for ax in (ax_lin, ax_log, ax_cdf):
-                ax.set_xlabel("TP (mm / 6h)", fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    pdf.savefig(fig)
-    plt.close(fig)
+    with eval_style():
+        fig, axes = plt.subplots(n, 3, figsize=(15, 3.0 * n + 1.0), squeeze=False)
+        fig.suptitle(f"Total precipitation distributions by lead time: {run_label}")
+        for r, step in enumerate(rows):
+            truth = step_data[step]["truth"]
+            vmax = max(truth.quantile(99.9), 1.0) if not truth.empty else \
+                max(step_data[step]["pred"].quantile(99.9), 1.0)
+            ax_lin, ax_log, ax_cdf = axes[r]
+            for k in SERIES:
+                dist = step_data[step][k]
+                style = _series_style(k, linewidth=1.6)
+                label = _series_label(k, dist)
+                _plot_density(ax_lin, dist, label, style.pop("color"),
+                              xlim=(0, vmax), log=False, **style)
+                style = _series_style(k, linewidth=1.6)
+                _plot_density(ax_log, dist, label, style.pop("color"),
+                              xlim=(0, vmax), log=True, **style)
+                if not dist.empty:
+                    centers = 0.5 * (dist.EDGES[:-1] + dist.EDGES[1:])
+                    ax_cdf.plot(centers, dist.cdf(), label=label, **_series_style(k, linewidth=1.6))
+                    ax_cdf.set_xlim(0, vmax)
+            ax_lin.set_ylabel(f"Lead time {step} h\n{pdf_label('mm')}", fontsize=9)
+            ax_log.set_ylabel(pdf_label("mm"), fontsize=9)
+            ax_cdf.set_ylabel(AXIS["cdf"], fontsize=9)
+            ax_lin.legend(fontsize=7, loc="upper right")
+            if r == 0:
+                ax_lin.set_title("Linear density axis")
+                ax_log.set_title("Logarithmic density axis")
+                ax_cdf.set_title("Cumulative distribution")
+            if r == n - 1:
+                for ax in (ax_lin, ax_log, ax_cdf):
+                    ax.set_xlabel(TP_LABEL)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        _emit(pdf, fig, "by_lead_time")
 
 
 def all_steps_overlay_page(pdf: PdfPages, step_data: dict, run_label: str):
-    """One column per series, all leads overlaid (viridis gradient)."""
+    """One column per series, all leads overlaid; the colour encodes lead time (viridis)."""
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    from eval.plotting import AXIS, eval_style
+    from eval.plotting.labels import pdf_label
+
     steps = sorted(step_data.keys())
     if not steps:
         return
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle(f"All-steps overlay — {run_label}", fontsize=11)
-    cmap = plt.cm.viridis(np.linspace(0, 1, len(steps)))
-    truth_total = _overall(step_data, "truth")
-    vmax = max(truth_total.quantile(99.9), 1.0) if not truth_total.empty else \
-        max(_overall(step_data, "pred").quantile(99.9), 1.0)
-    for col, k in enumerate(SERIES):
-        ax = axes[col]
-        for i, step in enumerate(steps):
-            dist = step_data[step][k]
-            if dist.empty:
-                continue
-            label = f"{step:03d}h" if step in HIGHLIGHT_STEPS else None
-            centers = 0.5 * (dist.EDGES[:-1] + dist.EDGES[1:])
-            mask = centers <= vmax
-            ax.step(centers[mask], dist.density()[mask], where="mid",
-                    color=cmap[i], linewidth=0.9, alpha=0.7, label=label)
-        ax.set_title(SERIES_LABEL[k], fontsize=10)
-        ax.set_xlabel("TP (mm / 6h)")
-        ax.set_yscale("log")
-        ax.set_xlim(0, vmax)
-        if col == 0:
-            ax.set_ylabel("Density (log)")
-        if col == 2:
-            ax.legend(fontsize=7, ncol=2, title="lead", loc="upper right")
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
-    pdf.savefig(fig)
-    plt.close(fig)
+    with eval_style():
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
+        fig.suptitle(f"Total precipitation distribution at every lead time: {run_label}")
+        lead_norm = Normalize(vmin=min(steps), vmax=max(steps) if max(steps) > min(steps) else min(steps) + 1)
+        cmap = plt.get_cmap("viridis")
+        truth_total = _overall(step_data, "truth")
+        vmax = max(truth_total.quantile(99.9), 1.0) if not truth_total.empty else \
+            max(_overall(step_data, "pred").quantile(99.9), 1.0)
+        for col, k in enumerate(SERIES):
+            ax = axes[col]
+            n_total = 0
+            for step in steps:
+                dist = step_data[step][k]
+                if dist.empty:
+                    continue
+                n_total += dist.n
+                centers = 0.5 * (dist.EDGES[:-1] + dist.EDGES[1:])
+                mask = centers <= vmax
+                ax.step(centers[mask], dist.density()[mask], where="mid",
+                        color=cmap(lead_norm(step)), linewidth=1.0, alpha=0.8)
+            ax.set_title(f"{SERIES_LABEL[k]} (n = {_count_text(n_total)} values)")
+            ax.set_xlabel(TP_LABEL)
+            ax.set_yscale("log")
+            ax.set_xlim(0, vmax)
+            if col == 0:
+                ax.set_ylabel(f"{pdf_label('mm')}, logarithmic axis")
+        cb = fig.colorbar(ScalarMappable(norm=lead_norm, cmap=cmap), ax=list(axes), pad=0.015, fraction=0.03)
+        cb.set_label(AXIS["lead"])
+        _emit(pdf, fig, "all_lead_times")
 
 
 def compact_page(pdf: PdfPages, step_data: dict, run_label: str):
     """One-page summary: overall distribution + wet-tail zoom (all series)."""
+    from eval.plotting import eval_style
+    from eval.plotting.labels import pdf_label
+
     dists = {k: _overall(step_data, k) for k in SERIES}
     if dists["pred"].empty:
         return
     ref = dists["truth"] if not dists["truth"].empty else dists["pred"]
     q995 = ref.quantile(99.5)
     xmax = max(5.0, ref.quantile(99.95), dists["pred"].quantile(99.95))
-    steps = ", ".join(f"{s}h" for s in sorted(step_data))
-    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.6), constrained_layout=True)
-    fig.suptitle(f"TP distribution | {run_label} | steps {steps}", fontsize=12)
-    for ax, title, xlim in [
-        (axes[0], "Overall distribution", (0.0, max(2.0, q995))),
-        (axes[1], "Wet-tail zoom", (max(0.25, q995 * 0.15), xmax)),
-    ]:
-        for k in SERIES:
-            if not dists[k].empty:
-                _plot_density(ax, dists[k], SERIES_LABEL[k], SERIES_COLOR[k],
-                              xlim=xlim, log=True)
-        ax.grid(True, which="major", alpha=0.25)
-        ax.set_title(title, fontsize=12)
-        ax.set_xlabel("TP accumulation (mm / 6h)")
-        ax.set_ylabel("Density")
-    axes[1].legend(frameon=False, loc="upper right")
-    pdf.savefig(fig)
-    plt.close(fig)
+    steps = ", ".join(f"{s}" for s in sorted(step_data))
+    with eval_style():
+        fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.6), constrained_layout=True)
+        fig.suptitle(f"Total precipitation distribution: {run_label} (lead times {steps} h)")
+        for ax, title, xlim in [
+            (axes[0], "Overall distribution", (0.0, max(2.0, q995))),
+            (axes[1], "Wet tail", (max(0.25, q995 * 0.15), xmax)),
+        ]:
+            for k in SERIES:
+                if not dists[k].empty:
+                    style = _series_style(k, linewidth=1.8)
+                    _plot_density(ax, dists[k], _series_label(k, dists[k]), style.pop("color"),
+                                  xlim=xlim, log=True, **style)
+            ax.set_title(title)
+            ax.set_xlabel(TP_LABEL)
+            ax.set_ylabel(f"{pdf_label('mm')}, logarithmic axis")
+        axes[1].legend(loc="upper right")
+        _emit(pdf, fig, "overall")
 
 
 def main():
@@ -378,7 +426,9 @@ def main():
           f" | input/baseline={'yes' if has_input else 'NO'}")
 
     args.out_pdf.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(str(args.out_pdf)) as pdf:
+    from eval.plotting import FigureBook
+
+    with FigureBook(args.out_pdf, png=True) as pdf:
         if args.style == "compact":
             compact_page(pdf, step_data, args.run_label)
         else:
