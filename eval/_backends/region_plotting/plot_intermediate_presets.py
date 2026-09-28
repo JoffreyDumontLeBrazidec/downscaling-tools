@@ -5,20 +5,17 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
 import xarray as xr
-from anemoi.training.diagnostics.maps import Coastlines
-from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.tri import LinearTriInterpolator, Triangulation
 
 from .local_plotting import plot_x_y
-from .plotting.config import RENDER_DPI
+from .plotting.config import RENDER_DPI  # noqa: F401  (kept for importers)
+from eval.plotting import save_figure
 from .plotting.coordinate_utils import get_region_ds
 from .plotting.datetime_utils import is_valid_date
 
 
-CONTINENTS = Coastlines()
 DEFAULT_WEATHER = ["10u", "10v", "2t", "msl"]
 
 
@@ -104,68 +101,85 @@ def _plot_minimal_pcolor_contour(
             f"Could not infer lon/lat variables for '{var_name}' from attrs={da.attrs} and dims={da.dims}."
         )
 
-    nrows, ncols = len(weather_states), len(model_vars)
-    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 4, nrows * 3))
-    if nrows == 1:
-        axs = np.array([axs])
-    if ncols == 1:
-        axs = np.array([axs]).T
+    import cartopy.crs as ccrs
+    from eval.plotting import add_geography, convert, eval_style, variable_spec
+    from eval.plotting.maps_helpers import (
+        colorbar_beside,
+        region_panel_title,
+        region_projection,
+        set_grid_ticks,
+        set_inner_extent,
+    )
 
+    nrows, ncols = len(weather_states), len(model_vars)
     shared = ["x", "y", "y_pred"]
+    if "region" in ds_region.attrs:
+        lat_min, lat_max, lon_min, lon_max = (float(v) for v in ds_region.attrs["region"])
+    else:
+        lon_all = np.asarray(ds_region["lon_hres"].values, dtype=float)
+        lat_all = np.asarray(ds_region["lat_hres"].values, dtype=float)
+        lon_min, lon_max, lat_min, lat_max = lon_all.min(), lon_all.max(), lat_all.min(), lat_all.max()
+    extent = (lon_min, lon_max, lat_min, lat_max)
+    proj = region_projection(*extent)
+
+    def display(mv: str, w: str) -> np.ndarray:
+        return np.asarray(convert(w, ds_region[mv].sel(weather_state=w).values), dtype=float)
+
     shared_minmax: dict[str, tuple[float, float]] = {}
     for w in weather_states:
-        vals = []
-        for mv in shared:
-            vals.append(ds_region[mv].sel(weather_state=w).values.ravel())
-        allv = np.concatenate(vals)
+        allv = np.concatenate([display(mv, w).ravel() for mv in shared])
         shared_minmax[w] = (float(np.nanmin(allv)), float(np.nanmax(allv)))
 
-    for i, w in enumerate(weather_states):
-        for j, mv in enumerate(model_vars):
-            ax = axs[i, j]
-            lon_name, lat_name = _resolve_lon_lat_names(mv)
-            lon = ds_region[lon_name].values
-            lat = ds_region[lat_name].values
-            field = ds_region[mv].sel(weather_state=w).values
+    with eval_style():
+        fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 3.4 + 1.0, nrows * 3.0 + 0.8),
+                                subplot_kw={"projection": proj}, squeeze=False)
+        for i, w in enumerate(weather_states):
+            spec = variable_spec(w)
+            shared_mesh = None
+            for j, mv in enumerate(model_vars):
+                ax = axs[i, j]
+                lon_name, lat_name = _resolve_lon_lat_names(mv)
+                lon = ds_region[lon_name].values
+                lat = ds_region[lat_name].values
+                field = display(mv, w)
 
-            if mv in shared:
-                vmin, vmax = shared_minmax[w]
-            else:
-                vmin, vmax = float(np.nanmin(field)), float(np.nanmax(field))
-            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
-                vmin, vmax = vmin - 1e-6, vmax + 1e-6
+                if mv in shared:
+                    vmin, vmax = shared_minmax[w]
+                else:
+                    # Intermediate diffusion states carry noise of their own amplitude,
+                    # so each keeps its own scale (with its own colour bar).
+                    vmin, vmax = float(np.nanmin(field)), float(np.nanmax(field))
+                if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin == vmax:
+                    vmin, vmax = vmin - 1e-6, vmax + 1e-6
 
-            gx = np.linspace(float(np.min(lon)), float(np.max(lon)), 140)
-            gy = np.linspace(float(np.min(lat)), float(np.max(lat)), 120)
-            lon2, lat2 = np.meshgrid(gx, gy)
-            tri = Triangulation(lon, lat)
-            grid = np.asarray(LinearTriInterpolator(tri, field)(lon2, lat2))
+                gx = np.linspace(float(np.min(lon)), float(np.max(lon)), 140)
+                gy = np.linspace(float(np.min(lat)), float(np.max(lat)), 120)
+                lon2, lat2 = np.meshgrid(gx, gy)
+                tri = Triangulation(lon, lat)
+                grid = np.asarray(LinearTriInterpolator(tri, field)(lon2, lat2))
 
-            levels = np.linspace(vmin, vmax, 21)
-            im = ax.pcolormesh(lon2, lat2, grid, shading="gouraud", cmap="viridis", vmin=vmin, vmax=vmax)
-            ax.contour(lon2, lat2, grid, levels=levels, colors="black", linewidths=0.35)
-            cbar = fig.colorbar(im, ax=ax, orientation="vertical", pad=0.05)
-            cbar.ax.tick_params(labelsize=10)
-
-            ax.set_title(f"{mv} - {w}", fontsize=10)
-            ax.xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            ax.tick_params(axis="both", which="major", labelsize=10)
-            if "region" in ds_region.attrs:
-                ax.set_xlim(ds_region.attrs["region"][2], ds_region.attrs["region"][3])
-                ax.set_ylim(ds_region.attrs["region"][0], ds_region.attrs["region"][1])
-            CONTINENTS.plot_continents(ax)
-            ax.set_aspect("auto")
-            ax.grid(False)
-            ax.patch.set_edgecolor("black")
-            ax.patch.set_linewidth(2)
-
-    for i in range(nrows):
-        axs[i, 0].set_ylabel("Latitude (°)", fontsize=12)
-    for j in range(ncols):
-        axs[-1, j].set_xlabel("Longitude (°)", fontsize=12)
-    fig.suptitle(title, fontsize=16, y=1.0)
-    fig.tight_layout()
+                levels = np.linspace(vmin, vmax, 21)
+                set_inner_extent(ax, extent)
+                im = ax.pcolormesh(lon2, lat2, grid, shading="gouraud", cmap=spec.field_cmap(),
+                                   vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree(), rasterized=True)
+                ax.contour(lon2, lat2, grid, levels=levels, colors="black", linewidths=0.35,
+                           transform=ccrs.PlateCarree())
+                gl = add_geography(ax, label_size=6.5)
+                set_grid_ticks(gl, extent)
+                if gl is not None:
+                    gl.left_labels = j == 0
+                    gl.bottom_labels = i == nrows - 1
+                ax.set_title(region_panel_title(mv), fontsize=9)
+                if mv in shared:
+                    shared_mesh = im
+                else:
+                    colorbar_beside(fig, [ax], im, spec.label, width=0.006, pad=0.004)
+            if shared_mesh is not None:
+                shared_axes = [axs[i, j] for j, mv in enumerate(model_vars) if mv in shared]
+                colorbar_beside(fig, [shared_axes[-1]], shared_mesh, spec.label, width=0.006, pad=0.004)
+            axs[i, 0].text(-0.25, 0.5, spec.name, transform=axs[i, 0].transAxes, rotation=90,
+                           ha="center", va="center", fontsize=9, fontweight="bold")
+        fig.suptitle(title)
     return fig
 
 
@@ -199,26 +213,22 @@ def main() -> None:
                 list_model_variables=model_vars,
                 weather_states=weather_states,
                 consistent_cbar=["x", "y", "y_pred"],
-                title=f"{args.region} | sample 0",
+                title=f"{args.region.replace('_', ' ').title()}, sample 0",
             )
         else:
             fig = _plot_minimal_pcolor_contour(
                 ds_region=ds_region,
                 model_vars=model_vars,
                 weather_states=weather_states,
-                title=f"{args.region} | sample 0",
+                title=f"{args.region.replace('_', ' ').title()}, sample 0",
             )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.suffix.lower() == ".pdf":
-        with PdfPages(out) as pdf:
-            pdf.savefig(fig)
-    else:
-        fig.savefig(out, dpi=RENDER_DPI)
-
+    # House saving: 150 dpi, rasterised meshes; the requested file keeps its name and format.
+    save_figure(fig, out, formats=(out.suffix.lower().lstrip(".") or "png",))
     if args.also_png:
-        fig.savefig(Path(args.also_png), dpi=RENDER_DPI)
+        save_figure(fig, Path(args.also_png), formats=("png",))
     plt.close(fig)
 
     print(out)

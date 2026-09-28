@@ -323,12 +323,12 @@ def read_grib_field(path: str | Path, spec: dict) -> tuple[np.ndarray, np.ndarra
 def _projection(extent, proj_lon: float, proj_lat: float):
     """Shared projection rule; an explicit --proj-lon/--proj-lat recentres the Lambert cone."""
     import cartopy.crs as ccrs
-    from eval.plotting import select_projection
+    from eval.plotting.maps_helpers import lambert_for, region_projection
 
-    proj = select_projection(*extent)
+    proj = region_projection(*extent)
     if isinstance(proj, ccrs.PlateCarree):
         return proj
-    return ccrs.LambertConformal(central_longitude=proj_lon, central_latitude=proj_lat)
+    return lambert_for(proj_lon, proj_lat)
 
 
 def _style_for(spec: dict, field: str):

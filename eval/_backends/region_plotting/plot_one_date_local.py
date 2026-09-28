@@ -5,10 +5,12 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import xarray as xr
-from matplotlib.backends.backend_pdf import PdfPages
+
+from eval.plotting import save_figure
+from eval.plotting.maps_helpers import dataset_grid_names
 
 from .local_plotting import plot_x_y
-from .plotting.config import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES, RENDER_DPI
+from .plotting.config import DEFAULT_MODEL_VARIABLES, DEFAULT_WEATHER_STATES, RENDER_DPI  # noqa: F401
 from .plotting.coordinate_utils import default_region_for_grid, get_region_ds, infer_grid_type
 from .plotting.manifest import write_manifest
 from .plotting.metadata import build_run_plot_title
@@ -158,6 +160,7 @@ def render_prediction_file(
         if not selected_weather_states:
             raise ValueError(f"No weather states available in {predictions_path}")
 
+        input_grid, target_grid = dataset_grid_names(ds_member)
         ds_region = get_region_ds(ds_member, resolved_region)
         title = _build_title(
             ds_member,
@@ -171,21 +174,23 @@ def render_prediction_file(
             list_model_variables=selected_model_variables,
             weather_states=selected_weather_states,
             title=title,
+            input_grid=input_grid,
+            target_grid=target_grid,
         )
 
     out_path = _absolute_path(out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if out_path.suffix.lower() == ".pdf":
-        with PdfPages(out_path) as pdf:
-            pdf.savefig(fig)
-    else:
-        fig.savefig(out_path, dpi=RENDER_DPI)
-
+    # House saving: 150 dpi, rasterised map meshes inside the PDF. The requested file is
+    # written in its own format; without --also-png the PNG/PDF sibling is added next to it.
+    out_fmt = out_path.suffix.lower().lstrip(".") or "png"
+    save_figure(fig, out_path, formats=(out_fmt,))
     png_path: Path | None = None
     if also_png:
         png_path = _absolute_path(also_png)
         png_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(png_path, dpi=RENDER_DPI)
+        save_figure(fig, png_path, formats=("png",))
+    else:
+        save_figure(fig, out_path, formats=("png",) if out_fmt == "pdf" else ("pdf",))
 
     plt.close(fig)
     return out_path, png_path

@@ -9,7 +9,7 @@ import xarray as xr
 import matplotlib.pyplot as plt
 
 from eval.plotting import FigureBook, save_figure
-from eval.plotting.maps_helpers import octahedral_grid_name
+from eval.plotting.maps_helpers import dataset_grid_names
 
 from .local_plotting import LocalInferencePlotter, plot_x_y
 from .plotting.config import (
@@ -48,11 +48,7 @@ def _step_meta_title(region_name: str, step, forecast_ref_time) -> str:
 
 def _grid_names(ds: xr.Dataset) -> tuple[str | None, str | None]:
     """(input grid, target grid) names such as ("O320", "O1280") for the panel titles."""
-    input_grid = octahedral_grid_name(int(ds.sizes["grid_point_lres"])) if "grid_point_lres" in ds.sizes else None
-    target = str(ds.attrs.get("grid", "")).strip() or None
-    if target is None and "grid_point_hres" in ds.sizes:
-        target = octahedral_grid_name(int(ds.sizes["grid_point_hres"]))
-    return input_grid, target
+    return dataset_grid_names(ds)
 
 
 def _select_prediction_variables(

@@ -9,6 +9,10 @@ These complement ``eval.plotting.maps``; they were written for the map figures o
   longitude-latitude grid by nearest neighbour and draw it as one rasterised mesh. Nearest
   neighbour keeps the native resolution visible (a coarse input looks coarse) and leaves
   cells without a nearby source point empty instead of inventing values.
+* ``region_projection`` is ``eval.plotting.select_projection`` made safe for the southern
+  hemisphere: Cartopy's ``LambertConformal`` defaults (standard parallels 33 and 45 N,
+  cut-off at 30 S) cannot show a box south of 30 S, so for boxes centred south of the
+  equator the cone is mirrored (parallels 33 and 45 S, cut-off at 30 N).
 * ``set_inner_extent`` shows the largest projected rectangle that lies inside a
   longitude-latitude box, so a Lambert map of a cropped region has no empty corners.
 * ``colorbar_beside`` adds one colour bar to the right of a group of map panels, aligned
@@ -25,10 +29,14 @@ import numpy as np
 
 __all__ = [
     "octahedral_grid_name",
+    "dataset_grid_names",
+    "region_projection",
+    "lambert_for",
     "regrid_nearest",
     "draw_unstructured",
     "set_inner_extent",
     "colorbar_beside",
+    "set_grid_ticks",
     "region_panel_title",
     "is_difference_key",
 ]
@@ -41,6 +49,42 @@ def octahedral_grid_name(n_points: int) -> str | None:
         return None
     big_n = int(round((-36.0 + math.sqrt(36.0 ** 2 + 16.0 * n)) / 8.0))
     return f"O{big_n}" if 4 * big_n * (big_n + 9) == n else None
+
+
+def dataset_grid_names(ds) -> tuple[str | None, str | None]:
+    """(input grid, target grid) of a predictions dataset, e.g. ("O320", "O1280").
+
+    Uses the ``grid`` attribute for the target when present, else the point counts of
+    ``grid_point_lres`` / ``grid_point_hres``. Call it before cropping to a region.
+    """
+    sizes = getattr(ds, "sizes", {})
+    input_grid = octahedral_grid_name(int(sizes["grid_point_lres"])) if "grid_point_lres" in sizes else None
+    target = str(getattr(ds, "attrs", {}).get("grid", "")).strip() or None
+    if target is None and "grid_point_hres" in sizes:
+        target = octahedral_grid_name(int(sizes["grid_point_hres"]))
+    return input_grid, target
+
+
+def lambert_for(central_longitude: float, central_latitude: float):
+    """Lambert conformal projection whose cone opens towards the hemisphere of the centre."""
+    import cartopy.crs as ccrs
+
+    if central_latitude < 0:
+        return ccrs.LambertConformal(central_longitude=central_longitude, central_latitude=central_latitude,
+                                     standard_parallels=(-33.0, -45.0), cutoff=30)
+    return ccrs.LambertConformal(central_longitude=central_longitude, central_latitude=central_latitude)
+
+
+def region_projection(west: float, east: float, south: float, north: float):
+    """``select_projection`` (the shared rule) with a southern-hemisphere cone when needed."""
+    import cartopy.crs as ccrs
+
+    from .maps import select_projection
+
+    proj = select_projection(west, east, south, north)
+    if isinstance(proj, ccrs.LambertConformal) and (south + north) / 2.0 < 0:
+        return lambert_for((west + east) / 2.0, (south + north) / 2.0)
+    return proj
 
 
 def _lon_near(lon: np.ndarray, west: float, east: float) -> np.ndarray:
@@ -136,6 +180,27 @@ def set_inner_extent(ax, extent, *, n: int = 60):
         ax.set_extent([west, east, south, north], crs=ccrs.PlateCarree())
         return
     ax.set_extent([x0, x1, y0, y1], crs=proj)
+
+
+def set_grid_ticks(gl, extent, *, nbins: int = 4) -> None:
+    """Round, evenly spaced grid-line positions for a small box (also across the antimeridian).
+
+    Cartopy's automatic locator can leave a regional map with a single longitude label;
+    this picks about ``nbins`` round values inside ``(west, east, south, north)``.
+    """
+    if gl is None:
+        return
+    from matplotlib.ticker import FixedLocator, MaxNLocator
+
+    west, east, south, north = (float(v) for v in extent)
+    if east < west:
+        east += 360.0
+    lons = MaxNLocator(nbins=nbins, steps=[1, 2, 2.5, 5, 10]).tick_values(west, east)
+    lats = MaxNLocator(nbins=nbins, steps=[1, 2, 2.5, 5, 10]).tick_values(south, north)
+    lons = [((v + 180.0) % 360.0) - 180.0 for v in lons if west - 1e-9 <= v <= east + 1e-9]
+    lats = [v for v in lats if south - 1e-9 <= v <= north + 1e-9]
+    gl.xlocator = FixedLocator(lons)
+    gl.ylocator = FixedLocator(lats)
 
 
 def colorbar_beside(fig, axes, mappable, label: str, *, extend: str = "neither",

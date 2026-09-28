@@ -67,3 +67,41 @@ def test_difference_keys():
     assert is_difference_key("x_interp_minus_y")
     assert not is_difference_key("y_pred_0")
     assert not is_difference_key("x_interp_0")
+
+
+@pytest.mark.parametrize("extent", [
+    (168.5, 180.5, -38.5, -30.5),   # New Zealand north, south of Cartopy's default 30 S cut-off
+    (-75.5, -63.5, -37.5, -29.5),   # central Andes
+    (35.5, 47.5, 5.5, 13.5),        # Horn of Africa
+    (15.0, 25.0, -5.0, 5.0),        # across the equator
+])
+def test_region_projection_can_show_every_box(extent):
+    pytest.importorskip("cartopy")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from eval.plotting.maps_helpers import region_projection, set_inner_extent
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1, projection=region_projection(*extent))
+    set_inner_extent(ax, extent)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    assert np.isfinite([x0, x1, y0, y1]).all() and x1 > x0 and y1 > y0
+    plt.close(fig)
+
+
+def test_set_grid_ticks_gives_several_round_longitudes_across_the_antimeridian():
+    from types import SimpleNamespace
+
+    from eval.plotting.maps_helpers import set_grid_ticks
+
+    gl = SimpleNamespace(xlocator=None, ylocator=None)
+    set_grid_ticks(gl, (168.5, 180.5, -38.5, -30.5))
+    lons = list(gl.xlocator.locs)
+    lats = list(gl.ylocator.locs)
+    assert len(lons) >= 3 and len(lats) >= 3
+    assert all(-180.0 <= v <= 180.0 for v in lons)
+    assert all(float(v).is_integer() or (2 * v).is_integer() for v in lons)

@@ -201,12 +201,14 @@ def plot_x_y(
     "O320", "O1280") name the grids in the panel titles; ``truth_label`` /
     ``input_label`` replace them when the source is known ("ENFO O1280").
     """
-    from eval.plotting import convert, convert_difference, eval_style, extend_for, select_projection
+    from eval.plotting import convert, convert_difference, eval_style, extend_for
     from eval.plotting import add_geography, shared_norm, symmetric_norm, variable_spec
     from eval.plotting.maps_helpers import (
         colorbar_beside,
         draw_unstructured,
         region_panel_title,
+        region_projection,
+        set_grid_ticks,
         set_inner_extent,
     )
 
@@ -241,7 +243,7 @@ def plot_x_y(
                 values,
             )
 
-    proj = select_projection(*extent)
+    proj = region_projection(*extent)
     panel_w = 3.1
     west, east, south, north = extent
     aspect = max(0.45, min(1.6, (north - south) / max((east - west) * np.cos(np.radians(0.5 * (south + north))), 1e-6)))
@@ -270,6 +272,7 @@ def plot_x_y(
                 axs[i, j] = ax
                 set_inner_extent(ax, extent)
                 gl = add_geography(ax, label_size=6.5)
+                set_grid_ticks(gl, extent)
                 if gl is not None:
                     gl.left_labels = j == 0
                     gl.bottom_labels = i == nrows - 1
@@ -294,7 +297,8 @@ def plot_x_y(
                 if group == "difference":
                     norm, _ = symmetric_norm(*arrays, q=99.5)
                     cmap = spec.error_cmap()
-                    label = f"{spec.name} difference ({spec.unit})" if spec.unit else f"{spec.name} difference"
+                    # The row label names the variable; a short label keeps rows from colliding.
+                    label = f"Difference ({spec.unit})" if spec.unit else "Difference"
                 elif spec.signed:
                     norm = shared_norm(*arrays, q=(0.5, 99.5), centered=True)
                     cmap = spec.field_cmap()
