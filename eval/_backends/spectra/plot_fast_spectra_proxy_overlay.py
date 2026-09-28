@@ -138,22 +138,25 @@ def main() -> None:
     ratio = np.maximum(a_proxy, 1e-30) / np.maximum(a_ref, 1e-30)
     log10_abs = np.abs(np.log10(ratio))
 
-    fig, ax = plt.subplots(figsize=(7.2, 4.2))
-    ax.plot(w, a_ref, color="#1f77b4", linewidth=2.0, label="Reference (metview)")
-    ax.plot(w, a_proxy, color="#d62728", linewidth=1.8, linestyle="--", label=f"Proxy ({model})")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("Zonal wavenumber")
-    ax.set_ylabel("Power amplitude")
-    ax.set_title(f"{args.param} @ {args.level} | {expid} {date} step={step} n={number}")
-    ax.grid(color="grey", linestyle="--", linewidth=0.25, alpha=0.6)
-    ax.legend(loc="best", frameon=False, fontsize=8)
-    fig.tight_layout()
+    from eval.plotting import AXIS, eval_style, role_style, save_figure, variable_spec
 
     stem = f"proxy_overlay_{expid}_{date}_{step}_{args.param}_{args.level}_n{number}"
     plot_path = out_dir / f"{stem}.pdf"
-    fig.savefig(plot_path, dpi=240, bbox_inches="tight")
-    plt.close(fig)
+    with eval_style():
+        fig, ax = plt.subplots(figsize=(7.6, 4.4))
+        # the Metview transform is the reference (truth role); the proxy is what is evaluated
+        ax.plot(w, a_ref, label="Reference spectrum (Metview transform)", **role_style("truth"))
+        ax.plot(w, a_proxy, label=f"Proxy spectrum ({model})", **role_style("model"))
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(AXIS["wavenumber"])
+        ax.set_ylabel("Spectral amplitude (native unit)")
+        name = variable_spec(f"{args.param}_{args.level}").name
+        ax.set_title(f"{name}: {expid}, {date}, lead time {step} h, member {number}")
+        ax.legend(loc="best")
+        fig.tight_layout()
+        # the PDF as before plus a PNG of the same name
+        save_figure(fig, plot_path, close=True)
 
     metrics = {
         "coefficients_json": str(coeff_path),

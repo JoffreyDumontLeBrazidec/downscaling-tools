@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import cmcrameri.cm as cmc
 import warnings
 
 from eval.paths import reference_spectra_dir
@@ -120,14 +119,12 @@ def ls2wn(x):
 
 FIG_HEI = 3.7
 FIG_FAC = 1.718
-GRID = {"color": "grey", "linestyle": "--", "linewidth": 0.22}
 LEG_LOC = "lower left"
 LEG_FS = 8
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 date_list = pd.date_range(pd.Timestamp(DATE_START), pd.Timestamp(DATE_END), freq=DATE_FREQ)
 expvers = EXPVER_CONFIGS
-colors = [cmc.batlow(i / (len(expvers) - 1)) for i in range(len(expvers))] if expvers else []
 
 
 def get_paths(conf, dir_name, date_in, step, param, level, number):
@@ -149,72 +146,98 @@ def mean_curve(curves):
     return np.mean(trimmed, axis=0)
 
 
-for cfg in PARAM_CONFIGS:
-    param, level, dir_name = cfg["param"], cfg["level"], cfg["dir_name"]
-    print(f"{param} {level}")
-    fig, ax = plt.subplots(figsize=(FIG_HEI * FIG_FAC, FIG_HEI))
-    ax2 = ax.secondary_xaxis("top", functions=(wn2ls, wn2ls))
-    ax2.set_xlabel("Approximate scale [km]")
-    ax2.set_xscale("log")
-    any_data = False
-    for ie, conf in enumerate(expvers):
-        missing_counter = 0
-        found_counter = 0
-        step_w_curves, step_a_curves = [], []
-        for step in STEPS_TO_PLOT:
-            mw, mA = [], []
-            for number in ENSEMBLE_MEMBERS:
-                W, A = [], []
-                for d in date_list:
-                    date_in = d.year * 10000 + d.month * 100 + d.day
-                    wfp, afp = get_paths(conf, dir_name, date_in, step, param, level, number)
-                    try:
-                        w = np.load(wfp)
-                        a = np.load(afp)
-                        W.append(w)
-                        A.append(a)
-                        found_counter += 1
-                    except FileNotFoundError:
-                        missing_counter += 1
+def _curve_style(conf, index):
+    """House role styles: one AI run red (several: sequence colours), EEFO = input, ENFO = truth."""
+    from eval.plotting import reference_style, role_style, sequence_style
 
-                if W and A:
-                    mw.append(np.stack(W, axis=1))
-                    mA.append(np.stack(A, axis=1))
-            if missing_counter > 0:
-                warnings.warn(
-                    f"Missing {missing_counter}/{missing_counter + found_counter} files for "
-                    f"{conf['name']} (param={param}, level={level}, step={step})"
+    n_ai = sum(1 for c in expvers if c["type"] == "ai")
+    if conf["type"] == "ai":
+        rank = [c for c in expvers if c["type"] == "ai"].index(conf)
+        return role_style("model") if n_ai == 1 else sequence_style(rank)
+    name = conf["name"].lower()
+    if name.startswith("eefo"):
+        return role_style("input")
+    if name.startswith("enfo"):
+        return role_style("truth")
+    return reference_style(index)
+
+
+def main():
+    from eval.plotting import AXIS, eval_style, save_figure, variable_spec
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+
+    with eval_style():
+        _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_to_power,
+                  spectral_power_label)
+
+
+def _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_to_power,
+              spectral_power_label):
+    for cfg in PARAM_CONFIGS:
+        param, level, dir_name = cfg["param"], cfg["level"], cfg["dir_name"]
+        print(f"{param} {level}")
+        fig, ax = plt.subplots(figsize=(FIG_HEI * FIG_FAC, FIG_HEI))
+        any_data = False
+        for ie, conf in enumerate(expvers):
+            missing_counter = 0
+            found_counter = 0
+            step_w_curves, step_a_curves = [], []
+            for step in STEPS_TO_PLOT:
+                mw, mA = [], []
+                for number in ENSEMBLE_MEMBERS:
+                    W, A = [], []
+                    for d in date_list:
+                        date_in = d.year * 10000 + d.month * 100 + d.day
+                        wfp, afp = get_paths(conf, dir_name, date_in, step, param, level, number)
+                        try:
+                            w = np.load(wfp)
+                            a = np.load(afp)
+                            W.append(w)
+                            A.append(a)
+                            found_counter += 1
+                        except FileNotFoundError:
+                            missing_counter += 1
+
+                    if W and A:
+                        mw.append(np.stack(W, axis=1))
+                        mA.append(np.stack(A, axis=1))
+                if missing_counter > 0:
+                    warnings.warn(
+                        f"Missing {missing_counter}/{missing_counter + found_counter} files for "
+                        f"{conf['name']} (param={param}, level={level}, step={step})"
+                    )
+                if mw and mA:
+                    avg_w = np.mean([arr.mean(axis=1) for arr in mw], axis=0)
+                    avg_a = np.mean([arr.mean(axis=1) for arr in mA], axis=0)
+                    step_w_curves.append(avg_w)
+                    step_a_curves.append(avg_a)
+            if step_w_curves and step_a_curves:
+                avg_w = mean_curve(step_w_curves)
+                avg_a = mean_curve(step_a_curves)
+                iok = range(3, len(avg_w))
+                x = avg_w[iok]
+                y = avg_a[iok]
+                ax.plot(
+                    x,
+                    amplitude_to_power(dir_name, y),
+                    label=f"{conf.get('label', conf['name'])} (n = {found_counter} fields)",
+                    **_curve_style(conf, ie),
                 )
-            if mw and mA:
-                avg_w = np.mean([arr.mean(axis=1) for arr in mw], axis=0)
-                avg_a = np.mean([arr.mean(axis=1) for arr in mA], axis=0)
-                step_w_curves.append(avg_w)
-                step_a_curves.append(avg_a)
-        if step_w_curves and step_a_curves:
-            avg_w = mean_curve(step_w_curves)
-            avg_a = mean_curve(step_a_curves)
-            iok = range(3, len(avg_w))
-            x = avg_w[iok]
-            y = avg_a[iok]
-            ax.plot(
-                x,
-                y,
-                color=colors[ie],
-                linestyle=TYPE_LINESTYLE.get(conf["type"], "-"),
-                label=conf.get("label", conf["name"]),
-            )
-            any_data = True
-    ax.set_yscale("log")
-    ax.set_ylabel("Mean power")
-    ax.set_xscale("log")
-    ax.set_xlabel("Zonal wavenumber")
-    if any_data:
-        ax.set_xlim([x.min(), x.max() * 1.1])
-    ax.grid(**GRID)
-    ax.legend(loc=LEG_LOC, frameon=False, fontsize=LEG_FS)
-    ax.set_title(f"{param} at level {level}")
-    plt.tight_layout()
-    out = f"{OUTPUT_DIR}/spectra_{param}_{level}.pdf"
-    plt.savefig(out, dpi=300, bbox_inches="tight")
-    print(f"Saved {out}")
-    plt.close()
+                any_data = True
+        ax.set_yscale("log")
+        ax.set_ylabel(spectral_power_label(dir_name))
+        ax.set_xscale("log")
+        ax.set_xlabel(AXIS["wavenumber"])
+        if any_data:
+            ax.set_xlim([x.min(), x.max() * 1.1])
+            add_wavelength_axis(ax)
+        ax.legend(loc=LEG_LOC, fontsize=LEG_FS)
+        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectrum")
+        fig.tight_layout()
+        out = f"{OUTPUT_DIR}/spectra_{param}_{level}.pdf"
+        save_figure(fig, out, close=True)   # the PDF as before plus a PNG, 150 dpi
+        print(f"Saved {out}")
+
+
+if __name__ == "__main__":
+    main()

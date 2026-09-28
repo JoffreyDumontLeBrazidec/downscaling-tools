@@ -352,6 +352,16 @@ def _plot_case_method(
     noise_stds: np.ndarray,
     out_path: Path,
 ) -> None:
+    from eval.plotting import AXIS, eval_style, role_style, save_figure, variable_spec
+
+    with eval_style():
+        _draw_case_method(case_id, method, spectra, noise_stds, out_path,
+                          AXIS=AXIS, role_style=role_style, save_figure=save_figure,
+                          variable_spec=variable_spec)
+
+
+def _draw_case_method(case_id, method, spectra, noise_stds, out_path, *, AXIS, role_style,
+                      save_figure, variable_spec) -> None:
     plot_vars = list(spectra.keys())
     ncols = 2
     nrows = max(1, (len(plot_vars) + ncols - 1) // ncols)
@@ -363,34 +373,34 @@ def _plot_case_method(
         ax = axes[iax]
         cur = spectra[var]
         x_clean, y_clean = cur[0.0]
-        ax.plot(x_clean[3:], y_clean[3:], color="black", linewidth=2.2, label="clean")
+        ax.plot(x_clean[3:], y_clean[3:], label="clean field", **role_style("truth"))
         for i, std in enumerate(noise_stds):
             x, y = cur[float(std)]
-            col = cmap(i / max(1, len(noise_stds) - 1))
+            # noise level is a quantity: sequential viridis, stopping short of its yellow end
+            col = cmap(0.85 * i / max(1, len(noise_stds) - 1))
             ax.plot(x[3:], y[3:], color=col, linewidth=1.05, alpha=0.95, label=f"{std:.1e}")
 
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.grid(color="0.75", linestyle="--", linewidth=0.35, alpha=0.8)
-        ax.set_title(var, fontsize=11, pad=8)
-        ax.set_xlabel("Wavenumber", fontsize=9)
-        ax.set_ylabel("Power", fontsize=9)
+        ax.set_title(variable_spec(var).name, fontsize=11, pad=8)
+        ax.set_xlabel(AXIS["wavenumber"], fontsize=9)
+        ax.set_ylabel(AXIS["power"], fontsize=9)
         ax.tick_params(axis="both", labelsize=8)
         if iax == 0:
             ax.legend(
                 fontsize=7.3,
                 frameon=False,
                 ncol=2,
-                title="noise std",
+                title="noise standard deviation",
                 title_fontsize=8,
                 loc="best",
             )
 
     for extra in range(len(plot_vars), len(axes)):
         axes[extra].set_visible(False)
-    fig.suptitle(f"{case_id} - {method} spectra (clean + gaussian noise)", fontsize=13, y=1.01)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    fig.suptitle(f"{case_id}: {method} spectra of the clean field and with Gaussian noise added",
+                 fontsize=13)
+    save_figure(fig, out_path, close=True)
 
 
 def _plot_dominance_heatmap(
@@ -399,15 +409,23 @@ def _plot_dominance_heatmap(
     noise_stds: np.ndarray,
     out_path: Path,
 ) -> None:
-    labels = [f"{row['case']}:{row['var']}" for row in dominance_rows]
+    from eval.plotting import eval_style, save_figure
+
+    with eval_style():
+        _draw_dominance_heatmap(method, dominance_rows, noise_stds, out_path, save_figure)
+
+
+def _draw_dominance_heatmap(method, dominance_rows, noise_stds, out_path, save_figure) -> None:
+    labels = [f"{row['case']}: {row['var']}" for row in dominance_rows]
     data = np.array([row["dominance_by_std"] for row in dominance_rows], dtype=np.float64)
     fig_h = max(6.0, 0.35 * len(labels) + 2.0)
     fig, ax = plt.subplots(figsize=(12.0, fig_h), constrained_layout=True)
 
     im = ax.imshow(data, cmap="magma", vmin=0.0, vmax=1.0, aspect="auto")
     ax.set_title(f"Dominance fraction by noise std ({method})", fontsize=12, pad=10)
-    ax.set_xlabel("Gaussian noise std", fontsize=10)
-    ax.set_ylabel("Case:Variable", fontsize=10)
+    ax.set_xlabel("Standard deviation of the Gaussian noise", fontsize=10)
+    ax.set_ylabel("Case: variable", fontsize=10)
+    ax.grid(False)
     ax.set_xticks(np.arange(len(noise_stds)))
     ax.set_xticklabels([f"{s:.1e}" for s in noise_stds], rotation=35, ha="right", fontsize=8)
     ax.set_yticks(np.arange(len(labels)))
@@ -416,8 +434,7 @@ def _plot_dominance_heatmap(
     cbar.set_label("Fraction of scales where noisy > clean", fontsize=9)
     cbar.ax.tick_params(labelsize=8)
 
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    save_figure(fig, out_path, close=True)
 
 
 def _format_pretty_table(rows: list[dict[str, Any]]) -> str:

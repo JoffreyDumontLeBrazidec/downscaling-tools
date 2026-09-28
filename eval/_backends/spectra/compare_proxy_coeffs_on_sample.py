@@ -67,7 +67,11 @@ def main() -> None:
     bands = [("all", 2), ("k>=40", 40), ("k>=80", 80), ("k>=120", 120)]
     band_order = {"all": 0, "k>=40": 1, "k>=80": 2, "k>=120": 3}
 
+    from eval.plotting import AXIS, eval_style, role_style, save_figure, sequence_style, variable_spec
+
     rows: list[dict[str, object]] = []
+    _style = eval_style()
+    _style.__enter__()
     fig, axes = plt.subplots(len(groups), 1, figsize=(8.4, 3.2 * max(1, len(groups))), sharex=True)
     if len(groups) == 1:
         axes = [axes]
@@ -121,24 +125,25 @@ def main() -> None:
 
         ax = axes[i]
         focus = ee >= float(args.focus_k_min)
-        ax.plot(ww[focus], ratio_b[focus], color="#d62728", lw=1.5, alpha=0.85, label="baseline")
-        ax.plot(ww[focus], ratio_c[focus], color="#2ca02c", lw=1.5, alpha=0.90, label="candidate")
-        ax.axhline(1.0, color="k", lw=1.0, ls=":")
+        # baseline coefficients in the baseline style, the candidate as the first sequence
+        # colour (never a red/green pair), the perfect ratio as the thin black truth line
+        ax.plot(ww[focus], ratio_b[focus], label="baseline coefficients", **role_style("baseline"))
+        ax.plot(ww[focus], ratio_c[focus], label="candidate coefficients", **sequence_style(0))
+        ax.axhline(1.0, label="reference (ratio 1)", **role_style("truth", linewidth=1.2))
         ax.set_xscale("log")
         ax.set_ylim(0.75, 1.35)
-        ax.set_ylabel(f"{group}\nproxy/reference")
-        ax.grid(ls="--", lw=0.3, alpha=0.6)
-        ax.legend(frameon=False, fontsize=8, loc="best")
+        ax.set_ylabel(f"{variable_spec(group).name}\nproxy / reference amplitude")
+        ax.legend(fontsize=8, loc="best")
 
-    axes[-1].set_xlabel("zonal wavenumber")
-    fig.suptitle(f"{args.expid} ratio comparison (k>={args.focus_k_min}) baseline vs candidate", fontsize=12)
+    axes[-1].set_xlabel(AXIS["wavenumber"])
+    fig.suptitle(f"{args.expid}: proxy to reference amplitude ratio for ℓ ≥ {args.focus_k_min}, "
+                 "baseline against candidate coefficients", fontsize=12)
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
     ratio_pdf = output_dir / f"{args.expid}_ratio_baseline_vs_candidate.pdf"
     ratio_png = output_dir / f"{args.expid}_ratio_baseline_vs_candidate.png"
-    fig.savefig(ratio_pdf, dpi=230, bbox_inches="tight")
-    fig.savefig(ratio_png, dpi=230, bbox_inches="tight")
-    plt.close(fig)
+    save_figure(fig, ratio_pdf, close=True)   # writes ratio_png and ratio_pdf at 150 dpi
+    _style.__exit__(None, None, None)
 
     rows = sorted(rows, key=lambda r: (str(r["group"]), band_order[str(r["band"])]))
     df = pd.DataFrame(rows)

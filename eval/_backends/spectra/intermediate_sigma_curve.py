@@ -214,30 +214,38 @@ def write_scope_outputs(
 
         plot_path = output_dir / f"{base_name}.pdf"
         png_path = output_dir / f"{base_name}.png"
-        fig, ax = plt.subplots(figsize=(6.8, 4.5))
-        sigmas = [rec["sigma"] for rec in records]
-        mean_abs = [rec["mean_abs_log10"] for rec in records]
-        ax.plot(sigmas, mean_abs, label="Mean |log10 ratio|", color="#1f77b4", marker="o", linewidth=1.5)
-        ax.set_xscale("log")
-        ax.set_xlabel("Sigma")
-        ax.set_ylabel("Mean |log10(inter / target)|")
-        ax.set_title(f"{param} | {SCOPE_LABELS[scope_name]} spectra vs {target_var}")
-        ax.grid(True, which="both", linestyle="--", linewidth=0.5, alpha=0.6)
+        from eval.plotting import AXIS, SEQUENCE, eval_style, save_figure, variable_spec
 
-        ax2 = ax.twinx()
-        rmse = [rec["rmse"] for rec in records]
-        ax2.plot(sigmas, rmse, label="RMSE", color="#d62728", marker="s", linewidth=1.2)
-        ax2.set_ylabel("RMSE (power spectrum)")
-        ax2.set_yscale("linear")
-        ax2.tick_params(axis="y", colors="#d62728")
+        # Two different quantities share the figure, so they get neutral metric colours
+        # (never the red of the model role) and different markers and dashes.
+        with eval_style():
+            fig, ax = plt.subplots(figsize=(7.2, 4.5))
+            sigmas = [rec["sigma"] for rec in records]
+            mean_abs = [rec["mean_abs_log10"] for rec in records]
+            ax.plot(sigmas, mean_abs, label="Mean |log10(intermediate / target)|",
+                    color=SEQUENCE[0], marker="o", linewidth=2.0)
+            ax.set_xscale("log")
+            ax.set_xlabel(AXIS["sigma"])
+            ax.set_ylabel("Mean |log10(intermediate / target)|", color=SEQUENCE[0])
+            ax.set_title(f"{variable_spec(param).name}: {SCOPE_LABELS[scope_name]} spectra "
+                         f"against {target_var}")
+            ax.grid(True, which="both", color="0.9", linewidth=0.5)
 
-        lines, labels = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines + lines2, labels + labels2, loc="best", fontsize=8)
-        fig.tight_layout()
-        fig.savefig(plot_path, dpi=240, bbox_inches="tight")
-        fig.savefig(png_path, dpi=240, bbox_inches="tight")
-        plt.close(fig)
+            ax2 = ax.twinx()
+            ax2.spines["right"].set_visible(True)
+            rmse = [rec["rmse"] for rec in records]
+            ax2.plot(sigmas, rmse, label="RMSE of the power spectrum", color=SEQUENCE[1],
+                     marker="s", linestyle=(0, (5, 2)), linewidth=1.8)
+            ax2.set_ylabel("RMSE of the power spectrum", color=SEQUENCE[1])
+            ax2.set_yscale("linear")
+            ax2.grid(False)
+
+            lines, labels = ax.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax.legend(lines + lines2, labels + labels2, loc="best", fontsize=8)
+            fig.tight_layout()
+            # writes <base_name>.png (150 dpi) and <base_name>.pdf, the same two files as before
+            save_figure(fig, plot_path, close=True)
 
         outputs[scope_name] = {
             "table": str(table_path),

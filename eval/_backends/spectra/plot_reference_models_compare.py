@@ -108,8 +108,14 @@ def main() -> None:
             }
         )
 
-    cmap = plt.get_cmap("tab10")
-    line_styles = ["-", "--", "-.", ":"]
+    from eval.plotting import AXIS, eval_style, readable_label, reference_styles, save_figure, variable_spec
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+
+    # every curve here is an anchor (operational forecasts on various grids), so each gets its
+    # own fixed reference style; well-known anchors look the same as in every other figure
+    styles = reference_styles([m["name"] for m in model_info])
+    _style = eval_style()
+    _style.__enter__()
 
     per_param_stats: dict[str, dict] = {}
     for cfg in PARAM_CONFIGS:
@@ -136,32 +142,30 @@ def main() -> None:
             iok = np.arange(3, len(avg_w))
             ax.plot(
                 avg_w[iok],
-                avg_a[iok],
-                color=cmap(i % 10),
-                linestyle=line_styles[i % len(line_styles)],
-                linewidth=1.6,
-                label=f"{m['name']} (step {chosen})",
+                amplitude_to_power(dir_name, avg_a[iok]),
+                label=f"{readable_label(m['name'])}, lead time {chosen} h (n = {len(w_arrays)} fields)",
+                **styles[m["name"]],
             )
             plotted += 1
             stats[m["name"]] = {"status": "plotted", "step": chosen, "files": len(w_arrays)}
 
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("Zonal wavenumber")
-        ax.set_ylabel("Mean power")
-        ax.set_title(f"{param} at {level}")
-        ax.grid(color="grey", linestyle="--", linewidth=0.25, alpha=0.6)
+        ax.set_xlabel(AXIS["wavenumber"])
+        ax.set_ylabel(spectral_power_label(dir_name))
+        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectra of the reference forecasts")
         if plotted:
-            ax.legend(loc="best", frameon=False, fontsize=8)
+            add_wavelength_axis(ax)
+            ax.legend(loc="best", fontsize=8)
         else:
             ax.text(0.5, 0.5, "No comparable spectra found", transform=ax.transAxes, ha="center", va="center")
         out = output_dir / f"physical_models_spectra_{param}_{level}.pdf"
         fig.tight_layout()
-        fig.savefig(out, dpi=220, bbox_inches="tight")
-        plt.close(fig)
+        save_figure(fig, out, close=True)   # the PDF as before plus a PNG, 150 dpi
         per_param_stats[f"{param}_{level}"] = stats
         print(f"Saved {out}")
 
+    _style.__exit__(None, None, None)
     summary = {
         "base_dir": str(base_dir),
         "output_dir": str(output_dir),

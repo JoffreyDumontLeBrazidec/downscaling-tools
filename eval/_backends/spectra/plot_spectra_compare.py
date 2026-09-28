@@ -4,7 +4,6 @@ import argparse
 import warnings
 from pathlib import Path
 
-import cmcrameri.cm as cmc
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -126,9 +125,32 @@ def main() -> None:
         eefo_token=args.eefo_token,
         hres_token=args.hres_token,
     )
-    colors = [cmc.batlow(i / max(1, len(expvers) - 1)) for i in range(len(expvers))]
-    type_style = {"ai": "-", "hpc": "--"}
+    from eval.plotting import eval_style
 
+    with eval_style():
+        _draw_all(args, expvers, date_list, steps, members, output_dir)
+
+
+def _curve_style(conf: dict, n_ai: int, ai_index: int) -> dict:
+    """House role styles: the model run red (several runs: sequence colours), the coarse
+    EEFO driver as the input, the high-resolution reference as the truth."""
+    from eval.plotting import reference_style, role_style, sequence_style
+
+    if conf["type"] == "ai":
+        return role_style("model") if n_ai == 1 else sequence_style(ai_index)
+    if conf["name"].lower().startswith("eefo"):
+        return role_style("input")
+    if conf["name"].lower().startswith("enfo"):
+        return role_style("truth")
+    return reference_style(0)
+
+
+def _draw_all(args, expvers, date_list, steps, members, output_dir) -> None:
+    from eval.plotting import AXIS, save_figure, variable_spec
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+
+    n_ai = sum(1 for c in expvers if c["type"] == "ai")
+    ai_rank = {id(c): i for i, c in enumerate(c for c in expvers if c["type"] == "ai")}
     for cfg in PARAM_CONFIGS:
         param, level, dir_name = cfg["param"], cfg["level"], cfg["dir_name"]
         fig, ax = plt.subplots(figsize=(7.2, 4.2))
@@ -161,13 +183,12 @@ def main() -> None:
                     step_a_curves.append(avg_a)
                     if args.separate_steps:
                         iok = range(3, len(avg_w))
+                        style = _curve_style(conf, n_ai, ai_rank.get(id(conf), 0))
                         ax.plot(
                             avg_w[iok],
-                            avg_a[iok],
-                            color=colors[ie],
-                            linestyle=type_style.get(conf["type"], "-"),
-                            linewidth=2.3,
-                            label=f"{conf['label']} step={step}",
+                            amplitude_to_power(dir_name, avg_a[iok]),
+                            label=f"{conf['label']}, lead time {step} h",
+                            **style,
                         )
                         any_data = True
             if miss and not found:
@@ -178,25 +199,23 @@ def main() -> None:
                 iok = range(3, len(avg_w))
                 ax.plot(
                     avg_w[iok],
-                    avg_a[iok],
-                    color=colors[ie],
-                    linestyle=type_style.get(conf["type"], "-"),
-                    linewidth=2.3,
-                    label=conf["label"],
+                    amplitude_to_power(dir_name, avg_a[iok]),
+                    label=f"{conf['label']} (n = {found} fields)",
+                    **_curve_style(conf, n_ai, ai_rank.get(id(conf), 0)),
                 )
                 any_data = True
 
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel("Zonal wavenumber")
-        ax.set_ylabel("Mean power")
-        ax.set_title(f"{param} @ {level}")
-        ax.grid(color="grey", linestyle="--", linewidth=0.25)
-        ax.legend(loc="lower left", frameon=False, fontsize=8)
+        ax.set_xlabel(AXIS["wavenumber"])
+        ax.set_ylabel(spectral_power_label(dir_name))
+        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectrum")
+        ax.legend(loc="lower left", fontsize=8)
         if any_data:
+            add_wavelength_axis(ax)
             out = output_dir / f"spectra_{param}_{level}.pdf"
-            plt.tight_layout()
-            plt.savefig(out, dpi=300, bbox_inches="tight")
+            fig.tight_layout()
+            save_figure(fig, out)   # the PDF as before plus a PNG, 150 dpi
             print(f"Saved {out}")
         plt.close(fig)
 
