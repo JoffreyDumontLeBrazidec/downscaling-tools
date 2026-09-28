@@ -13,7 +13,7 @@ EVALUATOR_SPEC = {
     "name": "region_plot",
     "requires": ["predictions"],
     "outputs": [
-        "all_regions_plots.pdf and per-region figures written by eval._backends.region_plotting.plot_regions.",
+        "all_regions_plots.pdf: the combined figure of every lane region, written by eval._backends.region_plotting.plot_regions.",
     ],
 }
 

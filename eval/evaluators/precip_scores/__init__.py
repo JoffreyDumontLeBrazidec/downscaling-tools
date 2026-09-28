@@ -18,7 +18,7 @@ EVALUATOR_SPEC = {
     "outputs": [
         "scores.json: the overall summary and the per-member and per-step aggregates.",
         "scores_rows.csv: the same numbers as rows.",
-        "precip_scores.pdf: a summary figure (written by run).",
+        "plots/precip_scores.pdf: a summary figure (written by run).",
     ],
 }
 

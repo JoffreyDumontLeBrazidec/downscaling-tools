@@ -15,7 +15,7 @@ EVALUATOR_SPEC = {
     "outputs": [
         "probabilistic_summary.json: CRPS, spread and ensemble-mean error per variable and region.",
         "summary_by_lead.csv: the same numbers by lead time.",
-        "probabilistic_scores.pdf: summary figure (written by plot).",
+        "plots/probabilistic_scores.pdf: summary figure (written by plot).",
     ],
 }
 

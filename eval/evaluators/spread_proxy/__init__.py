@@ -15,7 +15,7 @@ EVALUATOR_SPEC = {
     "outputs": [
         "spread_proxy_summary.json: spread of the model and of ENFO per variable.",
         "summary_by_lead.csv: the same numbers by lead time.",
-        "a spread comparison figure (written by plot).",
+        "plots/: the spread comparison figures (written by plot).",
     ],
 }
 

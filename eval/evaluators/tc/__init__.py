@@ -1,8 +1,8 @@
 """TC (tropical cyclone extremes) evaluator.
 
 For each tropical cyclone event of the lane (`tc.events`), extracts raw extremes
-from the prediction files: minimum sea-level pressure (and its 0.1 percent
-quantile) and maximum 10 m wind (and its 99.9 percent quantile), for the model and
+from the prediction files: minimum sea-level pressure (and its 0.01 percentile)
+and maximum 10 m wind (and its 99.99 percentile), for the model and
 for the reference sources present on the same grid (OPER, ENFO, EEFO). By the
 run-trust contract of 2026-06-21 the verdict is the raw extremes, read by eye:
 there is no composite score, no ratio and no anchor. The grid used is chosen by
