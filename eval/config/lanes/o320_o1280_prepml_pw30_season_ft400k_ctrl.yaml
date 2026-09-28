@@ -1,0 +1,134 @@
+# o320_o1280_prepml_pw30_season_ft400k_ctrl -- UNGUIDED CONTROL month arm on the
+# cycle-2 fine-tune checkpoint (family 12dcefeafa92457aab286d4931ffe63f, step 400000;
+# inference companion inference-anemoi-by_epoch-epoch_172-step_400000.ckpt, supplied
+# on the CLI as always). Cumulative training on this checkpoint is ~800k steps
+# (397,434-step pretraining + a fresh 400,000-step fine-tune cycle), which is what the
+# owner means by "the 800k checkpoint".
+#
+# This lane is the STRICTLY MATCHED CONTROL for the autoguidance arm
+# o320_o1280_prepml_pw30_season_ft400k_gmass_w13 (expver ja6g, live since 2026-08-21).
+# It is that lane with the guidance switched off and nothing else changed:
+#   - same checkpoint, same September-2025 month, same 10 members, same 15 steps;
+#   - same sampler (piecewise 30 steps, 10 high / 20 low, sigma_max=1e5);
+#   - same ecflow gpu limit of 4 (owner 2026-08-21: leave node headroom);
+#   - the two CODEX_AUTOGUIDE_* environment variables are ABSENT, so the runner takes
+#     the plain unguided path (the guidance seam in season-scale-tools/
+#     downscaling_unified_runner.py only activates when both are set).
+# Acceptance for this arm is therefore the MIRROR of the guided one: the job log must
+# NOT print the "AUTOGUIDANCE ACTIVE" banner, and the field count must hit the gate.
+#
+# NOTE: the lane loader merges only two levels deep, so predict.env and predict.sampler
+# REPLACE the base blocks wholesale and must both be restated here in full. Keep in
+# sync with the w13 lane except for the deliberate guidance difference.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+
+prepml:
+  # Owner 2026-08-22: cap concurrent model tasks at 2 for EVERY o320->o1280 prepml
+  # lane, so that several arms running at once cannot occupy the shared nodes and
+  # lock other users out of compute. This supersedes the earlier per-campaign caps
+  # of 3, 4 and 8. Applied live to the running ja6g and ja6y suites as well.
+  ecflow:
+    limits:
+      gpu: 2
+  # Unguided runs one denoiser evaluation per sampler step instead of two, so this arm
+  # is roughly half the cost of the guided one (~45 min per member-date against the
+  # ~1h30 measured on ja6g). A 6-hour cap still leaves a wide margin.
+  platform:
+    gpu:
+      time: "0-06:00"
+
+# ---------------------------------------------------------------------------
+# spectra_ecmwf_v2 (added 2026-08-31). The parent lane
+# o320_o1280_prepml_pw40_season declares only the v1 `spectra_ecmwf` block, so
+# v2 previously inherited NOTHING and fell back to an empty template_root,
+# dying in _grib_stager with "No *_nopoles.grb templates anywhere under
+# <code root>". This block is copied wholesale from the base lane
+# o320_o1280.yaml (the vetted full-grid convention, 6,599,680 points) rather
+# than hand-rolled, because the pole-masked and complete truth conventions
+# both exist under reference_dir and mixing them silently compares
+# incompatible supports. The lane loader merges only two levels deep, so this
+# block must stay restated in full here.
+#
+# WHY THIS MATTERS: the healpix proxy `spectra` evaluator on this lane runs at
+# nside 742, which zero-fills 12.2% of pixels and manufactures correlated
+# power above wavenumber ~500. Its fine-scale end is not trustworthy and no
+# fine-band number from it may reach a scoreboard. v2 is the fixed route.
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
+  # OWNER DECISION 2026-09-01 (option 2): interpolate the driver to O1280
+  # BEFORE the spectral transform, instead of transforming the native O320
+  # field at T1279.
+  #
+  # Why: an O320 field has 421,120 points and a T1279 transform needs
+  # ~6,599,680. Transforming it natively is underdetermined by ~16x and the
+  # transform FABRICATES power -- measured 45-50% of the driver's total power
+  # landing above wavenumber 320, and still ~45% above 800, which is
+  # impossible for a field truncated near 320. That destroyed the
+  # driver-collapse control test.
+  #
+  # Pointing input_template_grib at the O1280 template puts the driver on the
+  # SAME grid, and therefore the same spectral support, as the model and the
+  # truth, so all three curves are formed identically. The stager maps the
+  # coarse values on by great-circle nearest neighbour, which is what the
+  # model itself ingests. This template is bit-identical in grid to the
+  # fullgrid template the model side stages on (verified: max |dlat| =
+  # max |dlon| = 0.0, both 6,599,680 points).
+  input_template_grib: "/home/ecm5702/hpcperm/data/o1280-template.grib"
+
+# ---------------------------------------------------------------------------
+# spectra_ecmwf (v1, the ORIGINAL pole-masked evaluator) -- restated 2026-08-31.
+# Kept and run deliberately AS A CONTROL beside spectra_ecmwf_v2 above: v1
+# stages on the pole-masked template (latitude rows dropped near the poles,
+# 6,598,392 points) while v2 stages on the complete grid (6,599,680). Running
+# both on one window is what makes the artifact check possible -- agreement
+# between the two is evidence, and disagreement localises to the pole rows.
+#
+# The ONLY change from the block inherited from o320_o1280_prepml_pw40_season
+# is input_bundles_dir: the parent points at the August-2023 idalia bundles,
+# which for a September-2025 evaluation would build the EEFO driver curve from
+# the WRONG WINDOW. The driver curve is the control that catches fabricated
+# fine-scale power (an O320 driver is spectrally truncated near wavenumber 320
+# and MUST collapse above it), so it has to come from the window under test.
+# Restated in full because the lane loader merges only two levels deep.
+spectra_ecmwf:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"

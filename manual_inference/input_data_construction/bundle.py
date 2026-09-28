@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os as _os
+import re as _re
+
 import logging
 import re
 from datetime import datetime
@@ -508,6 +511,309 @@ def fill_hres_features(
             ).to(device)
 
 
+# --- accumulated low-res surface inputs -------------------------------------
+# ssrd/strd arrive from the archive ACCUMULATED FROM FORECAST START, while a model
+# trained on per-step increments expects one step's worth. The two coincide at the
+# first step and diverge linearly after it, so feeding the raw accumulation drives
+# the input further out of distribution with every lead time. Measured on the
+# o1280->o2560 pristine run: 4x the training mean by step 24 and ~20x (about
+# +15 sigma) by step 120, which invalidated every step past 006.
+# ON BY DEFAULT, decided per field from the data rather than from a name list.
+# An accumulated field is a running total, so it cannot decrease between two
+# consecutive steps; a per-step field can and does. Measured on real o1280
+# bundles the separation is absolute: ssrd and strd are non-decreasing at
+# 1.0000 of 26.3M points with a x4.0 growth by step 024, while every other
+# single-level field sits between 0.43 and 0.69. Deciding from the data means a
+# lane whose archive already delivers increments is left alone automatically,
+# which a hard-coded variable list could not guarantee.
+#
+# MI_DEACCUMULATE_LRES remains as an escape hatch for deliberate experiments:
+#   unset / "auto"  -> detect per field (the default)
+#   "off" / "none"  -> never de-accumulate (the pre-2026-08-22 behaviour)
+#   "ssrd,strd"     -> force exactly these, skipping detection
+_BUNDLE_STEP_RE = _re.compile(r"_step(\d{3})h_input_bundle\.nc$")
+
+# Fraction of points that must be non-decreasing before a field is called a
+# running total. Real accumulations score exactly 1.0; the highest-scoring
+# non-accumulated field measured was 0.69, so this is a wide margin.
+_ACCUMULATION_MONOTONE_FRACTION = 0.999
+
+# How far a point may go BACKWARDS and still count as non-decreasing, as a
+# fraction of the field maximum. Archived fields are packed with limited
+# precision, so a quantity that is genuinely constant across a step - accumulated
+# solar radiation over the night hemisphere - can be stored very slightly smaller
+# at the later step. Measured on a real failing case: 6.3% of ssrd points came
+# back lower, by up to 512 J/m2 out of 4.9e7, which is one quantum of 16-bit
+# packing over that range. A tolerance of 1e-9 (the original value) is five
+# orders of magnitude too tight to absorb that and dropped the fraction to 0.937,
+# so ssrd was judged not accumulated while strd, which never has a zero
+# increment, passed. 1e-3 is about sixty times the packing quantum and still five
+# thousand times smaller than one step's increment, so a per-step field cannot be
+# rescued by it: those score near 0.5 whatever the tolerance, because half their
+# point-to-point changes are genuinely negative.
+_ACCUMULATION_DECREASE_TOLERANCE = 1e-3
+
+
+def deaccumulate_mode_from_env():
+    """Resolve the escape hatch into ("auto", None) or ("forced", names)."""
+    raw = _os.environ.get("MI_DEACCUMULATE_LRES", "").strip()
+    if not raw or raw.lower() == "auto":
+        return "auto", None
+    if raw.lower() in {"off", "none", "0", "false"}:
+        return "off", ()
+    return "forced", tuple(v.strip() for v in raw.split(",") if v.strip())
+
+
+def deaccumulate_vars_from_env():
+    """Backwards-compatible view of the escape hatch used by older callers."""
+    _mode, names = deaccumulate_mode_from_env()
+    return names or ()
+
+
+def looks_accumulated(current, previous):
+    """True when `current` behaves like a total accumulated since forecast start.
+
+    Two conditions, both necessary. The field must be non-decreasing almost
+    everywhere, which is what makes a running total a running total. And its
+    mean must have actually grown, which excludes a field that is constant in
+    time - that would also pass the first test, and subtracting it would zero
+    out a legitimate input.
+    """
+    cur = np.asarray(current, dtype=np.float64).ravel()
+    prev = np.asarray(previous, dtype=np.float64).ravel()
+    if cur.shape != prev.shape or cur.size == 0:
+        return False, 0.0
+    if not (np.all(np.isfinite(cur)) and np.all(np.isfinite(prev))):
+        return False, 0.0
+    scale = max(float(np.max(np.abs(cur))), 1.0)
+    fraction = float(np.mean(cur >= prev - _ACCUMULATION_DECREASE_TOLERANCE * scale))
+    grew = float(cur.mean()) > float(prev.mean())
+    return (fraction >= _ACCUMULATION_MONOTONE_FRACTION and grew), fraction
+
+
+def previous_step_bundle_path(bundle_path, step_hours=None):
+    """Sibling bundle one accumulation window earlier, or None.
+
+    None is the correct answer at the genuine first step: there the accumulation
+    window already equals a single increment, so nothing may be subtracted.
+
+    The cadence is read off the files on disk rather than assumed. Lanes are
+    staged at different cadences - the o1280->o2560 Humberto set is 6-hourly and
+    the o320->o1280 regional set is 24-hourly - and subtracting a hard-coded six
+    hours would find no file on the latter and silently skip the correction,
+    which is the same silent failure the correction exists to prevent. Pass
+    step_hours, or set MI_DEACCUM_STEP_HOURS, to force a fixed cadence instead.
+    """
+    if bundle_path is None:
+        return None
+    text = str(bundle_path)
+    m = _BUNDLE_STEP_RE.search(text)
+    if not m:
+        return None
+    step = int(m.group(1))
+
+    if step_hours is None:
+        env_step_hours = _os.environ.get("MI_DEACCUM_STEP_HOURS", "").strip()
+        step_hours = int(env_step_hours) if env_step_hours else None
+
+    if step_hours is not None:
+        prev = step - int(step_hours)
+        if prev <= 0:
+            return None
+        candidate = Path(text.replace(f"_step{step:03d}h_", f"_step{prev:03d}h_"))
+        return candidate if candidate.exists() else None
+
+    # Cadence unknown: take the nearest earlier step that actually exists.
+    here = Path(text)
+    pattern = _BUNDLE_STEP_RE.sub("_step[0-9][0-9][0-9]h_input_bundle.nc", here.name)
+    best_step, best_path = None, None
+    try:
+        siblings = sorted(here.parent.glob(pattern))
+    except OSError:
+        return None
+    for sibling in siblings:
+        sm = _BUNDLE_STEP_RE.search(sibling.name)
+        if sm is None:
+            continue
+        s = int(sm.group(1))
+        if s < step and (best_step is None or s > best_step):
+            best_step, best_path = s, sibling
+    return best_path
+
+
+# --- input distribution guard -----------------------------------------------
+# Nothing used to check that the numbers fed to the model resembled the numbers
+# it was trained on, which is why accumulated radiation inputs could sit ~15
+# sigma out of distribution for months without anyone noticing. This checks that
+# directly, and knows nothing about accumulation specifically, so it also catches
+# unit changes, zero-fills, stale caches and wrong fields.
+#
+# The training statistics are already in the checkpoint. Its normaliser holds
+# norm_mul = 1/std and norm_add = -mean/std per channel, so raw*mul + add is the
+# z-score against training. Thresholds are advisory and tunable:
+#   MI_INPUT_GUARD_SIGMA    displacement of the field mean, in training sigma
+#   MI_INPUT_GUARD_SPREAD   how far the field spread may stray, as a factor
+#   MI_INPUT_GUARD=off      silence it entirely
+#
+# The one-sigma default is calibrated, not guessed. Measured on the real o1280
+# Humberto bundles against this checkpoint's own training statistics, the field
+# mean sits at (ssrd / strd, in training sigma):
+#   step 006  -0.02 / +0.04     <- the clean step, comfortably inside
+#   step 012  +0.76 / +4.88     <- corruption begins; strd trips the guard
+#   step 024  +2.31 / +14.53
+#   step 120  +14.90 / +91.67
+# So one sigma passes a healthy input and fires at the exact step where this
+# defect first bites. Raising it to five would have missed step 012 entirely.
+_INPUT_GUARD_DEFAULT_SIGMA = 1.0
+_INPUT_GUARD_DEFAULT_SPREAD = 3.0
+
+
+def _find_input_normalizer(model, n_channels, dataset_hint="in_lres"):
+    """Locate (norm_mul, norm_add) for the low-res input, or None.
+
+    Returns None rather than raising for any model whose layout we do not
+    recognise: the guard is a convenience, never a precondition.
+    """
+    try:
+        buffers = dict(model.named_buffers())
+    except Exception:
+        return None
+    pairs = {}
+    for name, tensor in buffers.items():
+        for suffix in ("_norm_mul", "_norm_add"):
+            if name.endswith(suffix):
+                try:
+                    size = int(tensor.reshape(-1).shape[0])
+                except Exception:
+                    continue
+                pairs.setdefault(name[: -len(suffix)], {})[suffix] = tensor
+    candidates = [
+        (stem, d["_norm_mul"], d["_norm_add"])
+        for stem, d in pairs.items()
+        if "_norm_mul" in d and "_norm_add" in d
+        and int(d["_norm_mul"].reshape(-1).shape[0]) == n_channels
+    ]
+    if not candidates:
+        return None
+    # A checkpoint carries both the forward normaliser (pre_processors) and its
+    # inverse (post_processors), and separate ones for tendencies, all with the
+    # same channel count. Only the forward one turns a raw field into a z-score,
+    # so pick it explicitly rather than taking whichever comes first.
+    def _rank(stem):
+        return (
+            0 if "pre_processors." in stem and "tendencies" not in stem else 1,
+            0 if dataset_hint in stem else 1,
+            stem,
+        )
+
+    usable = [c for c in candidates
+              if "post_processors" not in c[0] and "tendencies" not in c[0]]
+    if not usable:
+        return None
+    stem, mul, add = sorted(usable, key=lambda c: _rank(c[0]))[0]
+    if dataset_hint not in stem:
+        return None
+    return stem, mul, add
+
+
+def check_input_distribution(model, x_lres, name_to_idx, *, label="", logger_=None):
+    """Report, per input channel, how far it sits from the training distribution.
+
+    Never raises and never refuses. Returns the list of channels judged to be out
+    of range, which is empty when everything is fine or when the check could not
+    run.
+    """
+    log = logger_ or logger
+    try:
+        if _os.environ.get("MI_INPUT_GUARD", "").strip().lower() in {"off", "0", "none", "false"}:
+            return []
+        try:
+            sigma_limit = float(_os.environ.get("MI_INPUT_GUARD_SIGMA", "")
+                                or _INPUT_GUARD_DEFAULT_SIGMA)
+            spread_limit = float(_os.environ.get("MI_INPUT_GUARD_SPREAD", "")
+                                 or _INPUT_GUARD_DEFAULT_SPREAD)
+        except ValueError:
+            sigma_limit, spread_limit = _INPUT_GUARD_DEFAULT_SIGMA, _INPUT_GUARD_DEFAULT_SPREAD
+
+        values = np.asarray(x_lres)
+        if values.ndim > 2:
+            values = values.reshape(-1, values.shape[-1])
+        n_channels = values.shape[-1]
+        found = _find_input_normalizer(model, n_channels)
+        if found is None:
+            log.debug("input guard: no normaliser with %d channels found; skipping",
+                      n_channels)
+            return []
+        _stem, mul_t, add_t = found
+        mul = np.asarray(mul_t.detach().float().cpu(), dtype=np.float64).ravel()
+        add = np.asarray(add_t.detach().float().cpu(), dtype=np.float64).ravel()
+
+        idx_to_name = {i: n for n, i in dict(name_to_idx).items()}
+        offenders = []
+        rows = []
+        for i in range(n_channels):
+            column = np.asarray(values[:, i], dtype=np.float64)
+            if not np.all(np.isfinite(column)):
+                rows.append((idx_to_name.get(i, f"#{i}"), float("nan"), float("nan")))
+                offenders.append((idx_to_name.get(i, f"#{i}"), float("nan"), float("nan")))
+                continue
+            if mul[i] == 1.0 and add[i] == 0.0:
+                # Channel carries the identity normaliser, which anemoi uses for
+                # inputs it deliberately leaves alone (the periodic forcings, for
+                # instance). There is no training distribution to compare against.
+                continue
+            centre = float(column.mean()) * mul[i] + add[i]
+            spread = float(column.std()) * abs(mul[i])
+            rows.append((idx_to_name.get(i, f"#{i}"), centre, spread))
+            too_far = abs(centre) > sigma_limit
+            # Only the high side of the spread test is a range check. The low
+            # side exists to catch a channel that is flat - a zero-fill or a
+            # stale constant - so it is set near zero rather than at 1/limit,
+            # which would fire on plenty of legitimately narrow fields.
+            too_wide = spread > spread_limit
+            too_flat = spread < 0.01
+            if too_far or too_wide or too_flat:
+                offenders.append((idx_to_name.get(i, f"#{i}"), centre, spread))
+
+        # The full table is DEBUG: 91 lines per bundle would drown a run log.
+        # INFO gets one line saying whether anything is off and by how much.
+        log.debug(
+            "input distribution%s, z-scores against the training statistics "
+            "(centre near 0, spread near 1):",
+            f" [{label}]" if label else "",
+        )
+        for name, centre, spread in rows:
+            log.debug("    %-24s centre %+8.2f sigma   spread %6.2f x", name, centre, spread)
+
+        worst = max(rows, key=lambda r: abs(r[1])) if rows else None
+        if not offenders:
+            if worst is not None:
+                log.info(
+                    "input distribution%s: all %d channels in range "
+                    "(largest displacement %+.2f sigma on %s)",
+                    f" [{label}]" if label else "", len(rows), worst[1], worst[0],
+                )
+        else:
+            detail = ", ".join(
+                f"{name} ({centre:+.2f} sigma, spread {spread:.2f}x)"
+                for name, centre, spread in offenders[:8]
+            )
+            if len(offenders) > 8:
+                detail += f", and {len(offenders) - 8} more"
+            log.warning(
+                "INPUT OUT OF RANGE%s: %s. These channels do not look like the data "
+                "the checkpoint was trained on, so predictions from this step should "
+                "not be trusted until the inputs are understood. A field accumulated "
+                "since forecast start being fed as a per-step increment produces "
+                "exactly this signature, and so does a zero-fill or a unit change.",
+                f" [{label}]" if label else "", detail,
+            )
+        return [name for name, _c, _s in offenders]
+    except Exception as exc:  # never let the guard break a run
+        log.debug("input guard skipped after an internal error: %r", exc)
+        return []
+
+
 def load_inputs_from_bundle_numpy(
     bundle_nc: str | Path | xr.Dataset,
     name_to_idx_lres: Mapping[str, int],
@@ -515,8 +821,27 @@ def load_inputs_from_bundle_numpy(
     *,
     valid_time_override=None,
     constant_forcings_npz: str | Path | None = DEFAULT_CONSTANT_FORCINGS_NPZ,
+    prev_bundle=None,
+    deaccumulate_vars=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     bundle, should_close = _borrow_or_open_bundle_dataset(bundle_nc)
+    if deaccumulate_vars is not None:
+        _deaccum_mode, _deaccum = "forced", tuple(deaccumulate_vars)
+    else:
+        _deaccum_mode, _deaccum = deaccumulate_mode_from_env()
+        _deaccum = _deaccum or ()
+    _prev_bundle, _prev_close = None, False
+    if _deaccum_mode != "off" and prev_bundle is not None:
+        _prev_bundle, _prev_close = _borrow_or_open_bundle_dataset(prev_bundle)
+    # Visibility, never refusal: say out loud what was resolved, so an accidental
+    # drift back to raw accumulations is seen in the log rather than discovered
+    # months later in the scores.
+    logger.info(
+        "lres de-accumulation: mode=%s%s, previous-step bundle %s",
+        _deaccum_mode,
+        f" ({', '.join(_deaccum)})" if _deaccum else "",
+        "available" if prev_bundle is not None else "NOT available",
+    )
     try:
         n_lres = int(bundle.sizes["point_lres"])
         n_hres = int(bundle.sizes["point_hres"])
@@ -637,6 +962,52 @@ def load_inputs_from_bundle_numpy(
                             )
                     else:
                         raw = candidate.values.astype(np.float32)
+                        if _deaccum_mode != "off":
+                            _has_prev = (
+                                _prev_bundle is not None and field_name in _prev_bundle
+                            )
+                            _prev_raw = (
+                                _prev_bundle[field_name].values.astype(np.float32)
+                                if _has_prev
+                                else None
+                            )
+                            if _deaccum_mode == "forced":
+                                _accumulated = name in _deaccum
+                                _fraction = float("nan")
+                            elif _has_prev:
+                                _accumulated, _fraction = looks_accumulated(raw, _prev_raw)
+                            else:
+                                _accumulated, _fraction = False, float("nan")
+
+                            if _accumulated and _has_prev:
+                                raw = raw - _prev_raw
+                                logger.info(
+                                    "de-accumulated '%s' against the previous step "
+                                    "(non-decreasing fraction %.4f, mean %.4g -> %.4g)",
+                                    name, _fraction,
+                                    float(np.asarray(candidate.values, dtype=np.float64).mean()),
+                                    float(np.asarray(raw, dtype=np.float64).mean()),
+                                )
+                            elif _accumulated:
+                                # Forced on for a field we cannot correct. Passing the
+                                # raw running total on is what put the o2560 campaign
+                                # ~15 sigma out of distribution, so say so loudly - but
+                                # do not refuse, the caller may know better.
+                                logger.warning(
+                                    "'%s' is marked accumulated but the previous step's "
+                                    "bundle is unavailable, so the RAW RUNNING TOTAL is "
+                                    "being fed to the model. Past the first lead time this "
+                                    "is far out of distribution and the predictions should "
+                                    "not be trusted.",
+                                    name,
+                                )
+                            elif not _has_prev and _deaccum_mode == "auto":
+                                # No earlier bundle. At the first step that is the correct
+                                # answer, because the accumulation window already equals a
+                                # single increment.
+                                logger.debug(
+                                    "'%s' left as-is (no earlier bundle: first step)", name
+                                )
             else:
                 field_name = f"in_lres_{base}"
                 if field_name not in bundle:
@@ -683,6 +1054,11 @@ def load_inputs_from_bundle_numpy(
 
         return x_lres, x_hres, lon_lres, lat_lres, lon_hres, lat_hres
     finally:
+        if _prev_close and _prev_bundle is not None:
+            try:
+                _prev_bundle.close()
+            except Exception:
+                pass
         if should_close:
             try:
                 bundle.close()

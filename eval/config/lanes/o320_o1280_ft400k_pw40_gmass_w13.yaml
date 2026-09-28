@@ -1,0 +1,29 @@
+# o320_o1280_ft400k_pw40_gmass_w13 -- mass-only autoguidance w1.3 at the 40-step piecewise
+# schedule (13/27, s1e5) for the ft400k 2x2 (ctrl/w13 x pw30/pw40, all chunks=1, all AG).
+# Sibling of o320_o1280_ft400k_gmass_w13 (pw30) -- see that header for D_bad rationale
+# (34fdb91e d50k = earliest TRUE ancestor of the ft400k lineage). Differs from
+# o320_o1280_pw40_s397_gmass_w13 ONLY by not pinning chunks=32 (that pin was ctrl-era
+# matching for the 2026-08-17 campaign; here all four arms are fresh chunks=1 compute).
+# Full sampler block restated (lane merge is shallow at the sampler key).
+base: o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.3, sp: 1.3, z_100: 1.3, z_1000: 1.3, z_200: 1.3, z_300: 1.3, z_400: 1.3, z_50: 1.3, z_500: 1.3, z_700: 1.3, z_850: 1.3, z_925: 1.3}

@@ -1,0 +1,26 @@
+# tc_o320_o1280_s397_massrb_0828 -- GATE-2 mass w1.5 on the 250-support, date 20230828 shard.
+# Sampler = piecewise-40 EXACTLY matching parity ctrl tc_o320_o1280_piecewise40_s1e5.
+base: tc_o320_o1280
+
+predict:
+  dates: ["20230828"]
+  input_root: /home/ecm5702/scratch/eval/manual_181be03e_new_o320_o1280_20260421_manual_eval/data/bundles_with_y
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.5, sp: 1.5, z_100: 1.5, z_1000: 1.5, z_200: 1.5, z_300: 1.5, z_400: 1.5, z_50: 1.5, z_500: 1.5, z_700: 1.5, z_850: 1.5, z_925: 1.5}

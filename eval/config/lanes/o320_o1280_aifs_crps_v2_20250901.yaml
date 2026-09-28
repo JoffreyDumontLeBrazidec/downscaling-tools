@@ -1,0 +1,27 @@
+# AIFS-CRPS v2 -> o320->o1280 downscaling PROBE (2026-09-02, exploratory "see what happens").
+# Feeds the operational AIFS ensemble (AIFS-CRPS, class=ai stream=enfo type=pf, native N320)
+# regridded to octahedral O320 by MIR (MARS grid=O320) into the ft400k champion 12dcefea
+# (s397434 fine-tuned a second 400k-step cycle = 800k cumulative), MANUAL mode, UNGUIDED.
+# Sampler = base pw30 s100k (inherited); no autoguidance. Input GRIBs:
+#   /home/ecm5702/perm/data/input_data/o320_o1280/aifs_crps_v2_20250901
+# hres_grib reused from idalia ONLY for the O1280 grid + constant z/lsm static forcings.
+base: o320_o1280
+default_host: atos_ac_pristine
+allowed_hosts:
+  prepare: [atos_ac_pristine, atos_ag]
+  predict: [atos_ac_pristine, atos_ag]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+prepare:
+  bundle_filename_tpl: "aifs_o320_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc"
+  args:
+    lres_sfc_grib: "{source_grib_root}/aifs_o320_0001_date{date}_time0000_mem1to2_step12to48_sfc.grib"
+    lres_pl_grib:  "{source_grib_root}/aifs_o320_0001_date{date}_time0000_mem1to2_step12to48_pl.grib"
+    hres_grib:     "/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia/enfo_o1280_0001_date20230826_time0000_step24to120_sfc.grib"
+predict:
+  members: [1, 2]
+  steps: [24, 48]
+  dates: ["20250901"]
+  num_gpus_per_model: 4
+  input_root: /home/ecm5702/perm/eval/aifs_crps_v2_20250901/bundles

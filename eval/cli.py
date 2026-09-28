@@ -7,6 +7,17 @@ Subcommands:
     predict     Generate predictions only (subprocess call to eval.predict.main)
     evaluate    Run evaluators on existing predictions
     scoreboard  Generate scoreboard from existing evaluation results
+    tctracker   Produce ECMWF tctracker basin-track archives from a PrepML/FDB
+                expver AND its references (ctrl expver, target ENFO, input EEFO)
+                on one shared tracking support (--track-sources, --months)
+    tccompare   Compare tctracker track sets across those sources and render
+                the month-scale TC track figure suite + metrics JSON
+
+The tracker pair (tctracker + tccompare) is the month-scale, track-based TC
+diagnostic panel for prepml campaigns. It never feeds scoreboards: TC verdicts
+stay with the box-based raw-extremes `tc` evaluator on the canonical support.
+Operational runbook (read this before tracker work):
+/home/ecm5702/dev/docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md
 """
 from __future__ import annotations
 
@@ -36,10 +47,16 @@ LOG = logging.getLogger(__name__)
 ALL_EVALUATORS = [
     "tc", "spectra", "surface", "region_plot",
     "sigma", "sigma_loss", "mechanistic", "intermediate",
-    "spectra_ecmwf", "mlflow",
-    "precip_dist", "precip_events",
-    "interp", "probabilistic",
-    "quaver", "local_global",
+    "spectra_ecmwf", "spectra_ecmwf_v2", "mlflow",
+    "precip_dist", "precip_events", "precip_scores",
+    "interp", "probabilistic", "spread_proxy",
+    "quaver", "obs_crps", "local_global",
+    "spectra_coherence",
+    "lane_diagnostics",
+    "texture",
+    "wind_extremes",
+    "displacement",
+    "membermaps",
 ]
 
 DEFAULT_HOST = "atos_ac"
@@ -75,6 +92,18 @@ def _add_evaluator_filter_args(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--include-diagnostics", action="store_true", default=False,
         help="Run default + diagnostics evaluator groups from lane YAML.",
+    )
+    parser.add_argument(
+        "--stages", default=None,
+        help=(
+            "Comma-separated stage names passed to every selected evaluator as "
+            "eval_config['stages'], overriding the lane YAML. Evaluators that do "
+            "their work in one piece ignore it; evaluators whose measurements "
+            "have very different costs use it to run in separate jobs. Write the "
+            "stages' outputs to separate --output-dir trees when running them "
+            "concurrently, because an evaluator's results directory is cleaned "
+            "before a fresh run."
+        ),
     )
 
 
@@ -167,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", default=False,
         help="Allow re-running over existing evaluator outputs.",
     )
+    p_run.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="After the scoreboard step, diff this run against the lane BASELINE "
+             "(top of the lane scoreboard) and write scoreboard/vs_baseline.md.",
+    )
 
     # --- predict ---
     p_predict = subparsers.add_parser("predict", help="Generate predictions only.")
@@ -231,6 +265,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="PrepML/FDB expver of the run being evaluated. When set, the quaver "
              "probabilistic scorecard is run automatically (FDB-based).",
     )
+    p_eval.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="After evaluating, diff this run's scoreboard scores against the lane BASELINE "
+             "(top of the lane scoreboard) and write scoreboard/vs_baseline.md.",
+    )
 
     # --- scoreboard ---
     p_sb = subparsers.add_parser("scoreboard", help="Generate scoreboard from evaluation results.")
@@ -240,6 +279,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root evaluation directory containing evaluator outputs.",
     )
     _add_evaluator_filter_args(p_sb)
+    p_sb.add_argument(
+        "--vs-baseline", action="store_true", default=False,
+        help="Also diff the scores against the lane BASELINE (top of the lane scoreboard) "
+             "and write scoreboard/vs_baseline.md.",
+    )
 
     # --- report ---
     p_report = subparsers.add_parser("report", help="Generate HTML report for an evaluation run.")
@@ -306,9 +350,13 @@ def build_parser() -> argparse.ArgumentParser:
              "ENFO target (one row per weather state, one column per metric family).",
     )
     p_evo.add_argument("--exp", action="append", required=True,
-                       help="LABEL=/path/to/ladder.json (repeatable)")
+                       help="LABEL=/path/to/ladder.json (repeatable). `baseline:<lane>` resolves "
+                            "to the lane baseline's archived ladder card.")
     p_evo.add_argument("--ref", default=None,
-                       help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve")
+                       help="LABEL=/path/to/ladder.json -- reference RUN, drawn as its own curve. "
+                            "`baseline:<lane>` (e.g. baseline:o96_o320) resolves to the lane "
+                            "BASELINE's archived ladder card — the standard during-run and "
+                            "end-of-run comparison.")
     p_evo.add_argument("--input", dest="input_ref", default=None,
                        help="LABEL=/path/to/flat.json -- the INPUT anchor (REQUIRED)")
     p_evo.add_argument("--target", dest="target_ref", default=None,
@@ -327,7 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
     # --- tctracker ---
     p_tctracker = subparsers.add_parser(
         "tctracker",
-        help="Produce and verify ECMWF tctracker basin track archives from a PrepML/FDB expver.",
+        help="Produce and verify ECMWF tctracker basin track archives from a PrepML/FDB expver and its references (--track-sources).",
+        description=(
+            "Produce, verify, and parse ECMWF tctracker basin-track archives. "
+            "Default: one rd expver. With --track-sources, the same tracker "
+            "settings also run over ctrl/target/input references so every "
+            "track set shares ONE support; operational references are cached "
+            "under <scratch>/eval/tcrefs/ and reused across campaigns. "
+            "Runbook: docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md "
+            "(month-scale section). Compare the results with `eval.cli tccompare`."
+        ),
     )
     _add_common_args(p_tctracker)
     _add_lane_override_args(p_tctracker)
@@ -346,8 +403,78 @@ def build_parser() -> argparse.ArgumentParser:
     p_tctracker.add_argument("--module", default=None, help="Environment module to load before invoking tctracker (default: tctracker).")
     p_tctracker.add_argument("--overwrite", action="store_true", default=False, help="Re-run targets even if their tar already exists.")
     p_tctracker.add_argument("--verify-only", action="store_true", default=False, help="Only verify existing tars/manifests; do not run tctracker.")
-    p_tctracker.add_argument("--parse-only", action="store_true", default=False, help="Only parse existing Atlantic tracks; do not run tctracker.")
-    p_tctracker.add_argument("--slurm-script", default=None, help="Write a single resumable sbatch script to this path and exit.")
+    p_tctracker.add_argument("--parse-only", action="store_true", default=False, help="Only parse existing tracks; do not run tctracker.")
+    p_tctracker.add_argument("--slurm-script", default=None, help="Write a resumable sbatch script per source to this path (role-suffixed when multi-source) and exit.")
+    p_tctracker.add_argument("--role", default="model", help="Role label for this expver's tracks (default: model).")
+    p_tctracker.add_argument(
+        "--track-sources", default=None,
+        help=(
+            "Comma-separated roles to track in one invocation, e.g. "
+            "'model,ctrl=j95z,target,input'. Bare 'target'/'input' resolve from "
+            "lane tctracker.sources / prepml blocks; reference (non-rd) sources "
+            "are cached under <scratch>/eval/tcrefs/ and reused across expvers."
+        ),
+    )
+    p_tctracker.add_argument("--months", default=None, help="Comma-separated YYYYMM months expanded to daily dates (alternative to --dates).")
+    p_tctracker.add_argument("--no-check-fdb", action="store_true", default=False, help="Skip the FDB completeness preflight for rd expvers.")
+    p_tctracker.add_argument("--track-incomplete", action="store_true", default=False, help="Track partial/empty FDB dates too (default: skip them with a warning).")
+
+    # --- tccompare ---
+    p_tcc = subparsers.add_parser(
+        "tccompare",
+        help="Compare tctracker track sets (model vs ctrl/target/input) and render the TC track figure suite.",
+        description=(
+            "Compare track sets produced by `eval.cli tctracker` and render the "
+            "month-scale TC figure suite (track maps, density vs target, "
+            "intensity log-PDF + ratio, counts, step intensity, case panels) "
+            "plus tc_tracks_metrics.json. Pin --dates to the intersection of "
+            "complete dates when sources have unequal coverage. Diagnostic "
+            "panel only — TC verdicts stay with the box-based raw-extremes tc "
+            "evaluator. Runbook: docs/epics/completed_epics/tc_track/"
+            "TCTRACKER_EVAL_CLI.md (month-scale section)."
+        ),
+    )
+    _add_common_args(p_tcc)
+    p_tcc.add_argument(
+        "--sources", required=True,
+        help="Comma-separated role=value specs: rd expver (model=j9f3), ref class:stream:expver (target=od:enfo:0001), absolute run-root path, or a bare role resolved from lane defaults (target,input).",
+    )
+    p_tcc.add_argument("--months", required=True, help="Comma-separated YYYYMM months in scope.")
+    p_tcc.add_argument(
+        "--dates", default=None,
+        help=(
+            "Restrict ALL sources to these init dates (comma YYYYMMDD). Use for "
+            "paired-window comparisons when sources have unequal date coverage "
+            "(different weather in scope would confound the distributions)."
+        ),
+    )
+    p_tcc.add_argument("--basins", default="atl", help="Comma-separated basins (default: atl).")
+    p_tcc.add_argument("--label", default=None, help="Campaign label for the output dir (default: months joined).")
+    p_tcc.add_argument("--out", default=None, help="Output dir (default: <scratch>/eval/<lane_short>/tctracks/<label>).")
+    p_tcc.add_argument("--reparse", action="store_true", default=False, help="Re-parse source tars even if parsed tables exist.")
+    p_tcc.add_argument("--no-plots", action="store_true", default=False, help="Metrics only; skip figure rendering.")
+    p_tcc.add_argument("--top-k-cases", type=int, default=3, help="Deepest-target case pages per case basin (default: 3).")
+    p_tcc.add_argument("--case-basins", default="atl", help="Comma-separated basins that get per-storm case pages (default: atl).")
+    p_tcc.add_argument("--plot-only", action="store_true", default=False, help="Re-render the report from cached parsed tables + existing tc_tracks_metrics.json (no re-scoring).")
+    p_tcc.add_argument("--per-month-pages", action="store_true", default=False, help="Also render one focus-basin stats page per month (default: pooled pages only).")
+
+    # --- membermaps ---
+    from eval._backends.region_plotting.plot_member_wind_maps import build_arg_parser as _membermaps_parser
+    subparsers.add_parser(
+        "membermaps",
+        parents=[_membermaps_parser(add_help=False)],
+        help="Render single-member 10 m wind-speed cutout maps (EEFO input / ENFO truth / prediction arms) from predictions_*.nc or GRIB files.",
+        description=(
+            "Render the single-member 10 m wind-speed map set used for "
+            "member-level case inspection: EEFO input, operational ENFO truth "
+            "and one prediction panel per --run, all with a shared colour "
+            "scale, projection and title style. Sources are the retrieved "
+            "predictions_*.nc files (which embed x/y/y_pred); --grib panels "
+            "cover steps absent from predictions (e.g. step 0 read from "
+            "FDB/MARS). Diagnostic maps only — no scoring. Sits alongside the "
+            "TC contour suite (plot_tc_contours_from_predictions)."
+        ),
+    )
 
     return parser
 
@@ -355,6 +482,13 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Config resolution
 # ---------------------------------------------------------------------------
+
+def _parse_csv_or_none(raw: str | None) -> list[str] | None:
+    """Split a comma-separated option into a list, or None when it was not given."""
+    if raw is None:
+        return None
+    return [tok.strip() for tok in raw.split(",") if tok.strip()]
+
 
 def _parse_int_csv(raw: str) -> list[int]:
     """Parse comma-separated integers, sorted ascending."""
@@ -388,16 +522,24 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
     return {}
 
 
-def _with_prepml_quaver(evaluators: list[str], args: argparse.Namespace) -> list[str]:
-    """Auto-include the quaver scorecard for prepml evaluations (expver set).
+def _with_prepml_fdb_evaluators(evaluators: list[str], args: argparse.Namespace) -> list[str]:
+    """Auto-include the FDB-based scorecards for prepml evaluations (expver set).
 
-    Quaver is FDB-based and only meaningful when the run published an ensemble to
-    FDB under an expver. We avoid even listing it for manual runs. Applied to the
-    default / --include-diagnostics paths; --only stays explicit.
+    Both quaver and obs_crps read the ensemble from FDB under an expver, so they
+    are only meaningful when the run published one; we avoid even listing them
+    for manual runs. obs_crps is the cheap numeric counterpart of the quaver
+    surface scorecard (calibrated against it on ja6y, 2026-09-04) and quaver
+    remains the canonical scorecard and the only one covering upper air, so both
+    run. Applied to the default / --include-diagnostics paths; --only stays
+    explicit.
     """
-    if getattr(args, "expver", None) and "quaver" not in evaluators:
-        return [*evaluators, "quaver"]
-    return evaluators
+    if not getattr(args, "expver", None):
+        return evaluators
+    out = list(evaluators)
+    for name in ("quaver", "obs_crps"):
+        if name not in out:
+            out.append(name)
+    return out
 
 
 def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str]:
@@ -427,9 +569,9 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
         for e in diag_group:
             if e not in combined:
                 combined.append(e)
-        return _with_prepml_quaver(combined, args)
+        return _with_prepml_fdb_evaluators(combined, args)
 
-    return _with_prepml_quaver(list(evaluator_groups.get("default", [])), args)
+    return _with_prepml_fdb_evaluators(list(evaluator_groups.get("default", [])), args)
 
 
 def _get_git_commit() -> str:
@@ -861,6 +1003,7 @@ def _run_evaluators(
     plot_only: bool = False,
     checkpoint: str | None = None,
     run_label: str = "",
+    stages: list[str] | None = None,
 ) -> list[str]:
     """Run selected evaluators on existing predictions. Returns list of evaluators that ran."""
     evaluators_run: list[str] = []
@@ -903,7 +1046,9 @@ def _run_evaluators(
 
         # Determine results directory
         results_dir = output_dir / "evaluators" / name
-        eval_config = lane_config.get(name, {})
+        eval_config = dict(lane_config.get(name, {}))
+        if stages is not None:
+            eval_config["stages"] = list(stages)
 
         # C3: completion is tracked by a `.complete` marker written only after a
         # fully successful run/score/plot. A bare results_dir is NOT proof of
@@ -1082,39 +1227,124 @@ def _run_scoreboard(
 
 
 def cmd_tctracker(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
-    """Run, verify, or parse ECMWF tctracker archives for a PrepML/FDB expver."""
-    from eval._backends.tctracker import (
-        build_config, parse_atlantic_tracks, render_slurm_script, run_batch,
-        verify_outputs, write_atlantic_summary, write_verification_summary,
-    )
+    """Run, verify, or parse ECMWF tctracker archives for one or more sources.
 
-    config = build_config(args, lane_config, host_config, output_dir)
+    Default = the single --expver under --role (back-compatible). With
+    --track-sources, the same tracker settings run over every requested role
+    (model expver + ctrl/target/input references) so all tracks share ONE
+    support; reference tars land in the shared tcrefs cache.
+    """
+    import dataclasses
+
+    from eval._backends.tctracker import (
+        build_config, completeness_report, expand_months, parse_atlantic_tracks,
+        parse_sources_arg, render_slurm_script, resolve_source_configs,
+        run_batch, verify_outputs, write_atlantic_summary,
+        write_verification_summary,
+    )
+    from eval._backends.tctracker.tables import parse_run_root
+
+    if getattr(args, "months", None) and not getattr(args, "dates", None):
+        args.dates = ",".join(expand_months(args.months))
+
+    base_config = build_config(args, lane_config, host_config, output_dir)
+    roles = parse_sources_arg(getattr(args, "track_sources", None))
+    if roles:
+        model_override = roles.get("model")
+        if model_override and model_override != base_config.expver:
+            raise SystemExit("--track-sources model=<expver> must match --expver")
+        sources = resolve_source_configs(base_config, roles, lane_config, host_config)
+    else:
+        sources = [(getattr(args, "role", "model") or "model", base_config.expver, base_config)]
 
     if getattr(args, "slurm_script", None):
-        script = render_slurm_script(
-            config,
-            code_root=host_config["code_root"],
-            venv_activate=host_config["environment_setup"]["venv_activate"],
-        )
-        script_path = Path(args.slurm_script)
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(script, encoding="utf-8")
-        script_path.chmod(script_path.stat().st_mode | 0o755)
-        LOG.info("tctracker sbatch script written to %s", script_path)
+        base_path = Path(args.slurm_script)
+        for role, source_id, config in sources:
+            script = render_slurm_script(
+                config,
+                code_root=host_config["code_root"],
+                venv_activate=host_config["environment_setup"]["venv_activate"],
+            )
+            script_path = base_path if len(sources) == 1 else base_path.with_name(
+                f"{base_path.stem}_{role}_{source_id}{base_path.suffix or '.sbatch'}"
+            )
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(script, encoding="utf-8")
+            script_path.chmod(script_path.stat().st_mode | 0o755)
+            LOG.info("tctracker sbatch script (%s=%s) written to %s", role, source_id, script_path)
         return
 
-    if not getattr(args, "verify_only", False) and not getattr(args, "parse_only", False):
-        run_batch(config)
+    failures: list[str] = []
+    for role, source_id, config in sources:
+        LOG.info("=== tctracker source %s=%s (%s/%s/%s) -> %s",
+                 role, source_id, config.fdb_class, config.stream, config.expver,
+                 config.output_dir)
+        if not getattr(args, "verify_only", False) and not getattr(args, "parse_only", False):
+            # Warn-only FDB completeness preflight for rd expvers: partial or
+            # empty dates are skipped by default (a tracker run on a half-
+            # written date would silently produce truncated tracks).
+            if config.fdb_class == "rd" and not getattr(args, "no_check_fdb", False):
+                report = completeness_report(config)
+                config.manifests_dir.mkdir(parents=True, exist_ok=True)
+                (config.manifests_dir / "fdb_completeness.json").write_text(
+                    json.dumps(report, indent=2) + "\n", encoding="utf-8",
+                )
+                if report["checked"] and not getattr(args, "track_incomplete", False):
+                    keep = tuple(d for d in config.dates if d in set(report["complete"]))
+                    if keep != config.dates:
+                        LOG.warning("%s=%s: tracking %d/%d complete dates",
+                                    role, source_id, len(keep), len(config.dates))
+                        config = dataclasses.replace(config, dates=keep)
+            if not config.dates:
+                LOG.warning("%s=%s: no complete dates to track; skipping source", role, source_id)
+                continue
+            try:
+                run_batch(config)
+            except RuntimeError as exc:
+                failures.append(f"{role}={source_id}: {exc}")
 
-    verification = verify_outputs(config)
-    md_path, json_path = write_verification_summary(config, verification)
-    LOG.info("tctracker verification written to %s and %s", md_path, json_path)
-    if verification["issues"]:
-        raise RuntimeError(f"tctracker verification found {len(verification['issues'])} issue(s); see {json_path}")
+        verification = verify_outputs(config)
+        md_path, json_path = write_verification_summary(config, verification)
+        LOG.info("verification (%s=%s) written to %s", role, source_id, md_path)
+        if verification["issues"] and not getattr(args, "parse_only", False):
+            failures.append(f"{role}={source_id}: {len(verification['issues'])} verification issue(s); see {json_path}")
 
-    tracks = parse_atlantic_tracks(config)
-    atl_md, atl_json = write_atlantic_summary(config, tracks)
-    LOG.info("Atlantic tctracker summary written to %s and %s", atl_md, atl_json)
+        # Parse the WHOLE run root, not just this invocation's targets:
+        # member-sliced production jobs run concurrently against one run root,
+        # and a per-config parse would leave whichever member finished last.
+        parsed_dir = parse_run_root(config.output_dir, role=role, source_id=source_id)
+        LOG.info("parsed tables (%s=%s) written to %s", role, source_id, parsed_dir)
+        if role == "model":  # keep the historical Atlantic summary artifacts
+            tracks = parse_atlantic_tracks(config)
+            write_atlantic_summary(config, tracks)
+
+    if failures:
+        raise RuntimeError("tctracker source failures:\n" + "\n".join(failures))
+
+
+def cmd_tccompare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
+    """Compare track sets from multiple tctracker sources and render figures."""
+    from eval.evaluators.tctracks.runner import run as tccompare_run
+
+    months = [m.strip() for m in str(args.months).split(",") if m.strip()]
+    basins = [b.strip() for b in str(args.basins).split(",") if b.strip()]
+    dates = [d.strip() for d in str(args.dates).split(",") if d.strip()] if getattr(args, "dates", None) else None
+    tccompare_run(
+        sources_arg=args.sources,
+        months=months,
+        basins=basins,
+        dates=dates,
+        lane_name=args.lane,
+        lane_config=lane_config,
+        host_config=host_config,
+        out_dir=output_dir,
+        reparse=getattr(args, "reparse", False),
+        no_plots=getattr(args, "no_plots", False),
+        top_k_cases=getattr(args, "top_k_cases", 3),
+        plot_only=getattr(args, "plot_only", False),
+        per_month_pages=getattr(args, "per_month_pages", False),
+        case_basins=[b.strip() for b in str(getattr(args, "case_basins", "") or "").split(",") if b.strip()] or None,
+    )
 
 def cmd_prepare(args: argparse.Namespace, lane_config: dict, host_config: dict, output_dir: Path) -> None:
     """Build truth-aware bundles only (no prediction)."""
@@ -1277,6 +1507,11 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     )
 
+    # --- membermaps subcommand (no lane/host config needed) ---
+    if args.subcommand == "membermaps":
+        from eval._backends.region_plotting.plot_member_wind_maps import run as membermaps_run
+        raise SystemExit(membermaps_run(args))
+
     # --- Report subcommand (no config needed) ---
     if args.subcommand == "report":
         from eval.report import generate_report
@@ -1306,11 +1541,22 @@ def main(argv: list[str] | None = None) -> None:
     # --- Evolution subcommand (reads ladder cards; no lane/host config needed) ---
     if args.subcommand == "evolution":
         from eval.jobs.evolution import main as evolution_main
+
+        def _resolve_card_spec(spec: str) -> str:
+            """`baseline:<lane>` or `LABEL=baseline:<lane>` -> the lane baseline's archived
+            ladder card (LABEL defaults to baseline-<ckpt8>)."""
+            label, _, path = spec.rpartition("=")
+            if path.startswith("baseline:"):
+                from eval.baseline import baseline_ladder_card
+                auto_label, card = baseline_ladder_card(path.split(":", 1)[1])
+                return f"{label or auto_label}={card}"
+            return spec
+
         forwarded: list[str] = ["--out", str(args.out), "--region", args.region]
         for e in args.exp:
-            forwarded += ["--exp", e]
+            forwarded += ["--exp", _resolve_card_spec(e)]
         if args.ref:
-            forwarded += ["--ref", args.ref]
+            forwarded += ["--ref", _resolve_card_spec(args.ref)]
         if args.input_ref:
             forwarded += ["--input", args.input_ref]
         if args.target_ref:
@@ -1448,6 +1694,16 @@ def main(argv: list[str] | None = None) -> None:
         output_dir = Path(explicit_out) if explicit_out else default_output_dir(
             host_config, lane_name, lane_config, getattr(args, "expver")
         )
+    elif args.subcommand == "tccompare":
+        from eval._backends.tctracker.pipeline import _lane_short_name
+        label = getattr(args, "label", None) or "_".join(
+            m.strip() for m in str(args.months).split(",") if m.strip()
+        )
+        explicit_out = getattr(args, "out", None)
+        output_dir = Path(explicit_out) if explicit_out else (
+            Path(host_config["scratch_root"]) / "eval"
+            / _lane_short_name(lane_name, lane_config) / "tctracks" / label
+        )
     else:
         output_dir = _resolve_output_dir(host_config, lane_name)
 
@@ -1530,6 +1786,7 @@ def main(argv: list[str] | None = None) -> None:
             plot_only=getattr(args, "plot_only", False),
             checkpoint=getattr(args, "checkpoint", None),
             run_label=getattr(args, "run_label", ""),
+            stages=_parse_csv_or_none(getattr(args, "stages", None)),
         )
         # C2: record completion FIRST (always), then consolidate plots (non-fatal).
         _update_effective_config_completion(output_dir, evaluators_run)
@@ -1539,6 +1796,18 @@ def main(argv: list[str] | None = None) -> None:
         _run_scoreboard(eval_dir, lane_config, evaluators, output_dir)
     elif args.subcommand == "tctracker":
         cmd_tctracker(args, lane_config, host_config, output_dir)
+    elif args.subcommand == "tccompare":
+        cmd_tccompare(args, lane_config, host_config, output_dir)
+
+    # --- vs-baseline: every score is read relative to the lane BASELINE (top of the
+    # lane scoreboard). Written AFTER the scoreboard step so scores.csv exists.
+    # Warn-only: a missing baseline/scores must not fail an otherwise-good eval. ---
+    if getattr(args, "vs_baseline", False):
+        from eval.baseline import write_vs_baseline
+        try:
+            write_vs_baseline(output_dir, lane_name, run_label=getattr(args, "run_label", ""))
+        except SystemExit as exc:
+            LOG.warning("--vs-baseline skipped: %s", exc)
 
 
 if __name__ == "__main__":

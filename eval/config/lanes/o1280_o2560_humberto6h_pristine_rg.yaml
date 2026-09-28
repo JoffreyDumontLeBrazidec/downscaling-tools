@@ -1,0 +1,29 @@
+# o1280_o2560_humberto6h_pristine_rg.yaml
+# The pristine Humberto lane pinned to the REGRIDDED tropical-cyclone support.
+#
+# Why this exists rather than an edit to the base lane: on 2026-08-23 the base
+# lane moved to support_mode "both" (commit 8865847) so its rows would also be
+# comparable on the lane scoreboard's native support. That is a deliberate
+# change and it is not mine to revert. But "both" currently fails on this lane,
+# because the native pass pulls in the OPER_O1280_0001 analysis, which lives on
+# the o1280 box while the model and IEKM live on o2560, and the contract
+# correctly refuses to mix geometries.
+#
+# Independently of that failure, REGRIDDED is the support this comparison must
+# use. The autoguidance screen was designed on it, and its pre-registered
+# minimum detectable effect of 8.1 hPa was computed on it, so scoring the arm
+# against the pre-registration requires the same geometry.
+base: o1280_o2560_humberto6h_pristine
+
+tc:
+  support_mode: "regridded"
+  # Draw the model's actual INPUT as a curve, from x_interp in the prediction
+  # files. Without this key the tropical-cyclone input curve is silently absent,
+  # and absent in a way that is easy to miss: the lane lists
+  # reference_expids: ["ENFO_O1280_0001"], the runner de-duplicates it on the
+  # grounds that it is "already drawn as 'input'" from the bundle, and then the
+  # drawing itself is gated on this key, which this lane family has never set.
+  # (The input_label in the base lane belongs to the spectra_ecmwf block.) Net
+  # effect: the reference is dropped AND never drawn, so the one curve that says
+  # how much intensity downscaling actually adds goes missing.
+  input_label: "ENFO O1280 (model input)"

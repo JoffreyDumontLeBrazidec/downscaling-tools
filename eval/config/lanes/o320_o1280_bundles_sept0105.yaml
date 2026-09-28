@@ -1,0 +1,27 @@
+# o320_o1280_bundles_sept0105 -- GLOBAL truth-aware bundle build for the
+# early-September 2025 window (1-5 September), created 2026-09-03.
+#
+# Why this lane exists: the base lane o320_o1280 pins its prepare stage to
+# atos_ag, which is the training partition and not where this build belongs.
+# The regional lane tc_o320_o1280_regionalbundle already runs the identical
+# prepare stage on atos_ac_pristine and has done so since 2026-08-21, so the
+# host restriction is a lane-level convention rather than a real hardware
+# requirement. This lane keeps the GLOBAL (uncropped) bundle build of the base
+# lane and only moves it onto the compute partition the rest of this campaign
+# uses.
+#
+# allowed_hosts is restated in full because the loader merges only two levels
+# deep and a partial nested block would silently drop the other stages.
+base: o320_o1280
+
+allowed_hosts:
+  prepare: [atos_ac_pristine, atos_ac]
+  predict: [atos_ag]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+predict:
+  dates: ["20250901", "20250902", "20250903", "20250904", "20250905"]
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120]

@@ -713,3 +713,252 @@ def test_bundle_main_forwards_channel_subset_overrides(monkeypatch, tmp_path):
     assert captured["lres_pl_channels"] is None
     assert captured["target_sfc_channels"] == ["10u", "10v", "2t", "msl"]
     assert captured["target_pl_channels"] is None
+
+
+# --- de-accumulation of accumulated low-res surface inputs -------------------
+# Regression cover for the defect that invalidated the o1280->o2560 Humberto
+# campaign: ssrd/strd arrive accumulated since forecast start, and feeding the
+# raw running total put the model about 15 sigma out of distribution from the
+# second lead time onward. The correction now decides per field from the data,
+# so these tests pin both halves of that decision.
+
+
+def test_deaccumulation_defaults_to_automatic_detection(monkeypatch):
+    monkeypatch.delenv("MI_DEACCUMULATE_LRES", raising=False)
+    assert bundle.deaccumulate_mode_from_env() == ("auto", None)
+
+
+@pytest.mark.parametrize(
+    "value, expected_mode",
+    [("auto", "auto"), ("off", "off"), ("none", "off"), ("ssrd,strd", "forced")],
+)
+def test_deaccumulation_escape_hatch_is_honoured(monkeypatch, value, expected_mode):
+    monkeypatch.setenv("MI_DEACCUMULATE_LRES", value)
+    mode, names = bundle.deaccumulate_mode_from_env()
+    assert mode == expected_mode
+    if expected_mode == "forced":
+        assert names == ("ssrd", "strd")
+
+
+def test_running_total_is_recognised_as_accumulated():
+    previous = np.linspace(0.0, 100.0, 500)
+    current = previous + np.linspace(1.0, 9.0, 500)  # every point grew
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert accumulated
+    assert fraction == pytest.approx(1.0)
+
+
+def test_field_constant_in_time_is_not_zeroed_out():
+    """A constant field is non-decreasing everywhere, so monotonicity alone
+    would wrongly mark it accumulated and subtracting would zero a real input."""
+    constant = np.full(500, 3.75)
+    accumulated, _ = bundle.looks_accumulated(constant, constant)
+    assert not accumulated
+
+
+def test_per_step_field_is_left_alone():
+    rng = np.random.default_rng(0)
+    previous = rng.normal(size=5000)
+    current = rng.normal(size=5000)
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert not accumulated
+    assert 0.3 < fraction < 0.7
+
+
+def test_mismatched_or_non_finite_input_is_never_deaccumulated():
+    assert bundle.looks_accumulated(np.zeros(10), np.zeros(11))[0] is False
+    with_nan = np.arange(10, dtype=float)
+    with_nan[3] = np.nan
+    assert bundle.looks_accumulated(with_nan, np.zeros(10))[0] is False
+
+
+def test_first_step_has_no_previous_bundle(tmp_path):
+    """At the first step the accumulation window already equals one increment,
+    so nothing may be subtracted."""
+    first = tmp_path / "case_step006h_input_bundle.nc"
+    first.write_bytes(b"")
+    assert bundle.previous_step_bundle_path(first) is None
+
+
+def test_later_step_resolves_its_predecessor(tmp_path):
+    earlier = tmp_path / "case_step018h_input_bundle.nc"
+    later = tmp_path / "case_step024h_input_bundle.nc"
+    earlier.write_bytes(b"")
+    later.write_bytes(b"")
+    assert bundle.previous_step_bundle_path(later) == earlier
+
+
+def test_predecessor_is_found_at_a_non_six_hour_cadence(tmp_path):
+    """The o320->o1280 regional bundles are staged 24-hourly. Assuming six hours
+    would find no file and silently skip the correction."""
+    for step in (24, 48, 72):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step072h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(later).name == "case_step048h_input_bundle.nc"
+
+
+def test_earliest_step_has_no_predecessor_at_any_cadence(tmp_path):
+    for step in (24, 48):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    first = tmp_path / "case_step024h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(first) is None
+
+
+def test_nearest_earlier_step_wins_when_the_cadence_is_irregular(tmp_path):
+    for step in (6, 12, 36):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step036h_input_bundle.nc"
+    assert bundle.previous_step_bundle_path(later).name == "case_step012h_input_bundle.nc"
+
+
+def test_forced_cadence_overrides_detection(tmp_path, monkeypatch):
+    for step in (6, 12, 18, 24):
+        (tmp_path / ("case_step%03dh_input_bundle.nc" % step)).write_bytes(b"")
+    later = tmp_path / "case_step024h_input_bundle.nc"
+    monkeypatch.setenv("MI_DEACCUM_STEP_HOURS", "12")
+    assert bundle.previous_step_bundle_path(later).name == "case_step012h_input_bundle.nc"
+    monkeypatch.delenv("MI_DEACCUM_STEP_HOURS")
+    assert bundle.previous_step_bundle_path(later).name == "case_step018h_input_bundle.nc"
+
+
+# --- input distribution guard ------------------------------------------------
+# General cover: nothing looked at whether the numbers reaching the model
+# resembled the numbers it was trained on, which let accumulated radiation
+# inputs sit far out of distribution unnoticed. The guard compares against the
+# checkpoint's own normaliser, so it catches any drift, not only accumulation.
+
+
+class _BufferModel:
+    """Stand-in exposing named_buffers() the way a checkpoint does, including the
+    inverse and tendency copies that the selector has to reject."""
+
+    def __init__(self, n_channels=4, mean=0.0, std=1.0, with_decoys=True):
+        import torch
+
+        mul = torch.full((n_channels,), 1.0 / std)
+        add = torch.full((n_channels,), -mean / std)
+        self._b = {
+            "model.pre_processors.in_lres.processors.normalizer._norm_mul": mul,
+            "model.pre_processors.in_lres.processors.normalizer._norm_add": add,
+        }
+        if with_decoys:
+            self._b.update({
+                "model.post_processors.in_lres.processors.normalizer._norm_mul": mul * 7,
+                "model.post_processors.in_lres.processors.normalizer._norm_add": add * 7,
+                "model.pre_processors_tendencies.in_lres.processors.normalizer._norm_mul": mul * 3,
+                "model.pre_processors_tendencies.in_lres.processors.normalizer._norm_add": add * 3,
+            })
+
+    def named_buffers(self, *args, **kwargs):
+        return iter(self._b.items())
+
+
+def test_guard_picks_the_forward_normaliser_not_its_inverse():
+    stem, mul, add = bundle._find_input_normalizer(_BufferModel(), 4)
+    assert "pre_processors." in stem
+    assert "post_processors" not in stem and "tendencies" not in stem
+
+
+def test_guard_accepts_an_in_distribution_input():
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == []
+
+
+def test_guard_flags_a_field_shifted_out_of_distribution():
+    """The signature of the accumulated-radiation defect: one channel's centre
+    displaced by many training sigma while the rest are fine."""
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 2] += 15.0 * 2.0  # +15 sigma, as ssrd was by step 120
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == ["c"]
+
+
+def test_guard_flags_a_zero_filled_channel():
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 1] = 5.0  # right centre, no spread at all
+    model = _BufferModel(mean=5.0, std=2.0)
+    assert "b" in bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3})
+
+
+def test_guard_can_be_silenced(monkeypatch):
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(1000, 4))
+    x[:, 0] += 100.0
+    model = _BufferModel(mean=5.0, std=2.0)
+    monkeypatch.setenv("MI_INPUT_GUARD", "off")
+    assert bundle.check_input_distribution(model, x, {"a": 0, "b": 1, "c": 2, "d": 3}) == []
+
+
+def test_guard_threshold_is_tunable(monkeypatch):
+    rng = np.random.default_rng(0)
+    x = rng.normal(loc=5.0, scale=2.0, size=(4000, 4))
+    x[:, 0] += 2.0 * 2.0  # +2 sigma
+    model = _BufferModel(mean=5.0, std=2.0)
+    idx = {"a": 0, "b": 1, "c": 2, "d": 3}
+    assert "a" in bundle.check_input_distribution(model, x, idx)
+    monkeypatch.setenv("MI_INPUT_GUARD_SIGMA", "5")
+    assert bundle.check_input_distribution(model, x, idx) == []
+
+
+@pytest.mark.parametrize("junk", [None, "not an array", 12345])
+def test_guard_never_raises_whatever_it_is_handed(junk):
+    """It is a convenience, never a precondition: a fault inside it must not be
+    able to take down an inference run."""
+    assert bundle.check_input_distribution(_BufferModel(), junk, {"a": 0}) == []
+
+
+def test_guard_is_silent_when_no_matching_normaliser_exists():
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(100, 9))  # 9 channels, model has 4
+    assert bundle.check_input_distribution(_BufferModel(), x, {"a": 0}) == []
+    assert bundle.check_input_distribution(object(), x, {"a": 0}) == []
+
+
+def test_packing_noise_does_not_hide_an_accumulation():
+    """Found in production 2026-08-22. Archived fields are packed with limited
+    precision, so a quantity that is genuinely constant across a step - solar
+    radiation over the night hemisphere - can be stored very slightly SMALLER at
+    the later step. Real failing case: 6.3% of ssrd points came back lower, by up
+    to 512 J/m2 out of 4.9e7, one quantum of 16-bit packing. The original 1e-9
+    tolerance dropped the non-decreasing fraction to 0.937 and the field was
+    judged not accumulated, so it was fed to the model as a raw running total."""
+    rng = np.random.default_rng(0)
+    n = 200000
+    previous = rng.uniform(0.0, 4.0e7, size=n)
+    increment = np.where(rng.random(n) < 0.6, 0.0, rng.uniform(0.0, 8.0e6, size=n))
+    current = previous + increment
+    # packing quantum of the observed size, applied to the zero-increment points
+    night = increment == 0.0
+    current[night] -= rng.uniform(0.0, 512.0, size=int(night.sum()))
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert accumulated, "packing noise must not hide a real accumulation"
+    assert fraction == pytest.approx(1.0)
+
+
+def test_tolerance_cannot_rescue_a_per_step_field():
+    """The loosened tolerance must not blur the distinction it exists to make.
+    A per-step field's point-to-point changes are genuinely negative about half
+    the time, which no small tolerance can repair."""
+    rng = np.random.default_rng(1)
+    previous = rng.normal(loc=0.0, scale=5.0, size=200000)
+    current = rng.normal(loc=0.0, scale=5.0, size=200000)
+    accumulated, fraction = bundle.looks_accumulated(current, previous)
+    assert not accumulated
+    assert 0.3 < fraction < 0.7
+
+
+def test_a_real_decrease_still_rejects():
+    """A field that falls by far more than the packing quantum is not a running
+    total, and must not be treated as one."""
+    rng = np.random.default_rng(2)
+    previous = rng.uniform(0.0, 1.0e6, size=50000)
+    current = previous.copy()
+    drop = rng.random(50000) < 0.05
+    current[drop] -= 1.0e5  # 10% of the field maximum, far above any tolerance
+    current[~drop] += 1.0e4
+    accumulated, _ = bundle.looks_accumulated(current, previous)
+    assert not accumulated

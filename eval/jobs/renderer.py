@@ -64,6 +64,14 @@ def _sbatch_header(
     elif qos == "ng":
         lines.append("#SBATCH --gpus-per-node=0")
 
+    # Hosts outside ECMWF need directives the Atos clusters infer from the QOS
+    # alone -- JUPITER, for instance, requires --account and --partition. A host
+    # config may supply them verbatim via scheduler.extra_directives. Absent (the
+    # case for every Atos host config), this loop adds nothing and the rendered
+    # header is byte-identical to before.
+    for directive in scheduler.get("extra_directives") or []:
+        lines.append(f"#SBATCH {directive}")
+
     return "\n".join(lines)
 
 

@@ -1,0 +1,27 @@
+# tc_o1280_o2560_humberto_pw40s1e6_agmass_w20_d050k.yaml
+# Guided arm of the sigma_max mechanism test: pw40 sigma_max 1e6, mass-only
+# {msl: 2.0}, D_bad = fccc23df step 50k. Matched control = tc_o1280_o2560_humberto_pw40s1e6
+# (SAME sampler; the only deltas here are the two autoguide_* keys).
+# Never compare to pw30/s1000 rows.
+base: tc_o1280_o2560_humberto
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 1000000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000000.0
+    S_noise: 1.05
+    # --- autoguidance (the only deltas vs the pw40s1e6 control) ---
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/fccc23dfb5de4dfbbb2ca0c0e0ce3fdf/inference-anemoi-by_step-epoch_076-step_050000.ckpt"
+    autoguide_weight_map: {msl: 2.0}

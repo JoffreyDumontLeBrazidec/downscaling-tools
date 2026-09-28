@@ -144,9 +144,15 @@ PREDICT_ONESHOT = """python -m eval.cli predict --lane {lane} --host {host} --mo
   --dates {dates} --steps {steps} --members {members}
 """
 
-# candidate-B mode: M independent draws of ONE bundle (model noise is unseeded ->
-# repeated predict = independent samples of the conditional PDF).
+# candidate-B mode: M independent draws of ONE bundle = M independent samples of
+# the conditional PDF. Until 2026-08-31 this relied on inference being UNSEEDED, so
+# simply re-running gave a fresh draw. Inference is now deterministically seeded
+# (eval/predict/seeding.py), so the draw index must vary the seed explicitly --
+# otherwise every draw returns the SAME field and the seed statistics silently
+# collapse to one realization. Spacing of 1000 keeps draw d's per-rank seeds
+# (base + rank) disjoint from draw d+1's.
 PREDICT_SEED_DRAWS = """for D in $(seq 1 {draws}); do
+  ANEMOI_BASE_SEED=$((756000 + 1000 * D)) \\
   python -m eval.cli predict --lane {lane} --host {host} --mode manual \\
     --checkpoint {ckpt} --bundle-dir {bundles} --output-dir {evaldir}/draw_$D \\
     --dates {dates} --steps {steps} --members {members}
@@ -432,7 +438,22 @@ def cmd_loss(args: argparse.Namespace) -> None:
     Nested metric names are supported and are where the useful metrics live -- an MLflow
     file store writes per-variable validation metrics as SUBDIRECTORIES, e.g.
     'val_out_hres_mse_metric/out_hres/sfc_2t_scale_0'.
+
+    --baseline-lane <lane> loads the lane BASELINE's ARCHIVED store (mlflow-dir, run-id and
+    label 'baseline' resolved from the scoreboard's meta.baseline) so a live run and the
+    baseline overlay in one `ladder plot`. COARSE SANITY ONLY: train/val loss is not
+    cross-run-comparable skill -- judge progress on ladder/proxy metrics vs the baseline's
+    ladder card (evolution --ref baseline:<lane>), and use this overlay just to spot
+    divergence, stalls or NaNs.
     """
+    if args.baseline_lane:
+        from eval.baseline import baseline_mlflow
+        exp_dir, run_id = baseline_mlflow(args.baseline_lane)
+        args.mlflow_dir, args.run_id = exp_dir, run_id
+        args.run_name = None
+        args.label = args.label or "baseline"
+    if not args.mlflow_dir:
+        raise SystemExit("ladder loss: pass --mlflow-dir (or --baseline-lane)")
     if not (args.run_name or args.run_id):
         raise SystemExit("ladder loss: pass --run-name or --run-id")
     prof = load_profile(args.profile)
@@ -781,7 +802,11 @@ def main() -> None:
 
     s = sub.add_parser("loss")
     s.add_argument("--profile", required=True)
-    s.add_argument("--mlflow-dir", required=True)
+    s.add_argument("--mlflow-dir")
+    s.add_argument("--baseline-lane",
+                   help="load the lane BASELINE's archived MLflow store instead of "
+                        "--mlflow-dir/--run-id (label defaults to 'baseline'). Coarse sanity "
+                        "overlay only — loss is not cross-run-comparable skill.")
     s.add_argument("--run-name", help="EXACT mlflow.runName; use --run-id when the name is "
                                       "generic or reused")
     s.add_argument("--run-id", help="mlflow run id: merges that run AND every child whose "

@@ -1,0 +1,28 @@
+# tc_o1280_o2560_humberto_pw40s1e6_churn0.yaml
+# Stochasticity ladder of the 2026-08-31 precipitation sampler screen: the
+# boxed pw40/sigma_max 1e6 control with S_churn = 0.0. Stochasticity OFF: the bottom of the axis, and the arm that tells us whether churn is connected to the precipitation tail at all.
+# The Heun sampler uses gamma = min(S_churn / num_steps, sqrt(2) - 1), so with
+# num_steps 40 this arm injects gamma = 0.000 of extra noise per step in the
+# band sigma in [S_min, S_max], and S_churn above 16.57 changes nothing at all.
+# The ONLY delta against tc_o1280_o2560_humberto_pw40s1e6 is S_churn.
+# Task note: ~/dev/docs/epics/tc-o1280-o2560/in-progress/20260831_precip_sampler_guidance_screen.md
+base: tc_o1280_o2560_humberto
+
+predict:
+  # Loader merge is 2 levels deep: this block REPLACES the inherited sampler.
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 1000000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 1000000.0
+    S_noise: 1.05

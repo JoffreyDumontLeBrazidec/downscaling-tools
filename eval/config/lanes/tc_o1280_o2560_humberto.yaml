@@ -1,0 +1,56 @@
+# tc_o1280_o2560_humberto -- regional TC box-cut screening lane (2026-08-26).
+# First lane of the tc_o1280_o2560 family: the GLOBAL pristine o2560 checkpoint
+# (fccc23df-class lineage) run on a per-storm box via the generic
+# local_scope/cut_graph mechanism -- same mechanism as o96_o320_tcbox_bench.
+# Existing global Humberto bundles in, in-memory graph cut at model load: no new
+# bundles, no new graph builds, no retraining. Single-GPU (ngpm=1) on atos_ac
+# A100 -- the cut path refuses model-parallel by design, and escaping the AG
+# queue/24h wall is the point.
+# Purpose: fast same-day TC screens on out-of-sample storms (first customer =
+# the pre-registered autoguidance w=1.5 dose arm). SCREENING EVIDENCE ONLY:
+# box-support rows live on this lane's own board and never enter a full-lane
+# scoreboard (two-gate doctrine). Winners confirm globally.
+# Box = the established humberto_atlantic region [5,45,-80,-40]: superset of the
+# humberto_core showcase box, the TC-evaluator event box, and the full track for
+# init dates 0926-0930 at leads to 120h.
+# Design note: hpc ~/dev/docs/epics/tc-o1280-o2560/20260826_lane_design.md
+base: o1280_o2560_humberto6h_pristine
+
+default_host: atos_ac
+allowed_hosts:
+  prepare: [atos_ac, atos_ac_pristine]
+  predict: [atos_ac, atos_ac_pristine, atos_ag]
+  run: []
+  evaluate: [atos_ac, atos_ac_pristine]
+  scoreboard: [atos_ac, atos_ac_pristine]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  # 24h-subset steps only: the TC tail-extremes kernel supports 24/48/72/96/120,
+  # and this lane's verdicts are TC readouts -- no reason to pay 4x for 6h here.
+  # The 6h bundle set still serves as input (one bundle per step; each step is
+  # an independent prediction, so skipping steps skips their cost).
+  steps: [24, 48, 72, 96, 120]
+  dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 1
+  local_scope:
+    mode: bbox
+    cut_graph: true
+    hidden_halo_hops: 1
+    label: humberto_atlantic_box
+    lat_min: 5.0
+    lat_max: 45.0
+    lon_min: -80.0
+    lon_max: -40.0
+
+evaluator_groups:
+  default: [tc]
+
+resource_profiles:
+  predict:
+    qos: ng
+    gpus: 1
+    ntasks_per_node: 1
+    time: "04:00:00"
+    mem: 256G
+    cpus: 16

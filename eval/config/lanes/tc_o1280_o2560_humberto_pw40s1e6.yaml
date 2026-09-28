@@ -1,0 +1,30 @@
+# tc_o1280_o2560_humberto_pw40s1e6.yaml
+# WIDE-BAND CONTROL of the sigma_max mechanism test (owner directive 2026-08-27):
+# the boxed Humberto lane with the o320->o1280 piecewise40 schedule and
+# sigma_max RAISED to 1e6 (o320->o1280 runs 1e4/1e5; this lane ran 1000, and the
+# 08-27 agmatrix verdict flagged the band as the prime suspect for the guidance
+# null). Sampler block cloned from o320_o1280_piecewise40_s1e5.yaml with
+# sigma_max/S_max 1e5 -> 1e6. Everything else inherits from the box lane.
+# A sampler change touches BOTH arms: this control is the ONLY valid reference
+# for the pw40s1e6 guided arms; never compare pw40s1e6 rows to pw30/s1000 rows.
+# Design note addendum: ~/dev/docs/epics/tc-o1280-o2560/in-progress/20260826_agmatrix_weight_ckpt_screen.md
+base: tc_o1280_o2560_humberto
+
+predict:
+  # Loader merge is 2 levels deep: this block REPLACES the inherited sampler wholesale.
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 1000000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000000.0
+    S_noise: 1.05

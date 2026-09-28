@@ -55,6 +55,28 @@ def _expid_from_grib_path(path):
     return f"{m.group(1).upper()}_{m.group(2).upper()}_{m.group(3)}" if m else None
 
 
+# The input curve is drawn by default. Without a default here the dedup below
+# and the draw site further down disagreed: the dedup dropped a reference saying
+# the input was "already drawn", while the draw site skipped it because the key
+# was unset, and the curve disappeared with only a warning asserting otherwise.
+_DEFAULT_INPUT_LABEL = "input"
+
+
+def resolve_bundle_curve_labels(eval_config):
+    """Labels for the bundle-derived input and target curves.
+
+    One resolver for both the de-duplication and the drawing, so the two cannot
+    drift apart again. The input gets a default because a comparison without the
+    model's own input has no baseline for how much the downscaling adds. The
+    target deliberately gets none: most lanes already draw their target from
+    ``target_grib``, and defaulting this would add a duplicate target curve,
+    which is the regression the de-duplication exists to prevent.
+    """
+    input_label = eval_config.get("input_label", _DEFAULT_INPUT_LABEL)
+    target_nc_label = eval_config.get("target_nc_label")
+    return input_label, target_nc_label
+
+
 def _strip_bundle_duplicate_references(reference_expids, lane_config, eval_config):
     """Definitive guard against the duplicate-curve regression.
 
@@ -78,18 +100,44 @@ def _strip_bundle_duplicate_references(reference_expids, lane_config, eval_confi
     }
     if not bundle_products:
         return reference_expids
-    kept, dropped = [], []
+    input_label, target_nc_label = resolve_bundle_curve_labels(eval_config)
+    # Only stand down in favour of a curve that will actually be drawn. The input
+    # always is, now that it has a default. The target is drawn from the bundle
+    # only when target_nc_label is set, and otherwise usually comes from
+    # target_grib; if neither is true, keeping the reference is what preserves
+    # the curve.
+    target_is_drawn = bool(target_nc_label) or bool(eval_config.get("target_grib"))
+    input_product = _expid_from_grib_path(prep_args.get("lres_sfc_grib"))
+    target_product = _expid_from_grib_path(prep_args.get("target_sfc_grib"))
+    replaceable = set()
+    if input_product:
+        replaceable.add(input_product)
+    if target_product and target_is_drawn:
+        replaceable.add(target_product)
+
+    kept, dropped, retained_for_safety = [], [], []
     for expid in reference_expids:
-        (dropped if str(expid).upper() in bundle_products else kept).append(expid)
+        key = str(expid).upper()
+        if key in replaceable:
+            dropped.append(expid)
+        else:
+            kept.append(expid)
+            if key in bundle_products:
+                retained_for_safety.append(expid)
     if dropped:
         LOG.warning(
             "TC: dropping reference_expids %s -- identical to the bundle's input/target "
-            "(already drawn as '%s' / '%s'); keeping them would plot duplicate curves on a "
+            "(drawn instead as '%s' / '%s'); keeping them would plot duplicate curves on a "
             "different regrid support. Non-blocking dedup (remove them from the lane "
             "`reference_expids` to silence).",
-            dropped,
-            eval_config.get("input_label", "input"),
-            eval_config.get("target_nc_label", "target"),
+            dropped, input_label, target_nc_label or eval_config.get("target_label", "target"),
+        )
+    if retained_for_safety:
+        LOG.warning(
+            "TC: KEEPING reference_expids %s even though they duplicate the bundle, because "
+            "no bundle curve would be drawn to replace them. Dropping them would remove the "
+            "curve entirely rather than de-duplicate it.",
+            retained_for_safety,
         )
     return tuple(kept)
 
@@ -252,7 +300,13 @@ def run(
     # Grouping by mode keeps metview operations together and avoids MARS state issues.
     modes = ["regridded", "native"] if support_mode == "both" else [support_mode]
 
+    # Each mode is isolated. With support_mode "both" a failure in one pass used
+    # to escape this loop and abort the evaluator, throwing away the results the
+    # other pass had already computed. Now a failing mode is recorded and the
+    # others still produce output; the evaluator fails only if every mode fails.
+    mode_failures = {}
     for mode in modes:
+      try:
         for event_name in event_names:
             # Preflighted above: event resolves and has >=1 matched prediction file.
             event = resolved_events[event_name]
@@ -328,7 +382,7 @@ def run(
             )
 
             # Load input (x_interp) and target (y) curves directly from NetCDF files
-            input_label = eval_config.get("input_label")
+            input_label, target_nc_label = resolve_bundle_curve_labels(eval_config)
             if input_label and event_pred_files:
                 try:
                     curves[input_label] = load_prediction_curves(
@@ -340,7 +394,6 @@ def run(
                 except Exception:
                     LOG.warning("Failed to load x_interp curve for event=%s", event_name, exc_info=True)
 
-            target_nc_label = eval_config.get("target_nc_label")
             if target_nc_label and event_pred_files:
                 try:
                     curves[target_nc_label] = load_prediction_curves(
@@ -411,6 +464,24 @@ def run(
             event_stats["steps_hours"] = _steps
             event_stats["n_pred_files"] = len(event_pred_files)
             payload["events"][event_key] = event_stats
+
+      except Exception as exc:
+        if len(modes) == 1:
+            raise
+        mode_failures[mode] = repr(exc)
+        LOG.error(
+            "TC support mode %r failed and was skipped: %s. The other mode(s) still "
+            "produced output; read the results only on the mode(s) that succeeded.",
+            mode, exc, exc_info=True,
+        )
+
+    if not payload["events"]:
+        raise RuntimeError(
+            "TC produced no events: every support mode failed. "
+            + "; ".join(f"{m}: {e}" for m, e in mode_failures.items())
+        )
+    if mode_failures:
+        payload["mode_failures"] = mode_failures
 
     stats_path = output_dir / "stats.json"
     with open(stats_path, "w", encoding="utf-8") as f:

@@ -12,12 +12,13 @@ _CONFIG_DIR = Path(__file__).parent
 
 _LANE_REQUIRED_KEYS = {"predict", "evaluator_groups"}
 _LANE_ALLOWED_KEYS = {
-    "predict", "tc", "spectra", "spectra_ecmwf", "surface", "regions",
+    "predict", "tc", "spectra", "spectra_ecmwf", "spectra_ecmwf_v2", "surface", "regions",
     "evaluator_groups", "sigma", "sigma_loss", "mechanistic", "intermediate",
     "resource_profiles", "region_plot", "prepare", "prepml",
     "default_host", "allowed_hosts", "lineage",
-    "precip_dist", "precip_events", "probabilistic", "quaver", "local_global",
-    "tctracker",
+    "precip", "precip_dist", "precip_events", "precip_scores", "probabilistic", "quaver", "obs_crps", "local_global",
+    "tctracker", "lane_diagnostics", "texture", "wind_extremes", "displacement",
+    "membermaps",
 }
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}

@@ -2,6 +2,9 @@
 
 Used by the `precip_events` evaluator to drive bbox-cropped local plots of the
 hardest precip cases. Pure logic — no plotting, no subprocess.
+
+When ranking by truth and the predictions carry no tp truth (the o1280->o2560
+main-lane case), the truth comes from the per-date GRIB template instead.
 """
 from __future__ import annotations
 
@@ -11,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+
+from eval._backends.precip.sources import PrecipTruthSource
 
 _FNAME_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc")
 
@@ -43,6 +48,7 @@ def find_precip_events(
     rank_by: str = "truth",
     var: str = "tp",
     member: int = 0,
+    truth_grib_tpl: str = "",
 ) -> list[Event]:
     """Rank prediction NCs by max `var` (truth or pred) and return the top-N as Events."""
     predictions_dir = Path(predictions_dir)
@@ -50,7 +56,8 @@ def find_precip_events(
     if not files:
         raise FileNotFoundError(f"No prediction files found in {predictions_dir}")
 
-    field = "y" if rank_by == "truth" else "y_pred"
+    truth_src: PrecipTruthSource | None = None
+    truth_mode: str | None = None
     candidates: list[Event] = []
     for f in files:
         parsed = _parse(f)
@@ -59,17 +66,34 @@ def find_precip_events(
         date, step = parsed
         ds = xr.open_dataset(f)
         try:
-            ws = list(ds["weather_state"].values)
+            ws = [str(s) for s in ds["weather_state"].values]
             if var not in ws:
                 continue
             vi = ws.index(var)
-            arr = ds[field].values[0, member, :, vi]
             lats = ds["lat_hres"].values
             lons = ds["lon_hres"].values
+            if rank_by == "truth":
+                if truth_mode is None:
+                    probe = ds["y"][0, member, :100_000].values[:, vi]
+                    truth_mode = "embedded-y" if np.isfinite(probe).mean() > 0.99 \
+                        else "grib"
+                if truth_mode == "grib":
+                    if not truth_grib_tpl:
+                        raise RuntimeError(
+                            f"rank_by=truth but predictions carry no {var} truth "
+                            "and no truth_grib_tpl was configured (lane precip "
+                            "block)")
+                    truth_src = truth_src or PrecipTruthSource(truth_grib_tpl, var=var)
+                    arr = truth_src.load(date, step)
+                    truth_src.verify_grid(lats, lons)
+                else:
+                    arr = ds["y"][0, member].values[:, vi]
+            else:
+                arr = ds["y_pred"][0, member].values[:, vi]
         finally:
             ds.close()
 
-        gp = int(np.argmax(arr))
+        gp = int(np.nanargmax(arr))
         peak = float(arr[gp])
         lat = float(lats[gp])
         lon = float(lons[gp])

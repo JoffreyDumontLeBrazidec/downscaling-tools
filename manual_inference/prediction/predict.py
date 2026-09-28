@@ -4,6 +4,7 @@ import argparse
 import inspect
 import json
 import os
+import logging
 import re
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -27,7 +28,9 @@ from manual_inference.config import DEFAULT_EXTRA_ARGS_JSON
 # Re-export for backward compatibility — external callers import these from here.
 __all__ = ["DEFAULT_EXTRA_ARGS_JSON"]
 from manual_inference.input_data_construction.bundle import extract_target_from_bundle_dataset
+from manual_inference.input_data_construction.bundle import check_input_distribution
 from manual_inference.input_data_construction.bundle import load_inputs_from_bundle_numpy
+from manual_inference.input_data_construction.bundle import previous_step_bundle_path
 from manual_inference.input_data_construction.bundle import open_bundle_dataset
 from manual_inference.input_data_construction.bundle import parse_channel_subset_csv as _parse_channel_subset_csv
 from manual_inference.prediction.dataset import build_predictions_dataset
@@ -47,6 +50,21 @@ _JUPITER_RUNTIME_LOCAL = "/home/mlx/ai-ml/datasets/"
 # Unified multi-ds predict_step kwarg routing.
 _NOISE_SCHEDULER_KEYS = {"num_steps", "sigma_max", "sigma_min", "rho", "schedule_type"}
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
+
+
+def _model_takes_lead_hours(inference_model) -> bool:
+    """True iff the checkpoint carries a lead-conditioned hres_branch (fine-scale epic, 2026-09-06)."""
+    inner = getattr(inference_model, "model", inference_model)
+    branch = getattr(inner, "hres_branch", None)
+    return branch is not None and getattr(branch, "lead_embed", None) is not None
+
+
+_BUNDLE_LEAD_RE = re.compile(r"_step(\d{3})h_input_bundle\.nc$")
+
+
+def _bundle_lead_hours(bundle_nc) -> float | None:
+    m = _BUNDLE_LEAD_RE.search(str(bundle_nc)) if bundle_nc is not None else None
+    return float(int(m.group(1))) if m else None
 
 
 def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group, extra_args: dict):
@@ -345,6 +363,8 @@ def _predict_from_dataloader(
         amp_enabled = False  # native bf16 layernorm (~6.3GB) vs autocast fp32 transient (~12.6GB); OOM fix for 1-GPU global-o1280
     amp_dtype = torch.float16 if precision == "fp16" else torch.bfloat16
 
+    if _model_takes_lead_hours(inference_model):
+        raise NotImplementedError("from-dataloader does not carry the forecast lead; use from-bundle for a lead-conditioned model")
     for i_sample in range(n_samples):
         for j, m in enumerate(members):
             x_l = torch.from_numpy(x_in_full[i_sample, m]).to(device)[None, None, None, ...]
@@ -424,6 +444,17 @@ def predict_from_bundle(
             bundle,
             name_to_idx_lres,
             name_to_idx_hres,
+            # De-accumulation needs the previous step's bundle, a sibling file;
+            # `bundle` is already an open Dataset, so resolve it from the path.
+            prev_bundle=previous_step_bundle_path(bundle_nc),
+        )
+        # Sanity-check the inputs against the training distribution before spending
+        # a GPU-hour on them. Advisory only: it logs and never refuses.
+        check_input_distribution(
+            inference_model,
+            x_lres_np,
+            name_to_idx_lres,
+            label=Path(str(bundle_nc)).name if bundle_nc is not None else "",
         )
         x_in = torch.from_numpy(x_lres_np).to(device)[None, None, None, ...]
         x_in_hres = torch.from_numpy(x_hres_np).to(device)[None, None, None, ...]
@@ -446,6 +477,14 @@ def predict_from_bundle(
 
         # Unified multi-ds: predict_step takes a dict batch.
         batch = {"in_lres": x_in, "in_hres": x_in_hres}
+        # lead-conditioned hres_branch (2026-09-06): the lead comes from the bundle file name and
+        # travels as a plain predict_step kwarg; models without the option never see it.
+        if _model_takes_lead_hours(inference_model):
+            lead_hours = _bundle_lead_hours(bundle_nc)
+            if lead_hours is None:
+                raise ValueError(f"lead-conditioned model but no _stepNNNh in bundle name: {bundle_nc}")
+            extra_args = {**extra_args, "lead_hours": lead_hours}
+            logging.getLogger(__name__).info("lead_hours=%s passed to the lead-conditioned branch (%s)", lead_hours, Path(str(bundle_nc)).name)
         with torch.inference_mode():
             with torch.autocast(
                 device_type="cuda",

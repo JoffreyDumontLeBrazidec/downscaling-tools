@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -49,7 +50,8 @@ if str(_DT_ROOT) not in sys.path:
     sys.path.insert(0, str(_DT_ROOT))
 
 from interp.cli import add_event_args, add_model_args, setup_logging
-from interp.core.data import collect_event_bundles, resolve_event_args
+from interp.core.data import (collect_event_bundles, event_extra,
+                              inject_truth_grib, resolve_event_args)
 from interp.core.geometry import DEFAULT_AUTO_WINDOW, box_mask_km, detect_min_center
 from interp.core.model import (
     denoise_at_sigma,
@@ -159,12 +161,176 @@ def _side_reduce(col, name):
     return _q(col, CORE_Q_HIGH)
 
 
+def _shard_bounds(shard_sizes, rank):
+    """[lo, hi) global row range owned by `rank` under `shard_sizes`."""
+    lo = int(sum(int(s) for s in shard_sizes[:rank]))
+    return lo, lo + int(shard_sizes[rank])
+
+
+def _project_rows(inner, x_lres_5d, keep, new_row, n_rows):
+    """Project the low-res input onto a chosen subset of target rows.
+
+    Shared core of the row cut: `keep` selects the matrix entries belonging to the
+    wanted rows and `new_row` renumbers them into the subset, after which the
+    model's own projector does the multiply, so the arithmetic is byte-identical
+    to the path verified against the model's full-grid upsample.
+    """
+    res = inner.residual["in_lres"]
+    mat = res.provider.get_edges(device=x_lres_5d.device)
+    sub = torch.sparse_coo_tensor(
+        torch.stack([new_row, mat.indices()[1][keep]]), mat.values()[keep],
+        (n_rows, mat.shape[1]), device=x_lres_5d.device).coalesce()
+    x = x_lres_5d[:, res.step, ...]                           # (batch, ens, grid, feat)
+    batch = x.shape[0]
+    x = x.reshape(-1, x.shape[-2], x.shape[-1])               # (batch*ens, grid, feat)
+    out = res.projector(x, sub)          # the model's own projector, autocast setting and all
+    del sub
+    out = out.reshape(batch, -1, out.shape[-2], out.shape[-1])  # (batch, time, grid, feat)
+    return out[:, :, None, :, :]                                # + ensemble axis
+
+
+def box_rows_upsample(inner, x_lres_5d, box_bool):
+    """Interpolated input on the box cells only, computed locally on one rank.
+
+    The box reference used to be carved out of a gathered full grid, and then out
+    of a collective over the ranks. Both were needless: the row cut can take any
+    set of target rows, and the box is only ~42,000 of 26.3 million, so the rank
+    that needs the reference simply projects those rows itself. No collective at
+    all, which also keeps object-based collectives away from the NCCL group the
+    model's halo exchange depends on.
+    """
+    mat = inner.residual["in_lres"].provider.get_edges(device=x_lres_5d.device)
+    rows = mat.indices()[0]
+    keep = box_bool[rows]
+    sel = torch.nonzero(box_bool, as_tuple=False).flatten()   # sorted global row ids
+    new_row = torch.searchsorted(sel, rows[keep])
+    return _project_rows(inner, x_lres_5d, keep, new_row, int(sel.numel()))
+
+
+def row_sharded_upsample(inner, x_lres_5d, lo, hi):
+    """This rank's block of the low-res -> high-res projection, and nothing more.
+
+    The model's own `_before_sampling` upsamples the FULL target grid on EVERY
+    rank and only then splits the result. At O2560 that single array is 26,306,560
+    cells x 91 channels = 8.92 GiB in fp32, and the projector holds two of them at
+    once (the multiply's output and the stack that copies it), which overruns an
+    A100-40GB no matter how many ranks are used (measured: 16.94 GiB resident
+    before the call, 35.17 GiB at the failure, job 31190882).
+
+    The projection matrix has one row per target cell and rows are independent, so
+    multiplying only rows [lo, hi) reproduces exactly that slice of the global
+    result while allocating 1/world_size of the memory. This is the same row-cut
+    idea the box lane already uses, applied to the grid shards instead of a box.
+    """
+    rows = inner.residual["in_lres"].provider.get_edges(
+        device=x_lres_5d.device).indices()[0]
+    keep = (rows >= lo) & (rows < hi)
+    return _project_rows(inner, x_lres_5d, keep, rows[keep] - lo, hi - lo)
+
+
+def select_residual_channels(inner, x_interp, target_dataset="out_hres"):
+    """Channel-select an interpolated input for `compute_residuals`.
+
+    compute_residuals documents that x_interp "must already have channels selected
+    via matching_channel_indices": it subtracts x_interp from the target's
+    residual-prognostic channels, which excludes both the forcings and the
+    direct-prediction variables. On this o2560 checkpoint family that is 7 of the
+    91 interpolated channels (tp and cp are output-only, so they drop out of the
+    match by themselves). Lanes whose counts already agree are left untouched, so
+    no existing lane's residuals change.
+    """
+    idx = inner.get_matching_channel_indices(target_dataset).to(x_interp.device)
+    if x_interp.shape[-1] == len(idx):
+        return x_interp
+    LOGGER.info("compute_residuals: selecting %d of %d interpolated channels "
+                "(residual-prognostic subset of %s)", len(idx), x_interp.shape[-1],
+                target_dataset)
+    return x_interp[..., idx]
+
+
+def log_mem(tag):
+    """Log CUDA allocated/reserved/peak (GiB) at a setup milestone. At O2560 the
+    full-grid upsample transient alone is ~8.9 GiB per rank, so knowing which
+    step owns the memory is the difference between a fix and a guess."""
+    if not torch.cuda.is_available():
+        return
+    g = 1024 ** 3
+    LOGGER.info("MEM %-28s alloc=%6.2f GiB  reserved=%6.2f GiB  peak=%6.2f GiB", tag,
+                torch.cuda.memory_allocated() / g, torch.cuda.memory_reserved() / g,
+                torch.cuda.max_memory_allocated() / g)
+
+
+def _q_big(col, q):
+    """Quantile that survives tensors above torch.quantile's ~2^24-element cap
+    (the full O2560 grid is 26.3M cells) via kthvalue."""
+    col = col.float()
+    n = col.numel()
+    if n <= (1 << 24):
+        return float(torch.quantile(col, q))
+    k = max(1, min(n, int(round(q * (n - 1))) + 1))
+    return float(col.kthvalue(k).values)
+
+
+def tp_tail_stats(field5d, indices):
+    """Far-tail statistics of the precipitation channels over ALL N cells of a
+    (1,1,1,N,V) physical field (box-restricted or full-grid). Raw max and top-10
+    on purpose: the single heaviest cell IS the question for the tp-peak probe
+    (unlike the storm-core reductions above, which use p99 to dodge single-cell
+    artifacts — read the two side by side). SI units (metres of water per window)."""
+    fb = field5d[0, 0, 0]
+    out = {"n_cells": int(fb.shape[0])}
+    for name in ("tp", "cp"):
+        if name not in indices:
+            continue
+        col = fb[:, indices[name]].float()
+        k = min(10, col.numel())
+        top = torch.topk(col, k).values
+        out[f"{name}_max"] = float(col.max())
+        out[f"{name}_top10"] = [float(v) for v in top]
+        out[f"{name}_p999"] = _q_big(col, 0.999)
+        out[f"{name}_p9999"] = _q_big(col, 0.9999)
+        out[f"{name}_mean"] = float(col.mean())
+        out[f"{name}_wet_frac_1mm"] = float((col > 1.0e-3).float().mean())
+    return out
+
+
+def _output_norm_factors(bundle, device, dtype, n_vars, indices):
+    """Per-channel (mul, add) of the OUTPUT denormalizer, probed with zeros/ones
+    (the residual_diag trick), so tail values can be read in the diffusion's own
+    normalized units. Handles both the ds ('output' dataset kw) and the unified
+    ('out_hres' key) post-processor APIs."""
+    pp = bundle.post_processors
+    zeros = torch.zeros((1, 1, 1, 1, n_vars), device=device, dtype=dtype)
+    ones = torch.ones_like(zeros)
+
+    def denorm(t):
+        try:
+            return pp["out_hres"](t, in_place=False)
+        except (TypeError, KeyError, IndexError):
+            return pp(t, dataset="output", in_place=False)
+
+    add = denorm(zeros)[0, 0, 0, 0, :]
+    mul = denorm(ones)[0, 0, 0, 0, :] - add
+    return {name: {"mul": float(mul[i]), "add": float(add[i])}
+            for name, i in indices.items()}
+
+
 def reduce_field(field5d, indices, has_wind):
     """field5d: (1,1,1,N,V) physical, ALREADY restricted to the box. Reduce over
     all N cells. Returns {name: storm-core value} plus 'wind10m' (p99 speed) and, for
     msl, two diagnostics: the un-floored raw box-min and the count of sub-floor cells."""
     fb = field5d[0, 0, 0]                                 # (Nbox, V)
     out = {name: _side_reduce(fb[:, idx], name) for name, idx in indices.items()}
+    for pname in ("tp", "cp"):
+        # Far-tail companions to the robust p99 'tp' metric (raw max chases single-cell
+        # artifacts at low sigma — that is exactly what the tp-peak probe must SEE, so
+        # both are reported; top10_mean separates one rogue cell from a real tail).
+        if pname in indices:
+            col = fb[:, indices[pname]].float()
+            out[f"{pname}_max"] = float(col.max())
+            out[f"{pname}_top10_mean"] = float(
+                torch.topk(col, min(10, col.numel())).values.mean())
+            out[f"{pname}_p999"] = _q_big(col, 0.999)
     if "msl" in indices:
         mhpa = fb[:, indices["msl"]].float() * PA_TO_HPA
         out["msl_raw_min_hpa"] = float(mhpa.min())                       # un-floored (artifact-prone)
@@ -539,9 +705,14 @@ def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_con
     skw = dict(sampler_kwargs or {})
     with torch.no_grad():                    # must not retain the Heun-loop autograd graph (OOM)
         if is_dict_api(inner):               # unified sampler takes per-dataset dicts
+            # grid_shard_sizes must be passed under model-parallel inference, or the
+            # model assembles a per-rank shard against full-grid forcings and dies in
+            # _assemble_input (job 31387278: expected 3288320, got 26306560). The
+            # seeding path predates sharded dict-API use, which is why only Probe C
+            # ever hit this.
             out = sampler.sample({"in_lres": x_interp_cond, "in_hres": x_hres_cond},
                                  {"out_hres": y_init}, sigmas, denoise_fn,
-                                 model_comm_group=mcg, **skw)
+                                 model_comm_group=mcg, grid_shard_sizes=gss, **skw)
             return out["out_hres"] if isinstance(out, dict) else out
         return sampler.sample(x_interp_cond, x_hres_cond, y_init, sigmas,
                               denoise_fn,
@@ -960,6 +1131,181 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
 
 
 # ---------------------------------------------------------------------------
+# tp_sweep: teacher-forced denoise sweep for the precipitation peak (erasure curve)
+# ---------------------------------------------------------------------------
+
+def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_indices,
+                  x_interp_cond, x_hres_cond, y_residual_cond, phys_full_of, surf_remap,
+                  references, truth_grid, truth_box, box_t, peak_idx, clat, clon, box_np,
+                  window, eb, out_path):
+    """Probe A of the tp-peak program (epics/tc-o1280-o2560): the ERASURE CURVE.
+
+    For each sigma in --sweep-sigmas and each seed: re-noise the TRUE residual at
+    that sigma, make ONE denoiser call (denoise_at_sigma), and read the far-tail
+    precipitation statistics of (a) what the model was SHOWN (the reconstructed
+    noised state) and (b) what it RETURNED, over the full grid and the box.
+    If the denoiser clips the truth's peak cells toward the production ~330 mm
+    ceiling even at tiny sigma — where the peak is fully visible in its input —
+    the cap lives in the network's OUTPUT mapping (capacity; a training-side
+    fix). If the peak survives below some sigma* and is erased above it, the cap
+    lives in COMMITMENT (free sampling never reaches the mode from noise) and
+    sigma* locates where the decision is made. Raw max / top-10 on purpose:
+    the single heaviest cell IS the question here (see tp_tail_stats)."""
+    if "tp" not in target_indices:
+        raise SystemExit("tp_sweep needs tp in the output schema")
+    device = y_residual_cond.device
+    sigmas = sorted({float(s) for s in args.sweep_sigmas})
+    seeds = (list(args.seeds) if args.seeds
+             else list(range(args.seed_base, args.seed_base + args.n_seeds)))
+
+    # EDM preconditioning writes the denoised estimate as D = c_skip * x_noised +
+    # c_out * F(...), so at small sigma c_skip is near 1 and D is mostly the input
+    # passing straight through the skip connection. Recording c_skip per sigma keeps
+    # "the model returned 1007 mm" from being read as "the network produced 1007 mm":
+    # `passthrough_tp_max` is what the skip term alone would carry, and only a
+    # denoised value well above it is the network's own doing.
+    sigma_data = float(getattr(bundle.inner_model, "sigma_data", 1.0))
+
+    def _c_skip(s):
+        return sigma_data ** 2 / (s ** 2 + sigma_data ** 2)
+
+    def _c_out(s):
+        return s * sigma_data / (s ** 2 + sigma_data ** 2) ** 0.5
+
+    norm_factors = None
+    if global_rank == 0:
+        norm_factors = _output_norm_factors(
+            bundle, device, y_residual_cond.dtype, y_residual_cond.shape[-1], target_indices)
+        LOGGER.info("truth: grid tp_max=%.1f mm, box tp_max=%.1f mm",
+                    1e3 * truth_grid["tp_max"], 1e3 * truth_box["tp_max"])
+
+    records = []
+    for sigma in sigmas:
+        for seed in seeds:
+            # Per-(seed, rank) stream: identical eps per seed ACROSS sigmas (paired
+            # erasure curve), distinct streams across ranks (a shared stream would
+            # tile correlated noise blocks over the grid shards).
+            gen = torch.Generator(device=device.type).manual_seed(
+                int(seed) * 100003 + int(global_rank))
+            noise = torch.randn(y_residual_cond.shape, device=device,
+                                dtype=y_residual_cond.dtype, generator=gen)
+            # Reduce what the model is SHOWN to numbers and free it before the
+            # forward pass: at O2560 the forward needs every spare GiB.
+            shown_full = phys_full_of(y_residual_cond + float(sigma) * noise)
+            shown_stats = (tp_tail_stats(shown_full, surf_remap)
+                           if shown_full is not None else None)
+            # Value AT the truth's heaviest cell, so the split between what the skip
+            # connection carries and what the network itself emits is exact rather
+            # than inferred by differencing two maxima that may sit on different cells.
+            shown_at_peak = (float(shown_full[0, 0, 0, peak_idx, surf_remap["tp"]])
+                             if (shown_full is not None and peak_idx is not None) else None)
+            del shown_full
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            D = denoise_at_sigma(bundle, x_interp_cond, x_hres_cond, y_residual_cond,
+                                 float(sigma), noise, model_comm_group=mcg,
+                                 grid_shard_shapes=gss_arg)
+            del noise
+            den_full = phys_full_of(D)
+            del D
+            if global_rank == 0:
+                rec = {"sigma": float(sigma), "seed": int(seed),
+                       "shown_grid": shown_stats,
+                       "denoised_grid": tp_tail_stats(den_full, surf_remap),
+                       "denoised_box": tp_tail_stats(den_full[:, :, :, box_t, :], surf_remap)}
+                records.append(rec)
+                rec["c_skip"] = _c_skip(float(sigma))
+                rec["c_out"] = _c_out(float(sigma))
+                rec["passthrough_tp_max"] = rec["c_skip"] * rec["shown_grid"]["tp_max"]
+                if peak_idx is not None:
+                    den_at_peak = float(den_full[0, 0, 0, peak_idx, surf_remap["tp"]])
+                    rec["shown_at_peak"] = shown_at_peak
+                    rec["denoised_at_peak"] = den_at_peak
+                    # D = c_skip * x_noised + c_out * F, evaluated on one fixed cell.
+                    rec["network_at_peak"] = (
+                        (den_at_peak - rec["c_skip"] * shown_at_peak) / rec["c_out"])
+                LOGGER.info("tp_sweep sigma=%-8g seed=%d  shown=%7.1f mm -> denoised=%7.1f mm "
+                            "(truth %7.1f, skip-only %7.1f, c_skip=%.3g) | at peak cell: "
+                            "shown=%7.1f returned=%7.1f network=%7.1f mm",
+                            sigma, seed, 1e3 * rec["shown_grid"]["tp_max"],
+                            1e3 * rec["denoised_grid"]["tp_max"], 1e3 * truth_grid["tp_max"],
+                            1e3 * rec["passthrough_tp_max"], rec["c_skip"],
+                            1e3 * (rec.get("shown_at_peak") or float("nan")),
+                            1e3 * (rec.get("denoised_at_peak") or float("nan")),
+                            1e3 * (rec.get("network_at_peak") or float("nan")))
+            del den_full
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if sigma == sigmas[0] and seed == seeds[0]:
+                log_mem("after first denoiser call")
+
+    result = None
+    if global_rank == 0:
+        by_sigma = []
+        for sigma in sigmas:
+            rs = [r for r in records if r["sigma"] == sigma]
+            dmax = np.array([r["denoised_grid"]["tp_max"] for r in rs])
+            smax = np.array([r["shown_grid"]["tp_max"] for r in rs])
+            by_sigma.append({
+                "sigma": sigma, "n_seeds": len(rs),
+                "denoised_tp_max_mean": float(dmax.mean()),
+                "denoised_tp_max_std": float(dmax.std()),
+                "denoised_tp_max_best": float(dmax.max()),
+                "shown_tp_max_mean": float(smax.mean()),
+                "truth_retention_mean": float(dmax.mean() / truth_grid["tp_max"]),
+                "c_skip": _c_skip(sigma), "c_out": _c_out(sigma),
+                "passthrough_tp_max": _c_skip(sigma) * float(smax.mean()),
+                "network_at_peak_mean": (
+                    float(np.mean([r["network_at_peak"] for r in rs]))
+                    if all("network_at_peak" in r for r in rs) else None),
+                "denoised_at_peak_mean": (
+                    float(np.mean([r["denoised_at_peak"] for r in rs]))
+                    if all("denoised_at_peak" in r for r in rs) else None),
+            })
+        result = {
+            "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
+            "mode": "tp_sweep", "units": "SI (tp/cp in metres per window)",
+            "world_size": world_size,
+            "bundle_paths": [str(p) for p in eb.paths],
+            "surface_targets": list(target_indices.keys()),
+            "sweep_sigmas": sigmas, "seeds": [int(s) for s in seeds],
+            "sigma_data": sigma_data,
+            "norm_factors": norm_factors,
+            "tp_scale": float(getattr(args, "tp_scale", 1.0) or 1.0),
+            "truth_grib_tpl": getattr(args, "truth_grib_tpl", None),
+            "zero_filled_targets": [n for n in ("cp",) if n in target_indices],
+            "peak_cell_index": peak_idx,
+            "box": {"box_from": getattr(args, "box_from", "msl"), "lat": clat,
+                    "lon": clon % 360.0, "radius_km": args.eye_radius_km,
+                    "n_cells": int(box_np.sum())},
+            "window": list(window),
+            "references": references,
+            "truth_grid": truth_grid, "truth_box": truth_box,
+            "records": records, "by_sigma": by_sigma,
+        }
+        out_path.mkdir(parents=True, exist_ok=True)
+        with open(out_path / "tp_sweep.json", "w") as f:
+            json.dump(result, f, indent=2)
+        LOGGER.info("Results saved to %s", out_path / "tp_sweep.json")
+        write_run_meta(out_path, "trajectory_tp_sweep", args)
+        print("\nTP SWEEP — teacher-forced denoise across sigma "
+              f"(truth grid tp_max {1e3 * truth_grid['tp_max']:.1f} mm):")
+        for row in by_sigma:
+            print(f"  sigma={row['sigma']:>8g}  shown={1e3 * row['shown_tp_max_mean']:7.1f} mm"
+                  f"  denoised={1e3 * row['denoised_tp_max_mean']:7.1f}"
+                  f" +/-{1e3 * row['denoised_tp_max_std']:5.1f} mm"
+                  f"  skip-only={1e3 * row['passthrough_tp_max']:7.1f}"
+                  f"  retention={row['truth_retention_mean']:.2f}")
+
+    if mcg is not None:
+        import torch.distributed as dist
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+            dist.destroy_process_group()
+    return result
+
+
+# ---------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------
 
@@ -984,6 +1330,7 @@ def run_trajectory(args):
     LOGGER.info("Loading model from %s", args.checkpoint)
     bundle = load_model(args.checkpoint, device=device, precision=args.precision,
                         num_gpus_per_model=world_size)
+    log_mem("after load_model")
     inner = bundle.inner_model
     target_indices = get_surface_target_indices(bundle)
     if "msl" not in target_indices:
@@ -995,14 +1342,52 @@ def run_trajectory(args):
 
     bundle_dir, dates, members, steps, _ = resolve_event_args(args)
     eb = collect_event_bundles(bundle, bundle_dir, dates, members, steps)
+    truth_tpl = (getattr(args, "truth_grib_tpl", None)
+                 or event_extra(args, "truth_grib_tpl"))
+    if truth_tpl:
+        # o2560 6h bundles carry no tp truth (x_interp tp = 0 trap) — inject the
+        # definitive _tp_dea truth; cp stays zero-filled (no truth source).
+        inject_truth_grib(bundle, eb, truth_tpl, dates, members, steps, var="tp")
+        args.truth_grib_tpl = truth_tpl               # record the resolved template
+    tp_scale = float(getattr(args, "tp_scale", 1.0) or 1.0)
+    if tp_scale != 1.0:
+        # Value-dependence control for the tp-peak probes: scale the TRUTH tp
+        # channel before residuals/references so 'clips the peak but returns a
+        # scaled-down one faithfully' can be told apart from harness trouble.
+        idx_tp = get_surface_target_indices(bundle).get("tp")
+        if idx_tp is None:
+            raise SystemExit("--tp-scale needs tp in the output schema")
+        eb.y[..., idx_tp] *= tp_scale
+        LOGGER.info("tp truth scaled by %.3g before residual computation", tp_scale)
     _, _, lat_hres, lon_hres = eb.coords
     y0 = eb.y[0:1].to(device)                                 # observed, physical, FULL grid
+    log_mem("after y0 -> device")
 
     # Storm box from the OBSERVED msl (deterministic -> identical on every rank).
     window = (tuple(float(x) for x in args.auto_window.split(","))
               if args.auto_window else DEFAULT_AUTO_WINDOW)
-    probe = y0[0, 0, 0, :, target_indices["msl"]].cpu().numpy()
-    clat, clon = detect_min_center(probe, lat_hres, lon_hres, window)
+    peak_idx = None
+    if getattr(args, "box_from", "msl") == "tp":
+        # Center the box on the TRUTH tp maximum inside the window — for the tp-peak
+        # probes the cell of interest is the heaviest rain cell, not the msl eye.
+        if "tp" not in target_indices:
+            raise SystemExit("--box-from tp needs tp in the output schema")
+        tp_np = y0[0, 0, 0, :, target_indices["tp"]].cpu().numpy()
+        la0, la1, lo0, lo1 = window
+        lat_np, lonn = np.asarray(lat_hres), np.asarray(lon_hres) % 360.0
+        wmask = ((lat_np >= min(la0, la1)) & (lat_np <= max(la0, la1))
+                 & (lonn >= min(lo0, lo1)) & (lonn <= max(lo0, lo1)))
+        cand = np.where(wmask)[0]
+        if cand.size == 0:
+            cand = np.arange(tp_np.shape[0])
+        i = int(cand[np.argmax(tp_np[cand])])
+        peak_idx = i                     # global grid index of the truth's heaviest cell
+        clat, clon = float(lat_np[i]), float(lonn[i])
+        LOGGER.info("box centered on truth tp max %.4g m at (%.2f, %.2f)",
+                    float(tp_np[i]), clat, clon)
+    else:
+        probe = y0[0, 0, 0, :, target_indices["msl"]].cpu().numpy()
+        clat, clon = detect_min_center(probe, lat_hres, lon_hres, window)
     box_np = box_mask_km(lat_hres, lon_hres, clat, clon, args.eye_radius_km)
     box_t = torch.from_numpy(box_np).to(device)
     LOGGER.info("storm box: center=(%.2f,%.2f) R=%.0fkm -> %d hres cells",
@@ -1040,30 +1425,79 @@ def run_trajectory(args):
             phys_full = _gather_full(phys_sh)
             return reduce_box(phys_full, surf_remap, box_t, has_wind) if global_rank == 0 else None
 
-        xir_full = _gather_full(x_interp_raw_sh)
+        def phys_full_of(residual):
+            """Gathered full-grid physical surface-target field (rank 0; collective)."""
+            phys_sh = reconstruct_phys(bundle, x_interp_raw_sh, residual)[..., surf_idx]
+            phys_full = _gather_full(phys_sh)
+            return phys_full if global_rank == 0 else None
+
+        _xir_full = _gather_full(x_interp_raw_sh)
+        xi_box = _xir_full[:, :, :, box_t, :].clone() if global_rank == 0 else None
+        del _xir_full
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     elif sharded:  # unified dict-API, grid-sharded across model_comm_group
         from anemoi.models.distributed.graph import gather_tensor, shard_tensor
         from anemoi.models.distributed.shapes import get_shard_sizes
-        batch = {"in_lres": eb.x_lres[0:1].to(device), "in_hres": eb.x_hres[0:1].to(device)}
-        (x_interp_cond, x_hres_cond), dss = inner._before_sampling(
-            batch, bundle.pre_processors, 1, model_comm_group=mcg)
-        gss = dss  # DatasetShardSizes -> threaded into denoise/sample via gss_arg
-        out_sizes = dss["out_hres"]
-        # apply_interpolate_to_high_res with grid_shard_sizes set drives the
-        # InterpolationConnection all_to_all path, which expects a GRID-SHARDED input.
-        # Passing the FULL lres grid + hres shard sizes makes the all_to_all split counts
-        # disagree across ranks -> NCCL all_to_all deadlock (the tier1 b785 hang). Match
-        # _before_sampling: upsample the full grid collective-free (grid_shard_sizes=None),
-        # then take this rank's grid shard locally.
-        xir_full = inner.apply_interpolate_to_high_res(
-            eb.x_lres[0:1].to(device)[:, 0, ...],
-            grid_shard_sizes=None, model_comm_group=mcg)[:, None, ...]
-        x_interp_raw_sh = shard_tensor(xir_full, -2, out_sizes, mcg)
-        y_sh = shard_tensor(y0, -2, get_shard_sizes(y0, -2, mcg), mcg)
-        prt = getattr(bundle.model, "pre_processors_tendencies", None)
-        y_residual_cond = inner.compute_residuals(
-            y_sh, x_interp_raw_sh, bundle.pre_processors["out_hres"], prt["out_hres"],
-            target_dataset="out_hres")
+        # Shard sizes are the model's own balanced partition of the hres grid
+        # (_before_sampling derives in_lres/in_hres/out_hres from tensors that all
+        # live on that grid, so one partition serves all three).
+        out_sizes = get_shard_sizes(y0, -2, mcg)
+        gss = {"in_lres": out_sizes, "in_hres": out_sizes, "out_hres": out_sizes}
+        lo, hi = _shard_bounds(out_sizes, global_rank)
+        LOGGER.info("rank %d owns hres rows [%d, %d) of %d", global_rank, lo, hi,
+                    int(y0.shape[-2]))
+        log_mem("before setup")
+        # no_grad throughout setup: nothing here is ever backpropagated, and at O2560
+        # every retained full-grid intermediate is ~8.9 GiB per rank.
+        with torch.no_grad():
+            x_lres_dev = eb.x_lres[0:1].to(device)
+            x_interp_raw_sh = row_sharded_upsample(inner, x_lres_dev, lo, hi)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log_mem("after row-sharded upsample")
+            # Correctness gate for the row cut: compare against the model's OWN
+            # full-grid upsample, sliced to this rank's rows. Only usable on a lane
+            # whose full grid fits (it is the very allocation the row cut avoids),
+            # so it is env-gated and meant to be run once on o320->o1280.
+            if os.environ.get("INTERP_UPSAMPLE_CHECK"):
+                ref = inner.apply_interpolate_to_high_res(
+                    x_lres_dev[:, 0, ...], grid_shard_sizes=None,
+                    model_comm_group=mcg)[:, None, ...][:, :, :, lo:hi, :]
+                d = (x_interp_raw_sh - ref).abs()
+                scale = ref.abs().max().clamp_min(1e-12)
+                LOGGER.info("UPSAMPLE CHECK rank %d: max|rowcut-model|=%.3e "
+                            "(relative %.3e) over %s", global_rank, float(d.max()),
+                            float(d.max() / scale), tuple(ref.shape))
+                del ref, d
+            # The x_interp box reference, projected locally from the box rows only
+            # (~42,000 of 26.3 million) on the one rank that reports it, while the
+            # low-res input is still here.
+            xi_box = (box_rows_upsample(inner, x_lres_dev, box_t)
+                      if global_rank == 0 else None)
+            del x_lres_dev
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # Normalisation is per channel, so preprocessing a shard equals the shard
+            # of the preprocessed whole — the same reason the row cut is exact.
+            x_interp_cond = bundle.pre_processors["in_lres"](
+                x_interp_raw_sh, in_place=False)
+            x_hres_cond = bundle.pre_processors["in_hres"](
+                eb.x_hres[0:1][:, :, :, lo:hi, :].to(device), in_place=False)
+            log_mem("after preprocessing")
+            y_sh = y0[:, :, :, lo:hi, :]
+            prt = getattr(bundle.model, "pre_processors_tendencies", None)
+            y_residual_cond = inner.compute_residuals(
+                y_sh, select_residual_channels(inner, x_interp_raw_sh),
+                bundle.pre_processors["out_hres"], prt["out_hres"],
+                target_dataset="out_hres")
+            # The RAW interp has done its two jobs (the residual and the box
+            # reference); only the NORMALISED conditioning is needed from here on,
+            # and at O2560 this shard is 2.4 GiB that the forward pass needs back.
+            del y_sh, x_interp_raw_sh
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            log_mem("after residuals")
 
         def _gather_full(field_sh):
             return gather_tensor(field_sh, -2, out_sizes, mcg)
@@ -1081,37 +1515,58 @@ def run_trajectory(args):
             phys_full = _gather_full(phys_sh)
             return reduce_box(phys_full, surf_remap, box_t, has_wind) if global_rank == 0 else None
 
-        xir_full = _gather_full(x_interp_raw_sh)
+        def phys_full_of(residual):
+            """Gathered full-grid physical surface-target field (rank 0; collective)."""
+            phys_sh = reconstruct_phys(bundle, x_interp_cond, residual)[..., surf_idx]
+            phys_full = _gather_full(phys_sh)
+            return phys_full if global_rank == 0 else None
+
     elif is_dict_api(inner):
         # Unified (dict-API) single-GPU prep: _before_sampling gives the NORMALIZED interp
         # (which the unified add_interp_to_state adds back), compute_residuals (with the
         # SINGLE out_hres state/tendency normalizers) gives the true residual for the ceiling.
         batch = {"in_lres": eb.x_lres[0:1].to(device), "in_hres": eb.x_hres[0:1].to(device)}
-        (x_interp_cond, x_hres_cond), _ = inner._before_sampling(batch, bundle.pre_processors, 1)
-        x_interp_raw = inner.apply_interpolate_to_high_res(
-            eb.x_lres[0:1].to(device)[:, 0, ...])[:, None, ...]
-        prt = getattr(bundle.model, "pre_processors_tendencies", None)
-        y_residual_cond = inner.compute_residuals(
-            y0, x_interp_raw, bundle.pre_processors["out_hres"], prt["out_hres"],
-            target_dataset="out_hres")
+        with torch.no_grad():                                 # see the sharded branch
+            (x_interp_cond, x_hres_cond), _ = inner._before_sampling(batch, bundle.pre_processors, 1)
+            x_interp_raw = inner.apply_interpolate_to_high_res(
+                eb.x_lres[0:1].to(device)[:, 0, ...])[:, None, ...]
+            prt = getattr(bundle.model, "pre_processors_tendencies", None)
+            y_residual_cond = inner.compute_residuals(
+                y0, select_residual_channels(inner, x_interp_raw),
+                bundle.pre_processors["out_hres"], prt["out_hres"],
+                target_dataset="out_hres")
         recon_state_box = x_interp_cond[:, :, :, box_t, :]    # NORMALIZED interp = what's added back
-        xi_phys_box = x_interp_raw[:, :, :, box_t, :]         # RAW physical interp for x_interp ref
+        xi_box = x_interp_raw[:, :, :, box_t, :]              # RAW physical interp for x_interp ref
 
         def metrics_of(residual):
             return reduce_field(
                 reconstruct_phys_box(bundle, recon_state_box, residual, box_t),
                 target_indices, has_wind)
+
+        surf_idx = torch.tensor(list(target_indices.values()), device=device)
+        surf_remap = {name: i for i, name in enumerate(target_indices)}
+
+        def phys_full_of(residual):
+            """Full-grid physical surface-target field (single GPU: no gather)."""
+            return reconstruct_phys(bundle, x_interp_cond, residual)[..., surf_idx]
     else:
         prepared = prepare_batch(bundle, eb.x_lres[0:1], eb.x_hres[0:1], eb.y[0:1])
         x_interp_cond, x_hres_cond = prepared["x_interp"], prepared["x_hres"]
         y_residual_cond = prepared["y_residual"]
         recon_state_box = prepared["x_interp_raw"][:, :, :, box_t, :]
-        xi_phys_box = recon_state_box
+        xi_box = recon_state_box
 
         def metrics_of(residual):
             return reduce_field(
                 reconstruct_phys_box(bundle, recon_state_box, residual, box_t),
                 target_indices, has_wind)
+
+        surf_idx = torch.tensor(list(target_indices.values()), device=device)
+        surf_remap = {name: i for i, name in enumerate(target_indices)}
+
+        def phys_full_of(residual):
+            """Full-grid physical surface-target field (single GPU: no gather)."""
+            return reconstruct_phys(bundle, prepared["x_interp_raw"], residual)[..., surf_idx]
 
     gss_arg = gss if sharded else None
 
@@ -1128,7 +1583,13 @@ def run_trajectory(args):
     references = None
     if global_rank == 0:
         references = {"target": reduce_box(y0, target_indices, box_t, has_wind)}
-        fb_xi = (xir_full[:, :, :, box_t, :] if sharded else xi_phys_box)[0, 0, 0]
+        if getattr(args, "grid_tail", False) or args.mode == "tp_sweep":
+            surf_idx_t = torch.tensor(list(target_indices.values()), device=y0.device)
+            y0_surf = y0[..., surf_idx_t]
+            references["target_grid_tail"] = tp_tail_stats(y0_surf, surf_remap)
+            references["target_box_tail"] = tp_tail_stats(y0_surf[:, :, :, box_t, :], surf_remap)
+            del y0_surf
+        fb_xi = xi_box[0, 0, 0]
         xi_metrics = {name: _side_reduce(fb_xi[:, name2in[name]], name)
                       for name in target_indices if name in name2in}
         if has_wind and "10u" in name2in and "10v" in name2in:
@@ -1140,8 +1601,7 @@ def run_trajectory(args):
     # -> must equal the observed target storm-core. metrics_of gathers (collective), so ALL
     # ranks must call it. Garbage here => reconstruct/gather/layout bug; fine here => the
     # model FORWARD (ceiling/realized) is the bug.
-    import os as _pos
-    if _pos.environ.get("INTERP_PARITY_CHECK"):
+    if os.environ.get("INTERP_PARITY_CHECK"):
         _chk = metrics_of(y_residual_cond)
         if global_rank == 0:
             _t = references["target"]
@@ -1166,6 +1626,29 @@ def run_trajectory(args):
                              target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
                              metrics_of, references, clat, clon, box_np, window, eb, out_path, fields_of=fields_of)
 
+    if args.mode == "tp_sweep":
+        # The truth statistics are already in `references`, so the full-grid target
+        # can go before the first forward pass, which needs the memory.
+        truth_grid = (references or {}).get("target_grid_tail")
+        truth_box = (references or {}).get("target_box_tail")
+        del y0
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        log_mem("before tp_sweep")
+        return _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg,
+                             target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
+                             phys_full_of, surf_remap, references, truth_grid, truth_box,
+                             box_t, peak_idx, clat, clon, box_np, window, eb, out_path)
+
+    # Production-sampler overrides for the realized trajectories (e.g. reproduce a
+    # scored eval config's piecewise schedule: --noise-scheduler-json
+    # '{"sigma_max":1000.0,"sigma_transition":10.0,"num_steps_high":10,"num_steps_low":20}'
+    # --sampler-params-json '{"S_churn":2.5}').
+    nsp_over = (json.loads(args.noise_scheduler_json)
+                if getattr(args, "noise_scheduler_json", None) else None)
+    spp_over = (json.loads(args.sampler_params_json)
+                if getattr(args, "sampler_params_json", None) else None)
+
     # Teacher-forced ceiling: feed the TRUE residual + noise at each sigma.
     ceiling = []
     for sigma in args.ceiling_sigmas:
@@ -1173,8 +1656,16 @@ def run_trajectory(args):
         D = denoise_at_sigma(bundle, x_interp_cond, x_hres_cond, y_residual_cond,
                              sigma, noise, model_comm_group=mcg, grid_shard_shapes=gss_arg)
         m = metrics_of(D)                                    # collective in sharded mode
+        g_tail = None
+        if getattr(args, "grid_tail", False):
+            pf = phys_full_of(D)                             # collective in sharded mode
+            if pf is not None:
+                g_tail = tp_tail_stats(pf, surf_remap)
         if global_rank == 0:
-            ceiling.append({"sigma": float(sigma), "metrics": m})
+            entry = {"sigma": float(sigma), "metrics": m}
+            if g_tail is not None:
+                entry["grid_tail"] = g_tail
+            ceiling.append(entry)
             LOGGER.info("ceiling σ=%.3g -> msl=%.1f hPa", sigma, m.get("msl", float("nan")))
 
     # Realized trajectories: capture x̂₀ along the real sampler.
@@ -1187,8 +1678,16 @@ def run_trajectory(args):
 
         def on_call(sigma_scalar, D, _rec=records, _lf=lock_fields):
             m = metrics_of(D)                                # collective; runs on all ranks
+            g_tail = None
+            if getattr(args, "grid_tail", False):
+                pf = phys_full_of(D)                         # collective; runs on all ranks
+                if pf is not None:
+                    g_tail = tp_tail_stats(pf, surf_remap)
             if m is not None:                                # only rank 0 records
-                _rec.append({"call_idx": len(_rec), "sigma": sigma_scalar, "metrics": m})
+                rec = {"call_idx": len(_rec), "sigma": sigma_scalar, "metrics": m}
+                if g_tail is not None:
+                    rec["grid_tail"] = g_tail
+                _rec.append(rec)
             if getattr(args, "lockin", False) and fields_of is not None:
                 _lf.append((float(sigma_scalar), fields_of(D)))
 
@@ -1198,8 +1697,15 @@ def run_trajectory(args):
             final_resid = sample_full(bundle, x_interp_cond, x_hres_cond,
                                       num_steps=args.num_steps, seed=int(seed),
                                       model_comm_group=mcg, grid_shard_shapes=gss_arg,
-                                      sigma_min=SAMPLER_SIGMA_MIN)
+                                      sigma_min=SAMPLER_SIGMA_MIN,
+                                      noise_scheduler_params=nsp_over,
+                                      sampler_params=spp_over)
         final_metrics = metrics_of(final_resid) or {}        # collective; {} on non-zero ranks
+        final_grid_tail = None
+        if getattr(args, "grid_tail", False):
+            pf = phys_full_of(final_resid)                   # collective; runs on all ranks
+            if pf is not None:
+                final_grid_tail = tp_tail_stats(pf, surf_remap)
         lockin = None
         if getattr(args, "lockin", False) and fields_of is not None and global_rank == 0:
             fin = fields_of(final_resid)
@@ -1230,7 +1736,7 @@ def run_trajectory(args):
                 }
         if global_rank == 0:
             trajectories.append({"seed": int(seed), "steps": records, "final": final_metrics,
-                                 "lockin": lockin})
+                                 "final_grid_tail": final_grid_tail, "lockin": lockin})
             if records:
                 d = records[-1]["metrics"].get("msl", float("nan")) - final_metrics.get("msl", float("nan"))
                 LOGGER.info("seed %d: %d denoiser calls, final msl=%.1f hPa "
@@ -1253,6 +1759,8 @@ def run_trajectory(args):
             "metrics_reported": metrics_reported,
             "num_steps": args.num_steps,
             "fp32_sampler": bool(args.fp32_sampler),
+            "noise_scheduler_override": nsp_over,
+            "sampler_params_override": spp_over,
             "seeds": [int(s) for s in seeds],
             "box": {"name": "storm", "lat": clat, "lon": clon % 360.0,
                     "radius_km": args.eye_radius_km, "n_cells": int(box_np.sum())},
@@ -1288,13 +1796,44 @@ def main(argv=None):
                    help="P1: capture per-call box fields and emit per-variable lock-in "
                         "(pattern-correlation vs own final / vs target) curves")
     p.add_argument("--mode", default="trajectory",
-                   choices=["trajectory", "seeding", "residual_diag", "guidance"],
+                   choices=["trajectory", "seeding", "residual_diag", "guidance", "tp_sweep"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
                         "seeding = A2 sweep: plant the TRUE storm at σ_seed, sample free below, "
                         "and report final storm depth vs σ_seed (the critical-window test); "
                         "guidance = FIX SCREEN: free sampler + σ-banded score amplification "
                         "(--guidance-lambda in [--guidance-sigma-lo,-hi]) and/or --s-churn, "
-                        "report the storm-core eye-depth distribution vs the unguided baseline")
+                        "report the storm-core eye-depth distribution vs the unguided baseline; "
+                        "tp_sweep = tp-peak ERASURE CURVE: re-noise the TRUE state at each "
+                        "--sweep-sigmas level, one denoiser call, far-tail tp/cp stats of "
+                        "shown vs returned (capacity-vs-commitment discriminator)")
+    p.add_argument("--sweep-sigmas", nargs="+", type=float,
+                   default=[0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 40.0,
+                            80.0, 150.0, 300.0, 700.0],
+                   help="[tp_sweep] σ ladder for the teacher-forced denoise sweep — spans "
+                        "far below the storm-laying regime on purpose: at small σ the peak "
+                        "is fully visible to the denoiser, so erasure there = output cap")
+    p.add_argument("--box-from", choices=["msl", "tp"], default="msl",
+                   help="center the reduction box on the msl minimum (default) or on the "
+                        "TRUTH tp maximum inside the window (tp-peak probes)")
+    p.add_argument("--grid-tail", action="store_true", default=False,
+                   help="[trajectory] also record FULL-GRID far-tail tp/cp stats "
+                        "(tp_tail_stats) at every denoiser call, for the ceiling rows and "
+                        "for each final sample (one extra gather per call when sharded)")
+    p.add_argument("--noise-scheduler-json", default=None,
+                   help="[trajectory] JSON dict merged into the noise-scheduler params of "
+                        "the realized sampler (e.g. a scored eval config's piecewise "
+                        "schedule); --num-steps still sets num_steps")
+    p.add_argument("--sampler-params-json", default=None,
+                   help="[trajectory] JSON dict of sampler params for the realized sampler "
+                        "(e.g. {\"S_churn\": 2.5})")
+    p.add_argument("--truth-grib-tpl", default=None,
+                   help="per-date deaccumulated tp truth GRIB template with {date} "
+                        "(overrides the event's truth_grib_tpl); fills the tp target "
+                        "channel the o2560 6h bundles never embedded")
+    p.add_argument("--tp-scale", type=float, default=1.0,
+                   help="[tp_sweep control] scale the TRUTH tp channel by this factor "
+                        "before residuals — separates a value-dependent output cap "
+                        "from a harness artifact (e.g. 0.5)")
     p.add_argument("--seed-sigmas", nargs="+", type=float,
                    default=[2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 300.0],
                    help="[seeding] σ_seed grid — plant the true storm at each, then sample free below")

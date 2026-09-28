@@ -39,7 +39,7 @@ from manual_inference.prediction.predict import load_objects as _load_objects
 
 LOGGER = logging.getLogger(__name__)
 
-SURFACE_TARGETS = ["10u", "10v", "2t", "msl", "tp"]
+SURFACE_TARGETS = ["10u", "10v", "2t", "msl", "tp", "cp"]
 
 
 @dataclass
@@ -321,7 +321,9 @@ def denoise_at_sigma_grad(bundle, x_interp, x_hres, y_residual, sigma, noise):
 
 def sample_full(bundle, x_interp, x_hres, num_steps: int, seed: int,
                 model_comm_group=None, grid_shard_shapes=None,
-                sigma_min: float | None = None) -> torch.Tensor:
+                sigma_min: float | None = None,
+                noise_scheduler_params: dict | None = None,
+                sampler_params: dict | None = None) -> torch.Tensor:
     """Run the full Heun sampling trajectory on (x_interp, x_hres).
 
     Uses the model's own sample() entry point with a fixed seed so baseline
@@ -333,9 +335,15 @@ def sample_full(bundle, x_interp, x_hres, num_steps: int, seed: int,
     o96->o320) ship inference_defaults.sigma_min=0.0, which makes the Karras
     ladder end at 0 and the Heun step divide by ~0 -> NaN; pass a small positive
     value (e.g. 0.03, the ds default) to keep the sampler finite.
+
+    ``noise_scheduler_params`` / ``sampler_params`` override further scheduler
+    fields (e.g. sigma_max, sigma_transition) and sampler knobs (e.g. S_churn)
+    on top of the checkpoint's inference_defaults — pass exactly the production
+    eval-config sampler to reproduce a scored run's schedule.
     """
     inner = bundle.inner_model
-    nsp = {"num_steps": num_steps}
+    nsp = dict(noise_scheduler_params or {})
+    nsp["num_steps"] = num_steps
     if sigma_min is not None:
         nsp["sigma_min"] = float(sigma_min)
     with torch.no_grad():
@@ -346,7 +354,7 @@ def sample_full(bundle, x_interp, x_hres, num_steps: int, seed: int,
             x_hres,
             model_comm_group=model_comm_group,
             noise_scheduler_params=nsp,
-            sampler_params=None,
+            sampler_params=(dict(sampler_params) if sampler_params else None),
             seed=seed,
             **_shard_kw,
         )

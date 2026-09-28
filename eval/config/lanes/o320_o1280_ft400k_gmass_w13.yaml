@@ -1,0 +1,33 @@
+# o320_o1280_ft400k_gmass_w13 -- mass-only autoguidance w1.3 on the ft400k cycle-2 checkpoint
+# (family 12dcefea..., step-400000: the s397434 champion fine-tuned for a fresh 400k-step LR
+# cycle, EDM2 OFF). Question: does the adopted gmass recipe (w1.3 mass-only = TC repair at
+# ~zero global cost, ledger 18a/19) hold on the ft400k weights, guided-vs-own-ctrl?
+# D_bad = 34fdb91e d50k (inference-anemoi-by_step-epoch_021-step_050000): the EARLIEST TRUE
+# ANCESTOR of the ft400k weight lineage (ft400k warm-started FROM s397434, so the finetune
+# own-50k is s397434+50k = NOT weak; the original-run 50k is). Same D_bad file as the
+# validated gmass campaign -- already on Atos, sha-verified, halo-fix 1b078e1 exercised.
+# Ctrl arm = base lane o320_o1280 unchanged (pw30 10/20 s1e5 chunks=1), fresh compute,
+# ctrl-matched by construction. Sampler block restated in full (lane merge is shallow at
+# the sampler key); mass map verbatim from o320_o1280_pw40_s397_gmass_w13.yaml.
+base: o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.3, sp: 1.3, z_100: 1.3, z_1000: 1.3, z_200: 1.3, z_300: 1.3, z_400: 1.3, z_50: 1.3, z_500: 1.3, z_700: 1.3, z_850: 1.3, z_925: 1.3}

@@ -9,7 +9,7 @@ from eval.scoreboard.types import ScoreRecord
 
 LOG = logging.getLogger(__name__)
 
-KNOWN_EVALUATORS = ["tc", "spectra", "surface", "sigma", "region_plot", "sigma_loss", "probabilistic"]
+KNOWN_EVALUATORS = ["tc", "spectra", "surface", "sigma", "region_plot", "sigma_loss", "probabilistic", "precip_scores"]
 
 
 def aggregate_scores(

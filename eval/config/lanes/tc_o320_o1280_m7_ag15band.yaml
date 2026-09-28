@@ -1,0 +1,25 @@
+# matrix7 arm ag15band (2026-08-06) - s397434 sampler screen on the regional
+# tc_o320_o1280 lane (matrix6 transfer test). Screening only - no scoreboard.
+base: tc_o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 10000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 10000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.5
+    autoguide_sigma_lo: 2.0
+    autoguide_sigma_hi: 80.0

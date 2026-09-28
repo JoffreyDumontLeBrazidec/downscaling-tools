@@ -22,4 +22,8 @@ environment_setup:
     TORCHINDUCTOR_COMPILE_THREADS: "1"
     OMP_NUM_THREADS: "1"
     MKL_NUM_THREADS: "1"
-  venv_activate: /home/ecm5702/dev/runtimes/ds-260612/activate.sh
+  # The runtimes/ds-260612 selector was retired 2026-06-26 and now exits 1, which
+  # aborts any job that sources it under set -e. Its own message names the pristine
+  # certified venv as the replacement, and that is what atos_ac_pristine.yaml and
+  # atos_ac_unified.yaml already use.
+  venv_activate: /home/ecm5702/dev/.ds-260612/bin/activate

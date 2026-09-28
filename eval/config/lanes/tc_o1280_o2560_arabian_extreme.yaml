@@ -1,0 +1,36 @@
+# tc_o1280_o2560_arabian_extreme.yaml
+# A box cut around the heaviest 6-hour precipitation cell in the whole Humberto
+# evaluation window: an Arabian Sea system at 20.7N, 69.8E where the IEKM target
+# reaches 1008 mm on 2025-09-28 step 36, with 8 points above 330 mm.
+#
+# Why this box exists (2026-09-01 precipitation screen). On the Humberto box the
+# target peaks near 210 mm, below the model's apparent limit, so nothing there
+# tests it. Here the model's own DRIVER carries cells above the limit -- driver
+# per-member maxima in this box are 93.9, 479.3, 360.3, 278.1, 425.2, 190.5,
+# 471.2, 198.9, 194.0 and 304.4 mm -- while the model's outputs are 297.4, 310.5,
+# 302.0, 149.9, 299.0, 304.8, 261.5, 250.6, 293.7 and 299.0 mm. Not one crosses
+# 311 mm even when conditioned on a 479 mm driver cell. This lane exists to run
+# the denoiser trace (DS_DENOISER_TRACE) on exactly that case.
+#
+# SCREENING/DIAGNOSTIC ONLY: box-support numbers never enter a full-lane
+# scoreboard. Task note:
+# ~/dev/docs/epics/tc-o1280-o2560/in-progress/20260831_precip_sampler_guidance_screen.md
+base: tc_o1280_o2560_humberto
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [36]
+  dates: ["20250928"]
+  num_gpus_per_model: 1
+  local_scope:
+    mode: bbox
+    cut_graph: true
+    hidden_halo_hops: 1
+    label: arabian_extreme_box
+    lat_min: 10.0
+    lat_max: 30.0
+    lon_min: 60.0
+    lon_max: 85.0
+
+evaluator_groups:
+  default: [precip_scores]

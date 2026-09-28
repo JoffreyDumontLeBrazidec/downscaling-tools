@@ -78,6 +78,7 @@ def _patch_common(src: str, params: dict, curve_grid: str) -> str:
 def _input_fn_src(input_params: dict, input_grid: str) -> str:
     """Source for an `input_baseline(...)` curve helper injected into the template."""
     iexpver = input_params["expver"]
+    ivbase = input_params.get("vstream_base", f"prepml_{iexpver}")
     iclass = input_params["class_"]
     istream = input_params.get("stream", "enfo")
     ilabel = f"{istream} {input_params['grid']} input"
@@ -86,7 +87,7 @@ def _input_fn_src(input_params: dict, input_grid: str) -> str:
 def input_baseline(type_, score, vend, suff="", line_style="dotted", line_colour="orange", **kargs):
     return curve(
         data=modeldata(
-            vstream="prepml_{iexpver}_%s" % vend,
+            vstream="{ivbase}_%s" % vend,
             grid="{input_grid}",
             Class="{iclass}",
             stream="{istream}",
@@ -112,6 +113,7 @@ def _ref_fn_src(ref_params: dict, ref_grid: str) -> str:
     used to wipe the whole plot (fair-mean uniformiseMissingValues) when it was empty.
     """
     rexpver = ref_params["expver"]
+    rvbase = ref_params.get("vstream_base", f"prepml_{rexpver}")
     rclass = ref_params.get("class_", "od")
     rstream = ref_params.get("stream", "enfo")
     rlabel = ref_params.get("label", f"{rstream} {ref_params['grid']}")
@@ -120,7 +122,7 @@ def _ref_fn_src(ref_params: dict, ref_grid: str) -> str:
 def reference_baseline(type_, score, vend, suff="", line_style="solid", line_colour="blue", **kargs):
     return curve(
         data=modeldata(
-            vstream="prepml_{rexpver}_%s" % vend,
+            vstream="{rvbase}_%s" % vend,
             grid="{ref_grid}",
             Class="{rclass}",
             stream="{rstream}",

@@ -1,0 +1,35 @@
+# o1280_o2560_guided_control.yaml (2026-09-03)
+# Mass-only autoguidance (msl, weight 1.3 — the calibrated o2560 dose) applied to the
+# control arm of the cascade probe. Sampler = the lane default pw40 sigma_max 1e6
+# restated in full (2-level merge) plus the autoguide keys, so guided-vs-unguided
+# isolates the guidance on an otherwise identical run. Weak guiding ckpt = the
+# fccc23df own-ancestor inference file at step 50000 (D_bad), same as the agmass lane.
+base: o1280_o2560_humberto6h_pristine
+
+predict:
+  dates: ["20250926"]
+  members: [1, 2]
+  steps: [24, 48, 72, 96, 120]
+  num_gpus_per_model: 4
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 40
+    sigma_max: 1000000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 13
+    num_steps_low: 27
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 1000000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/fccc23dfb5de4dfbbb2ca0c0e0ce3fdf/inference-anemoi-by_step-epoch_076-step_050000.ckpt"
+    autoguide_weight_map: {msl: 1.3}
+
+tc:
+  max_pf_members: 2
+  support_mode: "both"

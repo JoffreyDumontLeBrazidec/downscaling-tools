@@ -1,0 +1,37 @@
+# tc_o320_o1280_ft400k_gmass_d200k_w120 -- GUIDING-MODEL sweep arm (owner 2026-08-26).
+#
+# Identical in every respect to the weight-sweep arms except the guiding model: this one
+# uses step 200,000 of the pretrain instead of step 50,000. Sampler, box, dates, members, lead times and the
+# twelve-key mass channel map are all inherited unchanged from tc_o320_o1280, so the only
+# thing that varies across this family is the pair (guiding model, weight).
+#
+# Why the weight differs from the step-50,000 arms: the displacement autoguidance applies
+# is (w - 1) times the gap between the sampled model and the guiding one. A stronger guide
+# shrinks that gap, so the same displacement needs a larger weight. Comparing this arm to a
+# step-50,000 arm at the SAME weight would therefore compare two different displacements
+# and would not be a controlled comparison.
+#
+# SCREENING ONLY -- never a scoreboard row. The box has no spherical-harmonic transform, so
+# this decides tropical-cyclone depth and 10 metre wind only.
+base: tc_o320_o1280
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_086-step_200000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.2, sp: 1.2, z_100: 1.2, z_1000: 1.2, z_200: 1.2, z_300: 1.2, z_400: 1.2, z_50: 1.2, z_500: 1.2, z_700: 1.2, z_850: 1.2, z_925: 1.2}

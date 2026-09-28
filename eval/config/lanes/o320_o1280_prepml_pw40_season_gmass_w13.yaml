@@ -1,0 +1,36 @@
+# o320_o1280_prepml_pw40_season_gmass_w13 -- AUTOGUIDANCE month campaign arm.
+# The ADOPTION-CANDIDATE dose on the champion checkpoint: identical to
+# o320_o1280_prepml_pw40_season_agmass (j9f3: s397434, pw40 13/27, mass-only
+# guidance, D_bad = s397434 own-ancestor step-50000) with ONE delta:
+#   weight w=1.3 (adopted gmass recipe, ledger 18a global confirm 2026-08-18;
+#   j9f3 ran w1.5, which overshoots idalia deepest by 7.1 hPa).
+# Owner ask 2026-08-31: September-2025 month at the adoption dose, ecflow gpu
+# limit 4 (single live arm -- supersedes the 2026-08-22 two-arm cap of 2 for
+# this campaign; each model task takes 4 GPUs).
+# Sampler-paired with j9f3 (w1.5) and j95z (ctrl): same pw40, same ckpt.
+# Guidance is injected in the prepml seam by season-scale-tools/
+# downscaling_unified_runner.py via CODEX_AUTOGUIDE_* env (fail-loud).
+# NOTE: loader _deep_merge is 2-level only -> predict.env REPLACES the base env,
+# so the base lane env block is repeated here in full. Keep in sync.
+# Walltime doubled vs ctrl: guidance = 2 denoiser evals per sampler step.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+    CODEX_AUTOGUIDE_CHECKPOINT: /home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt
+    CODEX_AUTOGUIDE_WEIGHT_MAP: /home/ecm5702/dev/anemoi-inference-configs/autoguide_mass_w13.json
+
+prepml:
+  # Owner 2026-08-31: gpu limit 4 for THIS campaign (only live o320->o1280 arm).
+  # The 2026-08-22 default of 2 still applies whenever several arms run at once.
+  ecflow:
+    limits:
+      gpu: 4
+  platform:
+    gpu:
+      time: "0-10:00"

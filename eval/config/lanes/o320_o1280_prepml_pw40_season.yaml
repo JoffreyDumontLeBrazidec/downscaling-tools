@@ -27,9 +27,9 @@ predict:
   # PYTORCH_CUDA_ALLOC_CONF reduces fragmentation. Both are pushed into os.environ
   # by eval.cli and emitted as `export` lines by eval.jobs.renderer.
   env:
-    ANEMOI_INFERENCE_NUM_CHUNKS: 32
-    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 32
-    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 32
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
     PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
     CODEX_UNIFIED_SHARD_STRATEGY: edges
   sampler:
@@ -51,6 +51,23 @@ predict:
     S_min: 0.75
     S_max: 100000.0
     S_noise: 1.05
+
+# tctracker: month-scale track production for this lane's FDB expvers and
+# their references. All sources track at ONE support (grid 320, 24h steps,
+# vorticity false) — the tccompare comparison contract. target/input reference
+# specs derive from the prepml blocks below (od/enfo and od/eefo, expver 0001);
+# name the ctrl expver per campaign: --track-sources model,ctrl=<expver>,target,input
+tctracker:
+  grid: 320
+  time: "00"
+  start_step: 0
+  end_step: 360
+  step_interval: 24
+  class: rd
+  type: pf
+  stream: enfo
+  vorticity: false
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 # TC evaluator: see eval/README.md "TC tail-extreme ratios" for the four
 # AN-anchored ratio metrics emitted per event (mslp_p001, mslp_min, wind_p9999,
@@ -212,6 +229,11 @@ prepml:
     root: /home/ecm5702/perm/reference/o320_o1280
   time_step: 24h
   lead_time: 360h
+  # Owner 2026-08-22: 2 concurrent model tasks is the DEFAULT for every o320->o1280
+  # prepml lane, so that several arms at once cannot lock other users out of compute.
+  ecflow:
+    limits:
+      gpu: 2
   platform:
     gpu:
       time: "0-05:00"

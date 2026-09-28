@@ -13,9 +13,13 @@ python -m eval.cli <subcommand> [args]
 
 ### Subcommands
 
-### ECMWF tctracker expver archives
+### ECMWF tctracker expver archives + month-scale track comparison
 
-Use python -m eval.cli tctracker when the source is a PrepML/FDB expver rather than local NetCDF predictions. It writes basin-track tars, manifests, structural verification, and Atlantic track summaries. Full operational runbook: /home/ecm5702/dev/docs/epics/tc_track/TCTRACKER_EVAL_CLI.md.
+Use python -m eval.cli tctracker when the source is a PrepML/FDB expver rather than local NetCDF predictions. It writes basin-track tars, manifests, structural verification, parsed tidy track tables (`parsed/`), and Atlantic track summaries. With `--track-sources model,ctrl=<expver>,target,input` the same tracker settings also run over the lane's references (target = operational ENFO, input = operational EEFO, both derived from the lane `prepml` blocks) so every track set shares ONE support; reference tars are cached under `<scratch>/eval/tcrefs/` and reused across campaigns. `--months 202509` expands to daily dates, and rd expvers get a warn-only per-(date,member) FDB completeness preflight.
+
+Compare the resulting track sets with `python -m eval.cli tccompare --sources model=<expver>,ctrl=<expver>,target=od:enfo:0001,input=od:eefo:0001 --months ... --dates <pinned window>` — it emits `tc_tracks_metrics.json` plus the figure suite (track maps, density vs target, intensity log-PDF + ratio, counts, step intensity, case panels). Pin `--dates` to the intersection of complete dates when sources have unequal coverage. This is the month-scale diagnostic panel; TC verdicts stay with the box-based raw-extremes `tc` evaluator.
+
+Full operational runbook (read before tracker work): /home/ecm5702/dev/docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md.
 
 Verified j761 inspection command:
 

@@ -1,0 +1,23 @@
+# AIFS Humberto screen: mass-only autoguidance w=1.50 (msl/sp/z_*), guide 34fdb91e d50k.
+base: o320_o1280_aifs_humberto
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+    autoguide_checkpoint: "/home/ecm5702/perm/checkpoints-jupiter-rebaseline-20260716/34fdb91e87cd413ca510bb1f6749dbdb/inference-anemoi-by_step-epoch_021-step_050000.ckpt"
+    autoguide_weight: 1.0
+    autoguide_weight_map: {msl: 1.50, sp: 1.50, z_50: 1.50, z_100: 1.50, z_200: 1.50, z_300: 1.50, z_400: 1.50, z_500: 1.50, z_700: 1.50, z_850: 1.50, z_925: 1.50, z_1000: 1.50}

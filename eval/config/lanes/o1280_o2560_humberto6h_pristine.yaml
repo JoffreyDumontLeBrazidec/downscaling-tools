@@ -1,0 +1,276 @@
+# o1280_o2560_humberto6h_pristine.yaml
+# Humberto (Sept 2025) evaluation of the PRISTINE o1280->o2560 rebaseline
+# ckpt fccc23dfb5de4dfbbb2ca0c0e0ce3fdf @ step 300,000 (epoch 456, run complete
+# 2026-08-15). FIRST inference ever run on a pristine o2560 checkpoint — every
+# prior o2560 lane targets the HALO ckpt 9d6f73 via atos_ac_unified.
+#
+# Owner direction 2026-08-17: manual inference on atos_ag (GH200); prepml on
+# 1 node x 4 AC GPUs. Both postures already tested.
+#
+# 6h step cadence (NOT the base lane's 24h [24,48,72,96,120]) because the ask is
+# precip: the staged Humberto inputs/targets are step006to120by006 and the target
+# GRIBs carry the _acc_wide accumulated fields.
+base: o1280_o2560
+
+default_host: atos_ag
+allowed_hosts:
+  prepare: [atos_ag, atos_ac]
+  predict: [atos_ag, atos_ac]     # ag = manual, ac = prepml (4 GPUs, 1 node)
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  # 20 steps at 6h — matches the staged bundles and the _acc_wide precip targets
+  steps: [6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 78, 84, 90, 96, 102, 108, 114, 120]
+  dates: ["20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 4
+  # Reuse the existing 1000-bundle 6h set (5 dates x 10 members x 20 steps).
+  # Bundles are checkpoint-independent: input fields + embedded truth.
+  # input_root repointed 2026-09-05 from the auto-purged scratch copy to the /perm copy (verified
+  # byte-identical; epics/o1280-o2560-lane-defects/in-progress/20260905_tranche1_probeC_D1_B1.md).
+  input_root: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/bundles_with_y
+
+prepml:
+  # j7a1 verified FREE via `fdb list --porcelain class=rd,expver=j7a1` (0 fields).
+  # NB the expver registry is stale (2026-06-23): j7a2 was absent from it yet holds
+  # 245k fields — always check FDB, not the registry.
+  debug_expvers: ["j9yw"]
+  # j9yk was minted with: prepml expver --create --force
+  # LESSON: an expver being FDB-free is NECESSARY BUT NOT SUFFICIENT. j7a1 had 0 FDB
+  # fields yet prepml rejected it with "No such experiment version: j7a1" — expvers must
+  # also exist in the prepml CATALOGUE. Always --create rather than picking a free name.
+  # DEVIATION FROM BASE LANE, and the one unverified axis here:
+  # base o1280_o2560 carries `runner: anemoi-dev` + ds-dyn-prepml-wrap, which serve
+  # the HALO 9d6f73 ckpt. This checkpoint is PRISTINE (c286c1a33, unified dict-API),
+  # so it needs the unified runner + pristine wrap, mirroring the pristine
+  # o320_o1280 lane. Validate via the FDB field-count gate, not job exit code.
+  # time_step drives the MARS step request, NOT predict.steps:
+  #   _input_step_request -> f"{offset}/to/{max(predict_steps)+offset}/by/{time_step}"
+  # Base lane has time_step: 24h, so overriding predict.steps to 6h alone produced
+  # "6/to/126/by/24" (24-HOURLY) — wrong cadence for precip. Must set it here too.
+  time_step: 6h
+  base_runner: downscaling_unified
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/ds-260612-prepml-wrap
+  # 2026-08-18 FIX (j9yk/j9yw postmortem, both expvers failed identically):
+  # the base lane inherits input.step_offset_hours: 6, which yields a MARS request
+  # step=6/to/126/by/6 (j9yk: 6/to/126/by/24) — NO step 0. The unified runner
+  # builds its initial input state at the forecast BASE date (00:00,
+  # write_initial_state: true), and .sel(valid_datetime=00:00) matched 0 of the
+  # 1911 staged fields (91 vars x 21 steps, retrieval itself was complete):
+  #   "Expected (91 variables) x (1 date) = 91 fields, got 0"
+  # The halo-era DYN runner selected inputs per valid time and tolerated the
+  # offset; the pristine/unified runner mirrors the working o320_o1280 pristine
+  # lane (j9yd requests step=0/to/360/by/24) and REQUIRES step 0 in the file.
+  # All 91 input vars verified present at od/enfo/pf/O1280 step 0 via mars list
+  # (13 sfc + 78 pl, date 2025-09-26). Offset 0 -> step=0/to/120/by/6.
+  # NB the loader merge is only 2 levels deep, so this input block REPLACES the
+  # base lane prepml.input wholesale — every key must be restated here.
+  input:
+    class: od
+    stream: enfo
+    type: pf
+    grid: O1280
+    step_offset_hours: 0
+
+# --- dataset re-pointing: Jupiter-trained ckpt -> Atos-resident zarrs ---
+# The ckpt carries ABSOLUTE JUPITER paths (training used absolute paths because
+# anemoi-datasets on Jupiter ignores DATA_DIR for name lookup). On Atos those miss,
+# and anemoi-datasets falls back to BASENAME lookup across its search path:
+#   1. /home/ecm5702/scratch/data/zarr_mirror/   <- writable, searched FIRST
+#   2. /home/mlx/ai-ml/datasets/
+#   3. /home/mlx/ai-ml/datasets/stable/
+# That fallback succeeds for the o1280 input but FAILED for the o2560 target,
+# because training used obrien2's Jupiter-only "-16gridchunks" rechunked copy.
+# Atos holds the SAME data under the canonical name (O2560, 26,306,560 points,
+# 104 vars), so the fix is an ALIAS SYMLINK in zarr_mirror (1) rather than a lane
+# key -- the lane schema has no `system:` block:
+#   zarr_mirror/downscaling-rd-fc-oper-i4ql-mars-o2560-2023-2024-24h-v1-16gridchunks.zarr
+#     -> /home/mlx/ai-ml/datasets/downscaling-rd-fc-oper-i4ql-mars-o2560-2023-2024-24h-v1.zarr
+# Verified: open_dataset(...-16gridchunks) -> shape (9000, 104, 1, 26306560).
+# Symptom if the symlink is lost: zarr PathNotFoundError on /e/data1/... at
+# datamodule ds_train construction (smoke 50057179).
+
+# TC support contract (2026-08-18): the base lane anchors on OPER_O1280_0001
+# analysis (o1280 box) while predictions/IEKM live on the o2560 box — in the
+# default "native" mode the contract correctly refuses to mix them (the May
+# 811960e6 stats.json predates the contract and DID mix supports — trap).
+# "regridded" regrids every curve (model, refs, bundle x_interp/y) onto the
+# shared regular analysis grid = one geometry. Needs metview (ecmwf-toolbox
+# module) + the surface_an_OPER_O1280_0001_*.grib files (verified present).
+# TC also runs from data_tc24h/predictions (24h subset): the legacy kernel
+# step contract only supports 24/48/72/96/120 ("Unsupported step=6").
+# 2026-08-23: "both" instead of "regridded". Regridded alone put this run on a
+# support the LANE SCOREBOARD does not use (its declared support is native
+# o2560, model vs IEKM native truth), so the row could not be compared with any
+# other row and its wind-max ranking was meaningless. "both" runs regridded
+# first (one shared geometry for model vs IEKM vs OPER analysis) and then native
+# (board-comparable), so we get the internally consistent three-curve view AND
+# numbers that can sit on the board. Read each set only against its own support.
+tc:
+  support_mode: "both"
+
+# Quaver: j9yw pl fields are ENFO DONORS for the hybrid tctracker, not model
+# output — upper-air scoring would mislabel ENFO skill as ML. Surface-only.
+quaver:
+  skip_upperair: true
+
+# --- Precipitation (definitive-tp fix, 2026-08-26) --------------------------
+# Why: the staged 6h bundles never embedded tp truth (every prediction NC has
+# y[tp] = all NaN), and tp/cp are OUTPUT-ONLY channels on this ckpt family
+# (in_lres has no tp/cp) so the exported x_interp tp is identically zero. The
+# precip evaluators fall back to these GRIB sources whenever the embedded
+# channels are missing/degenerate, logging the substitution loudly. The truth
+# gribs are grid-identical to the predictions hres grid (gate 2026-08-26:
+# max |dlat| 4e-6 deg over 26,306,560 points). Files hold metres per 6h
+# window; all evaluator output is mm per 6h window.
+precip:
+  truth_grib_tpl: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib"
+  baseline_lres_grib_tpl: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o1280_inputs/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_input_tp_dea.grib"
+  interp_index_cache: "/home/ecm5702/perm/reference/o1280_o2560/interp_o1280_to_o2560_nn.npz"
+
+precip_dist:
+  style: compact
+
+precip_events:
+  n_events: 3
+  dlat: 2.0
+  dlon: 2.5
+  rank_by: truth
+
+precip_scores:
+  wet_threshold_mm: 0.1
+
+# Own prepare block (2026-08-26): the base lane's prepare points at the
+# retired 24h destine paths; this reproduces the verified _6h staging AND adds
+# tp to the target channels via the _tp_dea sidecar, so bundles built from
+# here embed target_hres_tp natively and the precip GRIB fallbacks above stop
+# being load-bearing. The EXISTING 1000-bundle set predates this and stays
+# as-is (evaluators inject truth for it).
+prepare:
+  bundle_filename_tpl: enfo_o1280_0001_date{date}_time0000_mem{member:02d}_step{step:03d}h_input_bundle.nc
+  args:
+    lres_sfc_grib: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_input.grib"
+    lres_pl_grib: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_pl.grib"
+    hres_grib: /home/ecm5702/perm/reference/o1280_o2560/unified_91var/o2560-z-lsm.grib
+    target_sfc_grib: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y.grib
+    lres_sfc_channels: 10u,10v,2d,2t,msl,skt,tcw,tcc,hcc,lcc,mcc,ssrd,strd
+    lres_pl_channels: q,t,u,v,w,z
+    target_sfc_channels: 10u,10v,2t,msl,tp
+    target_pl_channels: NONE
+  optional_sidecars:
+    - file: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_sfc_wide.grib"
+      arg: lres_sfc_extra_grib
+    - file: "{source_grib_root}/enfo_o1280_0001_date{date}_time0000_mem1to10_step006to120by006_acc_wide.grib"
+      arg: lres_sfc_extra_grib
+    - file: "/home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib"
+      arg: target_sfc_extra_grib
+
+# Restated IN FULL: the config merge is 2 levels deep, so this list REPLACES
+# the base lane's default group. Base default + the three precip evaluators.
+evaluator_groups:
+  default: [tc, spectra, spectra_ecmwf, surface, region_plot, precip_scores, precip_dist, precip_events]
+  diagnostics: [sigma, mechanistic, intermediate, mlflow]
+
+resource_profiles:
+  evaluate_precip_scores:
+    time: "10:00:00"
+    mem: 64G
+    cpus: 8
+  evaluate_precip_dist:
+    time: "08:00:00"
+    mem: 32G
+    cpus: 4
+  evaluate_precip_events:
+    time: "04:00:00"
+    mem: 32G
+    cpus: 4
+
+# ---------------------------------------------------------------------------
+# Diagnostic figure bundle for this lane (2026-09-01).
+#
+# Reads measurements that already exist and makes the few that need a compute
+# node, then renders one labelled bundle of figures with captions that state
+# the support, the sample size and the arm behind every number. Diagnostic
+# only: this evaluator deliberately produces NO scoreboard row, and it is not
+# in any evaluator group, so it runs only when named with --only.
+# ---------------------------------------------------------------------------
+lane_diagnostics:
+  box: {south: 15.0, north: 40.0, west: -80.0, east: -35.0}
+
+  capacity:
+    control: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_ctrl.json
+    guided: /home/ecm5702/agent-work/20260828-lane-pair-coherence/outputs/capacity_w13.json
+
+  # Campaign paths point at the SCRATCH original (auto-purged ~1 month after its last write): the
+  # /perm copy stalled on the 10 TB user quota on 2026-09-05 and is incomplete. Repoint to
+  # ~/perm/eval-archive/<campaign> once that copy is complete and verified. NEVER ~/perm/eval (scratch symlink).
+  precip_scores_json: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/precip_scores/scores.json
+
+  # 1,333 paired tropical-belt samples from the two training datasets, scanned
+  # on Jupiter (job 1524468) and relayed here.
+  scan_jsonl: /home/ecm5702/agent-work/20260901-o2560-figures/scratch/tropical_extremes_stride3.jsonl
+
+  loss_budget:
+    stride: 5
+    member: 0
+    thresholds_mm: [0.1, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0]
+
+  # Each lane is scored on its OWN target grid against its own target; the two
+  # are never mixed into one number.
+  pair_lanes:
+    o1280_o2560: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/predictions
+    o320_o1280: /home/ecm5702/scratch/eval/o320_o1280_b785bf12_unified_full/run_20260619T192122_anemoi-by_ep/predictions
+
+  # READ ONLY. These boxed arms belong to another session's live sampler screen.
+  # Arms still filling report their own smaller sample rather than being pooled.
+  # Two of these arms carry IDENTICAL sampler settings and differ only in being
+  # separate runs. That repeat is deliberately kept: it measures the run-to-run
+  # scatter against which any sampler effect has to be judged.
+  sampler_arms:
+    "ceiling 1e3": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_ctrl_20260826T122854Z
+    "ceiling 1e6, run A": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_pw40s1e6_20260827T051954Z
+    "ceiling 1e6, run B": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn2p5_20260901T055159Z
+    "churn 0": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn0_20260901T055159Z
+    "churn 8": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn8_20260901T055159Z
+    "churn 16.6": /home/ecm5702/scratch/eval/tc_o1280_o2560/humberto_boxed_churn16p6_20260831T184705Z
+
+  standing_set:
+    event: humberto
+    tc_arms:
+      "unguided control": /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
+      "mass-only autoguidance, weight 1.3": /home/ecm5702/scratch/eval/o2560_humberto_agmass_w13_fixed_20260822T082649Z/data_tc24h/evaluators/tc/stats.json
+    spectra:
+      wavenumber_min: 100.0
+      candidates:
+        - label: spectra_ecmwf_v2, the corrected spectral route
+          path: /home/ecm5702/scratch/eval/o2560_humberto_pristine_fixed_20260822T082649Z/data/evaluators/spectra_ecmwf_v2/spectra_summary.json
+          support: "global field, spherical-harmonic transform at TCo2559, lead time 120 h, member 1, 5 initialisations"
+
+# Texture evaluator at O2560 (front B1 of epics/o1280-o2560-lane-defects/20260905_improvement_plan.md,
+# 2026-09-05). Same instrument as the o320->o1280 Phase 0 texture gate, run on the native 4.4 km grid:
+# static fields from the lane GRIB (no forcings zarr at O2560), a 32-neighbour cache built 2026-09-05,
+# the terrain roughness over 128 neighbours (the same ~20 km footprint as 32 neighbours at 8.8 km),
+# and tp as an OUTPUT-ONLY state whose truth comes from the six-hour _tp_dea GRIB.
+texture:
+  weather_states: [10u, 10v, 2t, msl, tp]
+  output_only_states: [tp, cp]
+  steps: [24, 120]
+  members: [1, 2, 3]
+  paths:
+    up_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O1280_to_O2560_linear.mat.npz
+    down_matrix: /home/ecm5702/hpcperm/data/inter_mat/interpol_O2560_to_O1280_linear.mat.npz
+    residual_stats: /home/ecm5702/hpcperm/data/residuals_statistics/o2560_dict_6_72.npy
+    static_grib: /home/ecm5702/perm/reference/o1280_o2560/unified_91var/o2560-z-lsm.grib
+    knn_cache: /home/ecm5702/hpcperm/data/static/o2560_knn32.npz
+    roughness_knn_cache: /home/ecm5702/hpcperm/data/static/o2560_knn128.npz
+    precip_truth_tpl: /home/ecm5702/perm/data/input_data/o1280_o2560/humberto_6h_20250926_20250930/o2560_targets/iekm_o2560_iekm_date{date}_time0000_step006to120by006_sfc_y_tp_dea.grib
+  terrain:
+    roughness_neighbours: 128
+  regions:
+    west_tropical_atlantic: [10.0, 25.0, -70.0, -45.0]
+    open_north_atlantic: [35.0, 55.0, -45.0, -20.0]
+    europe: [35.0, 60.0, -10.0, 25.0]
+    alps: [43.0, 49.0, 4.0, 16.0]
+    arabian_sea_monsoon: [10.0, 25.0, 60.0, 78.0]
