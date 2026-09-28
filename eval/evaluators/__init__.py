@@ -7,6 +7,7 @@
 * ``describe.py`` gathers what ``python -m eval.cli list`` and ``describe <name>``
   print, from the registry, the package docstring and the spec.
 
-The computation of most evaluators lives in ``eval/_backends/<name>/``; the package
-here is the thin, uniform front of it.
+The contract files of a package (``runner.py``, ``scorer.py``, ``plotter.py``) sit at its
+top, and the computation they call sits in its ``core/`` subpackage, with the tests in
+``tests/``. See ARCHITECTURE.md, section 2, for the rules.
 """

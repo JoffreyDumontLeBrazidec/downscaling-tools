@@ -57,8 +57,8 @@ do not reimplement their logic in ad-hoc scratch scripts.
 
 | Tool | Path | Purpose |
 |------|------|---------|
-| TC data request | `eval/tc/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
-| Spectra pipeline | `eval/spectra/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
+| TC data request | `eval/evaluators/tc/core/all_events_request.sh` | MARS request for TC reference GRIBs (edit EXPID) |
+| Spectra pipeline | `eval/tools/spectra_analysis/grb_to_spectra.sh` | Full MARS→gptosp→compute spectra pipeline |
 | ECMWF spectra evaluator | `eval/evaluators/spectra_ecmwf_v2/` | `eval.cli evaluate --only spectra_ecmwf_v2` (AC-only) |
 | MLflow evaluator | `eval/evaluators/mlflow/` | `eval.cli evaluate --only mlflow` (requires `--checkpoint`) |
 

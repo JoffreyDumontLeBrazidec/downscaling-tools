@@ -40,8 +40,10 @@ code they test.
 | Folder | What it tests |
 |---|---|
 | `eval/tests/` | The evaluation framework as a whole: command line, configuration, discovery, evaluator registry and contract, renderer, plotting helpers |
-| `eval/evaluators/*/tests/`, `eval/_backends/*/tests/` | One evaluator or backend |
-| `eval/predict/tests/`, `eval/scoreboard/tests/`, `eval/tools/parity/tests/` | Prediction generation, the scoreboard, the parity checker |
+| `eval/evaluators/*/tests/` | One evaluator, including its `core/` |
+| `eval/shared/tests/`, `eval/shared/*/tests/`, `eval/tools/*/tests/` | The shared helpers and each tool |
+| `eval/predict/tests/`, `eval/scoreboard/tests/` | Prediction generation and the scoreboard aggregation |
+| `eval/tests/test_backends_forwarders.py` | The forwarding modules left in `eval/_backends/` |
 | `eval/jobs/tests/` | The job orchestration and the maintenance commands of `eval/jobs/` |
 | `manual_inference/tests/` | Inference and input construction (CPU and GPU) |
 | `manual_inference_legacy_ds/tests/` | The frozen legacy copy of the same package, see below |

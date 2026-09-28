@@ -1,6 +1,6 @@
 """TC evaluator — data loading and per-event statistics.
 
-Delegates to eval.tc.workflows for the heavy lifting, but sources
+Delegates to eval.evaluators.tc.core.workflows for the heavy lifting, but sources
 configuration from lane_config instead of hardcoded values, and uses
 eval.discovery.predictions for file finding.
 """

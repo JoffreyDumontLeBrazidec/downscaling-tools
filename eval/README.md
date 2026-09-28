@@ -184,16 +184,21 @@ python -m eval.jobs.backfill_tc_extreme_percentiles --lane o96_o320
 underlying stats JSONs have the fields. (The custom
 `generate_enfo_o320_scoreboard` job was quarantined on 2026-09-28.)
 
-## Backends (`eval/_backends/`)
+## Where the code of an evaluator lives
 
-Internal implementation details of the evaluator wrappers. **Never invoke directly.**
+Each evaluator package keeps its contract files (`runner.py`, `scorer.py`, `plotter.py`) at the
+top and its computation in `core/`, with its tests in `tests/`; see `ARCHITECTURE.md`, section 2,
+for the rules and for the short list of imports between evaluators. Code that several
+evaluators use is in `eval/shared/`. Analysis code without a live evaluator is in
+`eval/tools/<name>/`, one folder each: `videogen`, `sigma_evaluator`, `obs_crps`,
+`plot_intermediate`, `weight_diagnostics`, `spectra_analysis`, and the older `parity`. Prefer
+the `python -m eval.cli` commands to running modules of `core/` directly. A few modules have a command line of their own, such as
+`python -m eval.evaluators.tc.core.workflows` and `python -m eval.tools.videogen`.
 
-Contains: `tc/`, `spectra/`, `region_plotting/`, `sigma_evaluator/`, `weight_diagnostics/`,
-`plot_intermediate/`, `quaver/`, and `scoreboard/{tc,spectra,surface,_surface_compute,_utils,canonical_data,row_matching}.py`.
-
-These modules were moved here from their original top-level `eval/` locations as part of the
-legacy quarantine. All imports have been updated. Old import paths (`eval.tc.*`, `eval.spectra.*`,
-etc.) will fail immediately — this is intentional.
+Until 2026-09-29 this code lived in `eval/_backends/`. Only 15 forwarding modules remain there,
+for callers outside the repository, and `eval/_backends/README.md` lists them. Old import
+paths of the older layout (`eval.tc.*`, `eval.spectra.*`, and so on) fail immediately, on
+purpose.
 
 ## Plot style (`eval/plotting/`)
 

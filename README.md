@@ -60,7 +60,7 @@ lane's configuration after its `base:` chain is merged.
 |---|---|
 | `eval/cli/` | The command line, `python -m eval.cli`: one module per command, see `eval/cli/__init__.py` |
 | `eval/evaluators/` | One package per evaluator. `registry.py` is the one list of evaluators, `base.py` is the contract each package follows, `describe.py` feeds `list` and `describe` |
-| `eval/_backends/` | The computation behind most evaluators (kernels, loaders, plot code); never called directly |
+| `eval/evaluators/<name>/core/` | The computation behind each evaluator (kernels, loaders, plot code), next to its `runner.py`, `scorer.py` and `plotter.py`; the tests are in `eval/evaluators/<name>/tests/` |
 | `eval/config/` | Lane, host, event and ladder YAML files (`lanes/`, `hosts/`, `events/`, `ladder/`) and `loader.py`, which resolves a lane and its `base:` chain |
 | `eval/predict/` | Prediction generation from bundles (`main.py`) and through prepml (`prepml.py`) |
 | `eval/prepare/` | Building truth-aware input bundles from source GRIB files |
@@ -69,9 +69,10 @@ lane's configuration after its `base:` chain is merged.
 | `eval/lean_layout.py` | Projects an evaluator tree into the tidy run-root layout |
 | `eval/report/` | The HTML report of a run |
 | `eval/discovery/` | Finding prediction files and identifying checkpoints |
-| `eval/shared/` | Grid and plotting helpers used by several evaluators |
+| `eval/shared/` | Code used by several evaluators: grid and plotting helpers, the precipitation truth source, the toolchain recipes |
 | `eval/jobs/` | SLURM orchestration (`pipeline.py`, `renderer.py`, `resources.py`), the ladder and evolution figures, `scripts/` for one-off jobs, `templates/` for sbatch templates |
-| `eval/tools/` | `parity/`, a checker that diffs two scoreboards |
+| `eval/tools/` | Analysis tools with no live evaluator, one folder each: `parity/` (diffs two scoreboards), `videogen/`, `sigma_evaluator/`, `obs_crps/`, `plot_intermediate/`, `weight_diagnostics/`, `spectra_analysis/` |
+| `eval/_backends/` | Only 15 forwarding modules for callers outside the repository; see its `README.md` |
 | `eval/tests/` | The unit tests of the framework as a whole |
 | `eval/archive/` | Frozen legacy scripts that a few tests and one tool still import |
 | `eval/notebooks/` | Example notebooks |

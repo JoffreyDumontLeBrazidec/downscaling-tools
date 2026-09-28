@@ -29,7 +29,9 @@ Input sources
 Supporting layers:
 - `eval/config/` -- lane, host, and event YAML configuration
 - `eval/discovery/` -- prediction file finding and checkpoint identification
-- `eval/shared/` -- common grid and plotting utilities
+- `eval/shared/` -- code that several evaluators use: grid and plotting helpers, the precipitation truth
+  source (`precip/`), the manifest writer, the toolchain recipes and small JSON helpers
+- `eval/tools/` -- analysis tools that have no live evaluator, one folder each
 - `eval/paths.py` -- canonical path resolution
 
 **Current state**: Both input paths go through `eval.cli`: the checkpoint path
@@ -39,17 +41,62 @@ a predictions directory that the evaluator framework consumes. The legacy
 
 ## 2. Evaluator Architecture
 
-Each evaluator is a thin package under `eval/evaluators/<name>/`; the computation
-behind it lives in `eval/_backends/<name>/`:
+Each evaluator is one package under `eval/evaluators/<name>/`. The three contract
+files sit at the top of the package and the computation behind them sits in a
+subpackage of the same package called `core/`:
 
 ```
 eval/evaluators/tc/
 |-- __init__.py       # exports run, score, plot and EVALUATOR_SPEC (the contract)
-|-- runner.py         # run(): orchestration, calls the backend
+|-- runner.py         # run(): orchestration, calls core
 |-- scorer.py         # score(): scoreboard rows from the results
 |-- plotter.py        # plot(): figures from the results
-eval/evaluators/tc/core/    # data loading, statistics, grid operations, plot code
+|-- core/             # the computation: data loading, statistics, grid operations,
+|                     # plot code, and the reader of the results for the scoreboard
+|-- tests/            # the tests of this evaluator, including its core
 ```
+
+### Where the code of an evaluator lives
+
+Until 2026-09-29 the computation lived in a separate folder, `eval/_backends/`, and
+several of its folders were shared by many evaluators, so the tree did not show which
+evaluator owned what. There is now one convention, and it has three parts.
+
+1. Code that belongs to one evaluator lives in `eval/evaluators/<name>/core/`, and its
+   tests in `eval/evaluators/<name>/tests/`. Small evaluators may have no `core/`.
+   The private helper modules an evaluator already had at the top of its package
+   (for example `spectra_ecmwf_v2/_grib_stager.py`) stay there.
+2. Code that several evaluators need goes to `eval/shared/`, in a module or package
+   named for what it does: `precip/` (the precipitation truth source), `manifest.py`,
+   `toolchain.py` with `toolchain.sh`, `json_utils.py`, `grid.py`, `plotting.py`,
+   `date_bootstrap.py`. When one evaluator is clearly the primary owner of some code
+   and others only borrow it, the code stays in the owner's `core/` and the others import
+   from there. Those borrowings are few, and this is the whole list:
+   `tc_structure` and `lane_diagnostics` import TC events, grids, loaders and plot code from
+   `tc/core`; `probabilistic` and `spread_proxy` import three helpers from
+   `surface/core/compute.py`; `spread_proxy` imports four helpers from `probabilistic/core`.
+   Anything else that two evaluators need belongs in `eval/shared/`.
+3. Analysis code that has no live evaluator goes to `eval/tools/<name>/`, next to
+   `eval/tools/parity/`. That covers `videogen` (used only by `eval.cli videogen`),
+   `sigma_evaluator`, `obs_crps`, `plot_intermediate`, `weight_diagnostics` and
+   `spectra_analysis`; the evaluators of the last five were retired on 2026-09-28. The tools
+   `plot_intermediate` and `weight_diagnostics` borrow the region helpers of
+   `region_plot/core`.
+
+Code outside the evaluators may import an evaluator's `core/` when it needs that
+evaluator's computation: `eval/jobs/scoreboard_metrics.py` reads the scoreboard files of the
+tc, surface and spectra_ecmwf_v2 cores (`core/scoreboard.py`), `eval.cli membermaps` and
+`eval.cli tctracker` call the cores of membermaps and tctracks, and the scripts in
+`scripts/` reuse the tc core.
+
+Importing anything below `eval.evaluators.<name>` first runs the `__init__.py` of that
+evaluator, which imports its `runner.py`, `scorer.py` and `plotter.py`. A consequence is that
+running a `core/` module with `python -m` while its own runner also imports it (as
+`python -m eval.evaluators.storm_maps.core.render` does) only prints Python's harmless
+"found in sys.modules" warning; the run itself is unaffected.
+
+`eval/_backends/` is left with 15 small forwarding modules for callers outside this
+repository, listed in `eval/_backends/README.md`, and is to be deleted when they are gone.
 
 The full list of evaluators, with their group (scored, standard, diagnostic or
 retired), the question each one answers and the host it is limited to, is
@@ -59,7 +106,7 @@ generated from the registry and the packages, so there is no second catalogue.
 
 `eval/scoreboard/` contains only the canonical aggregation layer
 (`aggregator.py`, `formatter.py`, `types.py`). Per-domain scoring math lives
-inside the evaluator's `scorer.py` or its backend.
+inside the evaluator's `scorer.py` or its `core/`.
 
 ### Evaluator Contract
 
@@ -89,9 +136,10 @@ evaluator's functions against the exact call `eval/cli/evaluate.py` makes.
 
 - Each evaluator writes only under its own results directory,
   `<run>/evaluators/<name>/`.
-- No cross-evaluator imports.
-- Evaluators import from `eval.config`, `eval.discovery`, `eval.shared`, their
-  own backend, and stdlib. Never from `eval.jobs` or another evaluator.
+- Evaluators import from `eval.config`, `eval.discovery`, `eval.plotting`, `eval.shared`,
+  their own `core/`, and stdlib. Never from `eval.jobs`.
+- An evaluator imports from another evaluator only in the few cases listed under
+  "Where the code of an evaluator lives"; everything else two evaluators need goes to `eval/shared/`.
 
 **Current state**: the consolidation is done. `eval/cli/evaluate.py` dispatches by
 name through `importlib.import_module(f"eval.evaluators.{name}")` over
@@ -100,7 +148,8 @@ name through `importlib.import_module(f"eval.evaluators.{name}")` over
 registry lists it and it is not retired. Whether an evaluator feeds the scoreboard
 is also read from the registry, not from its spec. The old top-level paths
 (`eval/tc/`, `eval/spectra/`, ...) no longer exist and their import paths fail
-immediately, which is intentional.
+immediately, which is intentional. The old `eval/_backends/` paths fail too, except for the
+15 forwarding modules described in `eval/_backends/README.md`.
 
 Three further facts a reader needs:
 
@@ -347,7 +396,6 @@ EVALUATOR_SPEC = {
 **Output root**: `<scratch_eval_root>/<lane>/<run_id>/`
 
 **Import rules**:
-- Evaluators import from `eval.config`, `eval.discovery`, `eval.shared`, their
-  own backend under `eval/_backends/`, and stdlib.
-- No cross-evaluator imports.
+- Evaluators import from `eval.config`, `eval.discovery`, `eval.plotting`, `eval.shared`, their
+  own `core/`, and stdlib, plus the few evaluator-to-evaluator imports listed in section 2.
 - No evaluator imports from `eval.jobs`.

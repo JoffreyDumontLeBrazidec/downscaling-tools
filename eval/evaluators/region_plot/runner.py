@@ -1,4 +1,4 @@
-"""Region-plot evaluator subprocess wrapper around eval.region_plotting.plot_regions.
+"""Region-plot evaluator subprocess wrapper around eval.evaluators.region_plot.core.plot_regions.
 
 The legacy module remains the canonical implementation. This runner translates
 EvaluatorContext values into the legacy CLI argv shape.

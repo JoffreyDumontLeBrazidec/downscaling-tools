@@ -21,7 +21,7 @@ PREFLIGHT_ERRORS=()
 PREFLIGHT_CLUSTER=""
 TEMPLATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${TEMPLATE_DIR}/../../.." && pwd)"
-TC_REQUEST_SCRIPT="${PROJECT_ROOT}/eval/tc/all_events_request.sh"
+TC_REQUEST_SCRIPT="${PROJECT_ROOT}/eval/evaluators/tc/core/all_events_request.sh"
 
 preflight_cluster() {
   local host_short

@@ -1,6 +1,6 @@
 # Map of `eval/_backends/` before the fold (2026-09-29)
 
-This note records who used each folder of `eval/_backends/` on `origin/main` at commit `dfc824e`, before the folder was dissolved on the branch `refactor/fold-backends-20260929`. It was written first, before any file moved, and the move table in the last section follows from it.
+This note records who used each folder of `eval/_backends/` on `origin/main` at commit `dfc824e`, before the folder was dissolved on the branch `refactor/fold-backends-20260929`. It was written first, before any file moved, and the decisions table below follows from it.
 
 ## How the map was made
 
@@ -42,7 +42,9 @@ The convention chosen is the following. The three contract files of an evaluator
 | `_backends/plot_intermediate/`, `weight_diagnostics/` | tests and archived scripts; their evaluators are retired | `tools/plot_intermediate/`, `tools/weight_diagnostics/` | no live evaluator |
 | `_backends/spectra/` (other files), `spectra_ecmwf/plot_ratio.py` | notebooks and docs only; the evaluators `spectra` and `spectra_ecmwf` are retired | `tools/spectra_analysis/` | no live evaluator |
 
-Tests move with the code they test. A test that exercises one moved module goes to the `tests/` folder of its new owner, and a test that spans several owners stays where it is with its imports updated (for example `eval/scoreboard/tests/test_integration.py`). The forwarding modules that the task allows are decided in the report of the branch and listed in `eval/_backends/README.md` if any remain.
+One correction was made while moving: `region_plotting/plotting/manifest.py` (the function `write_manifest`) turned out to be used by the member wind maps as well, so it went to `eval/shared/manifest.py` instead of `evaluators/region_plot/core/plotting/`.
+
+Tests move with the code they test. A test that exercises one moved module goes to the `tests/` folder of its new owner, and a test that spans several owners stays where it is with its imports updated (for example `eval/scoreboard/tests/test_integration.py`). Fifteen forwarding modules remain in `eval/_backends/` for callers outside the repository, and `eval/_backends/README.md` lists each with the file that still needs updating.
 
 ## Detail per folder
 
