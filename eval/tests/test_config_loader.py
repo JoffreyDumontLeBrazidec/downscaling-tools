@@ -189,3 +189,257 @@ def test_load_lane_allows_tctracker_config(tmp_path, monkeypatch):
 
     loaded = load_lane("with_tracker")
     assert loaded["tctracker"]["grid"] == 320
+
+
+# ---------------------------------------------------------------------------
+# predict.sampler_overrides
+#
+# Background for anyone reading these tests cold. `load_lane` merges a lane onto
+# the lane named by its `base:` key using `_deep_merge`, which merges only two
+# levels deep. The sampler lives at `predict.sampler`, three levels down, so a
+# child that sets any key under `predict.sampler` replaces the base's whole
+# sampler block rather than merging into it. `predict.sampler_overrides` is the
+# merging alternative: its keys are applied one by one to the sampler resolved
+# from the base chain, leaving every key the child does not name untouched.
+#
+# `predict.sampler` keeps its wholesale-replace behaviour unchanged, because all
+# existing lane files depend on it.
+# ---------------------------------------------------------------------------
+
+_BASE_SAMPLER = {
+    "schedule_type": "karras",
+    "num_steps": 25,
+    "sigma_max": 10000.0,
+    "sigma_min": 0.03,
+    "rho": 7.0,
+    "S_churn": 2.5,
+}
+
+
+def _write_lane(config_dir, name, body):
+    (config_dir / "lanes" / f"{name}.yaml").write_text(yaml.dump(body))
+
+
+def _sampler_lane_dir(tmp_path, monkeypatch, children):
+    """Build a temp config dir holding one base lane plus the given child lanes."""
+    import eval.config.loader as loader
+
+    (tmp_path / "lanes").mkdir()
+    base = {
+        "predict": {
+            "members": [1, 2],
+            "steps": [24, 48],
+            "dates": ["20230826"],
+            "sampler": dict(_BASE_SAMPLER),
+        },
+        "evaluator_groups": {"default": ["tc"]},
+    }
+    _write_lane(tmp_path, "sampler_base", base)
+    for name, body in children.items():
+        _write_lane(tmp_path, name, body)
+    monkeypatch.setattr(loader, "_CONFIG_DIR", tmp_path)
+    return tmp_path
+
+
+def test_sampler_overrides_inherits_unnamed_keys(tmp_path, monkeypatch):
+    """A child using sampler_overrides keeps every base key it does not name."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_overrides": {
+                "base": "sampler_base",
+                "predict": {"sampler_overrides": {"sigma_max": 100000.0}},
+            }
+        },
+    )
+
+    sampler = load_lane("child_overrides")["predict"]["sampler"]
+
+    assert sampler["sigma_max"] == 100000.0
+    for key, value in _BASE_SAMPLER.items():
+        if key != "sigma_max":
+            assert sampler[key] == value, f"{key} should have been inherited"
+
+
+def test_sampler_overrides_key_is_consumed(tmp_path, monkeypatch):
+    """The resolved config exposes only `sampler`; `sampler_overrides` is folded in."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_overrides": {
+                "base": "sampler_base",
+                "predict": {"sampler_overrides": {"num_steps": 40}},
+            }
+        },
+    )
+
+    predict = load_lane("child_overrides")["predict"]
+
+    assert "sampler_overrides" not in predict
+    assert predict["sampler"]["num_steps"] == 40
+
+
+def test_sampler_still_replaces_wholesale(tmp_path, monkeypatch):
+    """`predict.sampler` keeps its historical behaviour: it replaces, not merges."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_sampler": {
+                "base": "sampler_base",
+                "predict": {"sampler": {"sigma_max": 100000.0}},
+            }
+        },
+    )
+
+    sampler = load_lane("child_sampler")["predict"]["sampler"]
+
+    assert sampler == {"sigma_max": 100000.0}
+    assert "num_steps" not in sampler
+    assert "schedule_type" not in sampler
+
+
+def test_sampler_and_sampler_overrides_together(tmp_path, monkeypatch):
+    """Documented order when one config sets both keys.
+
+    `predict.sampler` is applied first and replaces the base block wholesale, then
+    `predict.sampler_overrides` is merged on top of that result. So the resolved
+    block contains exactly the keys named by `sampler`, with any key also named by
+    `sampler_overrides` taking the override's value, and nothing is inherited from
+    the base.
+    """
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_both": {
+                "base": "sampler_base",
+                "predict": {
+                    "sampler": {"schedule_type": "exponential", "num_steps": 30},
+                    "sampler_overrides": {"num_steps": 40, "S_churn": 8.0},
+                },
+            }
+        },
+    )
+
+    sampler = load_lane("child_both")["predict"]["sampler"]
+
+    # sampler decided the block, so no base key survives
+    assert "sigma_max" not in sampler
+    assert "rho" not in sampler
+    # sampler_overrides wins on the key both name, and adds the key only it names
+    assert sampler == {"schedule_type": "exponential", "num_steps": 40, "S_churn": 8.0}
+
+
+def test_lane_without_sampler_overrides_is_unchanged(tmp_path, monkeypatch):
+    """A child mentioning neither key inherits the base sampler exactly as before."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_plain": {
+                "base": "sampler_base",
+                "predict": {"members": [3, 4]},
+            }
+        },
+    )
+
+    config = load_lane("child_plain")
+
+    assert config["predict"]["sampler"] == _BASE_SAMPLER
+    assert config["predict"]["members"] == [3, 4]
+
+
+def test_sampler_overrides_through_multi_level_base_chain(tmp_path, monkeypatch):
+    """Overrides compose down a chain, each level merging onto the resolved sampler.
+
+    sampler_base -> mid (overrides num_steps) -> leaf (overrides S_churn). The leaf
+    must see its own S_churn, the mid's num_steps, and the base's remaining keys.
+    """
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "mid": {
+                "base": "sampler_base",
+                "predict": {"sampler_overrides": {"num_steps": 40}},
+            },
+            "leaf": {
+                "base": "mid",
+                "predict": {"sampler_overrides": {"S_churn": 8.0}},
+            },
+        },
+    )
+
+    sampler = load_lane("leaf")["predict"]["sampler"]
+
+    assert sampler["S_churn"] == 8.0      # from the leaf
+    assert sampler["num_steps"] == 40     # from the mid level
+    assert sampler["schedule_type"] == "karras"   # from the base
+    assert sampler["sigma_max"] == 10000.0        # from the base
+    assert sampler["sigma_min"] == 0.03           # from the base
+    assert sampler["rho"] == 7.0                  # from the base
+
+
+def test_wholesale_sampler_replacement_warns_but_does_not_raise(tmp_path, monkeypatch, capsys):
+    """The guard is advisory: it names the dropped keys and never stops the load."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_sampler": {
+                "base": "sampler_base",
+                "predict": {"sampler": {"sigma_max": 100000.0}},
+            }
+        },
+    )
+
+    config = load_lane("child_sampler")  # must not raise
+    warning = capsys.readouterr().err
+
+    assert config["predict"]["sampler"] == {"sigma_max": 100000.0}
+    assert "replaces the base block wholesale" in warning
+    assert "num_steps" in warning
+    assert "sampler_overrides" in warning
+
+
+def test_no_warning_when_sampler_overrides_restores_the_keys(tmp_path, monkeypatch, capsys):
+    """Keys a child restores through sampler_overrides are not reported as dropped."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_plain": {
+                "base": "sampler_base",
+                "predict": {"sampler_overrides": {"sigma_max": 100000.0}},
+            }
+        },
+    )
+
+    load_lane("child_plain")
+
+    assert "replaces the base block wholesale" not in capsys.readouterr().err
+
+
+def test_bad_sampler_overrides_type_warns_and_keeps_inherited_sampler(
+    tmp_path, monkeypatch, capsys
+):
+    """A malformed sampler_overrides is ignored with a warning, never an exception."""
+    _sampler_lane_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "child_bad": {
+                "base": "sampler_base",
+                "predict": {"sampler_overrides": ["sigma_max", 100000.0]},
+            }
+        },
+    )
+
+    config = load_lane("child_bad")  # must not raise
+
+    assert config["predict"]["sampler"] == _BASE_SAMPLER
+    assert "sampler_overrides" not in config["predict"]
+    assert "must be a mapping" in capsys.readouterr().err

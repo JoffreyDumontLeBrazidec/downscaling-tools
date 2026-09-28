@@ -21,6 +21,7 @@ probe). Named events live in `interp/core/data.py:EVENTS`.
 | How much does each conditioning pathway carry vs σ? | `ablation` | `conditioning_ablation.json` |
 | Which block/stage causally commits each field? | `patching` (residual / grid_region / stage) | `activation_patching.json` |
 | What drives the storm core, and is it local? | `ig --functionals eye,box` | `integrated_gradients.json` (maps + coherence) |
+| How far does a local input change actually reach, per noise level? | `receptive_field` | `receptive_field.json` + `receptive_field.csv` (+ `dD_fields.npz`) |
 | Layer activity / representation structure vs σ? | `activations` (norms + CKA, one pass) | `activation_profiling.json`, `cka_analysis.json` |
 
 ## Running
@@ -46,6 +47,18 @@ python -m interp tc_emergence_sweep --output-dir /tmp/tc_emergence_sweep \
 sbatch interp/slurm/run.sbatch tier1 $CKPT cfec_200k
 sbatch interp/slurm/run.sbatch patching $CKPT cfec_200k
 sbatch interp/slurm/run.sbatch ig $CKPT cfec_200k --functionals global_mean,eye,tail,spectral
+
+# receptive field, GRID-SHARDED (rank count and node count are POSITIONAL,
+# because ECMWF's sbatch wrapper rewrites --export and drops exported variables):
+#   <CKPT> <CKPT_ID> <NODES> <NTASKS> <INTERP_ENV> <CHUNKS> <EVENT> [extras...]
+# The registered bundle_dir of franklin_o320_o1280 was lost in the 2026-06-26
+# scratch purge, so the live o320->o1280 Franklin-peak bundles are named here
+# explicitly with bundle-dir=... until EVENTS is repointed.
+sbatch --nodes=1 --ntasks-per-node=4 \
+    interp/slurm/run_receptive_field_sharded.sbatch \
+    $CKPT 34fd_397k 1 4 env_pristine_regional 1 franklin_o320_o1280 \
+    theoretical-reach-km=510 r0-km=50 sigmas=80,20,5,1,0.2 \
+    bundle-dir=/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia_truthaware_20260819
 
 # GH200 instead (aarch64 .ds-ag venv):
 sbatch --gres=gpu:gh200:1 --export=ALL,INTERP_ENV=env_gh200 \

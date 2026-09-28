@@ -5,7 +5,8 @@ Usage
     cd ~/dev/downscaling-tools
     python -m interp <tool> [tool args]
 
-Tools: permutation, ablation, activations, patching, ig, tc_emergence,
+Tools: permutation, ablation, activations, patching, ig, receptive_field,
+tc_emergence,
 tc_emergence_sweep, report, compare.
 Every tool shares the same model / event-bundle / sigma flags (see
 add_model_args / add_event_args / add_sigma_args).
@@ -66,6 +67,9 @@ def main(argv=None):
         "activations": ("interp.tools.activations", "activation norms + CKA layer similarity"),
         "patching": ("interp.tools.patching", "causal activation patching (residual/grid_region/stage)"),
         "ig": ("interp.tools.ig", "integrated gradients (mean/box/eye/tail/spectral functionals)"),
+        "receptive_field": ("interp.tools.receptive_field",
+                            "effective receptive field of the denoiser "
+                            "(local input perturbation -> radial response vs sigma)"),
         "trajectory": ("interp.tools.trajectory",
                        "x̂₀ birth-commit-erase trajectory (storm-core intensity vs σ)"),
         "tc_emergence": ("interp.tools.tc_emergence",
