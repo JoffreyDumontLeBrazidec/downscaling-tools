@@ -1,9 +1,12 @@
 """PDF ratio visualization — matplotlib rendering only.
 
-Every curve is drawn by the role it plays (``eval.plotting.roles``): the analysis the
-statistics are normalised by is the truth (black, solid, thick); the downscaling run is the
-model (red; several runs take ``sequence_style``); the model's own input is blue and dashed;
-operational forecasts on other grids and other anchors take distinct reference styles.
+Every curve is drawn by the role it plays (``eval.plotting.roles``): the truth is the bundle
+target, i.e. ENFO (black, solid, thick); the downscaling run is the model (red; several runs
+take ``sequence_style``); the model's own input is blue and dashed; the operational analysis
+(OPER-AN), operational forecasts on other grids and other anchors are references with distinct
+styles. On native-support lanes the curve the statistics are normalised by ("analysis key") IS the
+bundle target and so is the truth; on regridded lanes it is the operational analysis, a
+reference, and the ratio figures say so in their title and axis label.
 Legends use readable names, never raw curve keys, and axes carry their units.
 """
 from __future__ import annotations
@@ -85,16 +88,20 @@ def curve_role(curve_key: str, *, analysis_key: str | None = None,
                curve_roles: dict[str, str] | None = None) -> str:
     """Role of a TC curve: ``truth``, ``model``, ``input`` or ``reference``.
 
-    ``curve_roles`` overrides the guess for named keys. Otherwise: the analysis key is the
-    truth; keys starting with "input" (or ``x_interp``) are the input; stream/grid keys
-    (``ENFO_O320_0001``, ``OPER_O1280_0001``, ``IEKM...``), "target ..." and "OPER-AN ..."
-    curves that are not the analysis are references; everything else is a model run.
+    ``curve_roles`` overrides the guess for named keys. Otherwise: "target ..." / "truth ..."
+    keys are the truth (the bundle target, ENFO), also when they are the analysis key; an
+    analysis key that is not target-like (``OPER_O1280_0001``, ``OPER-AN O1280``) is a
+    reference, never the truth; keys starting with "input" (or ``x_interp``) are the input;
+    other stream/grid keys (``ENFO_O320_0001``, ``IEKM...``) are references; everything else
+    is a model run. ``_figure_styles`` keeps at most one truth per figure.
     """
     if curve_roles and curve_key in curve_roles:
         return curve_roles[curve_key]
-    if analysis_key is not None and curve_key == analysis_key:
-        return "truth"
     low = str(curve_key).strip().lower()
+    if low.startswith(("target", "truth")):
+        return "truth"
+    if analysis_key is not None and curve_key == analysis_key:
+        return "reference"
     if low.startswith("input") or low in ("x", "x_interp", "x_interp_0"):
         return "input"
     if (curve_key in REFERENCE_STYLES or curve_key in NAMED_DISTRIBUTION_STYLES
@@ -130,6 +137,15 @@ def _reference_style_map(ref_keys) -> dict[str, dict]:
 def _figure_styles(keys, *, analysis_key, curve_roles=None) -> tuple[dict[str, dict], dict[str, str]]:
     """``({key: plot kwargs}, {key: role})`` for every curve drawn in one figure."""
     roles = {k: curve_role(k, analysis_key=analysis_key, curve_roles=curve_roles) for k in keys}
+    truths = [k for k in keys if roles[k] == "truth"]
+    if not truths:
+        # no target curve: an ENFO anchor is the strong-tail truth of this project
+        enfo = [k for k in keys if roles[k] == "reference" and re.match(r"^(od_)?enfo", str(k).lower())]
+        if enfo:
+            roles[enfo[0]] = "truth"
+    else:
+        for extra in truths[1:]:  # one truth per figure; the others are references
+            roles[extra] = "reference"
     models = [k for k in keys if roles[k] == "model"]
     refs = [k for k in keys if roles[k] == "reference"]
     ref_map = _reference_style_map(refs)
@@ -182,6 +198,8 @@ def _role_label(curve_key: str, role: str, exp_labels: dict[str, str], *, n_mode
     name = _plain_name(curve_key)
     if name.lower().startswith("target "):
         return f"{_strip_word(name, 'target')} target"
+    if name.lower().startswith("oper-an"):
+        return f"operational analysis ({name})"
     return name
 
 
@@ -247,12 +265,13 @@ def _var_meta(variable: str) -> tuple[str, str, str]:
 def _ordered_curves(event_stats: dict, *, include_truth: bool, curve_roles=None) -> tuple[list[str], dict, dict]:
     """Curve keys in legend order (truth, models, input, references) with styles and roles."""
     oper_key = event_stats["analysis_key"]
-    keys = list(dict.fromkeys(([oper_key] if include_truth else []) + list(event_stats["curve_order"])))
-    if not include_truth:
-        keys = [k for k in keys if k != oper_key]
-    styles, roles = _figure_styles(keys, analysis_key=oper_key, curve_roles=curve_roles)
+    all_keys = list(dict.fromkeys([oper_key] + list(event_stats["curve_order"])))
+    # styles and roles are decided over every curve, the analysis included, so that the
+    # analysis (the denominator of the ratio figures) always has a style and a role
+    styles, roles = _figure_styles(all_keys, analysis_key=oper_key, curve_roles=curve_roles)
+    keys = all_keys if include_truth else [k for k in all_keys if k != oper_key]
     rank = {"truth": 0, "model": 1, "input": 2, "baseline": 3, "reference": 4}
-    keys = sorted(keys, key=lambda k: (rank.get(roles[k], 5), keys.index(k)))
+    keys = sorted(keys, key=lambda k: (rank.get(roles[k], 5), all_keys.index(k)))
     return keys, styles, roles
 
 
@@ -301,7 +320,9 @@ def _title(plot_config: TCPlotConfig, kind: str) -> str:
     raw = (plot_config.plot_title or "").strip()
     if not raw:
         return kind[:1].upper() + kind[1:]
-    return re.sub(r"(?i)normed pdfs|TC distributions", kind, raw)
+    if re.search(r"(?i)normed pdfs|TC distributions", raw):
+        return re.sub(r"(?i)normed pdfs|TC distributions", kind, raw)
+    return f"{raw}: {kind}"
 
 
 def _apply_distribution_xlim(ax, var_data: dict, *, variable: str) -> None:
@@ -363,10 +384,23 @@ def _density_axes(ax, variable: str) -> None:
     ax.set_title(title)
 
 
-def _ratio_axes(ax, variable: str, truth_label: str) -> None:
+def _denominator(oper_key: str, roles: dict, styles: dict, exp_labels: dict) -> tuple[str, str, str, dict]:
+    """What the ratio figures divide by: ``(label, phrase, short name, line style)``.
+
+    On native-support lanes the analysis IS the truth ("truth (ENFO O1280)"); on regridded lanes
+    it is the operational analysis ("operational analysis (OPER-AN O1280)"), a reference. The
+    title and axis label are worded from this so they never call a reference "the truth".
+    """
+    role = roles.get(oper_key, "reference")
+    label = _role_label(oper_key, role, exp_labels)
+    short = re.sub(r"\s*\(.*\)\s*$", "", label) or label
+    return label, f"the {label}", f"the {short}", styles[oper_key]
+
+
+def _ratio_axes(ax, variable: str, denominator_short: str) -> None:
     vkey, _unit, title = _var_meta(variable)
     ax.set_xlabel(axis_label(vkey))
-    ax.set_ylabel("Probability density ratio to the truth")
+    ax.set_ylabel(f"Probability density ratio to {denominator_short}")
     ax.set_title(title)
 
 
@@ -426,13 +460,14 @@ def plot_pdf_ratios(
     """Render pre-computed event stats as a PDF ratio figure.
 
     Takes the output of workflows.compute_event_stats(). Every curve is divided by the
-    analysis (the truth), which is drawn as the constant 1 line.
+    analysis curve, which is drawn as the constant 1 line and named for what it is: the truth
+    on native-support lanes, the operational analysis on regridded lanes.
     """
     exp_labels = exp_labels or {}
     oper_key = event_stats["analysis_key"]
     keys, styles, roles = _ordered_curves(event_stats, include_truth=False, curve_roles=curve_roles)
     n_models = _n_models(roles)
-    truth_label = _role_label(oper_key, "truth", exp_labels)
+    denom_label, denom_phrase, denom_short, denom_style = _denominator(oper_key, roles, styles, exp_labels)
 
     with eval_style():
         fig, axs = plt.subplots(1, 2, figsize=(12, 5))
@@ -441,8 +476,8 @@ def plot_pdf_ratios(
             var_data = event_stats["variables"][variable]
             mids = np.asarray(var_data["bin_mids"])
             oper_hist = np.asarray(var_data["oper_histogram"])
-            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=truth_label,
-                        style=role_style("truth"))
+            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=f"{denom_label} = 1",
+                        style=denom_style)
             for key in keys:
                 _plot_curve(ax, mids, safe_ratio(_hist(var_data, key, oper_key), oper_hist), key=key,
                             label=_role_label(key, roles[key], exp_labels, n_models=n_models),
@@ -450,9 +485,9 @@ def plot_pdf_ratios(
             # Auto-crop x-axis; MSLP is intentionally inverted to match TC intensity semantics.
             _apply_distribution_xlim(ax, var_data, variable=variable)
             _ratio_ylim(ax, ylim)
-            _ratio_axes(ax, variable, truth_label)
+            _ratio_axes(ax, variable, denom_short)
             _legend(ax, var_data, [oper_key, *keys], oper_key)
-        fig.suptitle(_title(plot_config, "TC distributions divided by the truth"))
+        fig.suptitle(_title(plot_config, f"TC distributions divided by {denom_phrase}"))
         fig.tight_layout()
     return fig
 
@@ -527,7 +562,7 @@ def plot_pdf_single_variable(
     mids = np.asarray(var_data["bin_mids"])
     keys, styles, roles = _ordered_curves(event_stats, include_truth=(mode == "log"), curve_roles=curve_roles)
     n_models = _n_models(roles)
-    truth_label = _role_label(oper_key, "truth", exp_labels)
+    denom_label, denom_phrase, denom_short, denom_style = _denominator(oper_key, roles, styles, exp_labels)
     is_wind = variable.startswith("wind")
     ylim = plot_config.wind_ylim if is_wind else plot_config.mslp_ylim
 
@@ -544,15 +579,15 @@ def plot_pdf_single_variable(
             kind = "probability density, logarithmic axis"
             legend_keys = keys
         else:
-            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=truth_label,
-                        style=role_style("truth"))
+            _plot_curve(ax, mids, np.ones_like(mids), key=oper_key, label=f"{denom_label} = 1",
+                        style=denom_style)
             for key in keys:
                 _plot_curve(ax, mids, safe_ratio(_hist(var_data, key, oper_key), oper_hist), key=key,
                             label=_role_label(key, roles[key], exp_labels, n_models=n_models),
                             style=styles[key])
             _ratio_ylim(ax, ylim)
-            _ratio_axes(ax, variable, truth_label)
-            kind = "probability density divided by the truth"
+            _ratio_axes(ax, variable, denom_short)
+            kind = f"probability density divided by {denom_phrase}"
             legend_keys = [oper_key, *keys]
 
         _apply_distribution_xlim(ax, var_data, variable=variable)

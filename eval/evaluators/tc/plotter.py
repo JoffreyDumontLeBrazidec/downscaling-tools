@@ -68,34 +68,60 @@ def _bundle_source_names(lane_config: dict) -> tuple[str | None, str | None]:
     return names[0], names[1]
 
 
+def _analysis_label(analysis_key: str) -> str:
+    """Readable name of an analysis curve that is not the truth, e.g. the operational analysis."""
+    text = readable_label(analysis_key)
+    if text.startswith("operational analysis"):
+        return text
+    low = str(analysis_key).lower()
+    if low.startswith(("oper-an", "oper an", "oper_", "oper ")):
+        return f"operational analysis ({str(analysis_key).replace('_', ' ')})"
+    return f"analysis ({text})"
+
+
 def curve_labels_and_roles(event_stats: dict, lane_config: dict, eval_config: dict):
     """Legend labels and roles for the curves of one event, from the lane configuration.
 
-    The bundle's target (``target_nc_label``) is the truth when it is the analysis the
-    statistics are normalised by; the bundle's input (``input_label``) is the input; the
-    remaining non-reference curve is the model run, whatever key it was stored under
-    (for example the predictions folder name ``eval_inputs``).
+    The truth is always the bundle target (``target_nc_label``, the ENFO field the model is
+    trained towards). On native-support lanes the analysis the statistics are normalised by
+    IS that target, so it is the truth; on regridded lanes the analysis is the operational
+    analysis (OPER-AN), a reference, and the target is a separate curve that is the truth.
+    The bundle's input (``input_label``) is the input; the remaining non-reference curve is the
+    model run, whatever key it was stored under (for example ``eval_inputs``).
     """
     input_name, target_name = _bundle_source_names(lane_config)
     analysis_key = event_stats.get("analysis_key")
+    order = list(event_stats.get("curve_order", []))
     input_label = eval_config.get("input_label", "input")
-    target_labels = {eval_config.get("target_nc_label"), eval_config.get("analysis_display_label"),
-                     eval_config.get("target_label")} - {None}
+    target_keys = {eval_config.get("target_nc_label"), eval_config.get("target_label")} - {None}
+    other_target_like = {eval_config.get("analysis_display_label")} - {None}
     labels: dict[str, str] = {}
     roles: dict[str, str] = {}
-    if analysis_key and target_name and analysis_key in target_labels:
-        labels[analysis_key] = f"truth ({target_name})"
-    for key in event_stats.get("curve_order", []):
+
+    truth_key = None
+    if analysis_key in target_keys:
+        truth_key = analysis_key
+    else:
+        truth_key = next((k for k in order if k in target_keys), None)
+    if truth_key is not None:
+        roles[truth_key] = "truth"
+        labels[truth_key] = f"truth ({target_name})" if target_name else "truth"
+    if analysis_key and analysis_key != truth_key:
+        roles[analysis_key] = "reference"
+        labels[analysis_key] = _analysis_label(analysis_key)
+    for key in order:
+        if key == truth_key or key == analysis_key:
+            continue
         if key == input_label:
             roles[key] = "input"
             if input_name:
                 labels[key] = f"input ({input_name})"
-        elif key in target_labels and key != analysis_key:
+        elif key in target_keys or key in other_target_like:
             roles[key] = "reference"
             if target_name:
                 labels[key] = f"{target_name} target"
     run_label = eval_config.get("run_label")
-    if run_label and run_label in event_stats.get("curve_order", []):
+    if run_label and run_label in order:
         roles.setdefault(run_label, "model")
     return labels, roles
 

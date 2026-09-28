@@ -120,7 +120,7 @@ def readable_label(key: str, context: LabelContext | None = None, *, with_id: bo
             grid = f" O{m.group('grid')}" if m.group("grid") else ""
             mem = m.group("mem")
             if stream == "OPER":
-                text = f"operational analysis{grid}"
+                text = f"operational analysis (OPER-AN{grid})"
             elif mem and mem.isdigit() and mem not in ("0001",):
                 text = f"{stream}{grid} member {int(mem)}"
             elif mem and mem.isdigit():

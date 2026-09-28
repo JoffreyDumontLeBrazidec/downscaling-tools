@@ -115,8 +115,10 @@ def test_tc_log_plot_labels_oper_o320_explicitly():
     labels = [text.get_text() for ax in fig.axes for text in ax.get_legend().get_texts()]
     plt.close(fig)
 
-    # the analysis is the truth and is named by its grid, never by the raw key or "OPER AN"
-    assert "truth (operational analysis O320)" in labels
+    # the operational analysis is a reference, never the truth, named by its grid and never by
+    # the raw key or "OPER AN"
+    assert "operational analysis (OPER-AN O320)" in labels
+    assert not any(label.startswith("truth") for label in labels)
     assert "OPER AN" not in labels
     assert "OPER_O320_0001" not in labels
 
@@ -173,19 +175,19 @@ def test_tc_overview_plot_matches_operational_distribution_style():
         assert wind_ax.get_xlabel() == "10 m wind speed (m s⁻¹)"
         assert any(line.get_visible() for ax in fig.axes for line in [*ax.get_xgridlines(), *ax.get_ygridlines()])
 
-        oper_line = mslp_ax.lines[0]
-        assert oper_line.get_color() == TRUTH_COLOR
-        assert oper_line.get_linestyle() == "-"
-        assert oper_line.get_linewidth() == role_style("truth")["linewidth"]
-
-        # legend order is truth, model, input, references: the model comes second
+        # legend order is truth, model, input, references. With no target curve an ENFO anchor
+        # is the truth of this project (black, thick); the operational analysis is a reference.
+        truth_line = mslp_ax.lines[0]
+        assert truth_line.get_color() == TRUTH_COLOR
+        assert truth_line.get_linestyle() == "-"
+        assert truth_line.get_linewidth() == role_style("truth")["linewidth"]
         model_line = mslp_ax.lines[1]
         assert model_line.get_color() == MODEL_COLOR
-
-        enfo_line = mslp_ax.lines[2]
-        assert enfo_line.get_color() == REFERENCE_STYLES["ENFO_O320_0001"]["color"]
+        oper_line = mslp_ax.lines[2]
+        assert oper_line.get_color() not in (TRUTH_COLOR, MODEL_COLOR, INPUT_COLOR)
         labels = [t.get_text() for t in mslp_ax.get_legend().get_texts()]
-        assert "ENFO O320" in labels and "ENFO_O320_0001" not in labels
+        assert "truth (ENFO O320)" in labels and "ENFO_O320_0001" not in labels
+        assert "operational analysis (OPER-AN O320)" in labels
 
         assert any(np.isnan(line.get_ydata()).any() for ax in fig.axes for line in ax.lines)
         assert all(np.all(np.asarray(line.get_ydata())[np.isfinite(line.get_ydata())] > 0.0) for ax in fig.axes for line in ax.lines)
@@ -216,6 +218,7 @@ def test_tc_reference_styles_are_unique_and_avoid_role_colours():
 def test_tc_curve_roles_and_labels_hide_raw_keys():
     role = pdf_plot.curve_role
     assert role("target O1280", analysis_key="target O1280") == "truth"
+    assert role("OPER-AN O1280", analysis_key="OPER-AN O1280") == "reference"  # never the truth
     assert role("input O320", analysis_key="target O1280") == "input"
     assert role("eval_inputs", analysis_key="target O1280") == "model"
     assert role("ENFO_O1280_0001", analysis_key="OPER_O1280_0001") == "reference"
@@ -227,8 +230,9 @@ def test_tc_curve_roles_and_labels_hide_raw_keys():
 
 
 def test_tc_several_models_take_distinct_sequence_colours():
-    styles, roles = pdf_plot._figure_styles(["an", "run_a", "run_b", "input"], analysis_key="an")
-    assert roles == {"an": "truth", "run_a": "model", "run_b": "model", "input": "input"}
+    styles, roles = pdf_plot._figure_styles(["target O1280", "run_a", "run_b", "input"],
+                                            analysis_key="target O1280")
+    assert roles == {"target O1280": "truth", "run_a": "model", "run_b": "model", "input": "input"}
     assert styles["run_a"]["color"] != styles["run_b"]["color"]
     assert MODEL_COLOR not in (styles["run_a"]["color"], styles["run_b"]["color"])
 
@@ -242,4 +246,57 @@ def test_tc_plotter_labels_bundle_curves_from_the_lane():
     stats = {"analysis_key": "target O1280", "curve_order": ["eval_inputs", "input O320"]}
     labels, roles = plotter.curve_labels_and_roles(stats, lane, ev_cfg)
     assert labels == {"target O1280": "truth (ENFO O1280)", "input O320": "input (EEFO O320)"}
-    assert roles == {"input O320": "input"}
+    assert roles == {"target O1280": "truth", "input O320": "input"}
+
+
+def _stats_for(analysis_key, order):
+    hist = {"bin_edges": [990.0, 995.0, 1000.0], "bin_mids": [992.5, 997.5],
+            "oper_histogram": [0.1, 0.2], "curves": {k: {"histogram": [0.2, 0.1]} for k in order}}
+    wind = {"bin_edges": [0.0, 4.0, 8.0], "bin_mids": [2.0, 6.0],
+            "oper_histogram": [0.2, 0.1], "curves": {k: {"histogram": [0.1, 0.2]} for k in order}}
+    return {"analysis_key": analysis_key, "curve_order": order,
+            "variables": {"mslp_hpa": hist, "wind10m_ms": wind}}
+
+
+@pytest.mark.parametrize(
+    "lane_name, order, truth_key, analysis_is_truth, denominator",
+    [
+        # regridded lane: the analysis is OPER-AN, a reference; the target curve is the truth
+        ("o320_o1280", ["eval_inputs", "input O320", "target O1280"], "target O1280", False,
+         "operational analysis (OPER-AN O1280)"),
+        # native lane: the analysis IS the bundle target, hence the truth
+        ("tc_o320_o1280", ["eval_inputs", "input O320"], "target O1280", True,
+         "truth (ENFO O1280)"),
+    ],
+)
+def test_tc_truth_and_denominator_follow_the_lane(lane_name, order, truth_key, analysis_is_truth,
+                                                   denominator):
+    from eval.config.loader import load_lane
+
+    lane = load_lane(lane_name)
+    tc_cfg = lane["tc"]
+    analysis_key = tc_cfg["analysis_display_label"]
+    stats = _stats_for(analysis_key, order if not analysis_is_truth else order + [analysis_key])
+    stats["curve_order"] = [k for k in stats["curve_order"] if k != analysis_key]
+
+    labels, roles = plotter.curve_labels_and_roles(stats, lane, tc_cfg)
+    assert roles[truth_key] == "truth"
+    assert labels[truth_key] == "truth (ENFO O1280)"
+    assert list(roles.values()).count("truth") == 1
+    if analysis_is_truth:
+        assert analysis_key == truth_key
+    else:
+        assert roles[analysis_key] == "reference"
+        assert labels[analysis_key] == "operational analysis (OPER-AN O1280)"
+
+    fig = pdf_plot.plot_pdf_ratios(TCPlotConfig(plot_title="Idalia"), event_stats=stats,
+                                   exp_labels=labels, curve_roles=roles)
+    try:
+        assert f"divided by the {denominator}" in fig._suptitle.get_text()
+        short = denominator.split(" (")[0]
+        assert fig.axes[0].get_ylabel() == f"Probability density ratio to the {short}"
+        legend = [t.get_text() for t in fig.axes[0].get_legend().get_texts()]
+        assert f"{denominator} = 1" in legend
+        assert not any("eval_inputs" in t or "OPER_" in t for t in legend)
+    finally:
+        plt.close(fig)
