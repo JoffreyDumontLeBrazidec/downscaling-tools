@@ -121,11 +121,12 @@ def write_vs_baseline(run_root: Path, lane_name: str, run_label: str = "") -> Pa
     bl, rec = res["baseline"], res["record"]
     sc = _parse_scores_csv(scores_csv)
     surf = lambda m: sc.get(("surface", m))
-    spectra = next((v for (e, m), v in sc.items()
-                    if (e or "").startswith("spectra") and "mean" in m and "score" in m), None)
-    if spectra is None:
-        spectra = next((v for (e, m), v in sc.items()
-                        if (e or "").startswith("spectra") and "mean" in m), None)
+    # Two spectra instruments exist and give different numbers, so each is read by its
+    # exact evaluator and metric name and compared only with the same quantity on the
+    # baseline. spectra_mean on a baseline record is the retired HEALPix proxy
+    # (evaluator `spectra`); spectra_v2_mean is spectra_ecmwf_v2.
+    spectra_proxy = sc.get(("spectra", "spectra_mean_score"))
+    spectra_v2 = sc.get(("spectra_ecmwf_v2", "spectra_v2_mean_score"))
 
     L = [f"# vs BASELINE — {run_label or run_root.name}",
          "",
@@ -140,7 +141,10 @@ def write_vs_baseline(run_root: Path, lane_name: str, run_label: str = "") -> Pa
     base_nmse = rec.get("surface_nmse") or {}
     for v in _SURFACE_VARS:
         L.append(_delta_row(f"surface_{v}_nmse", surf(f"surface_{v}_nmse"), base_nmse.get(v), "lower"))
-    L.append(_delta_row("spectra_mean", spectra, rec.get("spectra_mean"), "higher"))
+    L.append(_delta_row("spectra_v2_mean", spectra_v2, rec.get("spectra_v2_mean"), "higher"))
+    if spectra_proxy is not None:
+        L.append(_delta_row("spectra_mean (proxy, retired)", spectra_proxy,
+                            rec.get("spectra_mean"), "higher"))
 
     # RAW TC extremes per event the baseline has been scored on (no direction verdict — read
     # model vs ENFO/OPER by eye per the run-trust contract; Δ shown for orientation only).

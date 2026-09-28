@@ -79,8 +79,13 @@ DEFAULT_ROWS = "10u,10v,2t,tp"
 
 COLUMNS: dict[str, Column] = {
     "rmse": Column("RMSE (ens mean)", "probabilistic_{f}_{region}_rmse_ens_mean_mean", "ws", True),
-    "spectra": Column("spectra rel-L2", "spectra_{f}_relative_l2", "sf", True,
+    # spectra_ecmwf_v2 (ECMWF transform, complete grid). The retired HEALPix proxy's rows,
+    # present only on cards scored before 2026-09-28, stay readable under their own column;
+    # the two instruments give different numbers and are never drawn as one column.
+    "spectra": Column("spectra v2 rel-L2", "spectra_v2_{f}_relative_l2", "sf", True,
                       unit="relative L2"),
+    "spectra_proxy": Column("spectra proxy rel-L2 (retired)", "spectra_{f}_relative_l2", "sf", True,
+                            unit="relative L2"),
     # spread has no "better" direction, so it carries lower_better=None
     "spread": Column("spread", "probabilistic_{f}_{region}_spread_mean", "ws", None),
     # CRPS family. Prefer `fcrps`: it is the ensemble-size-FAIR form, and the anchors do not

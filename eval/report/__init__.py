@@ -238,8 +238,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
 def _key_metrics(metrics: list[tuple[str, str, float, str]]) -> list[tuple[str, str, float, str]]:
     """Select a few key metrics for the card overview."""
-    # Prefer: spectra_mean_score, surface_weighted_nmse, plus any tc_ scores
-    key_names = {"spectra_mean_score", "surface_weighted_nmse"}
+    # Prefer: the spectra mean score (spectra_v2_mean_score from spectra_ecmwf_v2, or the
+    # retired proxy's spectra_mean_score on older runs), surface_weighted_nmse, plus any tc_ scores
+    key_names = {"spectra_v2_mean_score", "spectra_mean_score", "surface_weighted_nmse"}
     result = [m for m in metrics if m[1] in key_names]
     # Add TC scores if present
     result.extend(m for m in metrics if m[1].startswith("tc_") and m[1].endswith("_score"))

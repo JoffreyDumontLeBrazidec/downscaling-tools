@@ -36,7 +36,13 @@ REPO = Path(__file__).resolve().parents[2]
 PROFILE_DIR = REPO / "eval" / "config" / "ladder"
 LANE_DIR = REPO / "eval" / "config" / "lanes"
 # evaluator sections a ladder profile may pin (deep-merged over the base lane)
-LANE_OVERRIDE_KEYS = ("spectra", "spectra_ecmwf", "tc", "probabilistic")
+LANE_OVERRIDE_KEYS = ("spectra_ecmwf_v2", "tc", "probabilistic")
+# The spectra instrument. The HEALPix proxy (`spectra`) was retired on 2026-09-28;
+# a rung now scores spectra with spectra_ecmwf_v2 (ECMWF spectral transform on the
+# complete grid, AC only), whose rows are named spectra_v2_<field>_* so they are
+# never plotted on the same axis as the proxy rows older cards carry.
+SPECTRA_EVALUATOR = "spectra_ecmwf_v2"
+DEFAULT_EVALUATORS = f"tc,probabilistic,{SPECTRA_EVALUATOR}"
 CKPT_STEP_RE = re.compile(r"step[_=]?(\d+)")
 
 
@@ -99,7 +105,7 @@ def load_ladder(prof: dict) -> dict:
         "card_id": prof["card_id"],
         "lane": prof["lane"],
         "profile": prof["_name"],
-        "profile_pins": {k: prof.get(k) for k in ("budget", "seed_draws", "spectra", "storm_box")},
+        "profile_pins": {k: prof.get(k) for k in ("budget", "seed_draws", SPECTRA_EVALUATOR, "storm_box")},
         "note": "TC values at ladder budget = trend indicator, NOT a verdict (replica noise ±7/4.8 hPa).",
         "baselines": {},
         "rows": [],
@@ -131,13 +137,37 @@ module load ecmwf-toolbox || true
 cd {repo}
 export METVIEW_PYTHON_START_TIMEOUT=300
 {predict_block}
-python -m eval.cli evaluate --lane {lane} --host {host} \\
-  --predictions-dir {evaldir}/predictions --output-dir {evaldir} \\
-  --only {evaluators} --run-label ladder_{card}_step{step}{step_flag}{overwrite_flag}
-python -m eval._backends.storm_maps.render {evaldir}/predictions \\
+{evaluate_block}python -m eval._backends.storm_maps.render {evaldir}/predictions \\
   --out {evaldir}/evaluators/storm_maps {storm_args} || echo "storm_maps failed (non-fatal)"
 python -m eval.jobs.ladder collect --profile {profile} --step {step} --eval-dir {evaldir} {collect_extra}
 """
+
+EVALUATE_ONESHOT = """python -m eval.cli evaluate --lane {lane} --host {host} \\
+  --predictions-dir {evaldir}/predictions --output-dir {evaldir} \\
+  --only {evaluators} --run-label ladder_{card}_step{step}{step_flag}{overwrite_flag}
+"""
+
+
+def evaluate_block(prof: dict, *, lane: str, evaldir: Path, step: int, overwrite: bool) -> str:
+    """The rung's eval.cli evaluate call(s).
+
+    The budget's --steps override is applied to every evaluator section that has a
+    `steps` key, which would silently widen the spectra pin. spectra_ecmwf_v2 runs
+    one gptosp transform per (date, step, member, field), so it gets its own call
+    without --steps and the profile's `spectra_ecmwf_v2.steps` pin holds.
+    """
+    names = [e.strip() for e in str(prof.get("evaluators", DEFAULT_EVALUATORS)).split(",") if e.strip()]
+    stepped = [e for e in names if e != SPECTRA_EVALUATOR]
+    common = dict(lane=lane, host=prof["host"], evaldir=evaldir, card=prof["card_id"], step=step,
+                  overwrite_flag=" --overwrite" if overwrite else "")
+    block = ""
+    if stepped:
+        block += EVALUATE_ONESHOT.format(evaluators=",".join(stepped),
+                                         step_flag=f" --steps {prof['budget']['steps']}", **common)
+    if SPECTRA_EVALUATOR in names:
+        block += EVALUATE_ONESHOT.format(evaluators=SPECTRA_EVALUATOR, step_flag="", **common)
+    return block
+
 
 PREDICT_ONESHOT = """python -m eval.cli predict --lane {lane} --host {host} --mode manual \\
   --checkpoint {ckpt} --bundle-dir {bundles} --output-dir {evaldir} \\
@@ -209,10 +239,9 @@ def cmd_score(args: argparse.Namespace) -> None:
         walltime=slurm.get("walltime", "04:00:00"), logdir=paths["scratch"] / "logs",
         activate=_activate_line(prof), repo=REPO,
         predict_block=predict_block, lane=lane, host=prof["host"], evaldir=evaldir,
-        evaluators=prof.get("evaluators", "tc,probabilistic,spectra"),
-        step_flag=f" --steps {b['steps']}",
+        evaluate_block=evaluate_block(prof, lane=lane, evaldir=evaldir, step=step,
+                                      overwrite=bool(args.skip_predict)),
         storm_args=prof.get("storm_maps_args", ""),
-        overwrite_flag=" --overwrite" if args.skip_predict else "",
         profile=prof["_ref"], collect_extra=collect_extra)
     sb_path = evaldir / "ladder_score.sbatch"
     sb_path.write_text(script)
@@ -304,7 +333,11 @@ def collect_metrics(evaldir: Path, steps_csv: str) -> dict:
     for k, v in _metric_rows(ev / "probabilistic" / "metrics.json").items():
         if any(t in k for t in ("crps", "spread", "rmse")) and any(d in k for d in ("tropics", "n.hem")):
             out[k] = v
-    out.update(_metric_rows(ev / "spectra" / "metrics.json"))    # 1 relative_l2 per field
+    # spectra_v2_<field>_relative_l2 per field (spectra_ecmwf_v2). A re-collect of an
+    # eval dir scored before 2026-09-28 still picks up the retired proxy's
+    # spectra_<field>_* rows; the two sets have different names and panels.
+    out.update(_metric_rows(ev / SPECTRA_EVALUATOR / "metrics.json"))
+    out.update(_metric_rows(ev / "spectra" / "metrics.json"))
     out.update(_metric_rows(ev / "tc" / "metrics.json"))         # tail keys per event
     # storm_maps: fine-band (40-150 km) power ratio + log-log slope, nested 2 deep
     for k, v in _flatten("", _read_json(ev / "storm_maps" / "storm_maps_spectra.json")).items():
@@ -571,10 +604,16 @@ def _panels(rows: list, ref_metrics: dict) -> list:
                     label = region if len(stats) == 1 else f"{region} {stat}"
                     cell(band, var, k, label, direction)
             continue
-        if k.startswith("spectra_") and "relative_l2" in k:
-            cell("Spectra (rel-L2)", k.split("_")[1], k, "model", "lower")
-        elif k.startswith("spectra_"):
+        if k.startswith("spectra_v2_") and "relative_l2" in k:
+            field = k[len("spectra_v2_"):-len("_relative_l2")]
+            cell("Spectra v2 (rel-L2)", field, k, "model", "lower")
+        elif k.startswith("spectra_v2_"):
             continue                                    # _score is 1 - rel_l2, redundant
+        elif k.startswith("spectra_") and "relative_l2" in k:
+            # retired HEALPix proxy rows on cards scored before 2026-09-28
+            cell("Spectra proxy (rel-L2, retired)", k.split("_")[1], k, "model", "lower")
+        elif k.startswith("spectra_"):
+            continue
         elif "fine_band" in k:
             cell("Fine band 40-150 km", k.rsplit(".", 1)[-1], k, "model", "target1")
         elif "slope_fine" in k:
@@ -589,7 +628,8 @@ def _panels(rows: list, ref_metrics: dict) -> list:
             cell("Seed draws (candidate B)", k[len("seed_"):], k, "model",
                  None if k.endswith("_std") else ("lower" if "eye" in k else "higher"))
 
-    order = [b for b, _, _ in PROB_BANDS] + ["Spectra (rel-L2)", "Fine band 40-150 km",
+    order = [b for b, _, _ in PROB_BANDS] + ["Spectra v2 (rel-L2)",
+                                             "Spectra proxy (rel-L2, retired)", "Fine band 40-150 km",
                                              "Fine-band slope", "TC extremes",
                                              "Seed draws (candidate B)"]
     return sorted(panels.values(), key=lambda p: (order.index(p["band"]) if p["band"] in order

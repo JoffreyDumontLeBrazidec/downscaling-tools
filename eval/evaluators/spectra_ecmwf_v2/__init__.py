@@ -16,8 +16,11 @@ scoreboard actually reads. The reference cache is addressed by evaluation window
 and staging template, so a run cannot silently reuse a reference computed for a
 different month or a different grid.
 
-`spectra_ecmwf` is kept unchanged beside this as the reference implementation,
-so the two can be run against each other.
+Since 2026-09-28 this is the only spectra evaluator: the HEALPix proxy
+(`spectra`) and version one (`spectra_ecmwf`) are retired. Its scorer compares
+the run's mean curves with the truth reference above wavenumber 100 and emits
+scoreboard rows named `spectra_v2_<variable>_*` and `spectra_v2_mean_*`, which are
+deliberately not the proxy's `spectra_*` names (see scorer.py).
 """
 from .runner import run
 from .scorer import score
