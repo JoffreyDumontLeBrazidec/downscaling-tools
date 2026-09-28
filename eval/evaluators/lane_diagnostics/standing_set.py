@@ -83,6 +83,7 @@ def build_tc_set(arms: dict, event: str, out_dir: Path):
     """Eight figures: two arms x two readings x two variables."""
     from eval._backends.tc.pdf_plot import plot_pdf_single_variable
     from eval._backends.tc.plot_config import resolve_plot_config
+    from eval.plotting import eval_style, save_figure
 
     figures, captions = [], {}
     letters = iter("abcdefgh")
@@ -92,12 +93,13 @@ def build_tc_set(arms: dict, event: str, out_dir: Path):
         for variable, vshort in (("mslp_hpa", "pressure"), ("wind10m_ms", "wind")):
             for mode in ("ratio", "log"):
                 cfg_arm = replace(cfg, plot_title=f"{event.capitalize()} — {arm_label}")
-                fig = plot_pdf_single_variable(
-                    cfg_arm, event_stats=stats, variable=variable, mode=mode)
-                _stamp(fig, _arm_caption(arm_label, stats, variable, mode))
+                with eval_style():
+                    fig = plot_pdf_single_variable(
+                        cfg_arm, event_stats=stats, variable=variable, mode=mode)
+                    _stamp(fig, _arm_caption(arm_label, stats, variable, mode))
                 letter = next(letters)
                 name = f"12{letter}_tc_{vshort}_{mode}_{_slug(arm_label)}.pdf"
-                fig.savefig(out_dir / name, dpi=200)
+                save_figure(fig, out_dir / name)    # .pdf plus a 150 dpi .png
                 figures.append(fig)
                 captions[f"12{letter}"] = {
                     "slug": f"tc {vshort} {mode} {arm_label}",
@@ -186,7 +188,17 @@ def _spectra_measure(summary_path: Path, wmin: float) -> dict:
 
 def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
     """One spectra figure, with the cost quoted in absolute percentage points."""
+    from eval.plotting import eval_style
+
+    with eval_style():
+        return _build_spectra_panel(spectra_cfg, out_dir)
+
+
+def _build_spectra_panel(spectra_cfg: dict, out_dir: Path):
     import matplotlib.pyplot as plt
+
+    from eval.plotting import (AXIS, BETTER_COLOR, WORSE_COLOR, power_label, role_style,
+                               save_figure, variable_spec)
 
     source = None
     for candidate in spectra_cfg.get("candidates", []):
@@ -207,19 +219,21 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
 
     show = [f for f in ("10u", "msl") if f in measured["curves"]][:2]
     fig, axs = plt.subplots(1, 2 + len(show), figsize=(5.0 * (2 + len(show)), 5.2))
+    n_by_field = {r["field"]: r["n_curves"] for r in rows}
     for ax, field in zip(axs, show):
         c = measured["curves"][field]
-        ax.loglog(c["wavenumbers"], c["truth"], color="#111111", lw=2.0,
-                  label="IEKM 4.4 km target")
+        nl = f" (n = {n_by_field.get(field, '?')} curves)"
+        ax.loglog(c["wavenumbers"], c["truth"], label="truth (IEKM 4.4 km target)" + nl,
+                  **role_style("truth"))
         if c["driver"] is not None:
-            ax.loglog(c["wavenumbers"], c["driver"], color="#1f77b4", lw=1.6,
-                      label="interpolated 9 km driver")
-        ax.loglog(c["wavenumbers"], c["model"], color="#d62728", lw=1.6,
-                  label="downscaler")
-        ax.axvline(wmin, color="#888888", ls=":", lw=1.2)
-        ax.set_xlabel("spherical wavenumber")
-        ax.set_ylabel("power")
-        ax.set_title(f"{field}: how power is spread over scales")
+            ax.loglog(c["wavenumbers"], c["driver"], label="input (ENFO 9 km driver)" + nl,
+                      **role_style("input"))
+        ax.loglog(c["wavenumbers"], c["model"], label="model (downscaler)" + nl,
+                  **role_style("model"))
+        ax.axvline(wmin, color="0.45", ls=":", lw=1.2, label=f"ℓ = {wmin:.0f}, start of the scored range")
+        ax.set_xlabel(AXIS["wavenumber"])
+        ax.set_ylabel(power_label())
+        ax.set_title(f"{variable_spec(field).name}:\nhow power is spread over scales")
         ax.legend(fontsize=8)
         ax.grid(alpha=0.2, which="both")
 
@@ -229,31 +243,32 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
     driver = 100 * np.asarray([r["input_dev"] for r in rows])
     width = 0.38
     ax = axs[len(show)]
-    ax.bar(xs - width / 2, driver, width, color="#1f77b4", alpha=0.85,
-           label="interpolated 9 km driver")
-    ax.bar(xs + width / 2, model, width, color="#d62728", alpha=0.85, label="downscaler")
+    ax.bar(xs - width / 2, driver, width, color=role_style("input")["color"], alpha=0.85,
+           label="input (ENFO 9 km driver)")
+    ax.bar(xs + width / 2, model, width, color=role_style("model")["color"], alpha=0.85,
+           label="model (downscaler)")
     for x, v in zip(xs, model):
         if np.isfinite(v):
             ax.text(x + width / 2, v, f"{v:.1f}", ha="center", va="bottom", fontsize=8.5)
     ax.set_xticks(xs)
-    ax.set_xticklabels(fields)
-    ax.set_ylabel("deviation from target (percentage points)")
-    ax.set_title(f"Deviation above wavenumber {wmin:.0f}")
+    ax.set_xticklabels([variable_spec(f).short or f for f in fields])
+    ax.set_ylabel("Deviation from the truth spectrum (percentage points)")
+    ax.set_title(f"Deviation above wavenumber ℓ = {wmin:.0f}")
     ax.legend(fontsize=8.5)
     ax.grid(axis="y", alpha=0.25)
 
     ax = axs[len(show) + 1]
     gain = driver - model
-    ax.bar(xs, gain, color="#2ca02c", alpha=0.85)
+    ax.bar(xs, gain, color=[BETTER_COLOR if g >= 0 else WORSE_COLOR for g in gain], alpha=0.85)
     for x, v in zip(xs, gain):
         if np.isfinite(v):
             ax.text(x, v, f"{v:+.1f}", ha="center",
                     va="bottom" if v >= 0 else "top", fontsize=9)
     ax.axhline(0.0, color="#000000", lw=0.9)
     ax.set_xticks(xs)
-    ax.set_xticklabels(fields)
-    ax.set_ylabel("deviation removed (percentage points)")
-    ax.set_title("What the downscaler buys, absolute")
+    ax.set_xticklabels([variable_spec(f).short or f for f in fields])
+    ax.set_ylabel("Deviation removed: input minus model (percentage points)")
+    ax.set_title("What the downscaler buys, absolute\n(blue: closer to the truth than its input)")
     ax.grid(axis="y", alpha=0.25)
 
     detail = "; ".join(f"{r['field']} driver {100*r['input_dev']:.1f} pp, "
@@ -287,7 +302,7 @@ def build_spectra_panel(spectra_cfg: dict, out_dir: Path):
                  fontsize=13, fontweight="bold", y=1.0 - 0.30 / total)
     fig.text(0.010, 0.10 / total, wrapped, ha="left", va="bottom", fontsize=8.2,
              color="#333333")
-    fig.savefig(out_dir / name, dpi=200)
+    save_figure(fig, out_dir / name)    # .pdf plus a 150 dpi .png
     return [fig], {"12i": {"slug": "spectra panel", "file": name, "caption": caption}}
 
 

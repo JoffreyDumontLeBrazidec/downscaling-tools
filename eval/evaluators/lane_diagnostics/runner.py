@@ -143,7 +143,8 @@ def score(results_dir, lane_config: dict, eval_config: dict, **kwargs) -> dict:
 
 def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, **kwargs) -> Path:
     import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
+
+    from eval.plotting import FigureBook, save_figure
 
     results_dir = Path(results_dir)
     output_dir = Path(output_dir) if output_dir else results_dir
@@ -179,7 +180,7 @@ def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, 
         entries.append({
             "label": "cyclone maximum 10 m wind\n(driver low below 990 hPa)",
             "required": P.scan_increment(scan, "wind_max_ms", 990.0),
-            "delivered": wd, "unit": "m/s",
+            "delivered": wd, "unit": "m s⁻¹",
             "support_note": f"{n_w} co-located cases at or below 72 h"})
     for label, stat, key, unit in (
             ("precipitation wet fraction", "wet_frac", "tp_wet_frac", "of the grid"),
@@ -258,7 +259,7 @@ def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, 
     captions: dict[str, dict] = {}
     for number, slug, fig, cap in figs:
         path = bundle / f"{number}_{slug}.pdf"
-        fig.savefig(path, dpi=200)
+        save_figure(fig, path)          # <name>.pdf plus a 150 dpi <name>.png
         captions[number] = {"slug": slug, "file": path.name, "caption": cap}
 
     # 12: the standing cyclone set and the spectra panel -------------------
@@ -266,11 +267,11 @@ def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, 
     captions.update(standing["captions"])
 
     combined = bundle / "o1280_o2560_diagnostic_bundle.pdf"
-    with PdfPages(combined) as pdf:
+    with FigureBook(combined) as book:
         for number, slug, fig, _cap in figs:
-            pdf.savefig(fig)
+            book.add(fig, close=False)
         for fig in standing["figures"]:
-            pdf.savefig(fig)
+            book.add(fig, close=False)
     for _n, _s, fig, _c in figs:
         plt.close(fig)
     for fig in standing["figures"]:
