@@ -6,8 +6,8 @@ on TOP of the usual regional plots:
   1. <out>/storm_maps.png       : 10 m wind + MSL fields, TRUTH vs MODEL vs INPUT, zoomed on
                                   the deepest-eye storm instance (same colour scale per row).
   2. <out>/full_spectra.png     : full radial power spectrum at ALL wavenumbers for 10u/10v/msl,
-                                  model vs truth vs input, with the 20-100 km fine band shaded.
-  3. <out>/storm_maps_spectra.json : fine-band (20-100 km) power ratio to truth + log-log slope.
+                                  model vs truth vs input, with the 40-150 km fine band shaded (off the 16.7 km Nyquist).
+  3. <out>/storm_maps_spectra.json : fine-band (40-150 km, off-Nyquist) power ratio to truth + log-log slope.
 
 Method (identical to the T24 regional box-FFT audit, tc_o320_o1280):
   native O1280 box points -> nearest-neighbour onto a regular GRID_DEG grid (2 deg rim removed)
@@ -37,7 +37,13 @@ def _xyz(lat, lon):
 
 
 class BoxSpectra:
-    """Windowed 2D-FFT radial power spectra over a lat/lon box (interior, 2 deg rim removed)."""
+    """Windowed 2D-FFT radial power spectra over a lat/lon box (interior, 2 deg rim removed).
+
+    GUARD (2026-07-13): the reported fine band is 40-150 km, deliberately OFF the 16.7 km
+    Nyquist (2*grid). The former 20-100 km band integrated a grid-scale noise floor that the
+    UNIFIED multi-GPU edge-sharded runtime inflates ~3.5-4.2x (a runtime artifact, NOT model
+    over-power). Score ALL arms in the SAME pristine (fp32, single-tile/local-graph) runtime;
+    never mix unified. See tc-o320-o1280 20260711_lane_soundness_audit.md CORRECTION."""
 
     def __init__(self, lat, lon, box):
         from scipy.spatial import cKDTree
@@ -81,14 +87,18 @@ class BoxSpectra:
             avg[i] = s[i + 1] / n[i + 1] if n[i + 1] else np.nan
         return avg
 
-    def slope(self, spec, lo_km=20.0, hi_km=100.0):
+    def slope(self, spec, lo_km=40.0, hi_km=150.0):
         m = (self.kmid >= 1.0 / hi_km) & (self.kmid <= 1.0 / lo_km) & (spec > 0)
         if m.sum() < 3:
             return float("nan")
         return float(np.polyfit(np.log10(self.kmid[m]), np.log10(spec[m]), 1)[0])
 
     def fine_ratio(self, spec_m, spec_t):
-        fine = (self.wl >= 20) & (self.wl <= 100)
+        # 40-150 km "clean" mesoscale band, deliberately OFF the 16.7 km Nyquist (2*grid).
+        # The former 20-100 km band reached to 1.2x Nyquist and integrated a grid-scale noise
+        # floor; the unified multi-GPU runtime inflates that floor to a spurious 3.5-4.2x
+        # (tc-o320-o1280 20260711_lane_soundness_audit.md CORRECTION). Score arms PRISTINE-only.
+        fine = (self.wl >= 40) & (self.wl <= 150)
         return float(np.nansum(spec_m[fine]) / np.nansum(spec_t[fine]))
 
 
@@ -145,10 +155,10 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
             deepest = (float(mm[mem]), nc, mem)
 
     spec = {f: {c: np.nanmean(np.array(acc[f][c]), axis=0) for c in acc[f]} for f in FIELDS}
-    jout = {"fine_band_20_100km_ratio_to_truth": {}, "slope_fine_20_100km": {}, "storm_box_min_msl_hpa": round(deepest[0] / 100.0, 1)}
+    jout = {"fine_band_40_150km_ratio_to_truth": {}, "slope_fine_40_150km": {}, "storm_box_min_msl_hpa": round(deepest[0] / 100.0, 1)}
     for f in FIELDS:
-        jout["fine_band_20_100km_ratio_to_truth"][f] = round(bs.fine_ratio(spec[f]["model"], spec[f]["truth"]), 3)
-        jout["slope_fine_20_100km"][f] = {c: round(bs.slope(spec[f][c]), 3) for c in ("model", "truth", "input")}
+        jout["fine_band_40_150km_ratio_to_truth"][f] = round(bs.fine_ratio(spec[f]["model"], spec[f]["truth"]), 3)
+        jout["slope_fine_40_150km"][f] = {c: round(bs.slope(spec[f][c]), 3) for c in ("model", "truth", "input")}
     (out_dir / "storm_maps_spectra.json").write_text(json.dumps(jout, indent=2))
 
     col = {"model": "#1a73e8", "truth": "#2e7d32", "input": "#9aa0a6"}
@@ -157,10 +167,10 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
         for c, lab in (("truth", "truth (target y)"), ("model", "model"), ("input", "input (interp)")):
             ax.loglog(bs.wl, spec[f][c], color=col[c], lw=2.4 if c == "truth" else 1.8,
                       ls=":" if c == "input" else "-", label=lab)
-        ax.axvspan(20, 100, color="#f1c40f", alpha=.13)
+        ax.axvspan(40, 150, color="#f1c40f", alpha=.13)
         ax.invert_xaxis(); ax.grid(which="both", alpha=.18)
-        ax.set_title(f"{f}  (fine ratio {jout['fine_band_20_100km_ratio_to_truth'][f]:.2f}, "
-                     f"slope {jout['slope_fine_20_100km'][f]['model']:.2f} vs truth {jout['slope_fine_20_100km'][f]['truth']:.2f})",
+        ax.set_title(f"{f}  (fine ratio {jout['fine_band_40_150km_ratio_to_truth'][f]:.2f}, "
+                     f"slope {jout['slope_fine_40_150km'][f]['model']:.2f} vs truth {jout['slope_fine_40_150km'][f]['truth']:.2f})",
                      fontsize=9.5)
         ax.set_xlabel("wavelength (km) — large ← → fine")
         if f == "10u":
