@@ -1,0 +1,37 @@
+# House style for every figure drawn by the evaluation framework.
+# Loaded by eval.plotting.style.eval_style(); nothing here is applied at import time.
+figure.figsize: 8.0, 4.8
+figure.dpi: 100
+figure.facecolor: white
+figure.titlesize: 13
+figure.titleweight: bold
+savefig.dpi: 150
+savefig.facecolor: white
+font.family: DejaVu Sans
+font.size: 10
+axes.titlesize: 11
+axes.titleweight: bold
+axes.labelsize: 10
+axes.facecolor: white
+axes.edgecolor: 0.25
+axes.linewidth: 0.8
+axes.spines.top: False
+axes.spines.right: False
+axes.grid: True
+axes.axisbelow: True
+grid.color: 0.86
+grid.linewidth: 0.6
+grid.linestyle: -
+axes.prop_cycle: cycler('color', ['E69F00', '009E73', 'CC79A7', '56B4E9', '8C6D31', '6A3D9A'])
+lines.linewidth: 2.0
+lines.markersize: 5
+xtick.direction: out
+ytick.direction: out
+xtick.labelsize: 9
+ytick.labelsize: 9
+legend.frameon: False
+legend.fontsize: 9
+legend.title_fontsize: 9
+image.cmap: viridis
+pdf.fonttype: 42
+ps.fonttype: 42

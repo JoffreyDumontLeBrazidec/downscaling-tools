@@ -29,18 +29,10 @@ def add_coastlines(ax, *, linewidth: float = 0.6) -> None:
 
 
 def select_projection(west: float, east: float, south: float, north: float):
-    """Pick an appropriate cartopy projection for the given bounding box.
+    """Pick a cartopy projection for a bounding box; see ``eval.plotting.maps``.
 
-    Returns LambertConformal for non-dateline-crossing regions, PlateCarree otherwise.
+    Kept here so existing imports keep working; the rule itself now lives in one place.
     """
-    from cartopy import crs
+    from eval.plotting.maps import select_projection as _select_projection
 
-    crosses_dateline = east < west
-    if crosses_dateline:
-        return crs.PlateCarree()
-    central_lon = (west + east) / 2.0
-    central_lat = (south + north) / 2.0
-    return crs.LambertConformal(
-        central_longitude=central_lon,
-        central_latitude=central_lat,
-    )
+    return _select_projection(west, east, south, north)
