@@ -3,15 +3,15 @@ from __future__ import annotations
 import tarfile
 from types import SimpleNamespace
 
-from eval._backends.tctracker.parsing import (
+from eval.evaluators.tctracks.core.parsing import (
     BASINS,
     parse_basin_text,
     parse_tar,
     records_from_tracks,
     step_hours,
 )
-from eval._backends.tctracker.pipeline import TCTrackerConfig
-from eval._backends.tctracker.tables import parse_and_write, parse_run_root
+from eval.evaluators.tctracks.core.pipeline import TCTrackerConfig
+from eval.evaluators.tctracks.core.tables import parse_and_write, parse_run_root
 
 # Real j761 wnp output shape (verified 2026-08-18 on tar
 # j761_20230826_00_m001_o320_tracks.tar).

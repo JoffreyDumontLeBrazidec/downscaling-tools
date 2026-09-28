@@ -70,13 +70,13 @@ def cmd_tctracker(args: argparse.Namespace, lane_config: dict, host_config: dict
     """
     import dataclasses
 
-    from eval._backends.tctracker import (
+    from eval.evaluators.tctracks.core import (
         build_config, completeness_report, expand_months, parse_atlantic_tracks,
         parse_sources_arg, render_slurm_script, resolve_source_configs,
         run_batch, verify_outputs, write_atlantic_summary,
         write_verification_summary,
     )
-    from eval._backends.tctracker.tables import parse_run_root
+    from eval.evaluators.tctracks.core.tables import parse_run_root
 
     if getattr(args, "months", None) and not getattr(args, "dates", None):
         args.dates = ",".join(expand_months(args.months))

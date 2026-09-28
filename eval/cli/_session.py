@@ -58,13 +58,13 @@ def _output_dir_for(subcommand: str, args: argparse.Namespace, host_config: dict
         bundle_dir_arg = getattr(args, "bundle_dir", None)
         return Path(bundle_dir_arg).parent if bundle_dir_arg else _resolve_output_dir(host_config, lane_name)
     if subcommand == "tctracker":
-        from eval._backends.tctracker.pipeline import default_output_dir
+        from eval.evaluators.tctracks.core.pipeline import default_output_dir
         explicit_out = getattr(args, "output_dir", None)
         return Path(explicit_out) if explicit_out else default_output_dir(
             host_config, lane_name, lane_config, getattr(args, "expver")
         )
     if subcommand == "tccompare":
-        from eval._backends.tctracker.pipeline import _lane_short_name
+        from eval.evaluators.tctracks.core.pipeline import _lane_short_name
         label = getattr(args, "label", None) or "_".join(
             m.strip() for m in str(args.months).split(",") if m.strip()
         )
@@ -192,7 +192,7 @@ def run_lane_command(args: argparse.Namespace, command: Command) -> None:
     # --- Dry run ---
     if args.dry_run:
         if subcommand == "tctracker":
-            from eval._backends.tctracker import build_config, dry_run_payload
+            from eval.evaluators.tctracks.core import build_config, dry_run_payload
             effective["tctracker"] = dry_run_payload(
                 build_config(args, lane_config, host_config, output_dir)
             )

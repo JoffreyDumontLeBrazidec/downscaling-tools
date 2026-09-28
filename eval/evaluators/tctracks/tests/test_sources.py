@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from eval._backends.tctracker.pipeline import TCTrackerConfig
-from eval._backends.tctracker.sources import (
+from eval.evaluators.tctracks.core.pipeline import TCTrackerConfig
+from eval.evaluators.tctracks.core.sources import (
     default_source_specs,
     expand_months,
     parse_sources_arg,

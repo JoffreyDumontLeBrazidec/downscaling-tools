@@ -3,7 +3,7 @@ from __future__ import annotations
 import tarfile
 from types import SimpleNamespace
 
-from eval._backends.tctracker.pipeline import (
+from eval.evaluators.tctracks.core.pipeline import (
     BASINS,
     KT_TO_MS,
     TCTrackerConfig,

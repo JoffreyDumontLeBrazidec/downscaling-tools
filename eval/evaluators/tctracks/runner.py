@@ -16,13 +16,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval._backends.tctracker.pipeline import _lane_short_name
-from eval._backends.tctracker.sources import (
+from eval.evaluators.tctracks.core.pipeline import _lane_short_name
+from eval.evaluators.tctracks.core.sources import (
     default_source_specs,
     refs_cache_root,
     source_id_for,
 )
-from eval._backends.tctracker.tables import parse_run_root
+from eval.evaluators.tctracks.core.tables import parse_run_root
 
 from . import scorer
 
