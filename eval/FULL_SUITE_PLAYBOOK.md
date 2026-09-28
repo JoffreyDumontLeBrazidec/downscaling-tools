@@ -45,8 +45,9 @@ python -m eval.cli scoreboard \
 
 ## Legacy: One-Command Shell Script
 
-> **Note:** The legacy launchers (`launch_full_eval_suite.sh`, `codex_eval`) still work
-> but are deprecated in favor of `eval.jobs.pipeline` which provides better resource
+> **Note:** The legacy launcher `launch_full_eval_suite.sh` still works but is
+> deprecated (`codex_eval` and the autopilot scripts behind it were quarantined on
+> 2026-09-28 under `eval/_quarantine/20260928/jobs/`), in favor of `eval.jobs.pipeline` which provides better resource
 > control, evaluator-level parallelism, and consistent `eval.cli` invocations.
 
 ```bash

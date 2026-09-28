@@ -28,3 +28,21 @@ Backends that retired evaluators used but other code still needs stay in place:
 `eval/_backends/sigma_evaluator`, `eval/_backends/obs_crps` (used by
 `tools/station_head`), `eval/_backends/plot_intermediate`,
 `eval/_backends/weight_diagnostics` and `eval/_backends/spectra`.
+
+## Jobs and templates (`jobs/`)
+
+Dead jobs, quarantined after checking that nothing live calls them:
+
+| File | What it was |
+|---|---|
+| `jobs/autopilot.py`, `jobs/autopilot_predictions.py` | Background job drivers for the old per-step scoreboard flow |
+| `jobs/codex_eval`, `jobs/codex_eval_predictions` | Shell entry points that launched the two autopilots |
+| `jobs/generate_clean_scoreboards.py`, `jobs/generate_enfo_o320_scoreboard.py` | Version-one markdown scoreboard builders, called only from archived templates |
+| `jobs/tc_extreme_compare_all.sh`, `jobs/regenerate_o1280_regions_20260227.sbatch`, `jobs/sigma_loss_smoke.sbatch` | One-off scripts with no caller |
+| `jobs/templates/archive/` and the symlinks `jobs/templates/*.sbatch` / `*.sh` | The archived template set; the symlinks still resolve inside the quarantine |
+| `jobs/tests/` | Tests of the above, including the three `submit_*_manual_eval_flow.sh` helper tests |
+
+`eval/jobs/scoreboard_metrics.py` was kept, because the live template
+`eval/jobs/templates/finalize_lean_eval_layout.sbatch` still imports
+`build_run_scoreboard_metrics` from it. The finalize test that lived in
+`test_o48_o96_flow_helper.py` moved to `eval/jobs/tests/test_finalize_lean_eval_layout.py`.

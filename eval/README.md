@@ -157,9 +157,9 @@ python -m eval.jobs.backfill_tc_extreme_percentiles --lane o96_o320
 # Idempotent and atomic per file.
 ```
 
-The scoreboard generators (`eval.cli scoreboard` generic CSV, and the custom
-`eval.jobs.generate_enfo_o320_scoreboard`) surface the new columns automatically once
-the underlying stats JSONs have the fields.
+The scoreboard generator (`eval.cli scoreboard`, generic CSV) surfaces the new columns
+automatically once the underlying stats JSONs have the fields. (The custom
+`generate_enfo_o320_scoreboard` job was quarantined on 2026-09-28.)
 
 ## Backends (`eval/_backends/`)
 

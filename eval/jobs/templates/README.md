@@ -1,7 +1,7 @@
 # Strict Manual-Inference And Eval Templates
 
 > **Canonical entry point:** `python -m eval.cli run --checkpoint <CKPT_PATH> --lane <LANE> --host <HOST>`
-> Archived (covered by `eval.cli`): old shell flow scripts, `scoreboard_*_step.sbatch`, `scoreboard_write_from_predictions.sbatch`, `tc_eval_from_predictions.sbatch`, `spectra_proxy_from_predictions.sbatch`, `surface_loss_from_predictions.sbatch`, `regional_suite_from_predictions.sbatch`, `local_plots_one_date_from_predictions.sbatch`, `build_o*_truth_bundles.sbatch` (superseded by `eval.cli prepare` / `eval.cli run --source-grib-root`), all submit helpers, and their Python helpers — all moved to `archive/`.
+> Archived (covered by `eval.cli`): old shell flow scripts, `scoreboard_*_step.sbatch`, `scoreboard_write_from_predictions.sbatch`, `tc_eval_from_predictions.sbatch`, `spectra_proxy_from_predictions.sbatch`, `surface_loss_from_predictions.sbatch`, `regional_suite_from_predictions.sbatch`, `local_plots_one_date_from_predictions.sbatch`, `build_o*_truth_bundles.sbatch` (superseded by `eval.cli prepare` / `eval.cli run --source-grib-root`), all submit helpers, and their Python helpers — all moved to `archive/`, which was itself quarantined on 2026-09-28 together with the symlinks that pointed into it, under `eval/_quarantine/20260928/jobs/templates/`.
 
 This directory is the canonical home for repo-specific eval and manual-inference templates used by `downscaling-tools`.
 If copies exist under `jobscripts/`, treat them as mirrors, not the source of truth.
