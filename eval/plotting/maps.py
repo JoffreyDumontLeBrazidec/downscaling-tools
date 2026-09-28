@@ -65,6 +65,7 @@ def add_geography(ax, *, coastlines: bool = True, borders: bool = True, gridline
         if labels:
             gl.top_labels = False
             gl.right_labels = False
+            gl.rotate_labels = False
             gl.xlabel_style = {"size": label_size}
             gl.ylabel_style = {"size": label_size}
     return gl

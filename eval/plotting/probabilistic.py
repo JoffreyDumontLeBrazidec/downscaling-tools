@@ -12,8 +12,10 @@ Table columns (one row per curve point)
 ``lead_h``        lead time in hours
 ``series_role``   ``model``, ``input``, ``truth``, ``baseline`` or ``reference``
 ``series_label``  text for the legend (readable, not a raw key)
-``value``         the score, in the variable's NATIVE unit (converted here for display), unless a
-                  ``unit`` column is present, in which case the value is used as given
+``value``         the score, in the variable's native unit (converted here for display: hPa for
+                  pressure, dam for geopotential height). An optional ``native_unit`` column
+                  names a different native unit (quaver stores z in metres, so ``"gpm"``). If a
+                  ``unit`` column is present the value is used as given and ``unit`` is printed
 optional:  ``ci_low``, ``ci_high`` (confidence band), ``n`` (number of samples, added to the
            legend), ``unit`` (unit of ``value``; also used for dimensionless scores)
 
@@ -103,10 +105,11 @@ def _panel(ax, sub, metric: str, variable: str, styles, unit_col: bool):
         lo = g["ci_low"].to_numpy(float) if "ci_low" in g else None
         hi = g["ci_high"].to_numpy(float) if "ci_high" in g else None
         if dimensional and not unit_col:
-            y = np.asarray(convert_difference(variable, y), dtype=float)
+            nu = g["native_unit"].dropna().iloc[0] if "native_unit" in g and g["native_unit"].notna().any() else None
+            y = np.asarray(convert_difference(variable, y, native_unit=nu), dtype=float)
             if lo is not None:
-                lo = np.asarray(convert_difference(variable, lo), dtype=float)
-                hi = np.asarray(convert_difference(variable, hi), dtype=float)
+                lo = np.asarray(convert_difference(variable, lo, native_unit=nu), dtype=float)
+                hi = np.asarray(convert_difference(variable, hi, native_unit=nu), dtype=float)
         st = styles[(role, label)]
         marker = "o" if x.size <= 12 else None
         ax.plot(x, y, marker=marker, markersize=4, **st)
@@ -214,11 +217,14 @@ def plot_probabilistic_scores(curves, source: str, out, *, title: str | None = N
                 fig.legend(handles=handles, loc="lower center", ncol=min(len(handles), 4),
                            bbox_to_anchor=(0.5, 0.0))
                 head = variable_spec(var).name if variable_spec(var).unit else str(var)
+                n_title_lines = 2 + (1 if title else 0)
+                fig_h = fig.get_size_inches()[1]
                 fig.suptitle(f"{head}\n{source}" + (f"\n{title}" if title else ""),
-                             fontsize=11, y=0.995)
+                             fontsize=11, y=1.0 - 0.05 / fig_h, va="top")
                 if footnote:
                     fig.text(0.99, 0.005, footnote, ha="right", va="bottom", fontsize=7, color="0.4")
-                fig.tight_layout(rect=(0, 0.06 + 0.02 * ((len(handles) - 1) // 4), 1, 0.93))
+                legend_in = 0.35 * (1 + (len(handles) - 1) // 4)
+                fig.tight_layout(rect=(0, legend_in / fig_h, 1, 1.0))
                 book.add(fig, name=str(var))
             written = list(book.paths)
     return written
