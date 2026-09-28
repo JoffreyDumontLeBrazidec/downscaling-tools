@@ -325,11 +325,36 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
                         t.get("p999_mm"), t.get("wet_frac"), t.get("neg_frac")])
 
 
+_SERIES_WORDS = {"model": "model", "baseline": "interpolated input", "truth": "truth"}
+_METRIC_WORDS = {
+    "rmse_mm": "RMSE (mm)", "bias_mm": "bias (mm)", "corr": "correlation",
+    "ens_rmse_mm": "RMSE of the ensemble mean (mm)", "p999_mm": "99.9th percentile (mm)",
+    "max_mm": "maximum (mm)", "wet_frac": "wet fraction", "neg_frac": "negative fraction",
+}
+
+
+def _summary_label(key: str) -> str:
+    """Readable text for a summary key such as ``model_rmse_mm``."""
+    if key == "model_over_baseline_rmse_ratio":
+        return "RMSE ratio, model / interpolated input"
+    series, _, metric = key.partition("_")
+    if series in _SERIES_WORDS and metric in _METRIC_WORDS:
+        text = f"{_SERIES_WORDS[series]}: {_METRIC_WORDS[metric]}"
+        return text[:1].upper() + text[1:]
+    return key.replace("_", " ")
+
+
 def _render_pdf(path: Path, payload: dict, *, run_label: str) -> None:
+    """Skill and tail curves against lead time, plus a summary page (PDF + PNG per page).
+
+    Colours by role: model red, truth black, interpolated input (the baseline) blue dashed.
+    Solid lines with markers are member means; thinner dashed or dotted lines are scores
+    of the ensemble mean.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
+    from eval.plotting import AXIS, FigureBook, eval_style, role_style
 
     per_step = payload["per_step"]
     meta = payload["meta"]
@@ -340,72 +365,86 @@ def _render_pdf(path: Path, payload: dict, *, run_label: str) -> None:
         return steps, [d[str(s)] for s in steps]
 
     has_baseline = meta["baseline_source"] != "none"
-    C_MODEL, C_BASE, C_TRUTH = "#d95f02", "#555555", "#222222"
+    counts = f"n = {meta['n_slices']} date and lead cases, {meta['n_members']} members"
+    model_mean = role_style("model", marker="o", markersize=3.5)
+    model_ens = role_style("model", linestyle=(0, (5, 2)), linewidth=1.5, alpha=0.8)
+    input_mean = role_style("input", marker="s", markersize=3.5)
+    input_ens = role_style("input", linestyle=(0, (1.5, 1.5)), linewidth=1.5, alpha=0.8)
+    truth = role_style("truth")
+    def _short_source(src: str) -> str:
+        kind, sep, rest = str(src).partition(":")
+        return f"{kind}: {Path(rest).name}" if sep and "/" in rest else str(src)
 
-    with PdfPages(path) as pdf:
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.6), constrained_layout=True)
-        fig.suptitle(f"tp skill vs lead — {run_label} | truth: {meta['truth_source']}"
-                     f" | baseline: {meta['baseline_source']}", fontsize=10)
-        for ax, (mkey, bkey, ekey, title, unit) in zip(axes, [
+    import textwrap
+
+    footer = textwrap.fill(
+        f"truth source: {_short_source(meta['truth_source'])}; input (baseline) source: "
+        f"{_short_source(meta['baseline_source'])}; checkpoint: {meta.get('checkpoint_id', '')}",
+        width=180)
+
+    with FigureBook(path, png=True) as pdf, eval_style():
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.9), constrained_layout=True)
+        fig.suptitle(f"Total precipitation (6 h accumulation) skill against lead time: {run_label}")
+        for i, (ax, (mkey, bkey, ekey, title, ylabel)) in enumerate(zip(axes, [
             ("model_rmse_mm", "baseline_rmse_mm", "model_ens_rmse_mm",
-             "RMSE", "mm / 6h"),
-            ("model_bias_mm", None, None, "Bias", "mm / 6h"),
-            ("model_corr", "baseline_corr", None, "Correlation", ""),
-        ]):
+             "Root-mean-square error", "RMSE (mm)"),
+            ("model_bias_mm", None, None, "Bias (model minus truth)", "Bias (mm)"),
+            ("model_corr", "baseline_corr", None, "Correlation with truth", "Correlation"),
+        ])):
+            suffix = f" ({counts})" if i == 0 else ""
             s, v = series(mkey)
-            ax.plot(s, v, "-o", color=C_MODEL, label="model (member mean)", ms=3)
+            ax.plot(s, v, label=f"Model, member mean{suffix}", **model_mean)
             if bkey and has_baseline:
                 s, v = series(bkey)
-                ax.plot(s, v, "-s", color=C_BASE, label="interp baseline", ms=3)
+                ax.plot(s, v, label="Input (interpolated), member mean", **input_mean)
             if ekey:
                 s, v = series(ekey)
-                ax.plot(s, v, "--", color=C_MODEL, alpha=0.6, label="model (ens mean)")
+                ax.plot(s, v, label="Model, ensemble mean", **model_ens)
                 if has_baseline:
                     s, v = series("baseline_ens_rmse_mm")
-                    ax.plot(s, v, "--", color=C_BASE, alpha=0.6,
-                            label="baseline (ens mean)")
-            if title == "Bias":
-                ax.axhline(0, color="k", lw=0.5)
+                    ax.plot(s, v, label="Input (interpolated), ensemble mean", **input_ens)
+            if mkey == "model_bias_mm":
+                ax.axhline(0, color="0.3", lw=0.8, zorder=1)
             ax.set_title(title)
-            ax.set_xlabel("lead (h)")
-            ax.set_ylabel(unit)
-            ax.grid(alpha=0.25)
-            ax.legend(fontsize=7)
-        pdf.savefig(fig)
-        plt.close(fig)
+            ax.set_xlabel(AXIS["lead"])
+            ax.set_ylabel(ylabel)
+            ax.legend(fontsize=8)
+        fig.text(0.5, -0.02, footer, ha="center", va="top", fontsize=7, color="0.35")
+        pdf.add(fig, name="skill")
 
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.6), constrained_layout=True)
-        fig.suptitle(f"tp distribution tails vs lead — {run_label}", fontsize=10)
-        for ax, (tkey, mkey, bkey, title) in zip(axes, [
-            ("truth_p999_mm", "model_p999_mm", "baseline_p999_mm", "p99.9 (mm/6h)"),
-            ("truth_max_mm", "model_max_mm", "baseline_max_mm", "max (mm/6h)"),
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.9), constrained_layout=True)
+        fig.suptitle(f"Total precipitation (6 h accumulation) distribution tails against lead time: {run_label}")
+        for i, (ax, (tkey, mkey, bkey, title, ylabel)) in enumerate(zip(axes, [
+            ("truth_p999_mm", "model_p999_mm", "baseline_p999_mm",
+             "99.9th percentile", "99.9th percentile (mm)"),
+            ("truth_max_mm", "model_max_mm", "baseline_max_mm", "Maximum", "Maximum (mm)"),
             ("truth_wet_frac", "model_wet_frac", "baseline_wet_frac",
-             f"wet fraction (> {meta['wet_threshold_mm']:g} mm)"),
-        ]):
+             f"Wet fraction (above {meta['wet_threshold_mm']:g} mm)", "Fraction of grid points"),
+        ])):
+            suffix = f" ({counts})" if i == 0 else ""
             s, v = series(tkey)
-            ax.plot(s, v, "-", color=C_TRUTH, lw=2, label="truth")
+            ax.plot(s, v, label="Truth", **truth)
             s, v = series(mkey)
-            ax.plot(s, v, "-o", color=C_MODEL, label="model", ms=3)
+            ax.plot(s, v, label=f"Model, member mean{suffix}", **model_mean)
             if has_baseline:
                 s, v = series(bkey)
-                ax.plot(s, v, "-s", color=C_BASE, label="interp baseline", ms=3)
+                ax.plot(s, v, label="Input (interpolated), member mean", **input_mean)
             ax.set_title(title)
-            ax.set_xlabel("lead (h)")
-            ax.grid(alpha=0.25)
-            ax.legend(fontsize=7)
-        pdf.savefig(fig)
-        plt.close(fig)
+            ax.set_xlabel(AXIS["lead"])
+            ax.set_ylabel(ylabel)
+            ax.legend(fontsize=8)
+        fig.text(0.5, -0.02, footer, ha="center", va="top", fontsize=7, color="0.35")
+        pdf.add(fig, name="tails")
 
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.axis("off")
-        lines = [f"precip_scores summary — {run_label}",
+        lines = [f"Total precipitation scores, summary over all lead times: {run_label}",
                  f"checkpoint: {meta['checkpoint_id']}",
-                 f"slices: {meta['n_slices']}  members: {meta['n_members']}",
-                 f"negative handling: {meta['negative_handling']}", ""]
+                 f"cases (date and lead time): {meta['n_slices']}   members: {meta['n_members']}",
+                 f"negative values: {meta['negative_handling']}", ""]
         for k, v in payload["summary"].items():
             if v is not None:
-                lines.append(f"{k:38s} {v:10.4f}")
+                lines.append(f"{_summary_label(k):50s} {v:10.4f}")
         ax.text(0.02, 0.98, "\n".join(lines), va="top", family="monospace",
                 fontsize=9, transform=ax.transAxes)
-        pdf.savefig(fig)
-        plt.close(fig)
+        pdf.add(fig, name="summary")
