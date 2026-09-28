@@ -1,0 +1,168 @@
+docs/epics/completed_epics/big_reformat_downscaling_tools/README.md:26:- `eval/jobs/scoreboard_surface_loss.py` — CLI shim around `eval._backends.scoreboard._surface_compute`
+docs/epics/completed_epics/big_reformat_downscaling_tools/README.md:30:**Legacy kernels** (quarantined to `eval/_backends/`, never invoke directly):
+docs/epics/completed_epics/big_reformat_downscaling_tools/README.md:31:- `eval/_backends/tc/`, `eval/_backends/spectra/`, `eval/_backends/region_plotting/`, `eval/_backends/sigma_evaluator/`
+docs/epics/completed_epics/big_reformat_downscaling_tools/README.md:32:- `eval/_backends/scoreboard/{tc,spectra,surface,_surface_compute,_utils,canonical_data,row_matching}.py`
+docs/epics/completed_epics/big_reformat_downscaling_tools/README.md:287:**Note on Phase 9 (complete):** Legacy modules have been quarantined to `eval/_backends/`. Old scripts moved to `eval/archive/jobs/`. All imports updated — no backward-compat shims. Old import paths fail immediately.
+docs/epics/completed_epics/run-trust-and-validation/tc-extremes-contract-decision.md:9:- `eval/_backends/scoreboard/tc.py` + `eval/_backends/scoreboard/data/canonical_analysis.yaml` (the ratio/score machinery being dropped)
+docs/epics/completed_epics/run-trust-and-validation/tc-extremes-contract-decision.md:43:  `eval/_backends/tc/loading_grib.py:106` already loads both analyses ("keyed by expid, e.g.
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o1280-o2560__monitor-ab.md:47:  2. **TC extreme is support-dependent** (the epic's o96→o320 example). For o1280→o2560 I set an **everything-native** contract (canonical = native `IEKM_O2560_TARGET`, model scored n
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/INDEX.md:16:- scoreboard-eval-trust__sbv2.md — cross-lane (scoreboard/eval-trust) — control: NEVER-RAN — top suspect: c — CONTRACT PINNED (clean, exists): truth = curated AN (canonical_analysis.yaml o320: idalia 9
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o320o1280-o1280o2560-evalsuite__es1.md:57:- **Scorer:** `python -m eval.cli {predict,evaluate,scoreboard}` in `/home/ecm5702/dev/downscaling-tools` (commit not pinned). Evaluators tc/surface/spectra/spectra_ecmwf/
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96-o320-soap-optimizer__soapcmp1.md:101:    only native rows → the scoreboard's off-contract guardrail (`_warn_on_offcontract_support`, `eval/_backends/scoreboard/tc.py`)
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96-o320-soap-optimizer__soapcmp1.md:140:- Scorer: `downscaling-tools/eval` @ fd6afbe; TC backend `eval/_backends/scoreboard/tc.py` + `eval/evaluators/tc/`;
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96o320-o48o96-month-eval__cap1.md:26:- Best hypothesis + confirmation: **a (TC config)**. CONFIRMED by loading the prediction curves directly: dora and fernanda both extract their min-MSLP from the **identical** 
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96o320-o48o96-month-eval__cap1.md:36:- (a) **TC config — CONFIRMED REAL BUG, NOT in the lane**: the lane (`o96_o320_50044778_unified_aug2023_month.yaml`: events idalia/franklin/dora/fernanda/hilary, member_maps d
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96o320-o48o96-month-eval__cap1.md:67:- TCs: scored via **composite extreme_score** (`eval/_backends/scoreboard/tc.py`) PLUS raw min-MSLP/max-wind + ratios. Support: lane `support_mode: both` (regridded FIRST then
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96o320-o48o96-month-eval__cap1.md:78:- Config: `eval/config/lanes/o96_o320_50044778_unified_aug2023_month.yaml`. EFFECTIVE-CONFIG-CHANGING edits: `eval/_backends/tc/events.py` (bbox), `eval/checkpoint_interpolati
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/o96o320-o48o96-month-eval__cap1.md:84:- DO NOT RE-DERIVE: the dora/fernanda degenerate-0.0 TC bug = overlapping bboxes in `eval/_backends/tc/events.py` (FIXED this session, .bak kept; non-overlapping bands validat
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/scoreboard-eval-trust__sbv2.md:10:- **OPER_O320_0001 EXISTS.** `eval/_backends/tc/loading_grib.py:106` loads analysis curves "keyed by expid (e.g. `{OPER_O320_0001, ENFO_O320_0001}`)", native **and** regridded. Ne
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/scoreboard-eval-trust__sbv2.md:11:- **THE CLEAN CONTRACT (authoritative):** `eval/_backends/scoreboard/tc.py` + `eval/_backends/scoreboard/data/canonical_analysis.yaml`.
+docs/epics/completed_epics/run-trust-and-validation/completed-tasks/inbox-raw-captures/scoreboard-eval-trust__sbv2.md:59:- **NOW TRUSTED (was wrong before):** the clean contract = curated AN (canonical_analysis.yaml o320), regridded O320, depth-ratio(1013.25)+wind-ratio per `eval/_backends/scoreboar
+docs/epics/completed_epics/mechanistic-interpretability/completed-tasks/20260705_probe_real_tc_predictive_validity.md:480:`truth_disp`. Reuses `eval._backends.tc` loaders (`point_mask`/`BoundingBox`/cfgrib). Tool:
+docs/epics/completed_epics/validation_prepml/README.md:133:- Edited code (with `.bak`): `eval/_backends/tc/events.py` (B4), `eval/checkpoint_interpolation.py` (B7)
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260622_prepml_validation_capture.md:25:Diagnosis [VERIFIED]: loaded the prediction curves directly (eval._backends.tc loading_predictions +
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260622_prepml_validation_capture.md:28:`eval/_backends/tc/events.py` dora bbox `east=-105, west=175` (175E->105W) overlaps fernanda
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260627_quaver_evalcli_and_3curve_spectra_ecmwf.md:37:New evaluator `eval/evaluators/quaver/` {__init__,runner,scorer,plotter}.py wrapping backend `eval/_backends/quaver/q_{compute_probabilistic,plot_sfc,plot_pl}.py` (run under the `quave
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260627_quaver_evalcli_and_3curve_spectra_ecmwf.md:145:- `/home/ecm5702/dev/downscaling-tools/eval/_backends/quaver/q_compute_probabilistic.py` accepts
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:25:- `/home/ecm5702/dev/downscaling-tools/eval/_backends/quaver/q_compute_probabilistic.py` now has
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:56:`/home/ecm5702/dev/downscaling-tools/eval/_backends/quaver/q_compute_probabilistic.py` has
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:71:1. `/home/ecm5702/dev/downscaling-tools/eval/_backends/quaver/q_compute_probabilistic.py` hardcoded
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:149:1. `/home/ecm5702/dev/downscaling-tools/eval/_backends/quaver/q_compute_probabilistic.py`: add
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:390:(`jobscripts/submit/20260627/j5yb_quaver/quaver_{compute,plot}*.sbatch` + `eval/_backends/quaver/`) is
+docs/epics/completed_epics/validation_prepml/completed-tasks/20260705_eecdb127_eefo_verification_run_j747.md:437:**`~/dev/post_prepml/quaver_scoring/`** (referenced by `eval/_backends/quaver/compute_quaver.sh`),
+docs/epics/completed_epics/o48_o96/completed-tasks/20260501_tp_accumulation_mismatch.md:244:  - `precip_plot` — wraps `eval/_backends/region_plotting/plot_precip_events.py` (auto-ranks top-N precip events; tp/cp native).
+docs/epics/completed_epics/o48_o96/completed-tasks/20260501_tp_accumulation_mismatch.md:245:  - `precip_dist` — wraps `eval/_backends/precip/tp_histogram_comparison.py` (moved from `docs/scripts/`; 2-line shim left at old path).
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260504_multi_ds_o96_o320_lnm1p2_100k.md:113:3. Eval bridge required two single-line patches to the archived `eval/archive/jobs/{diagnose_per_bundle_tc_extremes,proxy_tc_compare}.py` to track `tc/` moving under `eval/_backends/`. Patches
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260617_o96_o320_unified_oldlike_tc_regression.md:152:Scorer = `eval/_backends/scoreboard/tc.py::load_tc_extreme_scores_from_json`, called exactly as the
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260617_o96_o320_unified_oldlike_tc_regression.md:154:`eval/_backends/scoreboard/data/canonical_analysis.yaml` (`o320`) + embedded EEFO floor**,
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260617_o96_o320_unified_oldlike_tc_regression.md:295:## P1 + P3 Implemented 2026-06-17 (eval/_backends/scoreboard/tc.py, +54/-2)
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260617_o96_o320_unified_oldlike_tc_regression.md:317:data (no generator in-repo; git history shows only the `_legacy_kernels`->`_backends` rename) whose Idalia
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260624_spread_crps_evidence_and_keystone.md:219:  `eval/_backends/probabilistic/`; validated j761 output:
+docs/epics/completed_epics/ds-multi-ds-parity/completed-tasks/20260624_spread_crps_evidence_and_keystone.md:355:- **Per-σ denoising (staged):** `sigma` evaluator (`eval/_backends/sigma_evaluator/`, already honors
+docs/epics/completed_epics/o96_o320_opti/pristine-eval/HANDOFF.md:206:  **`eval/_backends/quaver/q_compute_surface_only.py`** (NEW; drops the `analysis_upperair` PL block).
+docs/epics/completed_epics/o96_o320_opti/pristine-eval/HANDOFF.md:208:- Scorecard render: **`eval/_backends/quaver/q_plot_sfc_pristine.py`** (NEW; list_ml_exp={j740,j741},
+docs/epics/completed_epics/o96_o320_opti/pristine-eval/HANDOFF.md:236:- New tools: `eval/predict/fdb_write.py`, `eval/_backends/quaver/q_compute_surface_only.py`,
+docs/epics/completed_epics/o96_o320_opti/pristine-eval/HANDOFF.md:237:  `eval/_backends/quaver/q_plot_sfc_pristine.py`
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:42:Evaluators currently work because each evaluator has implicit knowledge of both shapes (see `eval/_backends/tc/loading_predictions.py`, `eval/evaluators/spectra_ecmwf/runner.py
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:92:5. **Evaluator code**: no `if backend == "prepml":` / `if shape == (ws, ens, ...)`: branches in `eval/evaluators/*` or `eval/_backends/*`. Backend detection lives only at write
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:176:- Criterion 6 (evaluator cleanup): identified targets — `eval/_backends/tc/loading_predictions.py::_prediction_values_by_point` squeezes the now-dead `forecast_reference_time`
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:233:Recommend (1) + (2) in parallel: (1) is a 1-line CLI override, (2) is a 30-line audit of `eval/_backends/tc/loading_predictions.py:264-268` and `eval/evaluators/spectra/proxy_
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:314:1. The shape-detection branch in `eval/_backends/tc/loading_predictions.py:264-268` (squeeze loop) may interact differently with the now-canonical 4D layout vs whatever it was
+docs/epics/completed_epics/checkpoint-eval-pipeline/completed-tasks/20260513_prepml_manual_inference_backend_equality.md:360:**Task complete.** PrepML and manual_inference backends are now numerically equivalent within sampler stochasticity on both o48_o96 (Humberto, analysis-source truth) and o96_o
+docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md:126:| Backend implementation | /home/ecm5702/dev/downscaling-tools/eval/_backends/tctracker/pipeline.py |
+docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md:128:| Backend tests | /home/ecm5702/dev/downscaling-tools/eval/_backends/tctracker/tests/test_pipeline.py |
+docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md:137:    PYTHONPATH=/home/ecm5702/dev/downscaling-tools /home/ecm5702/dev/.ds-260612/bin/python -m pytest -q eval/_backends/tctracker/tests/test_pipeline.py eval/tests/test_cli_dry_run.py::test_cli_tctracker_dry_run eval/tests/test_config_load
+docs/epics/completed_epics/tc_track/TCTRACKER_EVAL_CLI.md:152:the TC track figure suite. Code: `eval/_backends/tctracker/{parsing,tables,sources}.py`,
+docs/epics/tc-o1280-o2560/completed-tasks/20260826_o2560_tp_definitive_pipeline.md:50:- `eval/_backends/precip/sources.py`: PrecipTruthSource (grib-per-date, grid
+docs/epics/spread-calibration/in-progress/20260826_spread_proxy_overspread_spec.md:52:(`eval/_backends/probabilistic/scoring.py` + its evaluator registration), which already
+docs/epics/spread-calibration/in-progress/20260904_obs_crps_proxy.md:22:  `reference=surfaceobservations()` in `eval/_backends/quaver/q_compute_probabilistic.py`.
+docs/epics/spread-calibration/in-progress/20260904_obs_crps_proxy.md:175:- `eval/_backends/obs_crps/obs_crps_compute.py` does the work. It runs under the
+docs/epics/spread-calibration/completed-tasks/20260826_spread_proxy_phase1_ft400k_results.md:15:`eval/_backends/spread_proxy/` + evaluator `spread_proxy` (registered in `ALL_EVALUATORS`,
+docs/epics/spread-calibration/completed-tasks/20260826_spread_proxy_phase1_ft400k_results.md:22:Standalone: `python -m eval._backends.spread_proxy.scoring --predictions-dir ... --plots`.
+docs/epics/spread-calibration/README.md:25:(`eval/_backends/spread_proxy/`; standalone:
+docs/epics/spread-calibration/README.md:26:`python -m eval._backends.spread_proxy.scoring --predictions-dir ... --plots`).
+docs/epics/misc/completed-tasks/20260804_repo_trunk_consolidation_and_lane_cut.md:22:   `eval/predict/{graph_cut,local_scope}.py`, `eval/_backends/tctracker/pipeline.py`.
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:66:`eval._backends.scoreboard.spectra.load_spectra_metrics`, against a real
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:135:`eval/_backends/env/toolchain.py`. `module load` is no longer written as
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:145:`eval/_backends/env/toolchain.sh` exposes `use_metview` and `use_gptosp` for job
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:171:`eval/_backends/spectra/migrate_reference_windows.py` moves the existing caches
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:231:every lookup missed. `eval/_backends/spectra/naming.py` is now the one place that
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:254:`eval/_backends/spectra/harmonics.py` computes the spectrum directly from the
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:272:`eval/_backends/tc/loading_grib.py`, and its toolchain recipe stays for that.
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:363:`eval/_backends/spectra/make_fullgrid_templates.py` builds per-field templates
+docs/epics/misc/completed-tasks/20260822_spectra_ecmwf_global_fix.md:593:`eval/_backends/spectra/restore_legacy_cache.py` moved the o320_o1280 cache back
+docs/epics/misc/20260911_sampler_config_drift_audit.md:22:CHECKPOINT's own inference defaults (`eval/_backends/plot_intermediate/plot_intermediate.py`
+docs/epics/misc/20260921_two_lanes_precipitation_reconciliation.md:130:`eval/_backends/precip/tp_histogram_comparison.py` contain no lane strings — so this is one change
+docs/epics/misc/20260925_angle_a_residual_mismatch_diagnostic.md:85:   through the spectra backend of downscaling-tools (`eval/_backends/spectra/`); S6-S7 through the bench's
+docs/epics/tc-o320-o1280/completed-tasks/20260727_piecewise_sigma_sweep_prep.md:71:`eval.cli` → `eval.evaluators.tc` → `eval._backends.tc.workflows` →
+docs/epics/tc-o320-o1280/completed-tasks/20260727_piecewise_sigma_sweep_prep.md:72:`eval._backends.tc.member_plot` → `from cartopy import crs`, top-level, no lazy
+docs/epics/tc-o320-o1280/completed-tasks/20260727_piecewise_sigma_sweep_prep.md:116:(downscaling-tools). Defers `from cartopy import crs` in `eval/_backends/tc/member_plot.py`
+docs/epics/tc-o320-o1280/completed-tasks/20260711_testbed_validation_200k.md:203:- Backend (the exact code): `eval/_backends/storm_maps/render.py` (self-contained BoxSpectra + maps +
+docs/epics/tc-o320-o1280/completed-tasks/20260711_testbed_validation_200k.md:205:  `python -m eval._backends.storm_maps.render <predictions_dir> --out <dir> [--event-box ..] [--step 072]`.
+docs/epics/training-diagnostics/metric-skill-gap/completed-tasks/20260727_ladder_tc_proxy_studyA.md:43:- ONE support for every arm: `eval._backends.tc.events.EVENTS[ev].bbox` via `point_mask`, same
+docs/epics/training-diagnostics/eval-acceleration/README.md:24:  - `/home/ecm5702/dev/downscaling-tools/eval/_backends/probabilistic/scoring.py` (the instrument)
+docs/epics/training-diagnostics/eval-acceleration/README.md:84:`eval/_backends/probabilistic/scoring.py` via `eval.cli evaluate --only probabilistic --host
+docs/epics/fine-scale-o320-o1280/in-progress/20260917_curriculum_recommendation_and_training_process.md:132:surface weighted nMSE is a per-member paired error (`eval/_backends/scoreboard/_surface_compute.py`), which is the sum of the
+docs/epics/fine-scale-o320-o1280/in-progress/20260923_physical_realism_scores.md:173:  boxes from `eval/config/events/*.yaml` through `eval._backends.tc.events`, selected by the dates of the files. Job
+docs/epics/fine-scale-o320-o1280/in-progress/20260923_physical_realism_scores.md:263:`eval/_backends/tc/loading_predictions.py`, native support) for every file of the RW50k cyclone-box run and the RW50k
+docs/epics/fine-scale-o320-o1280/completed-tasks/20260908_arm_S_land_stratified_reread.md:60:the "truth-std" scheme of `eval/_backends/scoreboard/_surface_compute.py`. The probabilistic score is
+docs/epics/fine-scale-o320-o1280/completed-tasks/20260908_arm_S_land_stratified_reread.md:61:the fair CRPS from `crps_ensemble_components` in `eval/_backends/probabilistic/scoring.py`, with the
+docs/epics/fine-scale-o320-o1280/completed-tasks/20260914_arm_R_precip_v4_plan.md:104:`eval/_backends/precip` evaluator exists for the o1280 to o2560 lane, with an honest interpolated
+docs/epics/fine-scale-o320-o1280/completed-tasks/20260914_arm_R_precip_v4_plan.md:1074:   (`eval/_backends/precip`, written for the o1280→o2560 lane) must be pointed at O1280. No script name and
+docs/epics/tc-perf-high-resolution/guidance/completed-tasks/20260806_sept2025_agmass_prepml_month.md:1041:(module `eval/_backends/region_plotting/plot_member_wind_maps.py`, next to
+docs/epics/tc-perf-high-resolution/scripts/tc_extreme_compare.py:20:from eval._backends.tc.events import EVENTS
+docs/epics/tc-perf-high-resolution/scripts/tc_extreme_compare.py:21:from eval._backends.tc.grid import point_mask
+docs/epics/tc-perf-high-resolution/scripts/tc_extreme_compare.py:22:from eval._backends.tc.loading_predictions import prediction_point_coordinates, discover_prediction_files
+docs/epics/tc-perf-high-resolution/scripts/tc_spread_calibration.py:23:from eval._backends.tc.events import EVENTS
+docs/epics/tc-perf-high-resolution/scripts/tc_spread_calibration.py:24:from eval._backends.tc.grid import point_mask
+docs/epics/tc-perf-high-resolution/scripts/tc_spread_calibration.py:25:from eval._backends.tc.loading_predictions import prediction_point_coordinates, discover_prediction_files
+docs/epics/tc-perf-high-resolution/completed-tasks/20260622_explore_other_causes.md:124:Root cause in `eval/_backends/tc/`:
+docs/epics/tc-perf-high-resolution/completed-tasks/20260622_explore_other_causes.md:235:- Evaluator code: `dev/downscaling-tools/eval/_backends/tc/{events,loading_predictions,workflows}.py`,
+docs/epics/tc-perf-high-resolution/completed-tasks/20260730_o96_o320_5storm_sampler_matrix.md:62:Box-FFT via `eval._backends.storm_maps.render.BoxSpectra`, GRID_DEG=0.25 (O320-appropriate;
+docs/epics/tc-perf-high-resolution/completed-tasks/20260625_weight_signature_commitment_part1.md:81:- Integrate the unified-class loader + these metrics into `~/dev/downscaling-tools/eval/_backends/weight_diagnostics/plot_checkpoint_weights.py` (currently a standalone scan; tool is ds-API-gated). FA
+docs/epics/tc-perf-high-resolution/completed-tasks/20260806_matrix7_s397_regional_sampler_screen.md:248:eval/_backends/scoreboard/tc.py definitions).
+docs/epics/tc-perf-high-resolution/completed-tasks/20260818_tctracker_month_eval_pipeline_plan.md:21:  `eval/_backends/tctracker/pipeline.py`, 513 lines): production of one basin-track tar per
+docs/epics/tc-perf-high-resolution/completed-tasks/20260818_tctracker_month_eval_pipeline_plan.md:47:  `eval/_backends/tc/events.py` boxes), NOT by track-matching. IBTrACS/obs matching = phase 5.
+docs/epics/tc-perf-high-resolution/completed-tasks/20260818_tctracker_month_eval_pipeline_plan.md:61:## Phase 1 — backend generalization (`eval/_backends/tctracker/`)
+docs/epics/tc-perf-high-resolution/completed-tasks/20260828_wind_fine_scale_amplitude_vs_phase.md:51:  wavenumber on a LINEAR axis (`eval/_backends/spectra_ecmwf/plot_ratio.py`). A 15% shortfall is
+docs/epics/unified-inference/in-progress/20260730_prepml_pw40_season_s397434.md:564:5. ⛔ **The repo spectra pipeline is BROKEN at stage 3**: `eval/_backends/spectra/grb_to_spectra.sh`
+docs/epics/unified-inference/completed-tasks/20260831_jan_work_assessment.md:73:`eval/_backends/sigma_evaluator/sigma_evaluator.py:115-139` already shards
+docs/epics/certified-runtime-provenance/completed-tasks/20260626_b785_375k_idalia_franklin_eval_handoff.md:96:TC-extreme evaluator lives in `eval/evaluators/tc` + `eval/_backends/tc`; the playbook also has `02_eval_tc.sbatch` / `03_scoreboard.sbatch` and `eval/jobs/launch_full_eval_suite.sh`. **Conf
+docs/epics/handoff-archive/2026-07.md:398:   `eval/_backends/storm_maps/render.py:39`, used in exactly one place (render.py:121 storm-map spectra
+docs/epics/handoff-archive/2026-07.md:598:  `feat/storm-maps-eval` PUSHED. `eval/_backends/storm_maps/render.py` (single-run + CLI),
+docs/epics/handoff-archive/2026-08.md:866:(`eval/_backends/tc/member_plot.py`), pre-existing gap blocking any ag predict/evaluate;
+docs/epics/downscaling-aifs-crps/in-progress/20260909_station_head_adapter_design.md:7:- Source Links: `20260909_global_observations_anemoi_reuse.md` (the recommendation this note executes), `20260908_station_target_design.md` (the network measurements), `20260908_observation_inventory.md` (what `vt
+docs/epics/downscaling-aifs-crps/completed-tasks/20260908_arm_a_finetune_u100k.md:467:  once the device has been resolved, exactly as `eval/_backends/plot_intermediate/generate_from_bundle.py`
+docs/epics/downscaling-aifs-crps/completed-tasks/20260908_arm_a_finetune_u100k.md:1033:  project's storm-map renderer `eval._backends.storm_maps.render` once per lead over the Atlantic box
+docs/docs/exec-plans/completed/plotter-refactoring-design.md:3:> Outcome (2026-09-24): this design landed in part. The shared helpers exist in `downscaling-tools/eval/_backends/region_plotting/plotting/` (`config`, `coordinate_utils`, `datetime_utils`, `manifest`, `metadata`, `preprocessing`, `varia
+docs/docs/instructions/plotting-readability.md:26:- For non-TC local plots, stay inside `/etc/ecmwf/nfs/dh2_home_a/ecm5702/dev/downscaling-tools/eval/_backends/region_plotting/` and prefer the canonical `python -m eval._backends.region_plotting.plot_one_date_local ...` route over scratch helpers or 
+docs/docs/instructions/evaluation-workflow.md:92:python -m eval._backends.weight_diagnostics.plot_checkpoint_weights \
+docs/docs/instructions/evaluation-workflow.md:272:- Do not invoke `eval/_backends/` modules directly -- use `python -m eval.cli` with `--only <pillar>` for single-pillar reruns
+docs/docs/scoreboard_o96_o320/exp/enfo-o320-reference.md:30:### TC idalia — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o96_o320/exp/enfo-o320-reference.md:39:### TC franklin — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`)
+docs/docs/scoreboard_o96_o320/exp/eefo-o96-input-baseline.md:30:### TC idalia — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o96_o320/exp/eefo-o96-input-baseline.md:39:### TC franklin — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`)
+docs/docs/scoreboard_o96_o320/exp/oper-an-o320.md:23:### TC idalia — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o96_o320/exp/oper-an-o320.md:32:### TC franklin — raw extremes (support `regridded; EEFO_O96/ENFO_O320 vs OPER_O320 analysis (eval._backends.tc, max 10 pf members)`)
+docs/docs/scoreboard_o96_o320/scoreboard.md:13:- **TC raw extremes** (`idalia`, `franklin` columns): RAW per-event extremes on the regridded **O320 analysis grid** (support `regridded; model vs O320-analysis ref (ENFO_O320_0001, per row)`). No score/ratio/anchor. `wind max` = max 10m wind (m/s), `ms
+docs/docs/scoreboard_o48_o96/exp/enfo-o48-input-baseline.md:23:### TC humberto — raw extremes (support `regridded (O96), same-grid ENFO_O48 / IEKM_O96 / OPER_O96 (eval._backends.tc, job 32872415, 20260629)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o48_o96/exp/iekm-o96-truth-reference.md:23:### TC humberto — raw extremes (support `regridded (O96), same-grid ENFO_O48 / IEKM_O96 / OPER_O96 (eval._backends.tc, job 32872415, 20260629)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o48_o96/exp/oper-an-o96.md:23:### TC humberto — raw extremes (support `regridded (O96), same-grid ENFO_O48 / IEKM_O96 / OPER_O96 (eval._backends.tc, job 32872415, 20260629)`; same grid, no score/ratio/anchor)
+docs/docs/scoreboard_o48_o96/scoreboard.md:13:- **TC raw extremes** (`humberto` column): RAW per-event extremes on the regridded **O96 analysis grid** (support `regridded (O96): ENFO_O48 input / IEKM_O96 truth / OPER_O96 analysis, same grid`). No score/ratio/anchor. `wind max` = max 10m wind (m/s), 
+docs/docs/scoreboard_o320_o1280/scoreboard.md:15:- **TC raw extremes** (`idalia`, `franklin` columns): RAW per-event extremes on the regridded **O1280 analysis grid** (support `regridded; model vs O1280 analysis ref`). No score/ratio/anchor. `wind max` = max 10m wind (m/s), `mslp min` = min sea-leve
+docs/docs/scoreboard_o1280_o2560/scoreboard.md:13:- **TC raw extremes** (`humberto` column): RAW per-event extremes on the native **O2560 support** (support `native (o2560): model vs IEKM_O2560 native truth — NOT comparable to other lanes`). No score/ratio/anchor. `wind max` = max 10m wind (m/s), `m
+docs/docs/knowledge/methods/prepml-validation-runbook.md:70:  - Heavy + FDB-bound → must run on **atos_ac** (FDB host) with a long budget. As of 2026-07-07 the harness default for evaluate/quaver is **48h** (`35703148` hit an 8h self-wall on the full-month j7xn run; `35957731` reruns with 48h). Back
+docs/docs/knowledge/results/tc-extreme-score-support-contract.md:8:Code: `eval/_backends/scoreboard/tc.py`, `eval/_backends/scoreboard/data/canonical_analysis.yaml`, `eval/_backends/scoreboard/canonical_data.py`
+docs/docs/knowledge/results/tc-extreme-score-support-contract.md:17:  grid over the storm bbox (`regrid_resolution=0.25` in `eval/_backends/tc/loading_grib.py`).
+docs/docs/knowledge/synthesis/run-trust-durable-resolutions.md:93:- **B1/B2/B3/B5 (raw-extremes rewrite):** rewrite `eval/_backends/scoreboard/tc.py` + `eval/evaluators/tc/scorer.py`
+docs/docs/knowledge/synthesis/run-trust-durable-resolutions.md:100:- **B6 (event bbox):** commit the already-applied non-overlapping-bbox fix in `eval/_backends/tc/events.py`
+docs/docs/scoreboard/build.py:564:         "the eval.cli TC-PDF references computed from GRIB curves (`eval._backends.tc`, " + tc_reference_support + ", max 10 pf "
+docs/scripts/tp_histogram_comparison.py:2:eval/_backends/precip/tp_histogram_comparison.py inside downscaling-tools.
+docs/scripts/tp_histogram_comparison.py:7:from eval._backends.precip.tp_histogram_comparison import *  # noqa: F401,F403
+docs/scripts/tp_histogram_comparison.py:10:    from eval._backends.precip.tp_histogram_comparison import main
+docs/scripts/generate_combined_tc_pdf.py:25:from eval._backends.tc.data_types import BoundingBox, CurveVectors, SupportMode
+docs/scripts/generate_combined_tc_pdf.py:26:from eval._backends.tc.events import EVENTS
+docs/scripts/generate_combined_tc_pdf.py:27:from eval._backends.tc.experiment_config import TCExperimentConfig
+docs/scripts/generate_combined_tc_pdf.py:28:from eval._backends.tc.grid import normalize_lon, point_mask
+docs/scripts/generate_combined_tc_pdf.py:29:from eval._backends.tc.loading_grib import _load_native_curve
+docs/scripts/generate_combined_tc_pdf.py:30:from eval._backends.tc.loading_predictions import (
+docs/scripts/generate_combined_tc_pdf.py:35:from eval._backends.tc.plot_config import TCPlotConfig
+docs/scripts/generate_combined_tc_pdf.py:36:from eval._backends.tc.plot_config import REFERENCE_STYLES
+docs/skills/downscaling-evaluation/references/metrics-as-computed.md:21:estimator in `~/dev/downscaling-tools/eval/_backends/probabilistic/scoring.py`
+docs/skills/downscaling-evaluation/references/metrics-as-computed.md:73:   `~/dev/downscaling-tools/eval/_backends/scoreboard/_surface_compute.py` (~lines 29, 293-309
+jobscripts/submit/2026-05-12/manual_811960e6_new_o1280_o2560_20260512_ep130_100k_local_plots.sbatch:117:from eval._backends.region_plotting.plot_regions import render_region_suite_from_predictions_file
+jobscripts/submit/2026-05-12/manual_811960e6_new_o1280_o2560_20260512_ep130_100k_local_plots.sbatch:158:    "${PYTHON}" -m eval._backends.region_plotting.plot_one_date_local
+jobscripts/submit/2026-05-12/manual_811960e6_new_o1280_o2560_20260512_ep130_100k_tc_eval.sbatch:166:  "${PYTHON}" -m eval._backends.tc.workflows pdf
+jobscripts/submit/2026-05-12/manual_811960e6_new_o1280_o2560_20260512_ep130_100k_tc_member_maps.sbatch:4:#   eval._backends.tc.workflows member-maps
+jobscripts/submit/2026-05-12/manual_811960e6_new_o1280_o2560_20260512_ep130_100k_tc_member_maps.sbatch:81:  "${PYTHON}" -m eval._backends.tc.workflows member-maps
+jobscripts/submit/20260623/sigma_o96o320_cfec83a3.sbatch:27:srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+jobscripts/submit/20260623/sigma_o320o1280_b785bf12.sbatch:21:srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+jobscripts/submit/20260623/sigma_o320o1280_b785bf12_smoke_compat.sbatch:21:srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+jobscripts/submit/20260623/sigma_o320o1280_b785bf12_smoke_bundle_compat.sbatch:21:srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+jobscripts/submit/20260623/sigma_o320o1280_b785bf12_full_bundle_compat.sbatch:21:srun python -u -m eval._backends.sigma_evaluator.run_sigma_evaluator \
+jobscripts/submit/20260709/surface_z500_boxrms.py:18:from eval._backends.tc.events import EVENTS
+jobscripts/submit/20260709/surface_z500_boxrms.py:19:from eval._backends.tc.grid import point_mask
+jobscripts/submit/20260709/surface_z500_boxrms.py:20:from eval._backends.tc.loading_predictions import (
+jobscripts/submit/20260729/regional_sampler_parity/dump_tc_instance_arrays.py:14:from eval._backends.tc.events import EVENTS
+jobscripts/submit/20260729/regional_sampler_parity/dump_tc_instance_arrays.py:15:from eval._backends.tc.grid import point_mask
+jobscripts/submit/20260729/regional_sampler_parity/dump_tc_instance_arrays.py:16:from eval._backends.tc.loading_predictions import (
