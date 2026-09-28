@@ -2,7 +2,7 @@
 #
 # Source this from a job script instead of writing your own `module load` lines:
 #
-#   source /home/ecm5702/dev/downscaling-tools/eval/_backends/env/toolchain.sh
+#   source /home/ecm5702/dev/downscaling-tools/eval/shared/toolchain.sh
 #   use_gptosp
 #   ...
 #   use_metview
@@ -18,7 +18,7 @@ use_toolchain() {
   local name="$1"
   local block
   block="$(PYTHONPATH="${DS_TOOLCHAIN_ROOT}:${PYTHONPATH:-}" \
-           "${DS_PYTHON}" -m eval._backends.env.toolchain render "${name}")" || {
+           "${DS_PYTHON}" -m eval.shared.toolchain render "${name}")" || {
     echo "FATAL: could not render toolchain '${name}' from ${DS_TOOLCHAIN_ROOT}" >&2
     return 1
   }

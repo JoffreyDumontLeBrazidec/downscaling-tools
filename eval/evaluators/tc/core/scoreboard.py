@@ -28,7 +28,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from eval._backends.scoreboard._utils import finite_float as _finite_float
+from eval.shared.json_utils import finite_float as _finite_float
 from eval.evaluators.tc.core.row_matching import (
     find_model_row,
     find_row_by_predicate,

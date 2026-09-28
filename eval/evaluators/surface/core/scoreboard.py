@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from eval.evaluators.surface.core.compute import SURFACE_NORMALIZATION_SCHEME
-from eval._backends.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
+from eval.shared.json_utils import finite_float as _finite_float, load_json as _load_json
 SURFACE_VAR_LABELS = {
     "10u": "10u",
     "10v": "10v",

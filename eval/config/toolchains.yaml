@@ -1,5 +1,5 @@
 # Single definition of how to obtain the external binaries the eval pipeline
-# needs.  Both eval/_backends/env/toolchain.py and the hand-written job scripts
+# needs.  Both eval/shared/toolchain.py and the hand-written job scripts
 # under ~/dev/jobscripts read this file, so there is exactly one place to change
 # when a module version moves.
 #

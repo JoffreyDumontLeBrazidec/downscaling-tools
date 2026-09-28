@@ -1,7 +1,8 @@
-"""Shared helpers used across eval.scoreboard.* modules.
+"""Small helpers shared by the scoreboard readers.
 
-Single home for guard-and-cast and JSON read primitives that were duplicated
-across tc.py, spectra.py, surface.py, and eval/jobs/scoreboard_metrics.py.
+The guard-and-cast and JSON read primitives were duplicated across the readers of the
+tc, spectra_ecmwf_v2 and surface evaluators (their core/scoreboard.py) and
+eval/jobs/scoreboard_metrics.py; this is their single home.
 """
 from __future__ import annotations
 

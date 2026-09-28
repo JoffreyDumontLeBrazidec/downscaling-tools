@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from eval._backends.env.toolchain import render_module_block
+from eval.shared.toolchain import render_module_block
 
 LOG = logging.getLogger(__name__)
 

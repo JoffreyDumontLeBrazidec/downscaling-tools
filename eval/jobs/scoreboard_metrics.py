@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from eval._backends.scoreboard._utils import finite_float, load_json
+from eval.shared.json_utils import finite_float, load_json
 import numpy as np
 
 # ---------------------------------------------------------------------------

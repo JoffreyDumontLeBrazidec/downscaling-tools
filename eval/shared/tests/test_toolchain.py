@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from eval._backends.env import toolchain
+from eval.shared import toolchain
 
 
 def test_both_spectra_toolchains_are_defined() -> None:

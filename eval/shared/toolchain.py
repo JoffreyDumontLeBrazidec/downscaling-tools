@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "toolchains.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "toolchains.yaml"
 
 
 @lru_cache(maxsize=1)

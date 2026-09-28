@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from eval._backends.scoreboard._utils import finite_float as _finite_float, load_json as _load_json
+from eval.shared.json_utils import finite_float as _finite_float, load_json as _load_json
 from eval.evaluators.spectra_ecmwf_v2.core import naming
 import numpy as np
 
