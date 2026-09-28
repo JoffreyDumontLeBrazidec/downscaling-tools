@@ -8,7 +8,5 @@ from .runner import run
 
 EVALUATOR_SPEC = {
     "name": "storm_maps",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

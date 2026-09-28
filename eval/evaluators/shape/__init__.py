@@ -8,7 +8,5 @@ from .scorer import score
 
 EVALUATOR_SPEC = {
     "name": "shape",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

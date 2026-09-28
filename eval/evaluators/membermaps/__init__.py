@@ -8,10 +8,5 @@ from .runner import run
 
 EVALUATOR_SPEC = {
     "name": "membermaps",
-    # Default OFF: it is a figure bundle, not a measurement, and it opens a
-    # multi-gigabyte prediction file per render. Ask for it with
-    # `eval.cli evaluate --only membermaps`.
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

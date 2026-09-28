@@ -6,7 +6,5 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "probabilistic",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

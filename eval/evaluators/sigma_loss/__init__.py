@@ -14,8 +14,6 @@ from .plotter import plot
 EVALUATOR_SPEC = {
     "name": "sigma_loss",
     "requires": ["checkpoint"],
-    "scoreboard": True,
-    "default_enabled": False,
 }
 
 __all__ = ["run", "score", "plot", "EVALUATOR_SPEC"]

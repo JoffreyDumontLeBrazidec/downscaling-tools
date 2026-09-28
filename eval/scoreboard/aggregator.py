@@ -5,11 +5,14 @@ import importlib
 import logging
 from pathlib import Path
 
+from eval.evaluators import registry as evaluator_registry
 from eval.scoreboard.types import ScoreRecord
 
 LOG = logging.getLogger(__name__)
 
-KNOWN_EVALUATORS = ["tc", "spectra", "surface", "sigma", "region_plot", "sigma_loss", "probabilistic", "precip_scores"]
+# The evaluators whose score() records reach scores.csv: the registry entries
+# with feeds_scoreboard=True (eval/evaluators/registry.py). Not a second list.
+SCOREBOARD_EVALUATORS = evaluator_registry.scoreboard_names()
 
 
 def aggregate_scores(
@@ -19,9 +22,11 @@ def aggregate_scores(
 ) -> list[ScoreRecord]:
     """Collect scores from evaluator score() functions.
 
-    Scans eval_dir/evaluators/<name>/ for each known evaluator,
-    calls score() on those with scoreboard=True in their EVALUATOR_SPEC,
-    and returns sorted ScoreRecord list.
+    Scans eval_dir/evaluators/<name>/ for each evaluator that feeds the
+    scoreboard according to the registry, calls its score(), and returns a
+    sorted ScoreRecord list. Requested evaluators that do not feed the
+    scoreboard (standard and diagnostic ones) are passed over silently;
+    retired or unknown names are passed over with a warning.
 
     Args:
         eval_dir: Root evaluation directory containing evaluator outputs.
@@ -33,13 +38,19 @@ def aggregate_scores(
         List of ScoreRecord sorted by (evaluator, metric).
     """
     eval_dir = Path(eval_dir)
-    target_evaluators = evaluators if evaluators is not None else KNOWN_EVALUATORS
+    target_evaluators = evaluators if evaluators is not None else SCOREBOARD_EVALUATORS
 
     all_records: list[ScoreRecord] = []
 
     for name in target_evaluators:
-        if name not in KNOWN_EVALUATORS:
-            LOG.warning("Unknown evaluator: %s (not in KNOWN_EVALUATORS)", name)
+        entry = evaluator_registry.get(name)
+        if entry is None:
+            LOG.warning("Unknown evaluator: %s (not in eval/evaluators/registry.py)", name)
+            continue
+        if evaluator_registry.is_retired(name):
+            LOG.warning("Skipping retired evaluator. %s", evaluator_registry.retired_message(name))
+            continue
+        if not entry.feeds_scoreboard:
             continue
 
         # Import evaluator module
@@ -47,11 +58,6 @@ def aggregate_scores(
             mod = importlib.import_module(f"eval.evaluators.{name}")
         except ImportError:
             LOG.warning("Cannot import evaluator module: eval.evaluators.%s", name)
-            continue
-
-        # Check scoreboard eligibility
-        spec = getattr(mod, "EVALUATOR_SPEC", {})
-        if not spec.get("scoreboard", False):
             continue
 
         # Check results directory exists

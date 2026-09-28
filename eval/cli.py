@@ -39,27 +39,15 @@ from eval.config.loader import (
     validate_lane_host_compatible,
 )
 from eval.paths import resolve_eval_root
+from eval.evaluators import registry as evaluator_registry
 from eval.evaluators.tc.comparison_contract import require_lane_analysis_reference
 from eval import lean_layout
 
 LOG = logging.getLogger(__name__)
 
-ALL_EVALUATORS = [
-    "tc", "spectra", "surface", "region_plot",
-    "sigma", "sigma_loss", "mechanistic", "intermediate",
-    "spectra_ecmwf", "spectra_ecmwf_v2", "mlflow",
-    "precip_dist", "precip_events", "precip_scores",
-    "interp", "probabilistic", "spread_proxy",
-    "quaver", "obs_crps", "local_global",
-    "spectra_coherence",
-    "lane_diagnostics",
-    "texture",
-    "wind_extremes",
-    "displacement",
-    "membermaps",
-    "tc_structure",
-    "shape",
-]
+# Every evaluator this CLI can run. Derived from the one registry
+# (eval/evaluators/registry.py); retired evaluators are not in it.
+ALL_EVALUATORS = evaluator_registry.runnable_names()
 
 DEFAULT_HOST = "atos_ac"
 
@@ -547,36 +535,61 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
 
 
 def _with_prepml_fdb_evaluators(evaluators: list[str], args: argparse.Namespace) -> list[str]:
-    """Auto-include the FDB-based scorecards for prepml evaluations (expver set).
+    """Auto-include the quaver scorecard for prepml evaluations (expver set).
 
-    Both quaver and obs_crps read the ensemble from FDB under an expver, so they
-    are only meaningful when the run published one; we avoid even listing them
-    for manual runs. obs_crps is the cheap numeric counterpart of the quaver
-    surface scorecard (calibrated against it on ja6y, 2026-09-04) and quaver
-    remains the canonical scorecard and the only one covering upper air, so both
-    run. Applied to the default / --include-diagnostics paths; --only stays
-    explicit.
+    quaver reads the ensemble from FDB under an expver, so it is only meaningful
+    when the run published one; we avoid even listing it for manual runs. quaver
+    is the canonical probabilistic scorecard and the only one covering upper air.
+    (obs_crps, its cheap surface-only counterpart, was retired on 2026-09-28 in
+    favour of quaver.) Applied to the default / --include-diagnostics paths;
+    --only stays explicit.
     """
     if not getattr(args, "expver", None):
         return evaluators
     out = list(evaluators)
-    for name in ("quaver", "obs_crps"):
+    for name in ("quaver",):
         if name not in out:
             out.append(name)
     return out
 
 
+def _drop_retired_from_lane_group(evaluators: list[str], group: str) -> list[str]:
+    """Skip retired evaluators that a lane YAML group still lists, with a warning.
+
+    Tracked lanes were repointed when the evaluators were retired; this keeps an
+    old or untracked lane running instead of failing on a name that is gone.
+    """
+    kept: list[str] = []
+    for name in evaluators:
+        if evaluator_registry.is_retired(name):
+            LOG.warning(
+                "Lane evaluator group '%s' lists a retired evaluator; skipping it. %s",
+                group, evaluator_registry.retired_message(name),
+            )
+            continue
+        kept.append(name)
+    return kept
+
+
 def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str]:
     """Three-step evaluator resolution.
 
-    1. --only: run exactly those evaluators.
+    1. --only: run exactly those evaluators. A retired evaluator named here is a
+       tombstone: print its replacement and exit with status 1.
     2. --include-diagnostics: default + diagnostics groups.
     3. Otherwise: default group only.
+
+    Retired evaluators found in a lane group are skipped with a warning.
     """
     evaluator_groups = lane_config.get("evaluator_groups", {})
 
     if getattr(args, "only", None) is not None:
         requested = _parse_str_csv(args.only)
+        retired = [e for e in requested if evaluator_registry.is_retired(e)]
+        if retired:
+            for name in retired:
+                print(f"ERROR: {evaluator_registry.retired_message(name)}", file=sys.stderr)
+            raise SystemExit(1)
         unknown = [e for e in requested if e not in ALL_EVALUATORS]
         if unknown:
             raise SystemExit(
@@ -585,9 +598,13 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
             )
         return requested
 
+    default_group = _drop_retired_from_lane_group(
+        list(evaluator_groups.get("default", [])), "default"
+    )
     if getattr(args, "include_diagnostics", False):
-        default_group = evaluator_groups.get("default", [])
-        diag_group = evaluator_groups.get("diagnostics", [])
+        diag_group = _drop_retired_from_lane_group(
+            list(evaluator_groups.get("diagnostics", [])), "diagnostics"
+        )
         # Preserve order, avoid duplicates
         combined: list[str] = list(default_group)
         for e in diag_group:
@@ -595,7 +612,7 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
                 combined.append(e)
         return _with_prepml_fdb_evaluators(combined, args)
 
-    return _with_prepml_fdb_evaluators(list(evaluator_groups.get("default", [])), args)
+    return _with_prepml_fdb_evaluators(default_group, args)
 
 
 def _get_git_commit() -> str:
@@ -984,6 +1001,29 @@ def _write_evaluator_status(
         LOG.warning("Could not write evaluator status for '%s' (non-fatal)", name)
 
 
+def _host_mismatch(name: str) -> str | None:
+    """Why ``name`` cannot run on this machine, or None when it can.
+
+    Some evaluators depend on a tool that exists on one Atos cluster only (the
+    registry's ``host_prefix``; for example gptosp for spectra_ecmwf_v2 is on AC
+    only). On any other host the evaluator is skipped with a warning rather than
+    failing the whole evaluation.
+    """
+    import socket
+
+    entry = evaluator_registry.get(name)
+    prefix = entry.host_prefix if entry else None
+    if not prefix:
+        return None
+    hostname = socket.gethostname()
+    if hostname.startswith(prefix):
+        return None
+    return (
+        f"it needs a host whose name starts with '{prefix}' "
+        f"(current host: {hostname}); run it on Atos {prefix.upper()} with --only {name}"
+    )
+
+
 def _declared_evaluators(
     lane_config: dict, evaluators: list[str], *, checkpoint: str | None,
 ) -> list[str]:
@@ -1001,6 +1041,9 @@ def _declared_evaluators(
     declared: list[str] = []
     for name in evaluators:
         if name not in ALL_EVALUATORS:
+            continue
+        if _host_mismatch(name):
+            # Cannot run on this machine; skipped with a warning, not a gap.
             continue
         try:
             mod = importlib.import_module(f"eval.evaluators.{name}")
@@ -1034,10 +1077,19 @@ def _run_evaluators(
     failures: list[str] = []
 
     for name in evaluators:
+        if evaluator_registry.is_retired(name):
+            LOG.warning("Skipping retired evaluator. %s", evaluator_registry.retired_message(name))
+            continue
         if name not in ALL_EVALUATORS:
             LOG.warning(
                 "Skipping unknown evaluator '%s'. Valid: %s", name, ALL_EVALUATORS
             )
+            continue
+
+        mismatch = _host_mismatch(name)
+        if mismatch:
+            LOG.warning("Skipping evaluator '%s': %s", name, mismatch)
+            _write_evaluator_status(output_dir, name, "skipped", detail=mismatch)
             continue
 
         # Import evaluator module

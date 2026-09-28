@@ -12,8 +12,6 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "quaver",
-    "default_enabled": True,
-    "scoreboard": False,
     "requires": ["predictions"],
 }
 

@@ -112,7 +112,12 @@ def _deliverables(name: str) -> dict[str, Any]:
     try:
         mod = importlib.import_module(f"eval.evaluators.{name}")
     except ImportError:
-        return {}
+        # A retired evaluator's package is quarantined and no longer importable,
+        # but old run directories still hold its output; keep their layout.
+        from eval.evaluators.registry import get
+
+        entry = get(name)
+        return dict(entry.legacy_deliverables or {}) if entry else {}
     return dict(getattr(mod, "EVALUATOR_SPEC", {}).get("deliverables", {}))
 
 

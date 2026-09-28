@@ -10,7 +10,5 @@ from .scorer import score
 
 EVALUATOR_SPEC = {
     "name": "precip_scores",
-    "default_enabled": True,
-    "scoreboard": True,
     "requires": ["predictions"],
 }

@@ -11,15 +11,24 @@ import yaml
 _CONFIG_DIR = Path(__file__).parent
 
 _LANE_REQUIRED_KEYS = {"predict", "evaluator_groups"}
-_LANE_ALLOWED_KEYS = {
-    "predict", "tc", "spectra", "spectra_ecmwf", "spectra_ecmwf_v2", "surface", "regions",
-    "evaluator_groups", "sigma", "sigma_loss", "mechanistic", "intermediate",
-    "resource_profiles", "region_plot", "prepare", "prepml",
+# Structural lane keys, plus one per-evaluator section for every evaluator in
+# the registry. Retired evaluators stay allowed so that older lanes, which still
+# carry their sections, keep loading.
+_LANE_STRUCTURAL_KEYS = {
+    "predict", "regions", "evaluator_groups",
+    "resource_profiles", "prepare", "prepml",
     "default_host", "allowed_hosts", "lineage",
-    "precip", "precip_dist", "precip_events", "precip_scores", "probabilistic", "quaver", "obs_crps", "local_global",
-    "tctracker", "lane_diagnostics", "texture", "wind_extremes", "displacement",
-    "membermaps",
+    "precip", "tctracker",
 }
+
+
+def _registry_evaluator_names() -> set[str]:
+    from eval.evaluators.registry import names
+
+    return set(names())
+
+
+_LANE_ALLOWED_KEYS = _LANE_STRUCTURAL_KEYS | _registry_evaluator_names()
 
 _HOST_REQUIRED_KEYS = {"code_root", "scratch_root", "scheduler", "environment_setup"}
 

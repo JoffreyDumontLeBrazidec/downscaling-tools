@@ -5,8 +5,6 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "tc",
-    "default_enabled": True,
-    "scoreboard": True,
     "requires": ["predictions"],
     # Consolidated overview lives under plots/; promote it with the canonical
     # name. Per-member maps are an extra plot subdir. See eval.lean_layout.

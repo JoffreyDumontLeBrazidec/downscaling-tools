@@ -25,8 +25,5 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "spectra_ecmwf_v2",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
-    "host_constraint": "ac",
 }

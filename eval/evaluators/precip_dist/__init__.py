@@ -7,7 +7,5 @@ from .runner import run
 
 EVALUATOR_SPEC = {
     "name": "precip_dist",
-    "default_enabled": True,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

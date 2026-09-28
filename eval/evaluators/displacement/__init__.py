@@ -5,7 +5,5 @@ from .plotter import plot
 
 EVALUATOR_SPEC = {
     "name": "displacement",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

@@ -11,7 +11,5 @@ from .scorer import score
 
 EVALUATOR_SPEC = {
     "name": "tc_structure",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

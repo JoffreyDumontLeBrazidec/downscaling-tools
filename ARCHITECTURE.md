@@ -64,12 +64,13 @@ The same pattern applies to all evaluators:
 | Evaluator | Kernel contents |
 |---|---|
 | `tc` | TC workflows, stats, loading, plotting |
-| `spectra` | Spectral harmonics computation, comparison plots |
+| `spectra_ecmwf_v2` | ECMWF spectral transform (gptosp) on the complete grid, comparison plots |
 | `surface` | Surface nMSE scoring math, normalization (self-contained; no separate legacy runner) |
 | `region_plot` | Six-panel region plotting, coordinate/variable utils |
-| `sigma` | Noise schedule sweeps, sigma evaluator logic |
-| `mechanistic` | Weight diagnostics / interpretability |
-| `intermediate` | Intermediate diffusion step visualization |
+| `sigma_loss` | Per-noise-level denoiser loss from single forward passes |
+
+The full list of evaluators, with their group (scored, standard, diagnostic or
+retired) and the question each one answers, is `eval/evaluators/registry.py`.
 
 `eval/scoreboard/` contains only the canonical aggregation layer
 (`aggregator.py`, `formatter.py`, `types.py`). Per-domain scoring math lives
@@ -86,8 +87,6 @@ def plot(results_dir, lane_config, eval_config, output_dir) -> list[Path]:
 
 EVALUATOR_SPEC = {
     "name": "tc",
-    "default_enabled": True,
-    "scoreboard": True,
     "requires": ["predictions"],
 }
 ```
@@ -106,8 +105,10 @@ Not every evaluator needs all three. This is convention, not a base class.
 `eval/_backends/<name>/` and the thin evaluator wrappers in
 `eval/evaluators/<name>/` (`runner.py` / `scorer.py` / `plotter.py`, each
 exporting `EVALUATOR_SPEC`). `eval/cli.py` dispatches by name through
-`importlib.import_module(f"eval.evaluators.{name}")` over the `ALL_EVALUATORS`
-registry, so an evaluator is reachable if and only if it appears in that list.
+`importlib.import_module(f"eval.evaluators.{name}")` over `ALL_EVALUATORS`, which is
+derived from the one registry `eval/evaluators/registry.py`, so an evaluator is
+reachable if and only if the registry lists it and it is not retired. Whether an
+evaluator feeds the scoreboard is also read from the registry, not from its spec.
 The old top-level paths (`eval/tc/`, `eval/spectra/`, ...) no longer exist and
 their import paths fail immediately, which is intentional.
 
@@ -162,13 +163,15 @@ and reference data paths.
 
 ```yaml
 evaluator_groups:
-  default: [tc, spectra, surface, region_plot]
-  diagnostics: [sigma, mechanistic, intermediate]
-  experimental: [quaver]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot]
+  diagnostics: [mlflow]
 ```
 
 `eval.cli evaluate` runs the `default` group unless `--only` overrides.
-`--include-diagnostics` adds the diagnostics group.
+`--include-diagnostics` adds the diagnostics group. The `default` group holds only
+scored and standard evaluators (see the registry). A retired evaluator named with
+`--only` stops the CLI with exit status 1 and names its replacement; a retired name
+left in a lane group is skipped with a warning.
 
 **Config precedence**: CLI args > lane YAML > host YAML defaults. Every run emits
 `effective_config.json` recording the resolved snapshot.
@@ -311,9 +314,8 @@ the prepml front door and uses the legacy CLI internally.
 
 **Host names**: `atos_ac`, `atos_ag` (underscore-separated, lowercase).
 
-**Evaluator names**: `tc`, `spectra`, `surface`, `region_plot`, `sigma`,
-`mechanistic`, `intermediate`. Must match directory name under
-`eval/evaluators/`.
+**Evaluator names**: listed once in `eval/evaluators/registry.py`. Must match
+the directory name under `eval/evaluators/`.
 
 **Prediction files**: `predictions_YYYYMMDD_stepNNN.nc` (regex at
 `eval/discovery/predictions.py`).
@@ -325,8 +327,6 @@ format between evaluator scorers and the scoreboard aggregator.
 ```python
 EVALUATOR_SPEC = {
     "name": "tc",
-    "default_enabled": True,
-    "scoreboard": True,
     "requires": ["predictions"],
 }
 ```

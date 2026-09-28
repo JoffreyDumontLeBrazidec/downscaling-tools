@@ -11,7 +11,5 @@ from .runner import plot, run, score
 
 EVALUATOR_SPEC = {
     "name": "lane_diagnostics",
-    "default_enabled": False,
-    "scoreboard": False,
     "requires": ["predictions"],
 }

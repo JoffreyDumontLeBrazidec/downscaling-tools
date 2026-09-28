@@ -86,7 +86,7 @@ Validation caveat: quaver surface scores are station-observation/FDB-backed, whi
 
 Use `--dry-run` on any subcommand to print the resolved config as JSON.
 
-Use `--include-diagnostics` to run the diagnostics group (sigma, mechanistic, intermediate) in addition to defaults.
+Use `--include-diagnostics` to run the lane's diagnostics group in addition to defaults.
 
 ### Fast regional TC harness: `tc_o320_o1280`
 
@@ -111,12 +111,20 @@ This produces `01_predict.sbatch`, `02_eval_*.sbatch`, `03_scoreboard.sbatch`, a
 
 ## Evaluator Architecture
 
-Evaluators live in `eval/evaluators/<name>/` and follow a wrapper pattern:
-- **tc, surface**: Native Python implementations wrapping legacy kernels
-- **spectra, sigma, region_plot**: Subprocess wrappers around legacy modules
-- **mechanistic, intermediate**: Stubs (not yet implemented)
+Evaluators live in `eval/evaluators/<name>/`. The one list of evaluators is
+`eval/evaluators/registry.py`: it gives every evaluator a group (`scored`,
+`standard`, `diagnostic` or `retired`), says whether it feeds the scoreboard, and
+states in one sentence what question it answers. `eval.cli` and the scoreboard
+aggregator derive their evaluator lists from it.
 
-Each evaluator exports `EVALUATOR_SPEC`, `run()`, `score()`, and optionally `plot()`.
+- A lane's `default` group holds only scored and standard evaluators; diagnostic
+  evaluators go in its `diagnostics` group or are asked for with `--only`.
+- A retired evaluator named with `--only` makes the CLI print its replacement and
+  exit with status 1. A retired name left in a lane group is skipped with a
+  warning. Retired packages live, unimportable, under `eval/_quarantine/<date>/`.
+
+Each evaluator exports `EVALUATOR_SPEC` (its `requires` and optional
+`deliverables`), `run()`, and optionally `score()` and `plot()`.
 
 Lane configuration: `eval/config/lanes/<lane>.yaml`
 Host configuration: `eval/config/hosts/<host>.yaml`
