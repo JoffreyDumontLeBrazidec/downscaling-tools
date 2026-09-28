@@ -26,7 +26,7 @@ from eval.cli._common import ALL_EVALUATORS, DEFAULT_HOST, GROUP_TITLES, Command
 
 # Modules that publish commands, in the order they appear in the help.
 _COMMAND_MODULES = (
-    "run", "predict", "prepare", "evaluate", "scoreboard", "report",
+    "discover", "run", "predict", "prepare", "evaluate", "scoreboard", "report",
     "evolution", "tctracker", "tccompare", "membermaps", "videogen",
     "prepml_cleanup", "lane_config",
 )
