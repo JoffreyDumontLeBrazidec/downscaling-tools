@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from eval.evaluators.tc.core.canonical_data import load_canonical_analysis
 from eval.evaluators.tc.core.row_matching import RowClassification, classify_row, find_model_row
-from eval._backends.scoreboard.spectra import (
+from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import (
     load_spectra_metrics,
     relative_l2_weighted,
     spectra_score,

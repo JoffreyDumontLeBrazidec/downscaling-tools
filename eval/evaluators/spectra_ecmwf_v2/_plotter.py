@@ -59,7 +59,7 @@ def _role_label(role: str, name: str | None) -> str:
 def _sample_note(files: list[Path]) -> str:
     """"n = 10: 5 dates, 2 lead times" from the curve file names (plain "n = 10" otherwise)."""
     try:
-        from eval._backends.spectra import naming
+        from eval.evaluators.spectra_ecmwf_v2.core import naming
     except Exception:  # pragma: no cover - plotting must not depend on this
         naming = None
     n = len(files)
@@ -375,7 +375,7 @@ _RATIO_YLIM_MAX = 20.0
 def _default_score_wavenumber_min() -> float | None:
     """Wavenumber above which spectra are scored, or None if unavailable."""
     try:
-        from eval._backends.scoreboard.spectra import (
+        from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import (
             SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
         )
     except Exception:  # pragma: no cover - plotting must not depend on this

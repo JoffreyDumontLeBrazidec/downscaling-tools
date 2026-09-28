@@ -18,7 +18,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from eval._backends.spectra import harmonics, naming  # noqa: E402
+from eval.evaluators.spectra_ecmwf_v2.core import harmonics, naming  # noqa: E402
 
 
 FILE_RE = re.compile(r".*_(?P<date>\d{8})_(?P<step>\d{2,3})_(?P<member>\d+)_nopoles\.grb_sh$")

@@ -7,8 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from eval._backends.scoreboard.spectra import load_spectra_metrics
-from eval._backends.spectra import naming
+from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import load_spectra_metrics
+from eval.evaluators.spectra_ecmwf_v2.core import naming
 
 
 @pytest.mark.parametrize(

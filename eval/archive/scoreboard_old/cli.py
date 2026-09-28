@@ -28,7 +28,7 @@ def _score_tc(args: argparse.Namespace) -> None:
 
 
 def _score_spectra(args: argparse.Namespace) -> None:
-    from eval._backends.scoreboard.spectra import load_spectra_metrics
+    from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import load_spectra_metrics
 
     ref_root = Path(args.reference_root) if args.reference_root else None
     result = load_spectra_metrics(Path(args.spectra_dir), reference_root=ref_root)

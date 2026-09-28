@@ -184,7 +184,7 @@ def test_stage_three_needs_no_module_block(tmp_path: Path) -> None:
 
 def test_coefficient_walk_matches_the_definition() -> None:
     """power[n] = sum over m<=n of Re^2 + Im^2, with m>0 counted once."""
-    from eval._backends.spectra import harmonics
+    from eval.evaluators.spectra_ecmwf_v2.core import harmonics
 
     truncation = 3
     n_coefficients = (truncation + 1) * (truncation + 2) // 2
@@ -204,7 +204,7 @@ def test_coefficient_walk_matches_the_definition() -> None:
 
 
 def test_coefficient_walk_rejects_a_wrong_sized_array() -> None:
-    from eval._backends.spectra import harmonics
+    from eval.evaluators.spectra_ecmwf_v2.core import harmonics
 
     with pytest.raises(ValueError, match="expected 20 coefficient values for T3"):
         harmonics.power_from_coefficients(np.zeros(19), 3)

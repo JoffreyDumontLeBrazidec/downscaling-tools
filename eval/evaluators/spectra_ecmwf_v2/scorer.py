@@ -13,7 +13,7 @@ The score definition is the one the retired HEALPix proxy (``spectra``) used:
   mean curves are finite and positive (P = prediction mean curve, T = truth mean
   curve, no weighting). On a grid whose truncation does not reach past 100 (the
   O96 lane, T95) the band starts at one third of the largest wavenumber instead,
-  which is the rule of ``eval._backends.scoreboard.spectra.relative_l2``;
+  which is the rule of ``eval.evaluators.spectra_ecmwf_v2.core.scoreboard.relative_l2``;
 * per-variable score = max(0, 1 - relative L2 error);
 * mean relative L2 error = the average over the variables that were scored,
   reported only when at least three were, and mean score = max(0, 1 - that mean).
@@ -38,12 +38,12 @@ from typing import Any
 
 import numpy as np
 
-from eval._backends.scoreboard.spectra import (
+from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import (
     SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE,
     relative_l2,
     spectra_score,
 )
-from eval._backends.spectra import naming
+from eval.evaluators.spectra_ecmwf_v2.core import naming
 
 LOG = logging.getLogger(__name__)
 

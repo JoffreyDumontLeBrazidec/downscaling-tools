@@ -46,7 +46,7 @@ class TestSpectraGolden:
 
     def test_spectra_score_inversion(self):
         """Verify spectra_score is the simple 1 - relative_l2 inversion."""
-        from eval._backends.scoreboard.spectra import spectra_score
+        from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import spectra_score
 
         assert spectra_score(0.0) == pytest.approx(1.0)
         assert spectra_score(0.25) == pytest.approx(0.75)

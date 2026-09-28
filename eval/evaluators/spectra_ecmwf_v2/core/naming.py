@@ -5,8 +5,8 @@ spectra_ecmwf result ever reached a scoreboard.
 
 The six-field form ``ampl_<date>_<step>_<param>_<level>_<expid>_n<member>.npy``
 (for example ``ampl_20230826_120_msl_sfc_1_n1.npy``) is what
-``eval/_backends/scoreboard/spectra.py`` and the analysis scripts under
-``eval/_backends/spectra`` read, and it matches the staged GRIB naming that
+``eval/evaluators/spectra_ecmwf_v2/core/scoreboard.py`` and the analysis scripts under
+``eval/tools/spectra_analysis`` read, and it matches the staged GRIB naming that
 ``_grib_stager.py`` already follows.  It is therefore the canonical form.
 
 The short form ``ampl_<date>_<step>_<weather_state>_n<member>.npy`` (for example

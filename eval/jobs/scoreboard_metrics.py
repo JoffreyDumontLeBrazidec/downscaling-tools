@@ -32,7 +32,7 @@ from eval.evaluators.tc.core.row_matching import (
     is_reference_row as _is_reference_row,
     tc_candidates as _tc_candidates,
 )
-from eval._backends.scoreboard.spectra import (
+from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import (
     AMP_FILE_RE,
     RAW_FIELD_DIRS,
     SPECTRA_FIELD_DIR_ALIASES,
@@ -50,7 +50,7 @@ from eval._backends.scoreboard.spectra import (
     spectra_score,
     spectra_summary_keys,
 )
-from eval._backends.scoreboard.spectra import (
+from eval.evaluators.spectra_ecmwf_v2.core.scoreboard import (
     _rescore_from_curve_summary,
 )
 from eval.evaluators.surface.core.scoreboard import (

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from eval._backends.spectra import naming
+from eval.evaluators.spectra_ecmwf_v2.core import naming
 from eval.evaluators.spectra_ecmwf_v2 import scorer
 
 FIELD_DIRS = {"10u": "10u_sfc", "10v": "10v_sfc", "2t": "2t_sfc", "msl": "msl_sfc"}
