@@ -4,8 +4,9 @@
 Selection is delegated to eval._backends.region_plotting.precip_events
 (find_precip_events), so the pages always match the evaluator's events.json.
 
-Each event page shows, zoomed tightly around the event centre:
-  truth | interp input | prediction | prediction - truth
+Each event page shows, zoomed tightly around the event centre, as Cartopy maps:
+  truth | interpolated input | model | model minus truth
+The pages go to one PDF plus a PNG per page in ``<name>_pages/``.
 
 Truth and the interp-input baseline fall back to the lane's GRIB sources when
 the predictions do not embed them (tp truth was historically missing from the
@@ -20,11 +21,8 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.tri as mtri
 import numpy as np
 import xarray as xr
-from matplotlib.backends.backend_pdf import PdfPages
-from matplotlib.collections import LineCollection
 
 from eval._backends.precip.sources import (
     LresInterpBaseline,
@@ -38,39 +36,12 @@ DEFAULT_DLAT = 2.0
 DEFAULT_DLON = 2.5
 DEFAULT_N_TOP = 3
 
-try:
-    from anemoi.training.diagnostics.maps import Coastlines
-
-    COASTLINES = Coastlines()
-except Exception:  # pragma: no cover - coastlines are a presentation garnish
-    COASTLINES = None
-
-
-def _add_coastlines(ax) -> None:
-    if COASTLINES is None:
-        return
-    coast_segs_deg = [np.degrees(s) for s in COASTLINES.lines.get_segments()]
-    ax.add_collection(LineCollection(coast_segs_deg, linewidths=0.7,
-                                     colors="black", zorder=10))
-
-
 def _zoom_mask(lat: np.ndarray, lon: np.ndarray, clat: float, clon: float,
                dlat: float, dlon: float) -> np.ndarray:
     return (
         (lat >= clat - dlat) & (lat <= clat + dlat)
         & (lon >= clon - dlon) & (lon <= clon + dlon)
     )
-
-
-def _format_map(ax, *, clat: float, clon: float, dlat: float, dlon: float) -> None:
-    ax.set_xlim(clon - dlon, clon + dlon)
-    ax.set_ylim(clat - dlat, clat + dlat)
-    ax.set_xlabel("lon")
-    ax.set_ylabel("lat")
-    ax.set_aspect("auto", adjustable=None)
-    ax.patch.set_edgecolor("black")
-    ax.patch.set_linewidth(1.4)
-    _add_coastlines(ax)
 
 
 def _robust_limits(*arrays) -> tuple[float, float]:
@@ -111,12 +82,20 @@ class _EventData:
         self.mi = member_index
         self._truth_src: PrecipTruthSource | None = None
         self._baseline_src: LresInterpBaseline | None = None
+        self.input_grid: str | None = None   # for the panel titles, e.g. "O1280"
+        self.target_grid: str | None = None  # e.g. "O2560"
 
     def load(self, event: Event):
         ds = xr.open_dataset(event.nc_path)
         try:
             ws = [str(s) for s in ds["weather_state"].values]
             vi = ws.index(self.var)
+            from eval.plotting.maps_helpers import octahedral_grid_name
+
+            if "grid_point_lres" in ds.sizes:
+                self.input_grid = octahedral_grid_name(int(ds.sizes["grid_point_lres"]))
+            self.target_grid = (str(ds.attrs.get("grid", "")).strip()
+                                or octahedral_grid_name(int(ds.sizes["grid_point_hres"])))
             lat = ds["lat_hres"].values
             lon = ds["lon_hres"].values
             pred = ds["y_pred"][0, self.mi].values[:, vi] * 1000.0
@@ -128,6 +107,10 @@ class _EventData:
                                                         var=self.var)
                 truth = self._truth_src.load(event.date, event.step)
                 self._truth_src.verify_grid(lat, lon)
+                if truth.size != lat.size:
+                    # The first load of a regional run returns the full truth grid,
+                    # because the support index is only built by verify_grid.
+                    truth = self._truth_src.load(event.date, event.step)
             truth = truth * 1000.0 if np.isfinite(truth).mean() > 0.5 else None
 
             base = None
@@ -151,6 +134,23 @@ class _EventData:
 
 def _make_event_figure(event: Event, data: _EventData, run_label: str,
                        dlat: float, dlon: float) -> plt.Figure:
+    """Truth | interpolated input | model | model minus truth, zoomed on the event.
+
+    Cartopy maps (projection from ``select_projection``, coastlines, borders, labelled grid
+    lines). The three fields share one colour scale; the error panel is zero-centred
+    (``BrBG``: wetter than truth is blue-green, drier is brown). Values in mm per 6 h.
+    """
+    from eval.plotting import add_geography, eval_style, extend_for, variable_spec
+    from eval.plotting.maps import symmetric_norm
+    from eval.plotting.maps_helpers import (
+        colorbar_beside,
+        draw_unstructured,
+        region_projection,
+        set_grid_ticks,
+        set_inner_extent,
+    )
+    from matplotlib.colors import Normalize
+
     lat_hr, lon_hr, truth, base, pred = data.load(event)
     clat, clon = event.lat, event.lon
     hr_mask = _zoom_mask(lat_hr, lon_hr, clat, clon, dlat, dlon)
@@ -169,46 +169,86 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
     truth_z = truth_z[finite] if truth_z is not None else None
     base_z = base_z[finite] if base_z is not None else None
 
+    spec = variable_spec(data.var)
     vmin, vmax = _robust_limits(truth_z, base_z, pred_z)
-    unit = f"{data.var} (mm / 6h)"
-    panels = []
+    field_norm = Normalize(vmin=vmin, vmax=vmax)
+    field_label = f"{spec.name}, 6 h accumulation ({spec.unit})"
+    tgt = f" ({data.target_grid})" if data.target_grid else ""
+    panels = []  # (values, title, group)
     if truth_z is not None:
-        panels.append((truth_z, f"Truth: {data.var}", "viridis", vmin, vmax, unit))
+        panels.append((truth_z, f"Truth{tgt}", "field"))
     if base_z is not None:
-        panels.append((base_z, "Interp input (o1280)", "viridis", vmin, vmax, unit))
-    panels.append((pred_z, f"Prediction: {data.var}", "viridis", vmin, vmax, unit))
+        into = f" to {data.target_grid}" if data.target_grid else ""
+        src = f" ({data.input_grid})" if data.input_grid else ""
+        panels.append((base_z, f"Input{src} interpolated{into}", "field"))
+    panels.append((pred_z, f"Model{tgt}", "field"))
+    error_z = None
     if truth_z is not None:
         error_z = pred_z - truth_z
-        err_vmax = _error_limit(error_z)
-        panels.append((error_z, "Prediction - truth", "RdBu_r",
-                       -err_vmax, err_vmax, "Error (mm / 6h)"))
-        peak_summary = (f"peak truth={float(np.nanmax(truth_z)):.1f} mm | "
-                        f"peak pred={float(np.nanmax(pred_z)):.1f} mm")
+        err_norm, _ = symmetric_norm(error_z, limit=_error_limit(error_z))
+        panels.append((error_z, "Model minus truth", "error"))
+        peak_summary = (f"peak truth {float(np.nanmax(truth_z)):.1f} mm, "
+                        f"peak model {float(np.nanmax(pred_z)):.1f} mm")
     else:
-        peak_summary = f"peak pred={float(np.nanmax(pred_z)):.1f} mm"
+        peak_summary = f"peak model {float(np.nanmax(pred_z)):.1f} mm (no truth)"
 
-    triangulation = mtri.Triangulation(lon_z, lat_z)
+    extent = (clon - dlon, clon + dlon, clat - dlat, clat + dlat)
     n = len(panels)
-    fig, axes = plt.subplots(1, n, figsize=(5.8 * n, 6.2), constrained_layout=True)
-    if n == 1:
-        axes = [axes]
-    for ax, (arr, title, cmap, lo, hi, cbar_label) in zip(axes, panels):
-        sc = ax.tripcolor(triangulation, arr, cmap=cmap, vmin=lo, vmax=hi,
-                          shading="gouraud", rasterized=True)
-        ax.plot(clon, clat, marker="+", color="white", markersize=12,
-                markeredgewidth=2.1)
-        ax.plot(clon, clat, marker="+", color="black", markersize=9,
-                markeredgewidth=1.2)
-        plt.colorbar(sc, ax=ax, label=cbar_label, pad=0.025, shrink=0.82)
-        _format_map(ax, clat=clat, clon=clon, dlat=dlat, dlon=dlon)
-        ax.set_title(title, fontsize=9)
-
-    fig.suptitle(
-        f"{run_label} | {event.label} | event ({clat:.2f}°N, {clon:.2f}°E)"
-        f" | zoom ±{dlat:g}° x ±{dlon:g}° | {peak_summary}",
-        fontsize=10,
-    )
+    n_field = sum(1 for p in panels if p[2] == "field")
+    with eval_style():
+        fig = plt.figure(figsize=(4.3 * n + 1.6, 4.9))
+        ratios = [1.0] * n_field + [0.16] + ([1.0, 0.16] if error_z is not None else [])
+        gs = fig.add_gridspec(1, len(ratios), width_ratios=ratios, wspace=0.08,
+                              left=0.05, right=0.97, bottom=0.08, top=0.80)
+        proj = region_projection(*extent)
+        field_axes, error_axes, field_mesh, error_mesh = [], [], None, None
+        slot = 0
+        for k, (arr, title, group) in enumerate(panels):
+            if group == "error":
+                slot = n_field + 1
+            ax = fig.add_subplot(gs[0, slot], projection=proj)
+            slot += 1
+            set_inner_extent(ax, extent)
+            if group == "field":
+                field_mesh = draw_unstructured(ax, lon_z, lat_z, arr, extent,
+                                               cmap=spec.field_cmap(), norm=field_norm)
+                field_axes.append(ax)
+            else:
+                error_mesh = draw_unstructured(ax, lon_z, lat_z, arr, extent,
+                                               cmap=spec.error_cmap(), norm=err_norm)
+                error_axes.append(ax)
+            gl = add_geography(ax, label_size=7, resolution="10m")
+            set_grid_ticks(gl, extent)
+            if gl is not None:
+                gl.left_labels = k == 0
+            ax.plot(clon, clat, marker="+", color="white", markersize=12, markeredgewidth=2.4,
+                    transform=_plate_carree(), zorder=8)
+            ax.plot(clon, clat, marker="+", color="black", markersize=9, markeredgewidth=1.2,
+                    transform=_plate_carree(), zorder=9)
+            ax.set_title(title, fontsize=10)
+        fields = [p[0] for p in panels if p[2] == "field"]
+        if field_mesh is not None:
+            colorbar_beside(fig, field_axes, field_mesh, field_label,
+                            extend=extend_for(field_norm, *fields), width=0.012, pad=0.008)
+        if error_mesh is not None:
+            colorbar_beside(fig, error_axes, error_mesh, f"Model minus truth ({spec.unit})",
+                            extend=extend_for(err_norm, error_z), width=0.012, pad=0.008)
+        head = f"{run_label}: " if run_label else ""
+        fig.suptitle(
+            f"{head}heavy-precipitation event {event.label.split('_')[0].replace('event', '')} "
+            f"({event.date}, lead time {event.step} h)\n"
+            f"centre {abs(clat):.2f}°{'N' if clat >= 0 else 'S'} "
+            f"{abs(clon):.2f}°{'E' if clon >= 0 else 'W'}, window ±{dlat:g}° latitude × ±{dlon:g}° longitude; "
+            f"{peak_summary}",
+            fontsize=11,
+        )
     return fig
+
+
+def _plate_carree():
+    import cartopy.crs as ccrs
+
+    return ccrs.PlateCarree()
 
 
 def main() -> None:
@@ -245,11 +285,12 @@ def main() -> None:
                       args.interp_index_cache, args.var, args.member_index)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(out_path) as pdf:
+    from eval.plotting import FigureBook
+
+    with FigureBook(out_path, png=True) as book:
         for event in events:
             fig = _make_event_figure(event, data, run_label, args.dlat, args.dlon)
-            pdf.savefig(fig, bbox_inches="tight")
-            plt.close(fig)
+            book.add(fig, name=event.label)
     print(f"Saved: {out_path}")
 
 
