@@ -259,11 +259,16 @@ def _density_per_forecast(sources, months, basin):
     return grids, n_fc, lat_c, lon_c
 
 
-def _draw_density_diffs(fig, specs, sources, months, basin, *, title_size=9, cbar_size=9):
+def _draw_density_diffs(fig, specs, sources, months, basin, *, title_size=9, cbar_size=9,
+                        cbar_shrink=0.85):
     """Density difference maps vs target (or absolute maps without a target).
 
-    Returns the list of map axes; one spec is consumed per drawn panel.
+    Returns the list of map axes; one spec is consumed per drawn panel. ``cbar_shrink`` is the
+    height of the shared colour bar relative to the row of maps.
     """
+    def _colorbar(pcm, axes, **kw):
+        return fig.colorbar(pcm, ax=axes, shrink=cbar_shrink, pad=0.015, aspect=25, **kw)
+
     extent = BASIN_EXTENTS.get(basin, (0, 360, -60, 60))
     grids, n_fc, lat_c, lon_c = _density_per_forecast(sources, months, basin)
     axes = []
@@ -282,8 +287,7 @@ def _draw_density_diffs(fig, specs, sources, months, basin, *, title_size=9, cba
                          fontsize=title_size)
             axes.append(ax)
         if axes:
-            cb = fig.colorbar(pcm, ax=axes, shrink=0.85, pad=0.015,
-                              extend=extend_for(norm, *diffs.values()))
+            cb = _colorbar(pcm, axes, extend=extend_for(norm, *diffs.values()))
             cb.set_label("Track density difference\n(points per forecast per 2° box)",
                          fontsize=cbar_size)
             cb.ax.tick_params(labelsize=cbar_size - 1)
@@ -301,7 +305,7 @@ def _draw_density_diffs(fig, specs, sources, months, basin, *, title_size=9, cba
                          f"(n = {n_fc[role]} forecasts)", fontsize=title_size)
             axes.append(ax)
         if axes:
-            cb = fig.colorbar(pcm, ax=axes, shrink=0.85, pad=0.015)
+            cb = _colorbar(pcm, axes)
             cb.set_label("Track density\n(points per forecast per 2° box)", fontsize=cbar_size)
             cb.ax.tick_params(labelsize=cbar_size - 1)
     return axes
@@ -343,8 +347,12 @@ def _lifetime_values(sources, months, basin, stat):
 
 
 def _draw_intensity_pdf(ax, sources, months, basin, stat, bins, xlabel,
-                        *, ratio_inset=True, label_size=8):
-    """Log-PDF of a lifetime statistic per role, ratio-vs-target inset."""
+                        *, ratio_ax=None, label_size=8):
+    """Log-PDF of a lifetime statistic per role.
+
+    When ``ratio_ax`` is given (an axes placed under ``ax`` that shares its x axis) the ratio of
+    each role's PDF to the truth's is drawn there, so it never covers the curves above.
+    """
     values = _lifetime_values(sources, months, basin, stat)
     centers = (bins[:-1] + bins[1:]) / 2
     hists = {}
@@ -354,28 +362,33 @@ def _draw_intensity_pdf(ax, sources, months, basin, stat, bins, xlabel,
         ax.semilogy(centers, np.where(hist > 0, hist, np.nan),
                     label=f"{role_name(role)} (n = {len(vals)} tracks)",
                     **role_line(role, idx, linewidth=1.8))
-    ax.set_xlabel(xlabel, fontsize=label_size)
     unit = "hPa" if "hPa" in xlabel else _WIND_UNIT
     ax.set_ylabel(pdf_label(unit), fontsize=label_size)
     ax.tick_params(labelsize=label_size - 1)
-    # bulk of both distributions sits at the benign end: MSLP right, wind left
+    # bulk of both distributions sits at the benign end: MSLP right, wind left, so the legend
+    # goes to the empty upper corner on the other side
     ax.legend(fontsize=label_size - 1,
-              loc=("lower left" if stat == "wind_max_ms" else "upper left"))
+              loc=("upper right" if stat == "wind_max_ms" else "upper left"))
     ax.grid(alpha=0.25)
-    if ratio_inset and len(values.get("target", ())) > 0:
-        loc = [0.58, 0.64, 0.39, 0.32] if stat == "wind_max_ms" else [0.55, 0.66, 0.42, 0.30]
-        axr = ax.inset_axes(loc)
+    has_ratio = ratio_ax is not None and len(values.get("target", ())) > 0
+    if has_ratio:
         tgt = hists["target"]
         for idx, (role, hist) in enumerate(hists.items()):
             if role == "target":
                 continue
             ratio = np.where(tgt > 0, hist / np.where(tgt > 0, tgt, np.nan), np.nan)
-            axr.plot(centers, ratio, **role_line(role, idx, linewidth=1.2))
-        axr.axhline(1.0, **role_line("target", linewidth=1.0))
-        axr.set_ylim(0, 3.5)
-        axr.tick_params(labelsize=label_size - 3)
-        axr.set_title("ratio to the truth", fontsize=label_size - 2, fontweight="normal")
-        axr.grid(alpha=0.2)
+            ratio_ax.plot(centers, ratio, **role_line(role, idx, linewidth=1.2))
+        ratio_ax.axhline(1.0, **role_line("target", linewidth=1.0))
+        ratio_ax.set_ylim(0, 3.5)
+        ratio_ax.set_ylabel("Ratio to\nthe truth", fontsize=label_size - 1)
+        ratio_ax.set_xlabel(xlabel, fontsize=label_size)
+        ratio_ax.tick_params(labelsize=label_size - 1)
+        ratio_ax.grid(alpha=0.25)
+        ax.tick_params(labelbottom=False)
+    else:
+        ax.set_xlabel(xlabel, fontsize=label_size)
+        if ratio_ax is not None:
+            ratio_ax.axis("off")
 
 
 def _reserve_footer(fig):
@@ -573,9 +586,9 @@ def page_overview(sources, metrics, months, basins, focus_basin) -> plt.Figure:
     fig.text(0.04, 0.885, footer.replace(" | ", "\n"), fontsize=6.5, color="0.35", va="top")
 
     # headline table, one row per (basin, role)
-    col_labels = ["basin", "source", "fore-\ncasts", "tracks per forecast\n(95 % CI)",
-                  "5th pct of min MSLP\n(hPa, 95 % CI)", "deepest\nMSLP (hPa)",
-                  "95th pct wind\n(m s⁻¹)", "TC days per\nforecast"]
+    col_labels = ["basin", "source", "fore-\ncasts", "tracks per\nforecast\n(95 % CI)",
+                  "5th pct of\nmin MSLP\n(hPa, 95 % CI)", "deepest\nMSLP\n(hPa)",
+                  "95th pct\nwind\n(m s⁻¹)", "TC days\nper\nforecast"]
     cells, row_colors, row_roles = [], [], []
     for basin in basins:
         rows = _basin_metric_rows(metrics, basin, scope)
@@ -594,7 +607,7 @@ def page_overview(sources, metrics, months, basins, focus_basin) -> plt.Figure:
     ax_tab = fig.add_axes([0.03, 0.06, 0.52, 0.72])
     ax_tab.axis("off")
     if cells:
-        col_widths = [0.07, 0.09, 0.07, 0.19, 0.21, 0.10, 0.11, 0.11]
+        col_widths = [0.07, 0.09, 0.07, 0.19, 0.21, 0.11, 0.11, 0.11]
         table = ax_tab.table(cellText=cells, colLabels=col_labels,
                              colWidths=col_widths, cellLoc="center", loc="upper center")
         table.auto_set_font_size(False)
@@ -612,10 +625,12 @@ def page_overview(sources, metrics, months, basins, focus_basin) -> plt.Figure:
     ax_tab.set_title(f"Headline statistics, {_scope_display(scope, months)}", fontsize=10)
 
     # focus-basin deep-tail PDF with ratio inset
-    ax_pdf = fig.add_axes([0.62, 0.12, 0.35, 0.64])
+    # (the ratio to the truth has its own axes under the PDF, so it hides no curve)
+    ax_pdf = fig.add_axes([0.65, 0.36, 0.32, 0.40])
+    ax_ratio = fig.add_axes([0.65, 0.12, 0.32, 0.18], sharex=ax_pdf)
     _draw_intensity_pdf(ax_pdf, sources, months, focus_basin,
                         "mslp_min_hpa", MSLP_BINS, "Lifetime minimum MSLP (hPa)",
-                        label_size=9)
+                        ratio_ax=ax_ratio, label_size=9)
     ax_pdf.set_title(f"{basin_title(focus_basin)}: lifetime minimum MSLP per track",
                      fontsize=10)
     return fig
@@ -637,17 +652,25 @@ def page_basin_grid(sources, metrics, months, basin, scope_name) -> plt.Figure:
     fig = plt.figure(figsize=PAGE_SIZE, layout="constrained")
     _reserve_footer(fig)
     gs = fig.add_gridspec(2, 6, height_ratios=[1.25, 1.0])
+    # Top row: one density map per source other than the truth, sharing the whole row, with
+    # one colour bar as tall as the maps (no empty map slot, no oversized colour bar).
     n_diffs = min(3, max(1, len([r for r in sources if r != "target"]) or len(sources)))
-    specs = [gs[0, 2 * i:2 * i + 2] for i in range(n_diffs)]
-    _draw_density_diffs(fig, specs, sources, months, basin)
+    top = gs[0, :].subgridspec(1, n_diffs)
+    specs = [top[0, i] for i in range(n_diffs)]
+    _draw_density_diffs(fig, specs, sources, months, basin, cbar_shrink=0.6)
 
     ax_step = fig.add_subplot(gs[1, 0:2])
     _draw_step_intensity(ax_step, sources, months, basin)
     ax_step.set_title("Track MSLP against lead time", fontsize=9)
 
-    ax_wind = fig.add_subplot(gs[1, 2:4])
+    # Middle of the bottom row: the lifetime maximum wind PDF with the ratio to the truth in
+    # its own axes underneath.
+    wind = gs[1, 2:4].subgridspec(2, 1, height_ratios=[3.0, 1.15], hspace=0.06)
+    ax_wind = fig.add_subplot(wind[0])
+    ax_wind_ratio = fig.add_subplot(wind[1], sharex=ax_wind)
     _draw_intensity_pdf(ax_wind, sources, months, basin,
-                        "wind_max_ms", WIND_BINS, f"Lifetime maximum 10 m wind speed ({_WIND_UNIT})")
+                        "wind_max_ms", WIND_BINS, f"Lifetime maximum 10 m wind speed ({_WIND_UNIT})",
+                        ratio_ax=ax_wind_ratio)
     ax_wind.set_title("Lifetime maximum wind per track", fontsize=9)
 
     scope = scope_name if scope_name in (metrics.get("scopes") or []) else _headline_scope(metrics)
@@ -677,7 +700,7 @@ def page_other_basins(sources, metrics, months, other_basins, scope_name) -> plt
         ax_pdf = fig.add_subplot(gs[i, 0])
         _draw_intensity_pdf(ax_pdf, sources, months, basin,
                             "mslp_min_hpa", MSLP_BINS, "Lifetime minimum MSLP (hPa)",
-                            ratio_inset=False, label_size=7)
+                            label_size=7)
         ax_pdf.set_title(f"{basin.upper()}: lifetime minimum MSLP", fontsize=9)
         _draw_density_diffs(fig, [gs[i, 1], gs[i, 2]], sources, months, basin,
                             title_size=8, cbar_size=6.5)
