@@ -179,26 +179,18 @@ def _validate_lane(config: dict[str, Any], path: Path) -> None:
     if not isinstance(predict, dict):
         raise ConfigValidationError(f"{path}: 'predict' must be a mapping, got {type(predict).__name__}")
 
-    if "members" not in predict:
-        raise ConfigValidationError(f"{path}: missing required key 'predict.members' (expected list of int)")
-    if not isinstance(predict["members"], list) or not all(isinstance(m, int) for m in predict["members"]):
-        raise ConfigValidationError(
-            f"{path}: 'predict.members' must be a list of int, got {predict['members']!r}"
-        )
-
-    if "steps" not in predict:
-        raise ConfigValidationError(f"{path}: missing required key 'predict.steps' (expected list of int)")
-    if not isinstance(predict["steps"], list) or not all(isinstance(s, int) for s in predict["steps"]):
-        raise ConfigValidationError(
-            f"{path}: 'predict.steps' must be a list of int, got {predict['steps']!r}"
-        )
-
-    if "dates" not in predict:
-        raise ConfigValidationError(f"{path}: missing required key 'predict.dates' (expected list of str)")
-    if not isinstance(predict["dates"], list) or not all(isinstance(d, str) for d in predict["dates"]):
-        raise ConfigValidationError(
-            f"{path}: 'predict.dates' must be a list of str, got {predict['dates']!r}"
-        )
+    for key, element_type, element_name in (
+        ("members", int, "int"), ("steps", int, "int"), ("dates", str, "str"),
+    ):
+        if key not in predict:
+            raise ConfigValidationError(
+                f"{path}: missing required key 'predict.{key}' (expected list of {element_name})"
+            )
+        value = predict[key]
+        if not isinstance(value, list) or not all(isinstance(item, element_type) for item in value):
+            raise ConfigValidationError(
+                f"{path}: 'predict.{key}' must be a list of {element_name}, got {value!r}"
+            )
 
     evaluator_groups = config["evaluator_groups"]
     if not isinstance(evaluator_groups, dict):
@@ -237,17 +229,12 @@ def _validate_host(config: dict[str, Any], path: Path) -> None:
         if key not in config:
             raise ConfigValidationError(f"{path}: missing required key '{key}'")
 
-    code_root = config["code_root"]
-    if not isinstance(code_root, str) or not code_root.startswith("/"):
-        raise ConfigValidationError(
-            f"{path}: key 'code_root' must be an absolute path (starts with '/'), got {code_root!r}"
-        )
-
-    scratch_root = config["scratch_root"]
-    if not isinstance(scratch_root, str) or not scratch_root.startswith("/"):
-        raise ConfigValidationError(
-            f"{path}: key 'scratch_root' must be an absolute path (starts with '/'), got {scratch_root!r}"
-        )
+    for key in ("code_root", "scratch_root"):
+        value = config[key]
+        if not isinstance(value, str) or not value.startswith("/"):
+            raise ConfigValidationError(
+                f"{path}: key '{key}' must be an absolute path (starts with '/'), got {value!r}"
+            )
 
     scheduler = config["scheduler"]
     if not isinstance(scheduler, dict):

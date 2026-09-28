@@ -23,6 +23,7 @@ YAML group is skipped with a warning. The list, with replacements, is
 | `leadtime/` | Per-lead-time scores, never registered and never run | nothing |
 | `_backends/leadtime/` | The leadtime evaluator's compute backend | nothing |
 | `_backends/migrate_reference_windows.py` | One-off migration of version-one spectra reference caches; it imported a function the version-one runner no longer had | nothing |
+| `_backends/spectra/compare_proxy_coeffs_on_sample.py`, `_backends/spectra/evaluate_proxy_ranking_agreement.py`, `_backends/spectra/tune_fast_spectra_proxy_highk.py` | Research scripts of the retired HEALPix proxy spectra. Nothing in the repository, the docs or the skills referenced them | nothing |
 
 Backends that retired evaluators used but other code still needs stay in place:
 `eval/_backends/sigma_evaluator`, `eval/_backends/obs_crps` (used by
