@@ -208,6 +208,7 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
     width = 0.38
     xs = np.arange(len(DRIVER_BINS))
     counts_text, story = [], []
+    frac_tops, frac_bottoms = [1.0], [0.0]   # the "whole gap closed" line is always in view
     for k, (name, cap, colour) in enumerate(arms):
         mask = colocated_short_lead(cap)
         means, errs, fracs, flo, fhi, ns = [], [], [], [], [], []
@@ -230,6 +231,8 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
                    color=colour, alpha=0.85, label=f"{legend_name.get(name, name)} (n = {sum(ns)} cases)")
         axs[1].bar(xs + off, fracs, width, yerr=[flo, fhi], capsize=3,
                    color=colour, alpha=0.85, label=f"{legend_name.get(name, name)} (n = {sum(ns)} cases)")
+        frac_tops += [f + h for f, h in zip(fracs, fhi) if np.isfinite(f + h)]
+        frac_bottoms += [f - l for f, l in zip(fracs, flo) if np.isfinite(f - l)]
         counts_text.append(f"{name}: n = {sum(ns)} cases ({', '.join(str(v) for v in ns)} by bin)")
         story.append(
             f"{name} adds {means[1]:.1f} hPa where the driver is within 5 hPa and "
@@ -244,7 +247,10 @@ def fig01_capacity_curve(cap_ctrl: dict, cap_w13: dict | None):
                 fontsize=8.5, color="#555555")
     axs[1].set_ylabel("Fraction of the driver-to-target gap closed")
     axs[1].set_title("The same result as a fraction of what was needed")
-    axs[1].set_ylim(0, 1.45)
+    # limits from the data: the tallest bar with its error bar, plus room for the legend
+    # above it; the lower limit follows only if a bar or an error bar goes below zero
+    top, bottom = max(frac_tops), min(frac_bottoms)
+    axs[1].set_ylim(bottom * 1.1 if bottom < 0.0 else 0.0, top * 1.22)
     for ax in axs:
         ax.set_xticks(xs)
         ax.set_xticklabels([b[0] for b in DRIVER_BINS], fontsize=9)
