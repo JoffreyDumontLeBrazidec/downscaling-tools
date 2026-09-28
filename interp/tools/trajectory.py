@@ -612,6 +612,37 @@ def _build_sampler(inner, device):
     return sampler, sigma_min, float(nsc.get("sigma_max", 1000.0))
 
 
+def _lane_sampler_setup(inner, args, device):
+    """--seeding-lane-sampler: the lane's production sampler and full sigma ladder, built
+    exactly as the model's own sample() builds them (checkpoint inference_defaults updated
+    with --noise-scheduler-json / --sampler-params-json, num_steps=--num-steps, floor
+    SAMPLER_SIGMA_MIN as sample_full passes it), in fp32 like force_fp32_sampler.
+    Returns (sampler, full_ladder_fp32 incl. terminal 0, sampler_config dict)."""
+    from anemoi.models.samplers import diffusion_samplers as ds
+    nsc = dict(inner.inference_defaults.noise_scheduler)
+    if getattr(args, "noise_scheduler_json", None):
+        nsc.update(json.loads(args.noise_scheduler_json))
+    nsc["num_steps"] = int(args.num_steps)
+    nsc["sigma_min"] = float(SAMPLER_SIGMA_MIN)
+    stype = nsc.pop("schedule_type")
+    full = ds.NOISE_SCHEDULERS[stype](**nsc).get_schedule(device, torch.float64).to(torch.float32)
+    sc = dict(inner.inference_defaults.diffusion_sampler)
+    if getattr(args, "sampler_params_json", None):
+        sc.update(json.loads(args.sampler_params_json))
+    sname = sc.pop("sampler")
+    sampler = ds.DIFFUSION_SAMPLERS[sname](dtype=torch.float32, **sc)
+    cfg = {"schedule_type": stype, **nsc, "sampler": sname, **sc}
+    return sampler, full, cfg
+
+
+def _lane_seeded_ladder(full, start_sigma):
+    """Truncate the lane ladder at start_sigma: keep the nodes strictly below it (incl. the
+    terminal 0) and prepend start_sigma itself. At start_sigma == ladder[0] this is the
+    full production ladder."""
+    tail = full[full < float(start_sigma)]
+    return torch.cat([full.new_tensor([float(start_sigma)]), tail])
+
+
 def _guided_denoiser(base_fn, lam, sig_lo, sig_hi):
     """σ-banded score amplification (pure inference; no model/sampler/training change).
 
@@ -685,17 +716,71 @@ def _autoguided_denoiser(strong_fn, weak_fn, w, sig_lo, sig_hi):
     return fn
 
 
+# --- channel pinning (M1 probe, 2026-09-24; opt-in via --pin-groups, off by default) ---
+# mass = msl, sp and the geopotential levels; wind = 10u, 10v and the u/v levels (vertical
+# velocity w is in neither group).
+PIN_GROUPS = ("mass", "wind")
+
+
+def pin_group_channels(bundle, group):
+    """(names, indices) of the out_hres MODEL-OUTPUT channels of one pin group, in index
+    order. Same name->index map as get_surface_target_indices, so the indices address the
+    residual / denoiser-output channel axis."""
+    di = bundle.data_indices
+    d = di["out_hres"] if isinstance(di, dict) else di
+    n2i = getattr(d, "name_to_index_output", None)
+    if n2i is None:
+        n2i = d.model.output.name_to_index
+    if group == "mass":
+        names = [n for n in n2i if n in ("msl", "sp") or n.startswith("z_")]
+    elif group == "wind":
+        names = [n for n in n2i if n in ("10u", "10v") or n.startswith("u_") or n.startswith("v_")]
+    else:
+        raise SystemExit("unknown pin group %r (choose from %s)" % (group, PIN_GROUPS))
+    names = sorted(names, key=lambda n: int(n2i[n]))
+    if not names:
+        raise SystemExit("pin group %r matches no output channel" % group)
+    return names, [int(n2i[n]) for n in names]
+
+
+def _pinned_denoiser(base_fn, pin_idx, truth_residual):
+    """Channel pinning: at EVERY call, overwrite the clean estimate D of the pinned output
+    channels with the TRUE residual (same normalised residual space, this rank's shard).
+    The sampler then drives those channels along the true trajectory x0 + sigma*eps while
+    the other channels sample freely at the shared sigma. Unlike the guidance wrappers this
+    one raises on any mismatch: a silently unpinned run would look like a control."""
+    idx = torch.as_tensor(pin_idx, device=truth_residual.device, dtype=torch.long)
+    truth_sel = truth_residual.index_select(-1, idx)
+
+    def _pin(t):
+        if tuple(t.shape) != tuple(truth_residual.shape):
+            raise RuntimeError("pinning: denoiser output shape %s != truth residual shape %s"
+                               % (tuple(t.shape), tuple(truth_residual.shape)))
+        return t.index_copy(-1, idx, truth_sel.to(t.dtype))
+
+    def pinned(*args, **kwargs):
+        D = base_fn(*args, **kwargs)
+        if isinstance(D, dict):
+            return {k: (_pin(v) if k == "out_hres" else v) for k, v in D.items()}
+        return _pin(D)
+
+    return pinned
+
+
 def _seeded_sample(inner, sampler, num_steps, sigma_min, sigma_max, x_interp_cond, x_hres_cond,
                    y_residual_cond, start_sigma, seed, mcg, gss, free=False,
-                   guidance=None, sampler_kwargs=None, denoise_fn=None):
+                   guidance=None, sampler_kwargs=None, denoise_fn=None, sigmas=None):
     """Production-density Karras ladder from start_sigma down to ~0 (see _seeded_ladder).
     y_init = the TRUE storm re-noised to start_sigma (free=False) or pure noise (free=True).
     `guidance=(lam, sig_lo, sig_hi)` wraps the denoiser in σ-banded score amplification;
     `sampler_kwargs` (e.g. {"S_churn":.., "S_min":.., "S_max":..}) are forwarded to the
-    sampler (None/{} → checkpoint defaults).
+    sampler (None/{} → checkpoint defaults). `sigmas` (optional) is an explicit ladder
+    starting at start_sigma (e.g. the truncated lane schedule, see _lane_seeded_ladder);
+    None keeps the Karras ladder above.
     Returns the final residual (this rank's shard under model-parallel inference)."""
     device = y_residual_cond.device
-    sigmas = _seeded_ladder(sigma_max, sigma_min, num_steps, start_sigma, device)
+    if sigmas is None:
+        sigmas = _seeded_ladder(sigma_max, sigma_min, num_steps, start_sigma, device)
     gen = torch.Generator(device=device.type).manual_seed(int(seed))
     eps = torch.randn(y_residual_cond.shape, device=device, dtype=y_residual_cond.dtype, generator=gen)
     y_init = (float(start_sigma) * eps) if free else (y_residual_cond + float(start_sigma) * eps)
@@ -748,14 +833,46 @@ def _seed_row_physical(name, y):
 
 def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, target_indices,
                  x_interp_cond, x_hres_cond, y_residual_cond, metrics_of, references,
-                 clat, clon, box_np, window, eb, out_path):
+                 clat, clon, box_np, window, eb, out_path, fields_of=None,
+                 input_box_fields=None, y0=None, box_t=None):
     """A2 seeding-sigma sweep: how far down the noise schedule must the TRUE storm be planted
     for the free sampler to commit to the deep mode? Final storm-core depth vs sigma_seed
     reveals the critical window where storm depth is decided (and whether the fix is the
     noise schedule [a threshold] or low-sigma guidance [a smooth ramp])."""
     device = y_residual_cond.device
     sampler, sigma_min, sigma_max = _build_sampler(inner, device)
+
+    # --seeding-lane-sampler: replace the checkpoint-default sampler + Karras ladder by the
+    # lane's production sampler and schedule (--noise-scheduler-json/--sampler-params-json),
+    # truncated at each seed sigma. The Heun sampler sets its churn per step as
+    # gamma = S_churn / (len(sigmas) - 1), so a truncated ladder of k steps would churn
+    # harder than production (30 steps); S_churn is scaled by k / N_full per run so every
+    # step keeps the production gamma. Sampler code itself is untouched.
+    lane = None
+    if getattr(args, "seeding_lane_sampler", False):
+        l_sampler, l_full, l_cfg = _lane_sampler_setup(inner, args, device)
+        sampler, sigma_max = l_sampler, float(l_full[0])
+        n_full = int(l_full.numel()) - 1
+        lane = {"full": l_full, "n_full": n_full, "S_churn": float(l_cfg.get("S_churn", 0.0)),
+                "cfg": l_cfg}
+        LOGGER.info("seeding: lane sampler %s, full ladder (%d steps) %s", l_cfg, n_full,
+                    [round(float(s), 4) for s in l_full])
+
+    def _ladder_kw(start, free=False):
+        """(sigmas, sampler_kwargs) for one run: lane ladder truncated at `start`, or the
+        legacy Karras ladder (None, None)."""
+        if lane is None:
+            return None, None
+        sig = lane["full"] if free else _lane_seeded_ladder(lane["full"], start)
+        k = int(sig.numel()) - 1
+        return sig, {"S_churn": lane["S_churn"] * k / lane["n_full"]}
+
+    save_fields = bool(getattr(args, "save_seeding_fields", False)) and fields_of is not None
+    ladders_used = {}
     seed_sigmas = sorted({float(s) for s in args.seed_sigmas})
+    if getattr(args, "seeding_free_only", False):
+        seed_sigmas = []                                 # no restart sweep: free (+ pinned) runs only
+    pin_groups = list(getattr(args, "pin_groups", None) or [])
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
 
@@ -863,15 +980,28 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
         return {k: float(np.mean([f[k] for f in finals])) for k in finals[0]}
 
     runs = []
+    restart_fields = {}                                  # (ss, seed) -> {var: box array} (rank 0)
     for ss in seed_sigmas:
         finals = []
+        l_sig, l_skw = _ladder_kw(ss)
+        if l_sig is not None:
+            ladders_used[str(ss)] = {"sigmas": [float(s) for s in l_sig],
+                                     "S_churn_effective": l_skw["S_churn"]}
         for seed in seeds:
             torch.manual_seed(int(seed))
             y_final = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
-                                     x_interp_cond, x_hres_cond, plant, ss, seed, mcg, gss_arg)
+                                     x_interp_cond, x_hres_cond, plant, ss, seed, mcg, gss_arg,
+                                     sampler_kwargs=l_skw, sigmas=l_sig)
+            if save_fields:
+                f = fields_of(y_final)                   # collective; None off rank 0
+                if f is not None:
+                    restart_fields[(ss, int(seed))] = f
             m = metrics_of(y_final)                      # collective; rank 0 gets the dict
             if m is not None:
                 finals.append(m)
+            if global_rank == 0 and m is not None:
+                LOGGER.info("seed_sigma=%.3g seed=%d -> msl=%.1f hPa", ss, seed,
+                            m.get("msl", float("nan")))
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         if global_rank == 0:
@@ -889,15 +1019,99 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
 
     # free baseline = pure noise at sigma_max (the sigma_seed -> infinity asymptote).
     free_finals = []
+    free_fields = {}                                     # seed -> {var: box array} (rank 0)
+    f_sig, f_skw = _ladder_kw(sigma_max, free=True)
+    if f_sig is not None:
+        ladders_used["free"] = {"sigmas": [float(s) for s in f_sig],
+                                "S_churn_effective": f_skw["S_churn"]}
     for seed in seeds:
         torch.manual_seed(int(seed))
         yf = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max, x_interp_cond,
-                            x_hres_cond, y_residual_cond, sigma_max, seed, mcg, gss_arg, free=True)
+                            x_hres_cond, y_residual_cond, sigma_max, seed, mcg, gss_arg, free=True,
+                            sampler_kwargs=f_skw, sigmas=f_sig)
+        if save_fields:
+            f = fields_of(yf)                            # collective; None off rank 0
+            if f is not None:
+                free_fields[int(seed)] = f
         m = metrics_of(yf)
         if m is not None:
             free_finals.append(m)
+            if global_rank == 0:
+                LOGGER.info("free seed=%d -> msl=%.1f hPa", seed, m.get("msl", float("nan")))
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    # --pin-groups: the same free runs (same seeds, ladder, churn) with one channel group's
+    # clean estimate replaced by the true residual at every denoiser call.
+    pinned = {}                                          # group -> {"channels", "finals", ...}
+    pin_fields = {}                                      # (group, seed) -> {var: box array}
+    for group in pin_groups:
+        pnames, pidx = pin_group_channels(bundle, group)
+        LOGGER.info("pin group %s: %d channels %s", group, len(pidx), pnames)
+        pfn = _pinned_denoiser(inner.fwd_with_preconditioning, pidx, y_residual_cond)
+        pidx_t = torch.as_tensor(pidx, device=device, dtype=torch.long)
+        p_finals, p_err = [], []
+        for seed in seeds:
+            torch.manual_seed(int(seed))
+            yp = _seeded_sample(inner, sampler, args.num_steps, sigma_min, sigma_max,
+                                x_interp_cond, x_hres_cond, y_residual_cond, sigma_max, seed,
+                                mcg, gss_arg, free=True, sampler_kwargs=f_skw, sigmas=f_sig,
+                                denoise_fn=pfn)
+            # the pinned channels must end ON the truth (last step to sigma 0 returns D)
+            err = (yp.index_select(-1, pidx_t)
+                   - y_residual_cond.index_select(-1, pidx_t).to(yp.dtype)).abs().max().reshape(1)
+            if mcg is not None:
+                import torch.distributed as dist
+                dist.all_reduce(err, op=dist.ReduceOp.MAX, group=mcg)
+            p_err.append(float(err[0]))
+            if save_fields:
+                f = fields_of(yp)                        # collective; None off rank 0
+                if f is not None:
+                    pin_fields[(group, int(seed))] = f
+            m = metrics_of(yp)                           # collective; rank 0 gets the dict
+            if m is not None:
+                p_finals.append(m)
+                if global_rank == 0:
+                    LOGGER.info("pinned %s seed=%d -> msl=%.1f hPa, pin max|y-truth|=%.3g",
+                                group, seed, m.get("msl", float("nan")), p_err[-1])
+            del yp
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        pinned[group] = {"channels": pnames, "channel_indices": pidx, "finals": p_finals,
+                         "pin_check_max_abs_residual": p_err}
+
+    if save_fields and global_rank == 0:
+        _, _, lat_hres, lon_hres = eb.coords
+        names = list(target_indices.keys())
+        arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np],
+                "center_lat": np.float64(clat), "center_lon": np.float64(clon % 360.0),
+                "seed_sigmas": np.asarray(seed_sigmas, dtype=np.float64),
+                "seeds": np.asarray([int(s) for s in seeds], dtype=np.int64),
+                "free_sigma": np.float64(sigma_max),
+                "lane_sampler": np.bool_(lane is not None)}
+        if y0 is not None and box_t is not None:
+            for name, i in target_indices.items():
+                arrs["truth_%s" % name] = y0[0, 0, 0, box_t, i].float().cpu().numpy()
+        for name, vals in (input_box_fields or {}).items():
+            arrs["input_%s" % name] = vals
+        for name in names:
+            # restart_{var}: (n_seed_sigma, n_seed, n_box); free_{var}: (n_seed, n_box)
+            if seed_sigmas:                              # absent under --seeding-free-only
+                arrs["restart_%s" % name] = np.stack([
+                    np.stack([restart_fields[(ss, int(sd))][name] for sd in seeds])
+                    for ss in seed_sigmas]).astype(np.float32)
+            arrs["free_%s" % name] = np.stack(
+                [free_fields[int(sd)][name] for sd in seeds]).astype(np.float32)
+            for group in pin_groups:
+                # pin_{group}_{var}: (n_seed, n_box), same seeds and order as free_{var}
+                arrs["pin_%s_%s" % (group, name)] = np.stack(
+                    [pin_fields[(group, int(sd))][name] for sd in seeds]).astype(np.float32)
+        if pin_groups:
+            arrs["pin_groups"] = np.asarray(pin_groups)
+        out_path.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path / "seeding_fields.npz", **arrs)
+        LOGGER.info("saved seeding box fields (%d seed sigmas x %d seeds + free) to %s",
+                    len(seed_sigmas), len(seeds), out_path / "seeding_fields.npz")
 
     result = None
     if global_rank == 0:
@@ -947,6 +1161,8 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
             "checkpoint": args.checkpoint, "ckpt_id": ckpt_id_from_path(args.checkpoint),
             "mode": "seeding", "units": "physical", "world_size": world_size,
             "seed_source": seed_source, "plant": plant_info,
+            "lane_sampler": (lane["cfg"] if lane is not None else None),
+            "ladders": ladders_used,
             "metric_rule": {"msl": "box-min (hPa)", "wind10m": "box p99 speed (m/s)"},
             "bundle_paths": [str(p) for p in eb.paths],
             "surface_targets": list(target_indices.keys()), "metrics_reported": metrics_reported,
@@ -957,6 +1173,11 @@ def _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg, tar
             "probe_field": "msl", "window": list(window),
             "references": references, "free": free_mean, "runs": runs, "summary": summary,
         }
+        if pin_groups:
+            for group, rec in pinned.items():
+                rec["final_mean"] = _mean(rec["finals"]) if rec["finals"] else None
+            result["pinned"] = pinned
+            result["seeding_free_only"] = bool(getattr(args, "seeding_free_only", False))
         out_path.mkdir(parents=True, exist_ok=True)
         with open(out_path / "seeding.json", "w") as f:
             json.dump(result, f, indent=2)
@@ -1314,6 +1535,9 @@ def _run_tp_sweep(args, bundle, global_rank, world_size, mcg, gss_arg, target_in
 
 def run_trajectory(args):
     out_path = Path(args.output_dir)
+    if (getattr(args, "pin_groups", None) or getattr(args, "seeding_free_only", False)) \
+            and args.mode != "seeding":
+        raise SystemExit("--pin-groups / --seeding-free-only apply to --mode seeding only")
 
     # ---- parallel setup: world_size>1 (srun) => grid-shard the model across ranks ----
     from manual_inference.prediction.predict import _get_parallel_info, _init_model_comm_group
@@ -1599,6 +1823,7 @@ def run_trajectory(args):
 
     # References (rank 0): target from the full observed y; x_interp from the raw interp.
     references = None
+    input_box_fields = None                                  # --save-lockin-fields (rank 0)
     if global_rank == 0:
         references = {"target": reduce_box(y0, target_indices, box_t, has_wind)}
         if getattr(args, "grid_tail", False) or args.mode == "tp_sweep":
@@ -1614,6 +1839,11 @@ def run_trajectory(args):
             u, v = fb_xi[:, name2in["10u"]], fb_xi[:, name2in["10v"]]
             xi_metrics["wind10m"] = _q(torch.sqrt(u * u + v * v), CORE_Q_HIGH)
         references["x_interp"] = xi_metrics
+        if (getattr(args, "save_lockin_fields", False)
+                or getattr(args, "save_ceiling_fields", False)
+                or getattr(args, "save_seeding_fields", False)):
+            input_box_fields = {name: fb_xi[:, name2in[name]].detach().float().cpu().numpy()
+                                for name in target_indices if name in name2in}
 
     # PARITY SELF-CHECK (env-gated, b785 faithfulness debug): reconstruct the TRUE residual
     # -> must equal the observed target storm-core. metrics_of gathers (collective), so ALL
@@ -1637,7 +1867,9 @@ def run_trajectory(args):
     if args.mode == "seeding":
         return _run_seeding(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
                             target_indices, x_interp_cond, x_hres_cond, y_residual_cond,
-                            metrics_of, references, clat, clon, box_np, window, eb, out_path)
+                            metrics_of, references, clat, clon, box_np, window, eb, out_path,
+                            fields_of=fields_of, input_box_fields=input_box_fields,
+                            y0=y0, box_t=box_t)
 
     if args.mode == "guidance":
         return _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
@@ -1669,27 +1901,82 @@ def run_trajectory(args):
 
     # Teacher-forced ceiling: feed the TRUE residual + noise at each sigma.
     ceiling = []
-    for sigma in args.ceiling_sigmas:
-        noise = torch.randn_like(y_residual_cond)
-        D = denoise_at_sigma(bundle, x_interp_cond, x_hres_cond, y_residual_cond,
-                             sigma, noise, model_comm_group=mcg, grid_shard_shapes=gss_arg)
-        m = metrics_of(D)                                    # collective in sharded mode
-        g_tail = None
-        if getattr(args, "grid_tail", False):
-            pf = phys_full_of(D)                             # collective in sharded mode
-            if pf is not None:
-                g_tail = tp_tail_stats(pf, surf_remap)
-        if global_rank == 0:
-            entry = {"sigma": float(sigma), "metrics": m}
-            if g_tail is not None:
-                entry["grid_tail"] = g_tail
-            ceiling.append(entry)
-            LOGGER.info("ceiling σ=%.3g -> msl=%.1f hPa", sigma, m.get("msl", float("nan")))
+    save_ceiling = bool(getattr(args, "save_ceiling_fields", False))
+    n_draws = int(getattr(args, "ceiling_draws", 1) or 1) if save_ceiling else 1
+    ceil_fields = {}                                         # draw -> {"shown": [..], "denoised": [..]}
+    device_type = y_residual_cond.device.type
+    for draw in range(n_draws):
+        for sigma in args.ceiling_sigmas:
+            if save_ceiling:
+                # Seeded, reproducible noise: one stream per (draw, rank), identical across
+                # sigmas within a draw (paired ladder), distinct across ranks (a shared stream
+                # would tile the same noise over every grid shard), as in _run_tp_sweep.
+                gen = torch.Generator(device=device_type).manual_seed(
+                    (int(args.ceiling_seed_base) + draw) * 100003 + int(global_rank))
+                noise = torch.randn(y_residual_cond.shape, device=y_residual_cond.device,
+                                    dtype=y_residual_cond.dtype, generator=gen)
+            else:
+                noise = torch.randn_like(y_residual_cond)
+            D = denoise_at_sigma(bundle, x_interp_cond, x_hres_cond, y_residual_cond,
+                                 sigma, noise, model_comm_group=mcg, grid_shard_shapes=gss_arg)
+            m = metrics_of(D)                                    # collective in sharded mode
+            g_tail = None
+            if getattr(args, "grid_tail", False):
+                pf = phys_full_of(D)                             # collective in sharded mode
+                if pf is not None:
+                    g_tail = tp_tail_stats(pf, surf_remap)
+            if save_ceiling:
+                # Both are collectives in sharded mode: every rank calls them. The shown
+                # field is exactly the y_noised that denoise_at_sigma builds.
+                f_shown = fields_of(y_residual_cond + float(sigma) * noise.to(y_residual_cond.dtype))
+                f_den = fields_of(D)
+                if f_den is not None:
+                    d = ceil_fields.setdefault(draw, {"sigmas": [], "shown": [], "denoised": []})
+                    d["sigmas"].append(float(sigma))
+                    d["shown"].append(f_shown)
+                    d["denoised"].append(f_den)
+            del noise, D
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if global_rank == 0:
+                entry = {"sigma": float(sigma), "metrics": m}
+                if save_ceiling:
+                    entry["draw"] = int(draw)
+                if g_tail is not None:
+                    entry["grid_tail"] = g_tail
+                ceiling.append(entry)
+                LOGGER.info("ceiling draw %d σ=%.3g -> msl=%.1f hPa", draw, sigma,
+                            m.get("msl", float("nan")))
+
+    if save_ceiling and global_rank == 0 and ceil_fields:
+        _, _, lat_hres, lon_hres = eb.coords
+        arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np],
+                "center_lat": np.float64(clat), "center_lon": np.float64(clon % 360.0)}
+        for name, i in target_indices.items():
+            arrs["truth_%s" % name] = y0[0, 0, 0, box_t, i].float().cpu().numpy()
+        for name, vals in (input_box_fields or {}).items():
+            arrs["input_%s" % name] = vals
+        for draw, d in ceil_fields.items():
+            arrs["c%d_sigmas" % draw] = np.asarray(d["sigmas"], dtype=np.float64)
+            for name in target_indices:
+                # (n_sigma, n_box) physical box fields: what was shown / what came back
+                arrs["c%d_shown_%s" % (draw, name)] = np.stack(
+                    [f[name] for f in d["shown"]]).astype(np.float32)
+                arrs["c%d_denoised_%s" % (draw, name)] = np.stack(
+                    [f[name] for f in d["denoised"]]).astype(np.float32)
+        out_path.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path / "ceiling_fields.npz", **arrs)
+        LOGGER.info("saved ceiling box fields (%d draws x %d sigmas) to %s", len(ceil_fields),
+                    len(args.ceiling_sigmas), out_path / "ceiling_fields.npz")
 
     # Realized trajectories: capture x̂₀ along the real sampler.
     seeds = (list(args.seeds) if args.seeds
              else list(range(args.seed_base, args.seed_base + args.n_seeds)))
+    if getattr(args, "ceiling_only", False):
+        LOGGER.info("--ceiling-only: skipping the realized trajectories")
+        seeds = []
     trajectories = []
+    saved_lockin = {}                                        # seed -> arrays (rank 0, opt-in)
     for seed in seeds:
         records = []
         lock_fields = []                                     # [(sigma, {var: box np array})]
@@ -1754,6 +2041,14 @@ def run_trajectory(args):
                     "amp_ratio_anom": [float(np.std(f[name] - ref[name]) / max(np.std(fin_a), 1e-12))
                                          for _, f in lock_fields],
                 }
+        if (getattr(args, "save_lockin_fields", False) and global_rank == 0
+                and fin is not None and lock_fields):
+            saved_lockin[int(seed)] = {
+                "sigmas": np.asarray([s for s, _ in lock_fields], dtype=np.float64),
+                "calls": {name: np.stack([f[name] for _, f in lock_fields]).astype(np.float32)
+                          for name in target_indices},
+                "final": {name: np.asarray(fin[name], dtype=np.float32) for name in target_indices},
+            }
         if global_rank == 0:
             trajectories.append({"seed": int(seed), "steps": records, "final": final_metrics,
                                  "final_grid_tail": final_grid_tail, "lockin": lockin})
@@ -1762,6 +2057,24 @@ def run_trajectory(args):
                 LOGGER.info("seed %d: %d denoiser calls, final msl=%.1f hPa "
                             "(last x̂₀ − final = %+.2f hPa; should be small)",
                             seed, len(records), final_metrics.get("msl", float("nan")), d)
+
+    if saved_lockin and global_rank == 0:
+        _, _, lat_hres, lon_hres = eb.coords
+        arrs = {"lat": np.asarray(lat_hres)[box_np], "lon": np.asarray(lon_hres)[box_np],
+                "center_lat": np.float64(clat), "center_lon": np.float64(clon % 360.0)}
+        for name, i in target_indices.items():
+            arrs["truth_%s" % name] = y0[0, 0, 0, box_t, i].float().cpu().numpy()
+        for name, vals in (input_box_fields or {}).items():
+            arrs["input_%s" % name] = vals
+        for seed, d in saved_lockin.items():
+            arrs["s%d_sigmas" % seed] = d["sigmas"]
+            for name in d["calls"]:
+                arrs["s%d_calls_%s" % (seed, name)] = d["calls"][name]    # (n_calls, n_box)
+                arrs["s%d_final_%s" % (seed, name)] = d["final"][name]
+        out_path.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out_path / "lockin_fields.npz", **arrs)
+        LOGGER.info("saved per-call box fields for %d seeds to %s",
+                    len(saved_lockin), out_path / "lockin_fields.npz")
 
     result = None
     if global_rank == 0:
@@ -1817,6 +2130,10 @@ def main(argv=None):
                         "(pattern-correlation vs own final / vs target) curves; works on "
                         "single-GPU and grid-sharded runs (one extra surface-target gather "
                         "per denoiser call when sharded)")
+    p.add_argument("--save-lockin-fields", action="store_true", default=False,
+                   help="with --lockin (trajectory mode): also save the per-call box fields, the "
+                        "final sample, the truth and the input to lockin_fields.npz (rank 0); "
+                        "off by default, sampling is unchanged")
     p.add_argument("--mode", default="trajectory",
                    choices=["trajectory", "seeding", "residual_diag", "guidance", "tp_sweep"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
@@ -1890,6 +2207,39 @@ def main(argv=None):
                         "mid-to-high 'storm-laying' regime. Below ~sigma 5 the probe is "
                         "degenerate (teacher-forcing the true residual at low noise is "
                         "near-trivial and the reconstruction min picks up sharp artifacts)")
+    p.add_argument("--save-ceiling-fields", action="store_true", default=False,
+                   help="[trajectory] save, for every ceiling sigma and noise draw, the box "
+                        "fields of what the denoiser was SHOWN (true residual + sigma*noise, "
+                        "physical) and of what came back (clean estimate D) to "
+                        "ceiling_fields.npz (rank 0), with truth/input/lat/lon/centre; the "
+                        "noise is seeded per draw (--ceiling-seed-base); off by default")
+    p.add_argument("--ceiling-draws", type=int, default=1,
+                   help="[trajectory, with --save-ceiling-fields] noise draws per ceiling sigma")
+    p.add_argument("--ceiling-seed-base", type=int, default=7000,
+                   help="[trajectory, with --save-ceiling-fields] seed of draw 0; draw k uses "
+                        "(base+k)*100003 + rank")
+    p.add_argument("--ceiling-only", action="store_true", default=False,
+                   help="[trajectory] stop after the teacher-forced ceiling (no realized "
+                        "trajectories; trajectory.json is written with an empty list)")
+    p.add_argument("--save-seeding-fields", action="store_true", default=False,
+                   help="[seeding] save the final box fields of every (seed sigma, seed) "
+                        "restart and of every free run, with truth/input/lat/lon/centre, to "
+                        "seeding_fields.npz (rank 0); off by default")
+    p.add_argument("--pin-groups", nargs="+", choices=list(PIN_GROUPS), default=None,
+                   help="[seeding] channel-pinning probe: after the free runs, repeat them "
+                        "(same seeds, ladder and churn) once per listed group with that group's "
+                        "clean estimate replaced by the TRUE residual at every denoiser call. "
+                        "mass = msl, sp, z_*; wind = 10u, 10v, u_*, v_*. Off by default")
+    p.add_argument("--seeding-free-only", action="store_true", default=False,
+                   help="[seeding] skip the seed-sigma restart sweep; run only the free runs "
+                        "(and the pinned runs of --pin-groups). Off by default")
+    p.add_argument("--seeding-lane-sampler", action="store_true", default=False,
+                   help="[seeding] use the lane sampler and schedule given by "
+                        "--noise-scheduler-json / --sampler-params-json (on top of the "
+                        "checkpoint defaults), truncated at each seed sigma (nodes below it, "
+                        "seed sigma prepended; S_churn scaled by k/N so the per-step churn "
+                        "equals production), instead of the checkpoint-default Karras ladder; "
+                        "the free runs then use the full lane ladder")
     p.add_argument("--eye-radius-km", type=float, default=500.0,
                    help="radius of the storm-core box for the intensity reduction")
     p.add_argument("--auto-window", default=None,
