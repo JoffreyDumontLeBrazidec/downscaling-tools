@@ -53,7 +53,7 @@ from eval._backends.scoreboard.spectra import (
 from eval._backends.scoreboard.spectra import (
     _rescore_from_curve_summary,
 )
-from eval._backends.scoreboard.surface import (
+from eval.evaluators.surface.core.scoreboard import (
     SURFACE_NORMALIZATION_SCHEME,
     SURFACE_VAR_LABELS,
     format_surface_loss_for_scoreboard,

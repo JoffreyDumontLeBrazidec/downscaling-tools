@@ -11,7 +11,7 @@ from typing import Any, Iterable
 import numpy as np
 import xarray as xr
 
-from eval._backends.scoreboard._surface_compute import (
+from eval.evaluators.surface.core.compute import (
     _area_weights,
     _to_member_point_weather,
     _weather_state_index,

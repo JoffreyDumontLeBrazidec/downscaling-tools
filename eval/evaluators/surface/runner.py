@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 
-from eval._backends.scoreboard._surface_compute import process_predictions_dir
+from eval.evaluators.surface.core.compute import process_predictions_dir
 
 LOG = logging.getLogger(__name__)
 

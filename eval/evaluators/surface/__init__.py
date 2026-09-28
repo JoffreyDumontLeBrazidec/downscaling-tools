@@ -3,7 +3,7 @@
 Computes the model's error against the truth on the surface variables, normalised
 per variable, and an area- and variable-weighted total (the weighting comes from
 the lane's `surface.weighting`, default "truth-std"). The scoring functions are the
-ones of eval._backends.scoreboard.surface, imported directly so the numbers are
+ones of eval.evaluators.surface.core.scoreboard, imported directly so the numbers are
 identical to the scoreboard's. This is the surface column of the scoreboard.
 """
 from eval.evaluators.base import no_plot

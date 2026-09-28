@@ -44,7 +44,7 @@ from eval._backends.probabilistic.scoring import (
     _lat_lon,
     _weighted_mean,
 )
-from eval._backends.scoreboard._surface_compute import (
+from eval.evaluators.surface.core.compute import (
     _area_weights,
     _to_member_point_weather,
     _weather_state_index,

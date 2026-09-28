@@ -37,7 +37,7 @@ def _score_spectra(args: argparse.Namespace) -> None:
 
 
 def _score_surface(args: argparse.Namespace) -> None:
-    from eval._backends.scoreboard.surface import load_surface_loss_metrics
+    from eval.evaluators.surface.core.scoreboard import load_surface_loss_metrics
 
     result = load_surface_loss_metrics(Path(args.summary_json))
     json.dump(result, sys.stdout, indent=2, default=str)

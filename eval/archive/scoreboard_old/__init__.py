@@ -12,7 +12,7 @@ from eval._backends.scoreboard.spectra import (
     relative_l2_weighted,
     spectra_score,
 )
-from eval._backends.scoreboard.surface import (
+from eval.evaluators.surface.core.scoreboard import (
     format_surface_loss_for_scoreboard,
     load_surface_loss_metrics,
     load_x_interp_surface_metrics,

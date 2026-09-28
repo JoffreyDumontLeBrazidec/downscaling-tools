@@ -18,7 +18,7 @@ class TestSurfaceGolden:
 
     def test_truth_std_normalization(self, tmp_path):
         """Verify truth-std nMSE calculation matches expected values."""
-        from eval._backends.scoreboard.surface import load_surface_loss_metrics
+        from eval.evaluators.surface.core.scoreboard import load_surface_loss_metrics
 
         summary = tmp_path / "surface_loss_summary.json"
         summary.write_text(json.dumps({
