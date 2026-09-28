@@ -164,6 +164,7 @@ def loss_budget(
             loaded_date = date
         with xr.open_dataset(f) as ds:
             ti = _channels(ds).index("tp")
+            truth_src.verify_grid(ds["lat_hres"].values, ds["lon_hres"].values)
             truth_mm = truth_src.load(date, step).astype(np.float64) * MM
             pred_mm = ds["y_pred"][0, member].values[:, ti].astype(np.float64) * MM
         err2 = (pred_mm - truth_mm) ** 2

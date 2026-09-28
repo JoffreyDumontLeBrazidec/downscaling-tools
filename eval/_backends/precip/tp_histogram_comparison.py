@@ -174,8 +174,10 @@ def accumulate_tp_by_step(
                 print(f"truth source: {truth_mode}")
             if truth_mode == "grib":
                 truth_src = truth_src or PrecipTruthSource(truth_grib_tpl, var=var)
-                truth = truth_src.load(date, step).astype(np.float64)
+                # Declare the run's grid first: on a regional run the support
+                # index must exist before the first truth is served.
                 truth_src.verify_grid(ds["lat_hres"].values, ds["lon_hres"].values)
+                truth = truth_src.load(date, step).astype(np.float64)
             elif truth_mode == "missing":
                 truth = None
 

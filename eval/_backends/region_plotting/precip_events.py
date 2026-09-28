@@ -84,8 +84,10 @@ def find_precip_events(
                             "and no truth_grib_tpl was configured (lane precip "
                             "block)")
                     truth_src = truth_src or PrecipTruthSource(truth_grib_tpl, var=var)
-                    arr = truth_src.load(date, step)
+                    # Declare the run's grid first, so a regional run gets its
+                    # support index before the first truth is served.
                     truth_src.verify_grid(lats, lons)
+                    arr = truth_src.load(date, step)
                 else:
                     arr = ds["y"][0, member].values[:, vi]
             else:

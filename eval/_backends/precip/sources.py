@@ -196,6 +196,10 @@ class PrecipTruthSource:
         self._lats = self._lons = None
         self._grid_checked = False
         self._support_index: np.ndarray | None = None
+        # The run's own grid, declared through verify_grid(). It may be declared
+        # before any truth has been read; the check then runs inside preload().
+        self._ref_grid: tuple[np.ndarray, np.ndarray] | None = None
+        self._warned_undeclared = False
 
     def preload(self, date: str) -> dict[int, np.ndarray]:
         if self._cache_date == date:
@@ -209,6 +213,7 @@ class PrecipTruthSource:
                      "%d steps", date, len(by_step))
         self._cache_date, self._cache = date, by_step
         self._lats, self._lons = lats, lons
+        self._apply_reference_grid()
         return self._cache
 
     def steps(self, date: str) -> list[int]:
@@ -220,22 +225,41 @@ class PrecipTruthSource:
             raise KeyError(
                 f"tp truth for date {date} has no step {step}; "
                 f"available: {sorted(cache)}")
+        if not self._grid_checked and not self._warned_undeclared:
+            self._warned_undeclared = True
+            LOG.warning(
+                "tp truth %s: load() was called before verify_grid(), so the "
+                "truth is returned on the GRIB's full grid (%d points). On a "
+                "regional (box-cut) run that is the wrong support; call "
+                "verify_grid(lat, lon) with the run's own coordinates first.",
+                self.grib_tpl.format(date=date), len(self._lats))
         values = cache[step]
         if self._support_index is not None:
             values = values[self._support_index]
         return values
 
     def verify_grid(self, lat_ref, lon_ref) -> None:
-        """Check GRIB grid against reference coords once (idempotent).
+        """Declare the run's own grid and check it against the GRIB (idempotent).
 
         Equal grid sizes take the strict full-grid check. A smaller reference
         grid is a regional run: build a verified support index instead, so
         `load()` returns truth on the run's own support.
+
+        Call this BEFORE the first `load()`. It may be called before any truth
+        has been read (the check is then deferred to the first `preload()`),
+        which is what makes the order safe for a regional run: the support
+        index exists before any truth is served.
         """
         if self._grid_checked:
             return
-        if self._lats is None:
-            raise RuntimeError("verify_grid called before any preload()")
+        self._ref_grid = (np.asarray(lat_ref), np.asarray(lon_ref))
+        self._apply_reference_grid()
+
+    def _apply_reference_grid(self) -> None:
+        """Run the pending grid check once both grids are known."""
+        if self._grid_checked or self._ref_grid is None or self._lats is None:
+            return
+        lat_ref, lon_ref = self._ref_grid
         if len(lat_ref) == len(self._lats):
             check_grid_match(lat_ref, lon_ref, self._lats, self._lons,
                              context="tp truth GRIB")

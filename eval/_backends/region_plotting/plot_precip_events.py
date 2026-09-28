@@ -105,12 +105,8 @@ class _EventData:
                 if self._truth_src is None:
                     self._truth_src = PrecipTruthSource(self.truth_grib_tpl,
                                                         var=self.var)
-                truth = self._truth_src.load(event.date, event.step)
                 self._truth_src.verify_grid(lat, lon)
-                if truth.size != lat.size:
-                    # The first load of a regional run returns the full truth grid,
-                    # because the support index is only built by verify_grid.
-                    truth = self._truth_src.load(event.date, event.step)
+                truth = self._truth_src.load(event.date, event.step)
             truth = truth * 1000.0 if np.isfinite(truth).mean() > 0.5 else None
 
             base = None
