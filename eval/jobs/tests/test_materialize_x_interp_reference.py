@@ -8,7 +8,7 @@ import pytest
 import xarray as xr
 
 ROOT = Path(__file__).resolve().parents[3]
-MODULE_PATH = ROOT / "eval/jobs/materialize_x_interp_reference.py"
+MODULE_PATH = ROOT / "eval/archive/jobs/materialize_x_interp_reference.py"
 
 
 def _load_module():

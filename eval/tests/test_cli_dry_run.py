@@ -6,11 +6,14 @@ import os
 import subprocess
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 
-CODE_ROOT = "/home/ecm5702/dev/downscaling-tools"
+# The checkout this test file belongs to, so the subprocess tests exercise the code under test
+# and not whichever copy of the repository happens to live at a fixed path.
+CODE_ROOT = str(Path(__file__).resolve().parents[2])
 
 
 def _cli_env():
@@ -57,7 +60,8 @@ def test_cli_run_dry_run():
     assert '"lane": "o96_o320"' in result.stdout
 
 
-def test_cli_evaluate_rejects_quaver_only(tmp_path):
+def test_cli_evaluate_accepts_quaver_as_a_registered_evaluator(tmp_path):
+    """quaver is a registered diagnostic evaluator (eval/evaluators/registry.py), so --only accepts it."""
     result = subprocess.run(
         [
             sys.executable, "-m", "eval.cli", "evaluate",
@@ -68,8 +72,23 @@ def test_cli_evaluate_rejects_quaver_only(tmp_path):
         ],
         capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
     )
+    assert result.returncode == 0, result.stderr
+    assert '"evaluators": [\n    "quaver"\n  ]' in result.stdout
+
+
+def test_cli_evaluate_rejects_an_unknown_evaluator(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "evaluate",
+            "--dry-run",
+            "--lane", "o96_o320",
+            "--predictions-dir", str(tmp_path),
+            "--only", "not_an_evaluator",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
     assert result.returncode != 0
-    assert "Unknown evaluator(s) in --only: ['quaver']" in result.stderr
+    assert "Unknown evaluator(s) in --only: ['not_an_evaluator']" in result.stderr
 
 
 def test_run_evaluators_raises_when_evaluator_run_fails(tmp_path, monkeypatch):
@@ -246,8 +265,8 @@ def test_cli_num_chunks_override_sets_all_inference_chunk_envs():
     assert '"ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER": "64"' in result.stdout
 
 
-def test_cli_o320_o1280_predict_rejects_ac_host():
-    """o320->o1280 prediction is AG-only; explicit AC host selection is a hard error."""
+def test_cli_o320_o1280_predict_accepts_ac_host():
+    """Since 2026-09-04 the o320_o1280 lane allows predict on AC as well as AG (see the lane file)."""
     result = subprocess.run(
         [
             sys.executable, "-m", "eval.cli", "predict",
@@ -258,10 +277,26 @@ def test_cli_o320_o1280_predict_rejects_ac_host():
         ],
         capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
     )
+    assert result.returncode == 0, result.stderr
+    assert '"host": "atos_ac"' in result.stdout
+
+
+def test_cli_o320_o1280_predict_rejects_a_host_the_lane_does_not_allow():
+    """A host outside the lane's allowed_hosts for the stage is still a hard error."""
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "eval.cli", "predict",
+            "--dry-run",
+            "--lane", "o320_o1280",
+            "--host", "atos_ac_pristine",
+            "--checkpoint", "/tmp/test.ckpt",
+        ],
+        capture_output=True, text=True, env=_cli_env(), cwd=CODE_ROOT,
+    )
     assert result.returncode != 0
     assert (
-        "Lane 'o320_o1280' stage 'predict' must be run on host(s) ['atos_ag']; "
-        "got 'atos_ac'"
+        "Lane 'o320_o1280' stage 'predict' must be run on host(s) "
+        "['atos_ag', 'atos_ac', 'jupiter']; got 'atos_ac_pristine'"
     ) in result.stderr
 
 
@@ -423,8 +458,11 @@ def test_cli_predict_source_grib_root_rejects_srun_rank_context(tmp_path, monkey
     from unittest.mock import patch
     from eval.cli import predict as eval_cli
 
+    # A rank other than 0 in a multi-task step. Rank 0 of a single-task step is allowed (the
+    # world-size rule of _assert_serial_prepare_context), so the test must not use that.
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
-    monkeypatch.setenv("SLURM_PROCID", "0")
+    monkeypatch.setenv("SLURM_PROCID", "1")
+    monkeypatch.setenv("SLURM_NTASKS", "4")
 
     lane_config = {
         "predict": {"members": [1], "steps": [24], "dates": ["20230826"]},
@@ -492,8 +530,11 @@ def test_cli_predict_source_grib_root_allowed_in_plain_sbatch(tmp_path, monkeypa
     assert captured["cmd"][0] == "srun"
 
 
-def test_cli_predict_bundle_dir_rejects_truthless_prepare_lane(tmp_path, monkeypatch):
-    """eval.cli must not treat existing truthless bundles as prediction-ready."""
+def test_cli_predict_bundle_dir_warns_on_truthless_prepare_lane(tmp_path, monkeypatch, capsys):
+    """Truthless bundles are allowed with a loud warning (non-blocking project policy, see
+    eval.prepare.builder.validate_truth_bundle); the prediction call is still made."""
+    from unittest.mock import patch
+
     import xarray as xr
     from eval.cli import predict as eval_cli
 
@@ -520,8 +561,17 @@ def test_cli_predict_bundle_dir_rejects_truthless_prepare_lane(tmp_path, monkeyp
     args.bundle_dir = str(bundle_dir)
     args.mode = "manual"
 
-    with pytest.raises(RuntimeError, match="target_hres"):
+    captured = {}
+
+    def fake_run(cmd, check):
+        captured["cmd"] = cmd
+
+    with patch.object(eval_cli.subprocess, "run", side_effect=fake_run):
         eval_cli.cmd_predict(args, lane_config, host_config, tmp_path)
+
+    assert "no target_hres_* variables" in capsys.readouterr().out
+    assert captured["cmd"][captured["cmd"].index("--input-root") + 1] == str(bundle_dir)
+
 
 def test_cli_predict_tc_o320_o1280_fast_harness_dry_run():
     """tc_o320_o1280 previews as a one-rank local TC harness, not a scoreboard lane."""

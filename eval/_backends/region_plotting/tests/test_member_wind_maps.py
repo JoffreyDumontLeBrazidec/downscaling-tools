@@ -88,7 +88,7 @@ def test_field_converts_temperature_to_celsius():
 
 def test_every_variable_declares_a_complete_spec():
     keys = {"states", "combine", "token", "scale", "offset", "cmap",
-            "vmin", "vmax", "extend", "subtitle", "cbar_label"}
+            "vmin", "vmax", "extend", "subtitle", "cbar_label", "fine_vmax"}
     for name, spec in VARIABLES.items():
         assert set(spec) == keys, name
         assert spec["combine"] in ("hypot", "single"), name

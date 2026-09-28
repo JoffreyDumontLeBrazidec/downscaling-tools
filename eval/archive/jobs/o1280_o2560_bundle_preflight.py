@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from eval.jobs.o1280_o2560_contract import O1280_O2560_DESTINE_CONTRACT
-from eval.jobs.o1280_o2560_contract import contract_to_dict
+from eval.archive.jobs.o1280_o2560_contract import O1280_O2560_DESTINE_CONTRACT
+from eval.archive.jobs.o1280_o2560_contract import contract_to_dict
 from manual_inference.input_data_construction import bundle as bundle_mod
 
 

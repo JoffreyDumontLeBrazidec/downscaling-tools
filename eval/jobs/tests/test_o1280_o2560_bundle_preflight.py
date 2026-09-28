@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import xarray as xr
 
-from eval.jobs import o1280_o2560_bundle_preflight as preflight
+from eval.archive.jobs import o1280_o2560_bundle_preflight as preflight
 
 
 def _surface_ds(*names: str) -> xr.Dataset:

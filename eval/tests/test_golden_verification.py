@@ -146,9 +146,10 @@ class TestEffectiveConfigDryRun:
         import sys
 
         env = os.environ.copy()
-        env["PYTHONPATH"] = (
-            "/home/ecm5702/dev/downscaling-tools:" + env.get("PYTHONPATH", "")
-        )
+        from pathlib import Path
+
+        code_root = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = code_root + ":" + env.get("PYTHONPATH", "")
         result = subprocess.run(
             [
                 sys.executable, "-m", "eval.cli", "run",
@@ -157,7 +158,7 @@ class TestEffectiveConfigDryRun:
                 "--checkpoint", "/tmp/golden_test.ckpt",
             ],
             capture_output=True, text=True, env=env,
-            cwd="/home/ecm5702/dev/downscaling-tools",
+            cwd=code_root,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
 

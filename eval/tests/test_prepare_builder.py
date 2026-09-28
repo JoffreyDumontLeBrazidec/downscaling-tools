@@ -123,7 +123,8 @@ def test_build_bundles_skips_existing_valid_truth_bundle(tmp_path, monkeypatch):
     builder.build_bundles(_lane_config(), bundle_dir, str(grib_root))
 
 
-def test_build_bundles_rebuilds_existing_truthless_bundle(tmp_path, monkeypatch):
+def test_build_bundles_keeps_existing_truthless_bundle_and_warns(tmp_path, monkeypatch, capsys):
+    """Non-blocking project policy: a bundle without target_hres_* is kept, with a loud warning."""
     grib_root = tmp_path / "gribs"
     _touch_required_gribs(grib_root)
     bundle_dir = tmp_path / "bundles"
@@ -140,8 +141,9 @@ def test_build_bundles_rebuilds_existing_truthless_bundle(tmp_path, monkeypatch)
 
     builder.build_bundles(_lane_config(), bundle_dir, str(grib_root))
 
-    assert calls == 1
-    builder.validate_truth_bundle(_bundle_path(bundle_dir))
+    assert calls == 0
+    assert "no target_hres_* variables" in capsys.readouterr().out
+    assert builder.validate_truth_bundle(_bundle_path(bundle_dir)) == []
 
 
 def test_stale_temp_bundle_does_not_count_as_complete(tmp_path, monkeypatch):

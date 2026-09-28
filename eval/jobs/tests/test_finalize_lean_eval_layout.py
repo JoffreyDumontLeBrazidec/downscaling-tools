@@ -29,17 +29,14 @@ def test_finalize_lean_layout_moves_o48_outputs_into_data_without_symlink_clutte
         plot_dir.mkdir()
         (plot_dir / "all_regions_plots.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
 
-    rendered = FINALIZE_TEMPLATE.read_text(encoding="utf-8")
-    rendered = rendered.replace('RUN_ROOT="/home/ecm5702/scratch/eval/REPLACE_RUN_ID"', f'RUN_ROOT="{run_root}"')
-    rendered = rendered.replace('RUN_ID="REPLACE_RUN_ID"', 'RUN_ID="manual_test_o48"')
-    rendered = rendered.replace('CREATE_BACKCOMPAT_SYMLINKS="${CREATE_BACKCOMPAT_SYMLINKS:-1}"', 'CREATE_BACKCOMPAT_SYMLINKS="0"')
-
-    finalize_script = tmp_path / "finalize_test.sbatch"
-    finalize_script.write_text(rendered, encoding="utf-8")
-
+    # The template reads RUN_ROOT, RUN_ID and CREATE_BACKCOMPAT_SYMLINKS from the environment
+    # (each has a "${VAR:-default}" form), so the test sets them instead of editing the text.
+    env = {**os.environ, "RUN_ROOT": str(run_root), "RUN_ID": "manual_test_o48",
+           "CREATE_BACKCOMPAT_SYMLINKS": "0"}
     result = subprocess.run(
-        ["bash", str(finalize_script)],
+        ["bash", str(FINALIZE_TEMPLATE)],
         cwd=str(ROOT),
+        env=env,
         text=True,
         capture_output=True,
         check=False,

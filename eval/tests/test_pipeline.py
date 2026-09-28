@@ -25,8 +25,12 @@ def test_render_pipeline_dependency_chain():
     scoreboard = manifest.scripts[-1]
 
     assert predict.dependencies == []
+    # The split evaluators are serialised (they share one run directory): the first waits
+    # on predict and each later one waits on the evaluator before it.
+    previous = predict.name
     for entry in evals:
-        assert entry.dependencies == [predict.name]
+        assert entry.dependencies == [previous]
+        previous = entry.name
     assert set(scoreboard.dependencies) == {e.name for e in evals}
 
 
