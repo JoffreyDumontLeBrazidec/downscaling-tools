@@ -14,6 +14,13 @@ from .plotter import plot
 EVALUATOR_SPEC = {
     "name": "sigma_loss",
     "requires": ["checkpoint"],
+    "outputs": [
+        "data/sigma_loss/per_sigma.csv: the F-space loss per noise level and variable.",
+        "data/sigma_loss/meta.json: the sigma grid and sigma_data used.",
+        "data/sigma_loss/metrics.json: the scoreboard rows (written by score).",
+        "plots/view_a_per_sigma_loss.png: the loss-against-sigma figure (written by plot).",
+    ],
 }
+
 
 __all__ = ["run", "score", "plot", "EVALUATOR_SPEC"]
