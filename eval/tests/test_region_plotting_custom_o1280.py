@@ -25,12 +25,12 @@ def test_sample_meta_title_includes_indices_and_dates():
         coords={"sample": [0]},
     )
     title = mod._sample_meta_title(ds, "tibet_karakoram", 0)
-    assert "tibet_karakoram" in title
-    assert "sample_pos=0" in title
-    assert "sample_id=0" in title
-    assert "date=2026-02-27 00:00" in title
-    assert "init=2026-02-26 00:00" in title
-    assert "lead_h=24" in title
+    # Readable title: region in words, init and valid dates, lead time; no raw keys.
+    assert "Tibet Karakoram" in title
+    assert "Init: 2026-02-26 00:00" in title
+    assert "Valid: 2026-02-27 00:00" in title
+    assert "T+24h" in title
+    assert "sample_pos" not in title
 
 
 def test_run_region_plots_uses_standard_path_for_o1280(tmp_path: Path, monkeypatch):

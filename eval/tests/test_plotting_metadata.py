@@ -31,14 +31,12 @@ def test_plot_metadata_creation_uses_defaults() -> None:
 def test_plot_metadata_to_title_with_defaults() -> None:
     metadata = PlotMetadata(region="amazon_forest")
 
-    assert metadata.to_title() == "amazon_forest | sample_pos=0"
+    # Readable figure title (region name in words); raw keys such as sample_pos stay off figures.
+    assert metadata.to_title() == "Amazon Forest"
 
 
 def test_plot_metadata_to_title_with_full_metadata(full_metadata: PlotMetadata) -> None:
     title = full_metadata.to_title()
 
-    assert title == (
-        "alps_innsbruck | date=2023-08-26 00:00 | init=2023-08-25 00:00 "
-        "| step=24h | sample_pos=3"
-    )
+    assert title == "Alps Innsbruck — Init: 2023-08-25 00:00 — Valid: 2023-08-26 00:00 — T+24h"
     assert full_metadata.ensemble_member == 1

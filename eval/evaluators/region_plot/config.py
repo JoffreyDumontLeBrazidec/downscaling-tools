@@ -12,7 +12,11 @@ DEFAULT_MODEL_VARIABLES = [
     "x_0", "x_interp_0", "y_0", "y_pred_0", "residuals_0", "residuals_pred_0",
 ]
 
+# Field panels take the per-variable colour map of eval.plotting.variables
+# (variable_spec(v).field_cmap()); "default" is only the fallback for unknown
+# variables. Difference panels are always zero-centred with symmetric limits
+# shared across the row: RdBu_r (BrBG for precipitation, via error_cmap()).
 DEFAULT_COLORMAPS = {
     "default": "viridis",
-    "residual": "bwr",
+    "residual": "RdBu_r",
 }

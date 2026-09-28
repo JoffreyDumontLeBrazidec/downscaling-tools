@@ -6,8 +6,10 @@ import logging
 from pathlib import Path
 
 import xarray as xr
-from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
+
+from eval.plotting import FigureBook, save_figure
+from eval.plotting.maps_helpers import octahedral_grid_name
 
 from .local_plotting import LocalInferencePlotter, plot_x_y
 from .plotting.config import (
@@ -42,6 +44,15 @@ def _sample_meta_title(ds_region: xr.Dataset, region_name: str, sample_idx: int)
 
 def _step_meta_title(region_name: str, step, forecast_ref_time) -> str:
     return step_meta_title(region_name, step, forecast_ref_time)
+
+
+def _grid_names(ds: xr.Dataset) -> tuple[str | None, str | None]:
+    """(input grid, target grid) names such as ("O320", "O1280") for the panel titles."""
+    input_grid = octahedral_grid_name(int(ds.sizes["grid_point_lres"])) if "grid_point_lres" in ds.sizes else None
+    target = str(ds.attrs.get("grid", "")).strip() or None
+    if target is None and "grid_point_hres" in ds.sizes:
+        target = octahedral_grid_name(int(ds.sizes["grid_point_hres"]))
+    return input_grid, target
 
 
 def _select_prediction_variables(
@@ -167,7 +178,8 @@ def render_region_suite_from_predictions_file(
             if not selected_weather_states:
                 selected_weather_states = requested_weather_states
 
-        with PdfPages(combined_pdf) as pdf:
+        input_grid, target_grid = _grid_names(ds_pred)
+        with FigureBook(combined_pdf, png=True) as book:
             for region_name, region_box in region_boxes.items():
                 LOG.info("Plotting prediction region %s %s", region_name, region_box)
                 region_ds = get_region_ds(ds_pred, region_box)
@@ -177,9 +189,14 @@ def render_region_suite_from_predictions_file(
                     list_model_variables=selected_variables,
                     weather_states=selected_weather_states,
                     title=title,
+                    input_grid=input_grid,
+                    target_grid=target_grid,
                 )
-                pdf.savefig(fig)
-                plt.close(fig)
+                if also_png:
+                    # Per-region PNG + PDF next to the combined book (the --also-png contract).
+                    for path in save_figure(fig, out_root / region_name):
+                        generated.append(str(path))
+                book.add(fig, name=region_name)
 
         manifest_path = _write_suite_manifest(
             out_root=out_root,

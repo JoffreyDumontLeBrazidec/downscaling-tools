@@ -9,13 +9,9 @@ from pathlib import Path
 from typing import Union
 
 import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
-import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 import xarray as xr
-from anemoi.training.diagnostics.maps import Coastlines
-from matplotlib.backends.backend_pdf import PdfPages
 
 from eval.checkpoint_interpolation import CheckpointResidualInterpolator, resolve_checkpoint_path
 from .plotting.coordinate_utils import (
@@ -32,7 +28,6 @@ from .plotting.variable_utils import (
     supports_plot_variable as shared_supports_plot_variable,
 )
 
-continents = Coastlines()
 LOG = logging.getLogger(__name__)
 
 DERIVED_MODEL_VARIABLE_SPECS = SHARED_DERIVED_MODEL_VARIABLE_SPECS
@@ -136,6 +131,31 @@ def _residual_vmax(da: xr.DataArray) -> float:
     return vmax if vmax > 0 else 1.0
 
 
+def _region_extent(ds_sample: xr.Dataset) -> tuple[float, float, float, float]:
+    """``(west, east, south, north)`` of a region dataset: its ``region`` attribute, else the data."""
+    region = ds_sample.attrs.get("region")
+    if region is not None and len(region) == 4:
+        lat_min, lat_max, lon_min, lon_max = (float(v) for v in region)
+        return lon_min, lon_max, lat_min, lat_max
+    lons, lats = [], []
+    for lon_name, lat_name in (("lon_hres", "lat_hres"), ("lon_lres", "lat_lres")):
+        if lon_name in ds_sample.variables and ds_sample[lon_name].size:
+            lons.append(np.asarray(ds_sample[lon_name].values, dtype=float))
+            lats.append(np.asarray(ds_sample[lat_name].values, dtype=float))
+    lon = np.concatenate(lons)
+    lat = np.concatenate(lats)
+    return float(np.nanmin(lon)), float(np.nanmax(lon)), float(np.nanmin(lat)), float(np.nanmax(lat))
+
+
+def _panel_group(model_var: str, consistent_cbar: list[str]) -> str:
+    """Colour-scale group of a panel: ``field`` (shared per row), ``difference``, or its own."""
+    if model_var in consistent_cbar:
+        return "field"
+    if is_residual_plot_variable(model_var):
+        return "difference"
+    return f"own:{model_var}"
+
+
 def plot_x_y(
     ds_sample: xr.Dataset,
     list_model_variables: list[str],
@@ -163,100 +183,144 @@ def plot_x_y(
         "y_2",
     ],
     title: str | None = None,
+    *,
+    input_grid: str | None = None,
+    target_grid: str | None = None,
+    truth_label: str | None = None,
+    input_label: str | None = None,
 ):
+    """Map grid of one region: one row per weather state, one column per panel key.
+
+    Every panel is a Cartopy map (projection from ``select_projection``, coastlines,
+    borders, labelled grid lines) in display units from ``eval.plotting.variables``.
+    Field panels listed in ``consistent_cbar`` share one colour scale per row; the
+    difference panels (interpolated input minus truth / minus model) share one
+    zero-centred ``RdBu_r`` scale per row (``BrBG`` for precipitation); any other panel
+    (for example a noisy intermediate diffusion state) keeps its own scale. Each group
+    has one colour bar with the unit. ``input_grid`` / ``target_grid`` (for example
+    "O320", "O1280") name the grids in the panel titles; ``truth_label`` /
+    ``input_label`` replace them when the source is known ("ENFO O1280").
+    """
+    from eval.plotting import convert, convert_difference, eval_style, extend_for, select_projection
+    from eval.plotting import add_geography, shared_norm, symmetric_norm, variable_spec
+    from eval.plotting.maps_helpers import (
+        colorbar_beside,
+        draw_unstructured,
+        region_panel_title,
+        set_inner_extent,
+    )
+
     list_model_variables = [v for v in list_model_variables if supports_plot_variable(ds_sample, v)]
-    overlap = [
-        model_var
-        for model_var in list_model_variables
-        if model_var in consistent_cbar and supports_plot_variable(ds_sample, model_var)
-    ]
-    minmax_weather_states = get_minmax_weather_states(ds_sample, weather_states, overlap)
+    extent = _region_extent(ds_sample)
+    target_grid = target_grid or (str(ds_sample.attrs.get("grid", "")).strip() or None)
+    nrows, ncols = len(weather_states), len(list_model_variables)
+    groups = [_panel_group(v, consistent_cbar) for v in list_model_variables]
 
-    figsize = (len(list_model_variables) * 4, len(weather_states) * 3)
-    fig, axs = plt.subplots(len(weather_states), len(list_model_variables), figsize=figsize)
+    # Colour-bar slots: one after every run of consecutive columns that share a scale.
+    run_ends = [j for j in range(ncols) if j == ncols - 1 or groups[j + 1] != groups[j]]
 
-    if len(list_model_variables) == 1:
-        axs = np.array([axs]).transpose()
-    if len(weather_states) == 1:
-        axs = np.array([axs])
-
-    ims = {}
-    cbars = {}
-    for i_ax0, weather_state in enumerate(weather_states):
-        for i_ax1, model_var in enumerate(list_model_variables):
+    # Data, in display units, per (row, column).
+    fields: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for i, weather_state in enumerate(weather_states):
+        for j, model_var in enumerate(list_model_variables):
             da = get_plot_data_array(ds_sample, model_var)
             lon_name = _coord_name_for_array(ds_sample, da, "lon")
             lat_name = _coord_name_for_array(ds_sample, da, "lat")
             if len(ds_sample[lon_name].values) == 0:
-                axs[i_ax0, i_ax1].axis("off")
                 continue
             if "weather_state" in da.dims:
                 da = da.sel(weather_state=weather_state)
-            scatter_params = dict(
-                x=ds_sample[lon_name].values,
-                y=ds_sample[lat_name].values,
-                c=da.values,
-                s=75_000 / len(ds_sample[lon_name].values),
-                alpha=1.0,
-                rasterized=True,
-            )
-
-            if model_var in consistent_cbar and weather_state in minmax_weather_states:
-                scatter_params.update(
-                    vmin=minmax_weather_states[weather_state][0],
-                    vmax=minmax_weather_states[weather_state][1],
-                    cmap="viridis",
-                )
-            elif is_residual_plot_variable(model_var):
-                vmax = _residual_vmax(da)
-                scatter_params.update(vmin=-vmax, vmax=vmax, cmap="bwr")
+            values = np.asarray(da.values, dtype=float)
+            if groups[j] == "difference":
+                values = np.asarray(convert_difference(weather_state, values), dtype=float)
             else:
-                vmax = float(np.nanmax(da.values))
-                vmin = float(np.nanmin(da.values))
-                scatter_params.update(vmin=vmin, vmax=vmax, cmap="viridis")
-
-            ims[(i_ax0, i_ax1)] = axs[i_ax0, i_ax1].scatter(**scatter_params)
-            cbars[(i_ax0, i_ax1)] = plt.colorbar(
-                ims[(i_ax0, i_ax1)],
-                ax=axs[i_ax0, i_ax1],
-                orientation="vertical",
-                pad=0.05,
+                values = np.asarray(convert(weather_state, values), dtype=float)
+            fields[(i, j)] = (
+                np.asarray(ds_sample[lon_name].values, dtype=float),
+                np.asarray(ds_sample[lat_name].values, dtype=float),
+                values,
             )
 
-    for i_ax0, _weather_state in enumerate(weather_states):
-        axs[i_ax0, 0].set_ylabel("Latitude (°)", fontsize=12)
-    for i_ax1, _model_var in enumerate(list_model_variables):
-        axs[-1, i_ax1].set_xlabel("Longitude (°)", fontsize=12)
+    proj = select_projection(*extent)
+    panel_w = 3.1
+    west, east, south, north = extent
+    aspect = max(0.45, min(1.6, (north - south) / max((east - west) * np.cos(np.radians(0.5 * (south + north))), 1e-6)))
+    panel_h = panel_w * aspect + 0.45
+    fig_w = ncols * panel_w + 0.95 * len(run_ends) + 0.8
+    fig_h = nrows * panel_h + 1.0
 
-    for i_ax0, weather_state in enumerate(weather_states):
-        for i_ax1, model_var in enumerate(list_model_variables):
-            axs[i_ax0, i_ax1].xaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            axs[i_ax0, i_ax1].yaxis.set_major_formatter(ticker.FormatStrFormatter("%d°"))
-            axs[i_ax0, i_ax1].tick_params(axis="both", which="major", labelsize=10)
-            axs[i_ax0, i_ax1].set_title(f"{plot_variable_title(model_var)} - {weather_state}")
+    with eval_style():
+        fig = plt.figure(figsize=(fig_w, fig_h))
+        width_ratios: list[float] = []
+        col_slot: dict[int, int] = {}
+        for j in range(ncols):
+            col_slot[j] = len(width_ratios)
+            width_ratios.append(1.0)
+            if j in run_ends:
+                width_ratios.append(0.30)
+        gs = fig.add_gridspec(nrows, len(width_ratios), width_ratios=width_ratios,
+                              left=0.6 / fig_w, right=1.0 - 0.1 / fig_w,
+                              bottom=0.35 / fig_h, top=1.0 - 0.75 / fig_h,
+                              wspace=0.06, hspace=0.28)
+        axs = np.empty((nrows, ncols), dtype=object)
+        for i, weather_state in enumerate(weather_states):
+            spec = variable_spec(weather_state)
+            for j, model_var in enumerate(list_model_variables):
+                ax = fig.add_subplot(gs[i, col_slot[j]], projection=proj)
+                axs[i, j] = ax
+                set_inner_extent(ax, extent)
+                gl = add_geography(ax, label_size=6.5)
+                if gl is not None:
+                    gl.left_labels = j == 0
+                    gl.bottom_labels = i == nrows - 1
+                ax.set_title(
+                    region_panel_title(model_var, input_grid=input_grid, target_grid=target_grid,
+                                       truth=truth_label, input_name=input_label),
+                    fontsize=8.5, pad=3,
+                )
+                if (i, j) not in fields:
+                    ax.text(0.5, 0.5, "no data in region", transform=ax.transAxes,
+                            ha="center", va="center", fontsize=8, color="0.4")
 
-            if "region" in ds_sample.attrs:
-                axs[i_ax0, i_ax1].set_xlim(ds_sample.attrs["region"][2], ds_sample.attrs["region"][3])
-                axs[i_ax0, i_ax1].set_ylim(ds_sample.attrs["region"][0], ds_sample.attrs["region"][1])
-            # Draw coastlines on top of scatter (radians → degrees)
-            coast_segs_deg = [np.degrees(s) for s in continents.lines.get_segments()]
-            axs[i_ax0, i_ax1].add_collection(
-                LineCollection(coast_segs_deg, linewidths=0.8, colors="black", zorder=10)
-            )
-            axs[i_ax0, i_ax1].set_aspect("auto", adjustable=None)
-            axs[i_ax0, i_ax1].grid(False)
-            axs[i_ax0, i_ax1].patch.set_edgecolor("black")
-            axs[i_ax0, i_ax1].patch.set_linewidth(2)
-            if (i_ax0, i_ax1) in cbars:
-                cbars[(i_ax0, i_ax1)].outline.set_edgecolor("black")
-                cbars[(i_ax0, i_ax1)].outline.set_linewidth(1.0)
-                cbars[(i_ax0, i_ax1)].ax.tick_params(labelsize=10)
+            # One scale per run of columns; the difference group is centred on zero.
+            start = 0
+            for end in run_ends:
+                cols = list(range(start, end + 1))
+                start = end + 1
+                arrays = [fields[(i, j)][2] for j in cols if (i, j) in fields]
+                if not arrays:
+                    continue
+                group = groups[cols[0]]
+                if group == "difference":
+                    norm, _ = symmetric_norm(*arrays, q=99.5)
+                    cmap = spec.error_cmap()
+                    label = f"{spec.name} difference ({spec.unit})" if spec.unit else f"{spec.name} difference"
+                elif spec.signed:
+                    norm = shared_norm(*arrays, q=(0.5, 99.5), centered=True)
+                    cmap = spec.field_cmap()
+                    label = spec.label
+                elif spec.accumulated:
+                    norm = shared_norm(*arrays, q=(0.0, 99.5), vmin=0.0)
+                    cmap = spec.field_cmap()
+                    label = spec.label
+                else:
+                    norm = shared_norm(*arrays, q=(0.5, 99.5))
+                    cmap = spec.field_cmap()
+                    label = spec.label
+                mesh = None
+                for j in cols:
+                    if (i, j) not in fields:
+                        continue
+                    lon, lat, values = fields[(i, j)]
+                    mesh = draw_unstructured(axs[i, j], lon, lat, values, extent, cmap=cmap, norm=norm)
+                if mesh is not None:
+                    colorbar_beside(fig, [axs[i, j] for j in cols], mesh, label,
+                                    extend=extend_for(norm, *arrays), width=0.16 / fig_w,
+                                    pad=0.08 / fig_w)
+            axs[i, 0].text(-0.30, 0.5, spec.name, transform=axs[i, 0].transAxes, rotation=90,
+                           ha="center", va="center", fontsize=9, fontweight="bold")
 
-    if title:
-        fig.suptitle(title, fontsize=16, y=1.0)
-    else:
-        fig.suptitle(extract_date_from_dataset(ds_sample) or "Unknown date", fontsize=16, y=1.0)
-    fig.tight_layout()
+        fig.suptitle(title or extract_date_from_dataset(ds_sample) or "Unknown date", y=1.0 - 0.2 / fig_h)
     return fig
 
 
@@ -307,7 +371,9 @@ class LocalInferencePlotter:
         if os.path.exists(pdf_path):
             LOG.info("Removing existing PDF at %s", pdf_path)
             os.remove(pdf_path)
-        with PdfPages(pdf_path) as pdf:
+        from eval.plotting import FigureBook
+
+        with FigureBook(pdf_path, png=True) as pdf:
             for region in list_regions:
                 LOG.info("Plotting region %s", region)
                 region_ds = get_region_ds(self.ds, region)
@@ -323,8 +389,7 @@ class LocalInferencePlotter:
                             weather_states=selected_weather_states,
                             title=f"{region} - sample {sample}",
                         )
-                        pdf.savefig(fig)
-                        plt.close(fig)
+                        pdf.add(fig, name=f"{region}_sample{sample}")
                 else:
                     sample_count = 0
                     for step in region_ds.step.values:
@@ -337,8 +402,7 @@ class LocalInferencePlotter:
                                 weather_states=selected_weather_states,
                                 title=f"{region} - step {step} - forecast {pd.to_datetime(ft).strftime('%Y-%m-%d')}",
                             )
-                            pdf.savefig(fig)
-                            plt.close(fig)
+                            pdf.add(fig, name=f"{region}_step{step}")
                             sample_count += 1
                         if sample_count >= num_samples_to_plot:
                             break
