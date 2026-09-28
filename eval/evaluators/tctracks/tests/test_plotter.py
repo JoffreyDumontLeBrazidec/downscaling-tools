@@ -112,3 +112,53 @@ def test_render_all_writes_png_and_pdf_siblings(tmp_path):
     plotter.render_all(sources, metrics, ["202509"], ["atl"], tmp_path, top_k_cases=1)
     assert (tmp_path / "figures" / "dist_atl.png").exists()
     assert (tmp_path / "figures" / "dist_atl.pdf").exists()
+
+
+def _map_axes(fig):
+    return [ax for ax in fig.axes if hasattr(ax, "coastlines")]
+
+
+def test_basin_grid_has_one_map_per_source_and_no_inset(tmp_path):
+    """Two sources besides the truth give two maps that share the row (no empty third slot),
+    and the ratio to the truth is an axes of its own, not an inset over the curves."""
+    import matplotlib.pyplot as plt
+
+    sources = {k: v for k, v in _sources().items() if k in ("model", "target", "input")}
+    metrics = scorer.score_sources(sources, months=["202509"], basins=["atl"])
+    fig = plotter.page_basin_grid(sources, metrics, ["202509"], "atl", "all")
+    try:
+        assert len(_map_axes(fig)) == 2
+        assert all(not ax.child_axes for ax in fig.axes)
+        ratio_axes = [ax for ax in fig.axes if ax.get_ylabel().startswith("Ratio to")]
+        assert len(ratio_axes) == 1
+    finally:
+        plt.close(fig)
+
+
+def test_basin_grid_with_three_sources_has_three_maps():
+    import matplotlib.pyplot as plt
+
+    sources = _sources()
+    del sources["ctrl"]
+    sources["ctrl2"] = _source("ctrl", n_tracks=5, mslp_min_base=983.0)
+    metrics = scorer.score_sources(sources, months=["202509"], basins=["atl"])
+    fig = plotter.page_basin_grid(sources, metrics, ["202509"], "atl", "all")
+    try:
+        assert len(_map_axes(fig)) == 3
+    finally:
+        plt.close(fig)
+
+
+def test_overview_ratio_to_truth_is_its_own_axes_under_the_pdf():
+    import matplotlib.pyplot as plt
+
+    sources = _sources()
+    metrics = scorer.score_sources(sources, months=["202509"], basins=["atl"])
+    fig = plotter.page_overview(sources, metrics, ["202509"], ["atl"], "atl")
+    try:
+        assert all(not ax.child_axes for ax in fig.axes)
+        pdf_ax = next(ax for ax in fig.axes if ax.get_yscale() == "log")
+        ratio_ax = next(ax for ax in fig.axes if ax.get_ylabel().startswith("Ratio to"))
+        assert ratio_ax.get_position().y1 <= pdf_ax.get_position().y0 + 1e-9
+    finally:
+        plt.close(fig)
