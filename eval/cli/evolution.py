@@ -40,6 +40,9 @@ def register(subparsers) -> argparse.ArgumentParser:
     p.add_argument("--out", required=True, help="Output figure path.")
     p.add_argument("--allow-mixed-support", action="store_true",
                    help="Allow curves that were scored on different supports.")
+    p.add_argument("--keep-empty", action="store_true",
+                   help="Keep rows and columns that have no data on this lane as 'not available' "
+                        "panels (by default they are left out and named in the footer).")
     return p
 
 
@@ -78,6 +81,8 @@ def run(args: argparse.Namespace) -> None:
         forwarded += ["--title", args.title]
     if args.allow_mixed_support:
         forwarded.append("--allow-mixed-support")
+    if args.keep_empty:
+        forwarded.append("--keep-empty")
     evolution_main(forwarded)
 
 

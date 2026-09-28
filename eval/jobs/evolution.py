@@ -150,6 +150,20 @@ def series(ladder: dict, key: str) -> tuple[np.ndarray, np.ndarray]:
     return st, v
 
 
+def _panel_has_data(row: Row, col: Column, experiments, reference, hlines, region: str) -> bool:
+    """True when at least one curve or line would be drawn in the panel of ``row`` and ``col``."""
+    field = row.ws if col.field == "ws" else row.sf
+    if field is None:
+        return False
+    key = col.key.format(f=field, region=region)
+    for _label, ladder in experiments:
+        if np.isfinite(series(ladder, key)[1]).any():
+            return True
+    if reference is not None and np.isfinite(series(reference[1], key)[1]).any():
+        return True
+    return any(hvals.get(key) is not None for _label, hvals in hlines)
+
+
 def render(
     experiments: list[tuple[str, dict]],
     out: Path,
@@ -164,7 +178,11 @@ def render(
     region: str = "n.hem",
     title: str | None = None,
     allow_mixed_support: bool = False,
+    keep_empty: bool = False,
 ) -> Path:
+    """Draw the grid. Rows and columns that have no data at all on this lane (every panel of
+    the row or column would read "not available") are left out and named in the footer;
+    ``keep_empty=True`` keeps them as explicit empty panels."""
     # target first so it takes the solid-black style, then input, then any extras
     supplied = [x for x in (target_ref, input_ref) if x is not None]
     # supplied but NOT APPLICABLE on this lane: reported, never drawn as a line
@@ -184,6 +202,21 @@ def render(
               "is then stamped with what is missing.")
     row_specs = [ROWS[r] for r in (rows or DEFAULT_ROWS.split(","))]
     col_specs = [COLUMNS[c] for c in (columns or DEFAULT_COLUMNS.split(","))]
+    dropped_rows: list[str] = []
+    dropped_cols: list[str] = []
+    if not keep_empty:
+        # judge availability on the full request, then drop what is empty in every panel
+        has = [[_panel_has_data(r, c, experiments, reference, hlines, region) for c in col_specs]
+               for r in row_specs]
+        keep_r = [any(h) for h in has]
+        keep_c = [any(has[ri][ci] for ri in range(len(row_specs))) for ci in range(len(col_specs))]
+        dropped_rows = [r.label for r, k in zip(row_specs, keep_r) if not k]
+        dropped_cols = [c.label for c, k in zip(col_specs, keep_c) if not k]
+        if not any(keep_r):
+            raise SystemExit("none of the requested rows and columns has data on this lane; "
+                             "pass --keep-empty to draw the empty panels anyway")
+        row_specs = [r for r, k in zip(row_specs, keep_r) if k]
+        col_specs = [c for c, k in zip(col_specs, keep_c) if k]
 
     supports = {support_of(l) for _, l in experiments}
     if reference is not None:
@@ -309,10 +342,17 @@ def render(
         else:
             banner = title
         # the scoring support (sample counts) always goes in a small footer
-        fig.text(0.01, 0.002, "Scored on: " + " || ".join(sorted(supports))
-                 + "  |  region: %s" % DOMAIN_NAMES.get(region, region),
-                 fontsize=8, color="0.35", ha="left", va="bottom")
-        bottom = 0.025
+        foot = ("Scored on: " + " || ".join(sorted(supports))
+                + "  |  region: %s" % DOMAIN_NAMES.get(region, region))
+        if dropped_rows or dropped_cols:
+            omitted = []
+            if dropped_rows:
+                omitted.append("rows " + ", ".join(dropped_rows))
+            if dropped_cols:
+                omitted.append("columns " + ", ".join(dropped_cols))
+            foot += "\nLeft out, no data on this lane: " + "; ".join(omitted)
+        fig.text(0.01, 0.002, foot, fontsize=8, color="0.35", ha="left", va="bottom")
+        bottom = 0.025 + (0.018 if "\n" in foot else 0.0)
         if banner:
             fig.suptitle(banner, fontsize=10, wrap=True,
                          color=WORSE_COLOR if (mixed or missing) else "0.35",
@@ -352,6 +392,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--title", default=None, help="optional figure title (default: none)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--allow-mixed-support", action="store_true")
+    ap.add_argument("--keep-empty", action="store_true",
+                    help="keep rows and columns that have no data on this lane, as "
+                         "'not available' panels (default: leave them out and say so)")
     args = ap.parse_args(argv)
 
     for name, valid in (("rows", ROWS), ("columns", COLUMNS)):
@@ -372,6 +415,7 @@ def main(argv: list[str] | None = None) -> None:
         region=args.region,
         title=args.title,
         allow_mixed_support=args.allow_mixed_support,
+        keep_empty=args.keep_empty,
     )
 
 
