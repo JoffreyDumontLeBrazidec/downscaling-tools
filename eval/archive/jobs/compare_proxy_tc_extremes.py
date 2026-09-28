@@ -66,7 +66,7 @@ def _compute_metrics_from_predictions(predictions_dir: Path, support_mode: str) 
     # Import here to avoid import cost when just loading anchor
     from eval.tc_extremes import TC_EVENTS, load_prediction_event_curve
 
-    from eval.jobs.diagnose_per_bundle_tc_extremes import _extreme_metrics
+    from eval.archive.jobs.diagnose_per_bundle_tc_extremes import _extreme_metrics
 
     import gc
     import re

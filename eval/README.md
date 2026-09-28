@@ -11,7 +11,26 @@ The unified CLI is the **required** interface for all evaluation operations:
 python -m eval.cli <subcommand> [args]
 ```
 
-### Subcommands
+### Commands
+
+`python -m eval.cli --help` lists the commands in groups; `python -m eval.cli <command>
+--help` gives the flags of one. The code is the package `eval/cli/`, one module per
+command.
+
+| Group | Commands |
+|---|---|
+| discovery | `list`, `describe <evaluator>` |
+| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard`, `report` |
+| comparison | `evolution` |
+| tropical cyclone tracks | `tctracker`, `tccompare` |
+| figures | `membermaps`, `videogen` |
+| maintenance | `prepml-cleanup`, `config` |
+
+Start with discovery. `python -m eval.cli list` prints every evaluator with the
+question it answers, whether it feeds the scoreboard, and the host it needs;
+`python -m eval.cli describe tc` explains one (method, inputs, outputs, the lane keys it
+reads, an example command). Both are generated from the registry and the evaluator
+packages.
 
 ### ECMWF tctracker expver archives + month-scale track comparison
 
@@ -78,7 +97,7 @@ For quaver references that already exist in the score DB, export a CSV first:
 ```bash
 module load quaver
 export TMPDIR=/path/to/scratch/tmp
-quaver eval/jobs/export_quaver_probabilistic_reference.py \
+quaver eval/jobs/scripts/export_quaver_probabilistic_reference.py \
     --out-csv /path/to/quaver_reference.csv
 ```
 
@@ -97,6 +116,8 @@ Data flow stays bundle-based: rebuild truth-aware NetCDF bundles into `<RUN_ROOT
 The lane uses `predict.local_scope` with a bbox over lat `10..40`, lon `-100..-58`, `cut_graph: true`, and `num_gpus_per_model: 1`. TC stats are anchored to embedded `target O1280` bundle truth because `/home/ecm5702/perm/reference/o320_o1280/tc` currently contains no retrieved reference GRIBs.
 
 ## Pipeline Generation
+
+The code is in `eval/jobs/`; `eval/jobs/README.md` says what each file there is.
 
 Generate HPC sbatch chains with SLURM dependency chaining:
 
@@ -123,28 +144,30 @@ aggregator derive their evaluator lists from it.
   exit with status 1. A retired name left in a lane group is skipped with a
   warning. Retired packages live, unimportable, under `eval/_quarantine/<date>/`.
 
-Each evaluator exports `EVALUATOR_SPEC` (its `requires` and optional
-`deliverables`), `run()`, and optionally `score()` and `plot()`.
+Every evaluator package exports `EVALUATOR_SPEC` (`name`, `requires`, `outputs` and
+optional `deliverables`), `run()`, `score()` and `plot()`, in exactly the form written
+down in `evaluators/base.py`. An evaluator with nothing to score or plot uses the
+adapters `no_score` and `no_plot` from that file. `tests/test_evaluator_contract.py`
+checks all of them.
 
 Lane configuration: `eval/config/lanes/<lane>.yaml`
 Host configuration: `eval/config/hosts/<host>.yaml`
 
-### TC tail-extreme ratios (AN-anchored)
+### TC raw extremes
 
-The TC evaluator emits four ratio metrics per event + four aggregates, all anchored
-to the **embedded** OPER analysis row in each stats JSON (not the canonical YAML, so
-support_mode / bbox / member-clip stay consistent with everything else in the run):
+The `tc` evaluator follows the raw-extremes contract of 2026-06-21: for each event it
+emits four physical quantities, in hPa and m/s, for the model and for each reference
+present in the same stats file (OPER analysis, ENFO, EEFO) and nothing derived from
+them. There is no score, no ratio and no anchor. The verdict is read by eye on one
+support.
 
 | metric | meaning |
 |---|---|
-| `tc_<event>_mslp_p001_ratio` | depth(model.mslp_p001) / depth(AN.mslp_p001) |
-| `tc_<event>_mslp_min_ratio`  | depth(model.mslp_min)  / depth(AN.mslp_min)  |
-| `tc_<event>_wind_p9999_ratio`| model.wind_p9999 / AN.wind_p9999             |
-| `tc_<event>_wind_max_ratio`  | model.wind_max   / AN.wind_max               |
-| `tc_mean_<key>_ratio`        | mean of the per-event values                 |
-
-AN row = 1.0 by construction. `>1` means ML reaches deeper minima / stronger winds
-than the analysis; `<1` means weaker.
+| `tc_<event>_mslp_min` | lowest sea-level pressure of the model |
+| `tc_<event>_mslp_p001` | 0.01 percentile of sea-level pressure |
+| `tc_<event>_wind_max` | highest 10 m wind |
+| `tc_<event>_wind_p9999` | 99.99 percentile of the 10 m wind |
+| `tc_<event>_<source>_<quantity>` | the same four for `oper`, `enfo` or `eefo` |
 
 The percentile fields `mslp_p001` (0.01 percentile) and `wind_p9999` (99.99 percentile)
 were added to `extreme_tail_table` alongside the existing `mslp_p1`/`p01`/`min` and
@@ -157,8 +180,8 @@ python -m eval.jobs.backfill_tc_extreme_percentiles --lane o96_o320
 # Idempotent and atomic per file.
 ```
 
-The scoreboard generator (`eval.cli scoreboard`, generic CSV) surfaces the new columns
-automatically once the underlying stats JSONs have the fields. (The custom
+`eval.cli scoreboard` (generic CSV) surfaces the columns automatically once the
+underlying stats JSONs have the fields. (The custom
 `generate_enfo_o320_scoreboard` job was quarantined on 2026-09-28.)
 
 ## Backends (`eval/_backends/`)
@@ -212,7 +235,10 @@ See [`eval/predict/README.md`](predict/README.md) for full documentation.
 
 ## Archive (`eval/archive/`)
 
-Contains retired scripts and old templates. Not used in live workflows.
+Frozen legacy scripts and one old template. Not used in live workflows, but not dead:
+`eval/_backends/weight_diagnostics/mechanistic_compare_v1.py`, `eval/tests/test_eval_run.py`
+and a few tests in `eval/jobs/tests/` still import from it. Code retired on purpose goes
+to `eval/_quarantine/<date>/` instead (see the README there).
 
 
 ## Retiring a lane

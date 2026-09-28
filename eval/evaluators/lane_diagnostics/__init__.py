@@ -12,4 +12,12 @@ from .runner import plot, run, score
 EVALUATOR_SPEC = {
     "name": "lane_diagnostics",
     "requires": ["predictions"],
+    "outputs": [
+        "manifest.json and CAPTIONS.md: what each figure shows and the support behind it.",
+        "<number>_<slug>.pdf: one figure per diagnostic, plus a combined o1280_o2560_diagnostic_bundle.pdf.",
+        "loss_budget.json, sampler_peaks.json, pair_coherence.json, box_wind.json: the measurements behind the figures.",
+    ],
 }
+
+
+__all__ = ["run", "score", "plot", "EVALUATOR_SPEC"]

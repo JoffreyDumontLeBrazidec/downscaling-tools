@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from eval.jobs import checkpoint_profile as mod
+from eval.archive.jobs import checkpoint_profile as mod
 
 
 def _cfg_for_pair(lres: int, hres: int, *, stack: str) -> dict:

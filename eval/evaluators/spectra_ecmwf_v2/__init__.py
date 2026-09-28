@@ -29,4 +29,13 @@ from .plotter import plot
 EVALUATOR_SPEC = {
     "name": "spectra_ecmwf_v2",
     "requires": ["predictions"],
+    "outputs": [
+        "spectra_summary.json, staging_summary.json, spectra_curve_summary.json: what was staged and the mean curves.",
+        "spectra/: the mean spectrum curves per variable.",
+        "spectra_v2_scores.json: per-variable relative L2 detail (written by score).",
+        "spectra_ecmwf.pdf and spectra_ecmwf_ratio.pdf: spectra and model-to-truth ratio figures (written by plot).",
+    ],
 }
+
+
+__all__ = ["run", "score", "plot", "EVALUATOR_SPEC"]

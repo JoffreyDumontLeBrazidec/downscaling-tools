@@ -223,8 +223,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument(
         "--fine-cut-deg", type=float, default=DEFAULT_FINE_CUT_DEG,
         help="High-pass scale in degrees for --field fine (default: "
-             f"{DEFAULT_FINE_CUT_DEG}). Gaussian rolloff, not a brick wall: it transmits 99% "
-             "at this wavelength and 50% at 2.67x it.",
+             f"{DEFAULT_FINE_CUT_DEG}). Gaussian rolloff, not a brick wall: it transmits 99%% "
+             "at this wavelength and 50%% at 2.67x it.",
     )
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")

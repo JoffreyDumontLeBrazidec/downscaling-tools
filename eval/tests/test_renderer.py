@@ -115,8 +115,11 @@ def test_render_o320_o1280_evaluate_accepts_ac_host():
             "--only": "tc",
         },
     )
+    from eval.config.loader import load_host
+
     assert "# Host: atos_ac" in script
-    assert "source /home/ecm5702/dev/.ds-dyn/bin/activate" in script
+    # The venv is whatever the host file says (it changed on 2026-09-04), not a literal path.
+    assert f"source {load_host('atos_ac')['environment_setup']['venv_activate']}" in script
     assert "python -m eval.cli evaluate" in script
 
 

@@ -10,7 +10,7 @@ matplotlib.use("Agg")
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLOT_PY = ROOT / "mlflow" / "plot.py"
+PLOT_PY = ROOT / "eval" / "evaluators" / "mlflow" / "_plot.py"
 SPEC = importlib.util.spec_from_file_location("downscaling_tools_mlflow_plot", PLOT_PY)
 assert SPEC is not None and SPEC.loader is not None
 plot_mod = importlib.util.module_from_spec(SPEC)

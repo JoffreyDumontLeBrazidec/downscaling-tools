@@ -26,7 +26,7 @@ def _load_module(module_name: str, path: Path):
 def test_generate_predictions_parse_and_discover(tmp_path: Path):
     mod = _load_module(
         "gen25",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     p1 = tmp_path / "eefo_o96_0001_date20230826_time0000_mem01_step024h_input_bundle.nc"
@@ -60,7 +60,7 @@ def test_generate_predictions_parse_and_discover(tmp_path: Path):
 def test_generate_predictions_discover_non_recursive_ignores_nested_cache(tmp_path: Path):
     mod = _load_module(
         "gen25_non_recursive",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     top = tmp_path / "top_level.txt"
@@ -77,7 +77,7 @@ def test_generate_predictions_discover_non_recursive_ignores_nested_cache(tmp_pa
 def test_generate_predictions_parse_int_list():
     mod = _load_module(
         "gen25_ints",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
     assert mod.parse_int_list("3,1,2,2") == [1, 2, 3]
     assert mod.parse_int_list(" 10 , 1 , 5 ") == [1, 5, 10]
@@ -86,7 +86,7 @@ def test_generate_predictions_parse_int_list():
 def test_generate_predictions_wait_for_rank0_write_done(tmp_path: Path):
     mod = _load_module(
         "gen25_wait_done",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     out_path = tmp_path / "predictions_20230826_step024.nc"
@@ -111,7 +111,7 @@ def test_generate_predictions_wait_for_rank0_write_done(tmp_path: Path):
 def test_generate_predictions_wait_for_rank0_write_failure(tmp_path: Path):
     mod = _load_module(
         "gen25_wait_failed",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     out_path = tmp_path / "predictions_20230826_step024.nc"
@@ -132,7 +132,7 @@ def test_generate_predictions_wait_for_rank0_write_failure(tmp_path: Path):
 def test_generate_predictions_rejects_allow_missing_target(tmp_path: Path, monkeypatch):
     mod = _load_module(
         "gen25_reject_allow_missing_target",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
     input_root = tmp_path / "input"
     out_dir = tmp_path / "out"
@@ -158,7 +158,7 @@ def test_generate_predictions_rejects_allow_missing_target(tmp_path: Path, monke
 def test_generate_predictions_allows_missing_target_unsafe(tmp_path: Path, monkeypatch):
     mod = _load_module(
         "gen25_allow_missing_target_unsafe",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -260,7 +260,7 @@ def test_generate_predictions_allows_missing_target_unsafe(tmp_path: Path, monke
 def test_generate_predictions_rejects_nonempty_out_dir(tmp_path: Path, monkeypatch):
     mod = _load_module(
         "gen25_reject_nonempty_out_dir",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
     input_root = tmp_path / "input"
     out_dir = tmp_path / "out"
@@ -287,7 +287,7 @@ def test_generate_predictions_rejects_nonempty_out_dir(tmp_path: Path, monkeypat
 def test_generate_predictions_accepts_explicit_name_ckpt(monkeypatch, tmp_path: Path):
     mod = _load_module(
         "gen25_name_ckpt",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -385,7 +385,7 @@ def test_generate_predictions_bundle_pairs_override_dates_steps(
 ):
     mod = _load_module(
         "gen25_bundle_pairs",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -489,7 +489,7 @@ def test_generate_predictions_bundle_pairs_override_dates_steps(
 def test_generate_predictions_rejects_existing_prediction_file(monkeypatch, tmp_path: Path):
     mod = _load_module(
         "gen25_reject_existing_prediction_file",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -583,7 +583,7 @@ def test_generate_predictions_main_binds_cuda_device_and_gpu_override(
 ):
     mod = _load_module(
         "gen25_main_distributed",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -701,7 +701,7 @@ def test_generate_predictions_rejects_world_size_mismatch(
 ):
     mod = _load_module(
         "gen25_main_world_mismatch",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -750,7 +750,7 @@ def test_generate_predictions_passes_output_selection_and_slim_output(
 ):
     mod = _load_module(
         "gen25_output_subset",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -864,7 +864,7 @@ def test_generate_predictions_defaults_to_surface_plus_core_pl_and_slim(
 ):
     mod = _load_module(
         "gen25_default_subset",
-        ROOT / "eval/jobs/generate_predictions_25_files.py",
+        ROOT / "eval/archive/jobs/generate_predictions_25_files.py",
     )
 
     input_root = tmp_path / "input"
@@ -1003,7 +1003,7 @@ def test_launch_predictions_eval_suite_dry_run_generates_scripts(tmp_path: Path)
     import uuid
 
     run_id = f"manual_{uuid.uuid4().hex[:8]}"
-    script = ROOT / "eval/jobs/launch_predictions_eval_suite.sh"
+    script = ROOT / "eval/archive/jobs/launch_predictions_eval_suite.sh"
     eval_root = tmp_path / "eval_root"
     run_dir = eval_root / run_id
     generated_dir = run_dir / "jobs"
@@ -1038,39 +1038,3 @@ def test_launch_predictions_eval_suite_dry_run_generates_scripts(tmp_path: Path)
     assert f"--eval-root {run_dir}/eval" in evl_text
     assert "Expected 25 prediction files" in evl_text
 
-
-def test_launch_proxy_eval_dry_run_uses_repo_owned_spectra_helper(tmp_path: Path):
-    import subprocess
-    import uuid
-
-    run_id = f"proxy_{uuid.uuid4().hex[:8]}"
-    script = ROOT / "eval/jobs/launch_proxy_eval.sh"
-    eval_root = tmp_path / "eval_root"
-    run_dir = eval_root / run_id
-    generated_dir = run_dir / "jobs"
-
-    out = subprocess.check_output(
-        [
-            str(script),
-            "--run-id",
-            run_id,
-            "--eval-root",
-            str(eval_root),
-            "--ckpt-id",
-            "4a5b2f1b24b84c52872bfcec1410b00f",
-            "--write-scoreboard-artifacts",
-            "--dry-run",
-        ],
-        text=True,
-    )
-    assert "Dry run. Scripts written" in out
-
-    evl = generated_dir / f"eval_proxy_{run_id}.sbatch"
-    assert evl.exists()
-
-    evl_text = evl.read_text(encoding="utf-8")
-    helper_path = ROOT / "eval/jobs/templates/predictions_dir_spectra.py"
-    assert str(helper_path) in evl_text
-    assert "/dev/docs/scratch/predictions_dir_spectra.py" not in evl_text
-    assert "preserving scheduler success" not in evl_text
-    assert "Proxy TC comparison failed with exit code" in evl_text

@@ -12,7 +12,10 @@ __pycache__/
 # Job submission logs (created by ecsbatch wrapper when sbatch is run from repo root)
 ecsbatch.log.*
 *.out
-core.*
+# Core dumps are named core.<pid> or core.<host>.<pid>. The pattern is narrow on purpose:
+# a plain core.* would also hide a source file called core.py.
+core.[0-9]*
+core.*.[0-9]*
 
 # Legacy generated eval scripts (new flow writes under /home/ecm5702/perm/eval/<run>/jobs)
 eval/jobs/generated/
@@ -21,3 +24,8 @@ eval/jobs/generated/
 # from eval/config/ladder/*.yaml profiles; never hand-edit, never commit).
 eval/config/lanes/_ladder_*.yaml
 eval/config/lanes/_evoref_*.yaml
+
+# Local-only build artifacts at the repository root (anchored, so the package
+# eval/evaluators/mlflow/ is not caught).
+/graphify-out/
+/mlflow/

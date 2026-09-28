@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-LOADER_PY = ROOT / "mlflow" / "loader.py"
+LOADER_PY = ROOT / "eval" / "evaluators" / "mlflow" / "_loader.py"
 SPEC = importlib.util.spec_from_file_location("downscaling_tools_mlflow_loader", LOADER_PY)
 assert SPEC is not None and SPEC.loader is not None
 loader_mod = importlib.util.module_from_spec(SPEC)

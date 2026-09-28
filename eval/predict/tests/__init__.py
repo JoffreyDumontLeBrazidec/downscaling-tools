@@ -111,12 +111,18 @@ def install_manual_inference_dataset_stub(
     dataset_mod.build_predictions_dataset = build_fn or stub_build_predictions_dataset
     dataset_mod.OUTPUT_WEATHER_STATE_MODE_CHOICES = ("all", "surface-plus-core-pl")
 
+    # eval.predict._mi imports both submodules; the dataset builder only uses dataset.
+    predict_mod = types.ModuleType("manual_inference.prediction.predict")
+    predict_mod.__package__ = "manual_inference.prediction"
+
     manual_pkg.prediction = prediction_pkg
     prediction_pkg.dataset = dataset_mod
+    prediction_pkg.predict = predict_mod
 
     monkeypatch.setitem(sys.modules, "manual_inference", manual_pkg)
     monkeypatch.setitem(sys.modules, "manual_inference.prediction", prediction_pkg)
     monkeypatch.setitem(sys.modules, "manual_inference.prediction.dataset", dataset_mod)
+    monkeypatch.setitem(sys.modules, "manual_inference.prediction.predict", predict_mod)
 
 
 def install_torch_stub(
