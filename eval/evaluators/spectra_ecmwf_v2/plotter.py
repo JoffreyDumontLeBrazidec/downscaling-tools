@@ -18,12 +18,14 @@ def plot(
     """Build the spectra PDFs for this run.
 
     Two files are written side by side. `spectra_ecmwf.pdf` holds the
-    absolute amplitudes, with the prediction, truth and input curves on
-    log-log axes. `spectra_ecmwf_ratio.pdf` holds the same prediction and
-    input curves divided by the truth curve, so that a perfect match is
-    the horizontal line at one and departures of a few percent are
-    readable. The ratio file needs the truth curves and is skipped
-    without them.
+    mean power spectra (the square of the stored amplitudes, in the
+    variable's display unit squared), with the model, truth and input
+    curves on log-log axes. `spectra_ecmwf_ratio.pdf` holds the same model
+    and input spectra divided by the truth spectrum, so that a perfect
+    match is the horizontal line at one and departures of a few percent
+    are readable. The ratio file needs the truth curves and is skipped
+    without them. Each PDF also gets one PNG per page in
+    `spectra_ecmwf_pages/` and `spectra_ecmwf_ratio_pages/`.
     """
     from ._plotter import build_pdf_ecmwf_ratio, build_pdf_ecmwf_with_references
 

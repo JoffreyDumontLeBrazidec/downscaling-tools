@@ -1,4 +1,4 @@
-"""Plot prediction/truth spectral amplitude RATIO against wavenumber.
+"""Plot the prediction/truth spectral POWER ratio against wavenumber.
 
 Reading a deficit off a log-log spectrum is unreliable: a 15% shortfall is a
 0.07-decade offset, which is a couple of percent of a four-decade axis, and it
@@ -8,6 +8,8 @@ departs and by how much, with no eyeballing.
 
 Reads the spectra_ecmwf evaluator's own .npy output, so it inherits that
 evaluator's proper spectral transform rather than any HEALPix approximation.
+The stored curves are amplitudes; the figure shows the smoothed power ratio (their
+square ratio) in the house style of ``eval.plotting``, as PNG and PDF.
 """
 from __future__ import annotations
 
@@ -17,8 +19,8 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
 
 GROUPS = [
     ("10u_sfc", "10 m zonal wind"),
@@ -62,47 +64,53 @@ def main():
     p.add_argument("--out", required=True)
     a = p.parse_args()
 
-    fig, axes = plt.subplots(2, 3, figsize=(15.5, 8.0), squeeze=False)
-    for idx, (grp, title) in enumerate(GROUPS):
-        ax = axes[idx // 3][idx % 3]
-        w, am, nm = _stack(a.model_spectra, grp)
-        _, at, nt = _stack(a.truth_spectra, grp)
-        if w is None or at is None:
-            ax.set_title(title + " (missing)")
-            continue
-        n = min(len(w), len(am), len(at))
-        w, am, at = w[:n], am[:n], at[:n]
-        keep = w >= 2
+    from eval.plotting import AXIS, eval_style, role_style, save_figure, variable_spec
 
-        ax.semilogx(w[keep], _smooth_ratio(w, am, at)[keep], color="tab:blue", lw=1.8,
-                    label="prediction / truth")
-        if a.input_spectra:
-            _, ai, _ = _stack(a.input_spectra, grp)
-            if ai is not None:
-                ai = ai[:n]
-                ax.semilogx(w[keep], _smooth_ratio(w, ai, at)[keep], color="0.55", lw=1.2,
-                            ls="--", label="coarse input / truth")
-        ax.axhline(1.0, color="k", lw=0.9, ls=":")
-        ax.axvline(320, color="tab:red", lw=0.9, ls=":", alpha=0.7)
-        ax.set_ylim(0.0, 1.35)
-        ax.set_xlim(2, max(w))
-        ax.set_title("%s   (n=%d)" % (title, nm), fontsize=10)
-        ax.grid(alpha=0.3, which="both")
-        ax.set_xlabel("wavenumber")
-        if idx % 3 == 0:
-            ax.set_ylabel("amplitude ratio")
-        if idx == 0:
-            ax.legend(fontsize=8, loc="lower left")
+    with eval_style():
+        fig, axes = plt.subplots(2, 3, figsize=(15.5, 8.4), squeeze=False, sharey=True)
+        handles = None
+        for idx, (grp, _title) in enumerate(GROUPS):
+            ax = axes[idx // 3][idx % 3]
+            name = variable_spec(grp).name
+            w, am, nm = _stack(a.model_spectra, grp)
+            _, at, nt = _stack(a.truth_spectra, grp)
+            if w is None or at is None:
+                ax.set_title(name + " (no data)")
+                continue
+            n = min(len(w), len(am), len(at))
+            w, am, at = w[:n], am[:n], at[:n]
+            keep = w >= 2
 
-    fig.suptitle(
-        "Spectral amplitude ratio to truth  --  %s\n"
-        "1.0 = exactly the right amount of structure at that scale; "
-        "red dotted line = O320 truncation" % a.label, fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
-    out = Path(a.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=150)
-    fig.savefig(out.with_suffix(".png"), dpi=140)
+            # _smooth_ratio returns sqrt(power ratio); the figure shows the power ratio itself.
+            ax.axhline(1.0, label="Truth = 1", **role_style("truth", linewidth=1.6))
+            ax.semilogx(w[keep], _smooth_ratio(w, am, at)[keep] ** 2,
+                        label="Model / truth", **role_style("model"))
+            if a.input_spectra:
+                _, ai, _ = _stack(a.input_spectra, grp)
+                if ai is not None:
+                    ai = ai[:n]
+                    ax.semilogx(w[keep], _smooth_ratio(w, ai, at)[keep] ** 2,
+                                label="Coarse input / truth", **role_style("input"))
+            ax.axvline(320, color="0.45", lw=1.0, ls=":", label="O320 truncation (ℓ = 320)")
+            ax.set_ylim(0.0, 1.8)
+            ax.set_xlim(2, max(w))
+            ax.set_title(f"{name} (n = {nm} fields)")
+            ax.set_xlabel(AXIS["wavenumber"])
+            if idx % 3 == 0:
+                ax.set_ylabel(AXIS["power_ratio"])
+            if handles is None:
+                handles = ax.get_legend_handles_labels()
+
+        if handles is not None:
+            fig.legend(*handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(
+            "Spectral power ratio to the truth" + (f": {a.label}" if a.label else "")
+            + "\n1 = the right amount of variance at that scale; dotted line = O320 truncation")
+        fig.tight_layout(rect=(0, 0.035, 1, 0.96))
+        out = Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # writes <out stem>.png (150 dpi) and <out stem>.pdf, as before
+        save_figure(fig, out, close=True)
     print("wrote", out)
 
 

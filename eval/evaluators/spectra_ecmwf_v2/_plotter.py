@@ -4,6 +4,13 @@ Two modes are auto-detected:
   proxy   : spectra_curve_summary.json exists in spectra_dir
   ecmwf   : ampl_*.npy / wvn_*.npy files exist in subdirectories of spectra_dir
 
+Figures follow the house style of ``eval.plotting``: truth black solid, model red solid,
+input blue dashed, x axis "Total wavenumber ℓ" with the wavelength on a top axis. The stored
+curves are spectral AMPLITUDES (``sqrt(sum_m |X_nm|^2)`` in the field's native unit); the
+figures draw their square, the spectral POWER, in the variable's display unit squared
+(hPa² for pressure, dam² for geopotential height). Curves are averaged in power. Every
+multi-page PDF also gets one PNG per page in ``<name>_pages/``. The stored files are only read.
+
 Usage:
     python spectra_plot_pdf.py --spectra-dir <dir> --out-pdf <path>
 """
@@ -17,13 +24,96 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 import numpy as np  # noqa: E402
 
+from eval.plotting import AXIS, FigureBook, eval_style, role_style, variable_spec  # noqa: E402
+from eval.plotting.spec_helpers import (  # noqa: E402
+    add_wavelength_axis,
+    amplitude_to_power,
+    count_phrase,
+    spectral_power_label,
+)
 
 # Preferred variable order for proxy mode
 _VAR_ORDER = ["10u", "10v", "2t", "msl", "sp", "t_850", "z_500"]
 _SCOPE_ORDER = ["full_field", "residual"]
+_SCOPE_NAMES = {"full_field": "full field", "residual": "residual (field minus interpolated input)"}
+
+_FIGSIZE = (8.0, 5.2)
+_GUIDE_COLOR = "0.45"      # neutral grey for reading aids (score threshold, tolerance band)
+
+
+# ---------------------------------------------------------------------------
+# Shared drawing helpers
+# ---------------------------------------------------------------------------
+
+def _role_label(role: str, name: str | None) -> str:
+    """"Truth (ENFO)" from ("truth", "ENFO"); just "Truth" when the name adds nothing."""
+    title = role.capitalize()
+    if not name or name.strip().lower() in (role, ""):
+        return title
+    return f"{title} ({name})"
+
+
+def _sample_note(files: list[Path]) -> str:
+    """"n = 10: 5 dates, 2 lead times" from the curve file names (plain "n = 10" otherwise)."""
+    try:
+        from eval._backends.spectra import naming
+    except Exception:  # pragma: no cover - plotting must not depend on this
+        naming = None
+    n = len(files)
+    parsed = [naming.parse(Path(f).name) for f in files] if naming else [None]
+    if not files or any(p is None for p in parsed):
+        return f"n = {n}"
+    dates = {p["date"] for p in parsed}
+    steps = {p["step"] for p in parsed}
+    members = {p["member"] for p in parsed}
+    parts = [count_phrase(len(dates), "date"), count_phrase(len(steps), "lead time")]
+    if len(members) > 1:
+        parts.append(count_phrase(len(members), "member"))
+    return f"n = {n}: " + ", ".join(parts)
+
+
+def _finish_spectrum_axes(ax, variable: str | None, *, ylabel: str | None = None) -> None:
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel(AXIS["wavenumber"])
+    ax.set_ylabel(ylabel or spectral_power_label(variable))
+    ax.grid(True, which="major", color="0.86", linewidth=0.6)
+    ax.grid(True, which="minor", color="0.93", linewidth=0.4)
+    add_wavelength_axis(ax)
+
+
+def _title_for(pname: str, what: str) -> str:
+    spec = variable_spec(pname)
+    return f"{spec.name}: {what}"
+
+
+def _load_curve_stack(amp_dir: Path, param_name: str):
+    """(wavenumbers, amplitude stack [n_curves, n_wvn], amplitude files) or None."""
+    d = Path(amp_dir) / param_name
+    if not d.exists():
+        return None
+    ampl_files = sorted(d.glob("ampl_*.npy"))
+    if not ampl_files:
+        return None
+    wvn_files = sorted(d.glob("wvn_*.npy"))
+    if wvn_files and len(ampl_files) != len(wvn_files):
+        return None
+    ampls = [np.load(f) for f in ampl_files]
+    if len(set(len(a) for a in ampls)) > 1:
+        return None
+    if wvn_files:
+        wvn = np.mean(np.stack([np.load(f) for f in wvn_files], axis=0), axis=0)
+    else:
+        wvn = np.arange(len(ampls[0]), dtype=float)
+    return wvn, np.stack(ampls, axis=0), ampl_files
+
+
+def _power_stats(param: str, stack: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Mean and standard deviation over curves of the spectral power (display unit squared)."""
+    power = amplitude_to_power(param, stack)
+    return power.mean(axis=0), power.std(axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +121,11 @@ _SCOPE_ORDER = ["full_field", "residual"]
 # ---------------------------------------------------------------------------
 
 def build_pdf_proxy(spectra_dir: Path, out_pdf: Path) -> int:
-    """Build PDF from spectra_curve_summary.json.  Returns page count."""
+    """Build PDF from spectra_curve_summary.json.  Returns page count.
+
+    The retired HEALPix proxy stored an unnormalised power spectrum in native units, so the
+    y axis says so instead of naming a unit.
+    """
     summary_path = spectra_dir / "spectra_curve_summary.json"
     with open(summary_path, encoding="utf-8") as fh:
         summary = json.load(fh)
@@ -46,7 +140,7 @@ def build_pdf_proxy(spectra_dir: Path, out_pdf: Path) -> int:
     var_order = known + extras
 
     pages = 0
-    with PdfPages(out_pdf) as pdf:
+    with eval_style(), FigureBook(out_pdf, png=True) as book:
         for var in var_order:
             vs = weather_states[var]
             if vs.get("status") != "ok":
@@ -85,31 +179,27 @@ def build_pdf_proxy(spectra_dir: Path, out_pdf: Path) -> int:
                     print(f"[WARN] Skipping {var}/{scope}: no valid data after masking")
                     continue
 
-                fig, ax = plt.subplots(figsize=(8, 5))
-                # Only plot positive wavenumbers for log-log
-                ax.loglog(wvn[mask], pred_masked, label="prediction", color="tab:blue")
-                ax.loglog(wvn[mask], truth_masked, label="truth", color="tab:orange", linestyle="--")
-
+                fig, ax = plt.subplots(figsize=_FIGSIZE)
+                ax.plot(wvn[mask], truth_masked, label=f"Truth (n = {n_curves})",
+                        **role_style("truth"))
+                ax.plot(wvn[mask], pred_masked, label=f"Model (n = {n_curves})",
+                        **role_style("model"))
                 if score_wvn_min is not None:
-                    ax.axvline(score_wvn_min, color="gray", linestyle=":", linewidth=0.8, label=f"score ell>{score_wvn_min:.0f}")
-
-                ax.set_xlabel("Wavenumber ℓ")
-                ax.set_ylabel("Spectral amplitude")
-                ax.set_title(f"{run_label}  |  {var}  |  {scope}  (n={n_curves})")
-                ax.legend(fontsize=8)
-                rl2_label = "RL2=N/A" if (isinstance(rl2, float) and np.isnan(rl2)) else f"RL2={rl2:.4f}"
-                ax.text(
-                    0.98, 0.98,
-                    rl2_label,
-                    transform=ax.transAxes,
-                    ha="right", va="top",
-                    fontsize=9,
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="wheat", alpha=0.7),
-                )
-                ax.grid(True, which="both", linestyle=":", linewidth=0.4, alpha=0.6)
+                    ax.axvline(score_wvn_min, color=_GUIDE_COLOR, linestyle=":", linewidth=1.0,
+                               label=f"Scored above ℓ = {score_wvn_min:.0f}")
+                _finish_spectrum_axes(ax, var, ylabel=f"{AXIS['power']} (proxy, unnormalised)")
+                ax.set_title(_title_for(var, f"power spectrum, {_SCOPE_NAMES.get(scope, scope)}"))
+                ax.legend(loc="lower left")
+                rl2_label = ("relative L2 distance: n/a" if (isinstance(rl2, float) and np.isnan(rl2))
+                             else f"relative L2 distance: {rl2:.4f}")
+                ax.text(0.98, 0.97, rl2_label, transform=ax.transAxes, ha="right", va="top",
+                        fontsize=9, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
+                                              edgecolor="0.7"))
+                if run_label:
+                    fig.text(0.01, 0.005, f"run {run_label} · retired HEALPix proxy spectra",
+                             fontsize=7, color="0.4", ha="left", va="bottom")
                 fig.tight_layout()
-                pdf.savefig(fig)
-                plt.close(fig)
+                book.add(fig, name=f"{var}_{scope}")
                 pages += 1
 
     return pages
@@ -132,7 +222,7 @@ def build_pdf_ecmwf(spectra_dir: Path, out_pdf: Path) -> int:
     )
 
     pages = 0
-    with PdfPages(out_pdf) as pdf:
+    with eval_style(), FigureBook(out_pdf, png=True) as book:
         for param_dir in param_dirs:
             ampl_files = sorted(param_dir.glob("ampl_*.npy"))
             wvn_files = sorted(param_dir.glob("wvn_*.npy"))
@@ -145,43 +235,26 @@ def build_pdf_ecmwf(spectra_dir: Path, out_pdf: Path) -> int:
                 )
                 continue
 
-            # Load all amplitude arrays; use matching wvn if available
-            ampls = [np.load(f) for f in ampl_files]
-            if wvn_files:
-                wvns = [np.load(f) for f in wvn_files]
-                wvn = np.mean(np.stack(wvns, axis=0), axis=0)
-            else:
-                wvn = np.arange(len(ampls[0]), dtype=float)
-
-            # Fix 2: guard against inconsistent amplitude array lengths
-            ampl_lengths = [len(a) for a in ampls]
-            if len(set(ampl_lengths)) > 1:
+            got = _load_curve_stack(spectra_dir, param_dir.name)
+            if got is None:
+                # Fix 2: guard against inconsistent amplitude array lengths
                 print(f"[WARN] Skipping {param_dir.name}: inconsistent amplitude array lengths")
                 continue
+            wvn, stack, files = got
+            mean, std = _power_stats(param_dir.name, stack)
 
-            ampl_stack = np.stack(ampls, axis=0)
-            ampl_mean = np.mean(ampl_stack, axis=0)
-            ampl_std = np.std(ampl_stack, axis=0)
-
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig, ax = plt.subplots(figsize=_FIGSIZE)
             mask = wvn > 0
-            ax.loglog(wvn[mask], ampl_mean[mask], label="mean", color="tab:blue")
-            ax.fill_between(
-                wvn[mask],
-                np.maximum(ampl_mean[mask] - ampl_std[mask], 1e-30),
-                ampl_mean[mask] + ampl_std[mask],
-                alpha=0.25,
-                color="tab:blue",
-                label="±1σ",
-            )
-            ax.set_xlabel("Wavenumber ℓ")
-            ax.set_ylabel("Spectral amplitude")
-            ax.set_title(f"{param_dir.name}  (n={len(ampl_files)} files)")
-            ax.legend(fontsize=8)
-            ax.grid(True, which="both", linestyle=":", linewidth=0.4, alpha=0.6)
+            model = role_style("model")
+            ax.plot(wvn[mask], mean[mask], label=f"Model mean ({_sample_note(files)})", **model)
+            ax.fill_between(wvn[mask], np.maximum(mean[mask] - std[mask], 1e-30),
+                            mean[mask] + std[mask], color=model["color"], alpha=0.15, lw=0,
+                            label="Model ±1 standard deviation")
+            _finish_spectrum_axes(ax, param_dir.name)
+            ax.set_title(_title_for(param_dir.name, "power spectrum"))
+            ax.legend(loc="lower left")
             fig.tight_layout()
-            pdf.savefig(fig)
-            plt.close(fig)
+            book.add(fig, name=param_dir.name)
             pages += 1
 
     return pages
@@ -207,6 +280,18 @@ def _load_mean_curve(amp_dir: Path, param_name: str) -> tuple[np.ndarray, np.nda
     return wvn, ampl_mean
 
 
+def _load_mean_power(amp_dir: Path | None, param_name: str):
+    """(wavenumbers, mean power in display units², curve files) of a reference, or None."""
+    if amp_dir is None:
+        return None
+    got = _load_curve_stack(amp_dir, param_name)
+    if got is None:
+        return None
+    wvn, stack, files = got
+    mean, _ = _power_stats(param_name, stack)
+    return wvn, mean, files
+
+
 def build_pdf_ecmwf_with_references(
     pred_amp_dir: Path,
     out_pdf: Path,
@@ -216,69 +301,60 @@ def build_pdf_ecmwf_with_references(
     truth_label: str = "truth",
     input_label: str = "input",
 ) -> int:
-    """Build PDF with prediction + optional truth/input reference curves."""
+    """Build PDF with prediction + optional truth/input reference curves.
+
+    One page per parameter: the model's mean power spectrum with a ±1 standard deviation band
+    across its fields, the truth (black) and the input (blue dashed) mean spectra.
+    """
     param_dirs = sorted(
         d for d in pred_amp_dir.iterdir()
         if d.is_dir() and list(d.glob("ampl_*.npy"))
     )
 
     pages = 0
-    with PdfPages(out_pdf) as pdf:
+    with eval_style(), FigureBook(out_pdf, png=True) as book:
         for param_dir in param_dirs:
             pname = param_dir.name
-            ampl_files = sorted(param_dir.glob("ampl_*.npy"))
-            wvn_files = sorted(param_dir.glob("wvn_*.npy"))
-            if wvn_files and len(ampl_files) != len(wvn_files):
+            got = _load_curve_stack(pred_amp_dir, pname)
+            if got is None:
                 continue
+            wvn, stack, files = got
+            pred_mean, pred_std = _power_stats(pname, stack)
 
-            ampls = [np.load(f) for f in ampl_files]
-            if len(set(len(a) for a in ampls)) > 1:
-                continue
-            if wvn_files:
-                wvn = np.mean(np.stack([np.load(f) for f in wvn_files], axis=0), axis=0)
-            else:
-                wvn = np.arange(len(ampls[0]), dtype=float)
-
-            pred_mean = np.mean(np.stack(ampls, axis=0), axis=0)
-            pred_std = np.std(np.stack(ampls, axis=0), axis=0)
-
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig, ax = plt.subplots(figsize=_FIGSIZE)
             mask = wvn > 0
 
-            # Truth reference
-            if truth_amp_dir:
-                ref = _load_mean_curve(truth_amp_dir, pname)
-                if ref is not None:
-                    rwvn, rampl = ref
-                    rmask = rwvn > 0
-                    ax.loglog(rwvn[rmask], rampl[rmask], label=f"truth ({truth_label})", color="tab:orange", linestyle="--", linewidth=2)
+            truth = _load_mean_power(truth_amp_dir, pname)
+            if truth is not None:
+                rwvn, rpow, rfiles = truth
+                rmask = rwvn > 0
+                ax.plot(rwvn[rmask], rpow[rmask],
+                        label=f"{_role_label('truth', truth_label)} ({_sample_note(rfiles)})",
+                        **role_style("truth"))
 
-            # Input reference
-            if input_amp_dir:
-                ref = _load_mean_curve(input_amp_dir, pname)
-                if ref is not None:
-                    rwvn, rampl = ref
-                    rmask = rwvn > 0
-                    ax.loglog(rwvn[rmask], rampl[rmask], label=f"input ({input_label})", color="#888888", linestyle="--", linewidth=2)
+            inp = _load_mean_power(input_amp_dir, pname)
+            if inp is not None:
+                rwvn, rpow, rfiles = inp
+                rmask = rwvn > 0
+                ax.plot(rwvn[rmask], rpow[rmask],
+                        label=f"{_role_label('input', input_label)} ({_sample_note(rfiles)})",
+                        **role_style("input"))
 
-            # Prediction
-            ax.loglog(wvn[mask], pred_mean[mask], label="prediction", color="tab:blue", linewidth=2)
+            model = role_style("model")
+            ax.plot(wvn[mask], pred_mean[mask], label=f"Model ({_sample_note(files)})", **model)
             ax.fill_between(
                 wvn[mask],
                 np.maximum(pred_mean[mask] - pred_std[mask], 1e-30),
                 pred_mean[mask] + pred_std[mask],
-                alpha=0.2,
-                color="tab:blue",
+                color=model["color"], alpha=0.15, lw=0, zorder=1,
+                label="Model ±1 standard deviation",
             )
 
-            ax.set_xlabel("Wavenumber ℓ")
-            ax.set_ylabel("Spectral amplitude")
-            ax.set_title(f"{pname}  (n={len(ampl_files)})")
-            ax.legend(fontsize=8)
-            ax.grid(True, which="both", linestyle=":", linewidth=0.4, alpha=0.6)
+            _finish_spectrum_axes(ax, pname)
+            ax.set_title(_title_for(pname, "mean power spectrum"))
+            ax.legend(loc="lower left")
             fig.tight_layout()
-            pdf.savefig(fig)
-            plt.close(fig)
+            book.add(fig, name=pname)
             pages += 1
 
     return pages
@@ -370,6 +446,21 @@ def _ratio_ylim(series: list[np.ndarray]) -> tuple[float, float]:
     return 1.0 / span, span
 
 
+_RATIO_TICKS = (0.05, 0.1, 0.2, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0,
+                5.0, 10.0, 20.0)
+_RATIO_TICKS_MEDIUM = (0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 20.0)
+_RATIO_TICKS_COARSE = (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0)
+
+
+def _ratio_ticks(lo: float, hi: float) -> list[float]:
+    """Readable tick values (at most about eight) for a log ratio axis between ``lo`` and ``hi``."""
+    for candidates in (_RATIO_TICKS, _RATIO_TICKS_MEDIUM, _RATIO_TICKS_COARSE):
+        ticks = [t for t in candidates if lo <= t <= hi]
+        if len(ticks) <= 8:
+            break
+    return ticks or [1.0]
+
+
 def build_pdf_ecmwf_ratio(
     pred_amp_dir: Path,
     out_pdf: Path,
@@ -382,11 +473,11 @@ def build_pdf_ecmwf_ratio(
 ) -> int:
     """Build a PDF of spectra expressed as a ratio to the truth spectrum.
 
-    One page per parameter. The prediction and the model input are each
-    divided by the truth curve, so a perfect match sits on the horizontal
-    line at one, a curve above one carries too much power at that scale and a
-    curve below one carries too little. The truth itself is the flat line at
-    one by construction and is not drawn as a separate series.
+    One page per parameter. The mean power spectra of the prediction and of
+    the model input are each divided by the mean power spectrum of the truth,
+    so a perfect match sits on the horizontal line at one, a curve above one
+    carries too much power at that scale and a curve below one carries too
+    little. The truth itself is the flat line at one by construction.
 
     The truth curves are required: without them there is nothing to divide
     by, so the function returns zero pages. Returns the page count.
@@ -401,97 +492,94 @@ def build_pdf_ecmwf_ratio(
     if score_wavenumber_min is None:
         score_wavenumber_min = _default_score_wavenumber_min()
 
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
     pages = 0
-    with PdfPages(out_pdf) as pdf:
+    with eval_style(), FigureBook(out_pdf, png=True) as book:
         for param_dir in param_dirs:
             pname = param_dir.name
 
-            truth = _load_mean_curve(truth_amp_dir, pname)
+            truth = _load_mean_power(truth_amp_dir, pname)
             if truth is None:
                 print(f"[WARN] Skipping ratio page for {pname}: no truth curve")
                 continue
-            twvn, tampl = truth
+            twvn, tpow, tfiles = truth
 
-            ampl_files = sorted(param_dir.glob("ampl_*.npy"))
-            wvn_files = sorted(param_dir.glob("wvn_*.npy"))
-            if wvn_files and len(ampl_files) != len(wvn_files):
+            got = _load_curve_stack(pred_amp_dir, pname)
+            if got is None:
                 continue
-            ampls = [np.load(f) for f in ampl_files]
-            if len(set(len(a) for a in ampls)) > 1:
-                continue
-            if wvn_files:
-                wvn = np.mean(np.stack([np.load(f) for f in wvn_files], axis=0), axis=0)
-            else:
-                wvn = np.arange(len(ampls[0]), dtype=float)
-            stack = np.stack(ampls, axis=0)
-            pred_mean = np.mean(stack, axis=0)
-            pred_std = np.std(stack, axis=0)
+            wvn, stack, files = got
+            pred_mean, pred_std = _power_stats(pname, stack)
 
-            pred_ratio = _ratio_to_reference(wvn, pred_mean, twvn, tampl)
+            pred_ratio = _ratio_to_reference(wvn, pred_mean, twvn, tpow)
             if pred_ratio is None:
                 print(f"[WARN] Skipping ratio page for {pname}: no prediction/truth overlap")
                 continue
 
-            from matplotlib.ticker import FuncFormatter
-
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig, ax = plt.subplots(figsize=_FIGSIZE)
             drawn: list[np.ndarray] = []
 
-            # Input over truth: how far the driver already is from the target.
-            if input_amp_dir:
-                ref = _load_mean_curve(input_amp_dir, pname)
-                if ref is not None:
-                    got = _ratio_to_reference(ref[0], ref[1], twvn, tampl)
-                    if got is not None:
-                        iwvn, iratio = got
-                        ax.plot(
-                            iwvn, iratio,
-                            label=f"input ({input_label}) / truth",
-                            color="#888888", linestyle="--", linewidth=2,
-                        )
-                        drawn.append(iratio)
+            # Perfect agreement, and a tolerance band to read small departures against.
+            ax.axhspan(
+                1.0 - _RATIO_GUIDE_BAND, 1.0 + _RATIO_GUIDE_BAND,
+                color=_GUIDE_COLOR, alpha=0.12, lw=0, zorder=0,
+                label=f"±{_RATIO_GUIDE_BAND * 100:.0f} % of the truth power",
+            )
+            truth_style = role_style("truth", linewidth=1.8)
+            ax.axhline(1.0, label=f"{_role_label('truth', truth_label)} = 1 "
+                                  f"({_sample_note(tfiles)})", **truth_style)
 
-            # Prediction over truth, with the same spread band as the
-            # absolute plot carried through the division.
+            # Input over truth: how far the driver already is from the target.
+            inp = _load_mean_power(input_amp_dir, pname)
+            if inp is not None:
+                got_in = _ratio_to_reference(inp[0], inp[1], twvn, tpow)
+                if got_in is not None:
+                    iwvn, iratio = got_in
+                    ax.plot(iwvn, iratio,
+                            label=f"{_role_label('input', input_label)} / truth "
+                                  f"({_sample_note(inp[2])})",
+                            **role_style("input"))
+                    # The vertical window follows the model only: the input's collapse
+                    # beyond its own truncation runs off the bottom instead of flattening
+                    # the few-percent departures of the model that this page exists to show.
+
+            # Prediction over truth, with the ±1 standard deviation band of the model power
+            # carried through the division.
             pwvn, pratio = pred_ratio
-            band = _ratio_to_reference(wvn, np.maximum(pred_mean - pred_std, 1e-30), twvn, tampl)
-            band_hi = _ratio_to_reference(wvn, pred_mean + pred_std, twvn, tampl)
-            ax.plot(pwvn, pratio, label="prediction / truth", color="tab:blue", linewidth=2)
+            band = _ratio_to_reference(wvn, np.maximum(pred_mean - pred_std, 1e-30), twvn, tpow)
+            band_hi = _ratio_to_reference(wvn, pred_mean + pred_std, twvn, tpow)
+            model = role_style("model")
+            ax.plot(pwvn, pratio, label=f"Model / truth ({_sample_note(files)})", **model)
             if (
                 band is not None and band_hi is not None
                 and band[1].shape == pratio.shape
                 and band_hi[1].shape == pratio.shape
             ):
-                ax.fill_between(pwvn, band[1], band_hi[1], alpha=0.2, color="tab:blue")
+                ax.fill_between(pwvn, band[1], band_hi[1], color=model["color"], alpha=0.15,
+                                lw=0, zorder=1, label="Model ±1 standard deviation")
             drawn.append(pratio)
 
-            # Perfect agreement, and a tolerance band to read small
-            # departures against.
-            ax.axhline(1.0, color="tab:orange", linestyle="-", linewidth=1.5,
-                       label=f"truth ({truth_label})")
-            ax.axhspan(
-                1.0 - _RATIO_GUIDE_BAND, 1.0 + _RATIO_GUIDE_BAND,
-                color="tab:orange", alpha=0.10, zorder=0,
-                label=f"+/-{_RATIO_GUIDE_BAND * 100:.0f}%",
-            )
             if score_wavenumber_min is not None and score_wavenumber_min > 0:
                 ax.axvline(
-                    score_wavenumber_min, color="gray", linestyle=":", linewidth=0.8,
-                    label=f"scored above l={score_wavenumber_min:.0f}",
+                    score_wavenumber_min, color=_GUIDE_COLOR, linestyle=":", linewidth=1.2,
+                    label=f"Scored above ℓ = {score_wavenumber_min:.0f}",
                 )
 
             ax.set_xscale("log")
             ax.set_yscale("log")
-            ax.set_ylim(*_ratio_ylim(drawn))
+            lo, hi = _ratio_ylim(drawn)
+            ax.set_ylim(lo, hi)
+            ax.yaxis.set_major_locator(FixedLocator(_ratio_ticks(lo, hi)))
             ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _pos: f"{v:g}"))
-            ax.set_xlabel("Wavenumber l")
-            ax.set_ylabel("Spectral amplitude / truth amplitude")
-            ax.set_title(f"{pname}  ratio to truth  (n={len(ampl_files)})")
-            ax.legend(fontsize=8)
-            ax.grid(True, which="both", linestyle=":", linewidth=0.4, alpha=0.6)
+            ax.yaxis.set_minor_formatter(NullFormatter())
+            ax.set_xlabel(AXIS["wavenumber"])
+            ax.set_ylabel(AXIS["power_ratio"])
+            ax.grid(True, which="major", color="0.86", linewidth=0.6)
+            add_wavelength_axis(ax)
+            ax.set_title(_title_for(pname, "power spectrum relative to the truth"))
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2)
             fig.tight_layout()
-            pdf.savefig(fig)
-            plt.close(fig)
+            book.add(fig, name=pname)
             pages += 1
 
     return pages
