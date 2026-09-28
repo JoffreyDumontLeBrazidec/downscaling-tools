@@ -107,8 +107,9 @@ def render_dual_row(
         fig = plt.figure(figsize=(16, 10), dpi=scene.dpi)
         proj_inset = select_projection(inset_bbox)
 
-        # Top row.
-        PANEL_Y, PANEL_H, PANEL_W = 0.56, 0.33, 0.20
+        # Top row. The colour bars sit ABOVE the panels (see below) so that the two lines that
+        # join the box on the regional map to the outer panels cross nothing on their way up.
+        PANEL_Y, PANEL_H, PANEL_W = 0.52, 0.33, 0.20
         panel_x = [0.040, 0.246, 0.512, 0.718]
         ax_top = []
         sc_handles: dict[str, object] = {}
@@ -131,10 +132,12 @@ def render_dual_row(
             if is_hres:
                 sc_handles[v] = sc
 
-        # Per-variable colorbars.
+        # Per-variable colorbars, above the two panels of the variable (ticks and label on top).
         for i, v in enumerate(vars_list):
-            cax = fig.add_axes([0.05 + i * 0.475, 0.495, 0.41, 0.013])
+            cax = fig.add_axes([0.05 + i * 0.475, 0.910, 0.41, 0.013])
             cb = fig.colorbar(sc_handles[v], cax=cax, orientation="horizontal")
+            cb.ax.xaxis.set_ticks_position("top")
+            cb.ax.xaxis.set_label_position("top")
             cb.set_label(label_for(v), fontsize=10)
             cb.outline.set_edgecolor("black")
             cb.outline.set_linewidth(1.0)
@@ -158,7 +161,7 @@ def render_dual_row(
 
         fig.suptitle(
             f"{scene.title}   ({scene.ckpt_label})   |   {frame.label()}",
-            fontsize=15, y=0.965,
+            fontsize=15, y=1.005,
         )
         out_png.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out_png, dpi=_save_dpi(scene, out_png), bbox_inches="tight", facecolor="white")
