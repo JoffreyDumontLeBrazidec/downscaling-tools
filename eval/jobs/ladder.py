@@ -154,7 +154,8 @@ def evaluate_block(prof: dict, *, lane: str, evaldir: Path, step: int, overwrite
     The budget's --steps override is applied to every evaluator section that has a
     `steps` key, which would silently widen the spectra pin. spectra_ecmwf_v2 runs
     one gptosp transform per (date, step, member, field), so it gets its own call
-    without --steps and the profile's `spectra_ecmwf_v2.steps` pin holds.
+    without --steps and the profile's `spectra_ecmwf_v2.steps` pin holds. That call
+    is non-fatal, so a spectra failure leaves the rung's other columns intact.
     """
     names = [e.strip() for e in str(prof.get("evaluators", DEFAULT_EVALUATORS)).split(",") if e.strip()]
     stepped = [e for e in names if e != SPECTRA_EVALUATOR]
@@ -165,7 +166,10 @@ def evaluate_block(prof: dict, *, lane: str, evaldir: Path, step: int, overwrite
         block += EVALUATE_ONESHOT.format(evaluators=",".join(stepped),
                                          step_flag=f" --steps {prof['budget']['steps']}", **common)
     if SPECTRA_EVALUATOR in names:
-        block += EVALUATE_ONESHOT.format(evaluators=SPECTRA_EVALUATOR, step_flag="", **common)
+        # Non-fatal like storm_maps: a gptosp or module failure must degrade the row
+        # (collect reads whatever metrics.json exist), never lose the rung's other columns.
+        call = EVALUATE_ONESHOT.format(evaluators=SPECTRA_EVALUATOR, step_flag="", **common)
+        block += call.rstrip("\n") + f' || echo "{SPECTRA_EVALUATOR} failed (non-fatal)"\n'
     return block
 
 
