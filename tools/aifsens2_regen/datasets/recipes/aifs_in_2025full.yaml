@@ -1,0 +1,75 @@
+name: downscaling-ai-pf-enfo-0001-mars-o320-2025-2025-12h-6h-v1-aifscrps
+description: "FULL YEAR 2025 as archived (1 Jan 00 UTC to 31 Dec 12 UTC 2025, starts every 12 h at 00 and 12 UTC, leads 6 and 12 h). The archived AIFS-CRPS ensemble (class ai, model aifs-ens, stream enfo, type pf) at O320, all fifty perturbed members, on a synthetic forecast axis (origin 1900-01-01). The 2025 record is split across two MARS experiment versions: expver 0103, the pre-operational experiment, serves every start up to and including 2025-07-01 00 UTC, and expver 0001 serves every start from 2025-07-01 12 UTC to the end of the year; the two versions are joined here with the concat input action, whose date blocks are written in real calendar time and translated to the synthetic axis by the fork. Input store of the AIFS->analysis o320->o1280 lane; the ensemble dimension holds the 50 members. Note that .zattrs variables_metadata can record only one expver for the whole store, so it shows 0103 alone; the split is documented here and in the block dates of this recipe."
+attribution: ECMWF
+licence: CC-BY-4.0
+dates:
+  start: 2025-01-01 00:00:00
+  end: 2025-12-31 12:00:00
+  frequency: 12h
+  fake_forecasts: true
+  steps: [6, 12]
+build:
+  group_by: forecast
+
+input:
+  concat:
+  - dates:
+      start: 2025-01-01 00:00:00
+      end: 2025-07-01 00:00:00
+      frequency: 12h
+    join:
+    - mars:
+        class: ai
+        model: aifs-ens
+        stream: enfo
+        expver: "0103"
+        type: pf
+        number: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+        levtype: sfc
+        grid: o320
+        param: [10u, 10v, 2d, 2t, tcw, sp, skt, msl]
+    - mars:
+        class: ai
+        model: aifs-ens
+        stream: enfo
+        expver: "0103"
+        type: pf
+        number: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+        levtype: pl
+        grid: o320
+        levelist: [50, 100, 200, 300, 400, 500, 700, 850, 925, 1000]
+        param: [q, t, u, v, w, z]
+  - dates:
+      start: 2025-07-01 12:00:00
+      end: 2025-12-31 12:00:00
+      frequency: 12h
+    join:
+    - mars:
+        class: ai
+        model: aifs-ens
+        stream: enfo
+        expver: "0001"
+        type: pf
+        number: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+        levtype: sfc
+        grid: o320
+        param: [10u, 10v, 2d, 2t, tcw, sp, skt, msl]
+    - mars:
+        class: ai
+        model: aifs-ens
+        stream: enfo
+        expver: "0001"
+        type: pf
+        number: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+        levtype: pl
+        grid: o320
+        levelist: [50, 100, 200, 300, 400, 500, 700, 850, 925, 1000]
+        param: [q, t, u, v, w, z]
+output:
+  chunking: {dates: 1, ensembles: 1, variables: 34}
+  dtype: float32
+  ensemble_dimension: 2
+  flatten_grid: true
+  order_by: [{valid_datetime: ascending}, {param_level: ascending}, {number: ascending}]
+  remapping: {param_level: "{param}_{levelist}"}
+  statistics: param_level

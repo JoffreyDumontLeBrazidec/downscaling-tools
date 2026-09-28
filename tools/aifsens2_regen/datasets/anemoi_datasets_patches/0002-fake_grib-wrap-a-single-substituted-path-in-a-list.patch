@@ -1,0 +1,40 @@
+From cb197253c8e528f089f718891d024ea2d206ed09 Mon Sep 17 00:00:00 2001
+From: Joffrey Dumont Le Brazidec <joffreydumont95@gmail.com>
+Date: Thu, 10 Sep 2026 08:01:50 +0000
+Subject: [PATCH 2/2] fake_grib: wrap a single substituted path in a list
+
+earthkit.data.utils.patterns.Pattern.substitute returns a bare string when every placeholder has
+a single value, and only returns a list when one of them is a list. _expand iterates whatever it
+is given, so the string was walked character by character and from_source("file", "/") started a
+recursive scan of the whole root filesystem. The symptom was anemoi-datasets init sitting in
+disk sleep for twenty minutes with an open descriptor on an unrelated NFS tree.
+
+The original execute() never hit this because it always passes a list of dates.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/anemoi/datasets/create/functions/sources/grib.py | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/anemoi/datasets/create/functions/sources/grib.py b/src/anemoi/datasets/create/functions/sources/grib.py
+index a5c58a84..1940d39b 100644
+--- a/src/anemoi/datasets/create/functions/sources/grib.py
++++ b/src/anemoi/datasets/create/functions/sources/grib.py
+@@ -201,7 +201,13 @@ def fake_grib(context, dates, path, *args, **kwargs):
+         expected += n
+ 
+         for given in given_paths:
+-            for p in _expand(Pattern(given).substitute({"date": start}, allow_extra=True)):
++            # Pattern.substitute returns a bare string when every placeholder has a single
++            # value. _expand iterates its argument, so a string would be walked character by
++            # character; wrap it in a list.
++            substituted = Pattern(given).substitute({"date": start}, allow_extra=True)
++            if isinstance(substituted, str):
++                substituted = [substituted]
++            for p in _expand(substituted):
+                 context.trace("📁", "PATH", p)
+                 s = from_source("file", p)
+                 s = s.sel(**sel)
+-- 
+2.43.7
+

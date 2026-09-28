@@ -1,0 +1,41 @@
+name: downscaling-od-an-oper-0001-mars-o1280-2026-2026-12h-6h-v1-aifsens2-early-validtime
+description: EARLY 2026 (1 Jan 00 UTC to 12 May 00 UTC 2026, 263 initialisations every 12 h, leads 6 and 12 h = 526 samples). Operational O1280 analysis at the VALID time of each (init, lead) sample of the early-2026 AIFS ENS input store, on the SAME synthetic forecast axis (origin 1900-01-19T14:00:00, one hour after the last synthetic date of the summer store). The matching input forecasts were REGENERATED on the cluster with the public AIFS ENS version 2 checkpoint from the IFS ensemble perturbed initial conditions, expver rgn2. Target store of the AIFS->analysis o320->o1280 lane. Built with the fake_forecasts analysis-at-valid-time source (fork branch feature/aifs-regen-2026-early).
+attribution: ECMWF
+licence: CC-BY-4.0
+dates:
+  start: 2026-01-01 00:00:00
+  end: 2026-05-12 00:00:00
+  frequency: 12h
+  fake_forecasts: true
+  fake_forecasts_origin: 1900-01-19T14:00:00
+  steps: [6, 12]
+build:
+  group_by: forecast
+
+input:
+  join:
+  - mars:
+      class: od
+      stream: oper
+      expver: "0001"
+      type: an
+      levtype: sfc
+      grid: o1280
+      param: [10u, 10v, 2d, 2t, tcw, sp, skt, msl]
+  - mars:
+      class: od
+      stream: oper
+      expver: "0001"
+      type: an
+      levtype: pl
+      grid: o1280
+      levelist: [50, 100, 200, 300, 400, 500, 700, 850, 925, 1000]
+      param: [q, t, u, v, w, z]
+output:
+  chunking: {dates: 1, ensembles: 1, variables: 34}
+  dtype: float32
+  ensemble_dimension: 2
+  flatten_grid: true
+  order_by: [{valid_datetime: ascending}, {param_level: ascending}, {number: ascending}]
+  remapping: {param_level: "{param}_{levelist}"}
+  statistics: param_level

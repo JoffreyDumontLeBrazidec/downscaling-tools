@@ -1,0 +1,105 @@
+From 146496d25a8d491d87f2e6f1936b30bcc4ff5b3a Mon Sep 17 00:00:00 2001
+From: Joffrey Dumont Le Brazidec <joffrey.dumont@ecmwf.int>
+Date: Thu, 10 Sep 2026 19:01:13 +0000
+Subject: [PATCH] fake_forecasts: declare real forecast starts that do not
+ exist
+
+A forecast start can be permanently absent from the source data, for example when the
+perturbed initial conditions it was made from were lost on a damaged tape. On a synthetic
+forecast axis there was no way to say so. The dates key "missing" of upstream
+anemoi-datasets was accepted by the recipe parser but silently dropped, because
+FakeForecastsDates never passed its extra keyword arguments to DatesProvider, and it would
+have been ambiguous anyway: the recipe speaks in real calendar dates while the axis of the
+store is made of synthetic 1900-based ones.
+
+FakeForecastsDates now takes a dates key "missing_starts", holding real forecast starts,
+each one either a single date or a "start/end/step" range. The synthetic axis is left
+regular, with no hole: every synthetic date built from one of those starts, that is one date
+per lead time, is declared missing instead. The existing machinery then does the rest, since
+Groups filters missing dates out of every group before the loader sees them, an empty group
+disappears, and the create step writes the list into the "missing_dates" attribute of the
+store, where open_dataset picks it up.
+
+A start listed in "missing_starts" that is not a forecast start of the recipe raises an
+error, so a typo cannot pass unnoticed. Passing "missing" together with "fake_forecasts" now
+raises an error naming "missing_starts", instead of being ignored. The list of missing starts
+is also written to the store metadata as "fake_forecasts_missing_starts", next to the
+existing "fake_forecasts" mapping, so a store says in real calendar time which starts it
+lacks. Recipes that do not use the new key are unchanged.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/anemoi/datasets/dates/__init__.py | 35 ++++++++++++++++++++++++---
+ 1 file changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/src/anemoi/datasets/dates/__init__.py b/src/anemoi/datasets/dates/__init__.py
+index 49ad1fef..0c387e43 100644
+--- a/src/anemoi/datasets/dates/__init__.py
++++ b/src/anemoi/datasets/dates/__init__.py
+@@ -363,7 +363,9 @@ FAKE_FORECASTS_DEFAULT_ORIGIN = datetime.datetime(1900, 1, 1, 0, 0)
+ 
+ 
+ class FakeForecastsDates(FakeDateProvider):
+-    def __init__(self, start, end, steps, frequency=24, fake_forecasts_origin=None, **kwargs):
++    def __init__(
++        self, start, end, steps, frequency=24, fake_forecasts_origin=None, missing_starts=None, **kwargs
++    ):
+         """Synthetic forecast axis.
+ 
+         Parameters
+@@ -373,7 +375,21 @@ class FakeForecastsDates(FakeDateProvider):
+             value. Setting it lets two stores built separately share one contiguous hourly
+             axis, so that they can be joined with `concat` at open time: give the second store
+             the origin that immediately follows the last synthetic date of the first one.
++        missing_starts : list, optional
++            Real forecast starts (initialisation date and time) for which no forecast exists and
++            never will, for example because the initial conditions were lost. Each entry is a date
++            in the same calendar as `start` and `end`, either as a single date or as a
++            "start/end/step" range. The synthetic axis keeps its regular hourly spacing: every
++            synthetic date that maps to one of these starts is declared missing instead, which
++            means it is skipped by the loader and written to the `missing_dates` attribute of the
++            store.
+         """
++        if "missing" in kwargs:
++            raise ValueError(
++                "missing is not supported together with fake_forecasts, because the dates of "
++                "the recipe are real forecast starts while the dates of the store are synthetic. "
++                "Use missing_starts to list the real starts that do not exist."
++            )
+         dates = datetimes_factory(
+             start=start,
+             end=end,
+@@ -395,7 +411,17 @@ class FakeForecastsDates(FakeDateProvider):
+         self.mapping = {v: Forecast(v, *k) for k, v in all_dates.items()}
+         self.date_mapping = all_dates
+ 
+-        super().__init__(missing=[])
++        # A real start listed in `missing_starts` has no data at all, so every synthetic date
++        # built from it (one per lead time) is declared missing. The axis itself is untouched.
++        self.missing_starts = sorted(set(extend(missing_starts))) if missing_starts else []
++        unknown = [d for d in self.missing_starts if not any(d == k[0] for k in all_dates)]
++        if unknown:
++            raise ValueError(
++                f"missing_starts contains dates that are not forecast starts of this recipe: {unknown}"
++            )
++        missing = sorted(v for k, v in all_dates.items() if k[0] in set(self.missing_starts))
++
++        super().__init__(missing=missing)
+ 
+     def actual_dates(self, dates):
+         return [self.date_mapping[d] for d in dates]
+@@ -434,7 +460,10 @@ class FakeForecastsDates(FakeDateProvider):
+         return PatchedResult(data)
+ 
+     def metadata(self):
+-        return {"fake_forecasts": {v.isoformat(): k for k, v in self.date_mapping.items()}}
++        metadata = {"fake_forecasts": {v.isoformat(): k for k, v in self.date_mapping.items()}}
++        if self.missing_starts:
++            metadata["fake_forecasts_missing_starts"] = [d.isoformat() for d in self.missing_starts]
++        return metadata
+ 
+ 
+ if __name__ == "__main__":
+-- 
+2.43.7
+

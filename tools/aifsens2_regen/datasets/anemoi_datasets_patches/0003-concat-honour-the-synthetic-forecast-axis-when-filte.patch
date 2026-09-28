@@ -1,0 +1,88 @@
+From 6bcd0464b0cf90591a385da6ed254f13cd682558 Mon Sep 17 00:00:00 2001
+From: Joffrey Dumont Le Brazidec <joffrey.dumont@ecmwf.int>
+Date: Thu, 10 Sep 2026 12:52:24 +0000
+Subject: [PATCH] concat: honour the synthetic forecast axis when filtering the
+ blocks
+
+The concat input action selects each of its blocks by date, intersecting the dates of the
+current group with the dates declared in that block. On a synthetic axis built by
+fake_forecasts or fake_hindcasts the dates in the group are the 1900-based placeholders, while
+the block bounds are written in real calendar time, so the intersection was always empty and
+every block was dropped. On top of that ConcatAction did not declare supports_fake_dates, so
+the fake-date guard rejected the action before the filter even ran.
+
+ConcatAction now declares that it supports fake dates, and its select() translates every
+synthetic date back to its real forecast start through the provider mapping before comparing it
+with the block bounds. On a normal axis the translation is the identity and behaviour is
+unchanged.
+
+This is what lets one store span two MARS experiment versions, which is needed for the 2025
+AIFS-CRPS record: expver 0103 up to 2025-07-01 00 UTC and expver 0001 from 2025-07-01 12 UTC.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ src/anemoi/datasets/create/input/concat.py | 32 +++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/src/anemoi/datasets/create/input/concat.py b/src/anemoi/datasets/create/input/concat.py
+index aee7f79b..3a70d400 100644
+--- a/src/anemoi/datasets/create/input/concat.py
++++ b/src/anemoi/datasets/create/input/concat.py
+@@ -12,6 +12,7 @@ from copy import deepcopy
+ from functools import cached_property
+ 
+ from anemoi.datasets.dates import DatesProvider
++from anemoi.datasets.dates import FakeDateProvider
+ 
+ from .action import Action
+ from .action import action_factory
+@@ -61,6 +62,12 @@ class ConcatResult(Result):
+ 
+ 
+ class ConcatAction(Action):
++
++    # The blocks of a concat are selected by date, and the selection below knows how to
++    # translate a synthetic (fake) date back to the real forecast start before comparing it
++    # with the block bounds, so a concat is safe on a fake axis.
++    supports_fake_dates = True
++
+     def __init__(self, context, action_path, *configs):
+         super().__init__(context, action_path, *configs)
+         parts = []
+@@ -84,9 +91,32 @@ class ConcatAction(Action):
+     def select(self, group_of_dates):
+         from anemoi.datasets.dates.groups import GroupOfDates
+ 
++        provider = group_of_dates.provider
++
++        # On a synthetic axis (fake_forecasts / fake_hindcasts) the dates carried by
++        # group_of_dates are the 1900-based placeholders, not the real forecast starts. The
++        # `dates` block of each concat part is written in real calendar time, so comparing the
++        # two directly would select nothing. Translate every synthetic date back to its real
++        # forecast start through provider.mapping first; on a normal axis nothing changes.
++        if isinstance(provider, FakeDateProvider):
++
++            def real_date(d):
++                entry = provider.mapping[d]
++                # Forecast carries `date` (the start), Hindcast carries `refdate`.
++                return getattr(entry, "date", None) or entry.refdate
++
++        else:
++
++            def real_date(d):
++                return d
++
+         results = []
+         for filtering_dates, action in self.parts:
+-            newdates = GroupOfDates(sorted(set(group_of_dates) & set(filtering_dates)), group_of_dates.provider)
++            wanted = set(filtering_dates)
++            newdates = GroupOfDates(
++                sorted(d for d in group_of_dates if real_date(d) in wanted),
++                provider,
++            )
+             if newdates:
+                 results.append(action.select(newdates))
+ 
+-- 
+2.43.7
+
