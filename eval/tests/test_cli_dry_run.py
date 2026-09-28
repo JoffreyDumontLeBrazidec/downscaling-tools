@@ -74,7 +74,7 @@ def test_cli_evaluate_rejects_quaver_only(tmp_path):
 
 def test_run_evaluators_raises_when_evaluator_run_fails(tmp_path, monkeypatch):
     """Evaluator run() exceptions must fail the CLI/job instead of producing empty scores."""
-    from eval import cli as eval_cli
+    from eval.cli import evaluate as eval_cli
 
     evaluator_name = "broken_for_test"
     module_name = f"eval.evaluators.{evaluator_name}"
@@ -100,7 +100,7 @@ def test_run_evaluators_raises_when_evaluator_run_fails(tmp_path, monkeypatch):
 
 def test_run_scoreboard_raises_when_no_scores(tmp_path):
     """A scoreboard with no records is a failed evaluation, not a successful empty result."""
-    from eval import cli as eval_cli
+    from eval.cli import scoreboard as eval_cli
 
     with pytest.raises(RuntimeError, match="Scoreboard produced no scores"):
         eval_cli._run_scoreboard(tmp_path, {}, ["tc"], tmp_path)
@@ -319,7 +319,7 @@ def test_cli_o320_o1280_run_is_rejected_for_split_hosts():
 def test_cli_predict_bundle_dir_without_source_grib_root(tmp_path, monkeypatch):
     """--bundle-dir without --source-grib-root is used as input_root (no rebuild)."""
     from unittest.mock import patch
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     bundles = tmp_path / "bundles_with_y"
@@ -369,7 +369,7 @@ def test_cli_predict_bundle_dir_without_source_grib_root(tmp_path, monkeypatch):
 def test_cli_predict_wraps_in_srun_under_slurm(tmp_path, monkeypatch):
     """num_gpus_per_model > 1 within an sbatch allocation wraps predict.main in srun."""
     from unittest.mock import patch
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
     bundles = tmp_path / "bundles_with_y"
@@ -421,7 +421,7 @@ def test_cli_predict_wraps_in_srun_under_slurm(tmp_path, monkeypatch):
 def test_cli_predict_source_grib_root_rejects_srun_rank_context(tmp_path, monkeypatch):
     """Serial prepare must fail before build_bundles when eval.cli is launched under srun."""
     from unittest.mock import patch
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
     monkeypatch.setenv("SLURM_PROCID", "0")
@@ -448,7 +448,7 @@ def test_cli_predict_source_grib_root_rejects_srun_rank_context(tmp_path, monkey
 def test_cli_predict_source_grib_root_allowed_in_plain_sbatch(tmp_path, monkeypatch):
     """An sbatch allocation alone is fine; only an actual rank context is rejected."""
     from unittest.mock import patch
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     monkeypatch.setenv("SLURM_JOB_ID", "12345")
     monkeypatch.setenv("SLURM_NTASKS", "4")
@@ -495,7 +495,7 @@ def test_cli_predict_source_grib_root_allowed_in_plain_sbatch(tmp_path, monkeypa
 def test_cli_predict_bundle_dir_rejects_truthless_prepare_lane(tmp_path, monkeypatch):
     """eval.cli must not treat existing truthless bundles as prediction-ready."""
     import xarray as xr
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
 

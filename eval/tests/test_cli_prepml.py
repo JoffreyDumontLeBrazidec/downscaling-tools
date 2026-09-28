@@ -48,7 +48,7 @@ def test_parser_invalid_mode_rejected():
 def test_cmd_predict_prepml_sets_bundle_dir_as_input_root(tmp_path):
     from unittest.mock import patch
 
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     bundles = tmp_path / "bundles_with_y"
     bundles.mkdir()
@@ -82,7 +82,7 @@ def test_cmd_predict_prepml_sets_bundle_dir_as_input_root(tmp_path):
 
 
 def test_cmd_predict_prepml_requires_bundle_input(tmp_path):
-    from eval import cli as eval_cli
+    from eval.cli import predict as eval_cli
 
     lane_config = {
         "predict": {

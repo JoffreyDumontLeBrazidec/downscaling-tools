@@ -92,7 +92,7 @@ def test_only_retired_evaluator_is_a_tombstone(tmp_path, capsys):
 def test_lane_group_retired_name_is_skipped_with_warning(caplog):
     import argparse
 
-    from eval import cli
+    from eval.cli import _selection as cli
 
     lane = {"evaluator_groups": {"default": ["tc", "spectra", "surface"],
                                  "diagnostics": ["sigma", "mlflow"]}}
@@ -106,7 +106,7 @@ def test_lane_group_retired_name_is_skipped_with_warning(caplog):
 def test_expver_adds_quaver_only():
     import argparse
 
-    from eval import cli
+    from eval.cli import _selection as cli
 
     lane = {"evaluator_groups": {"default": ["tc"]}}
     args = argparse.Namespace(only=None, include_diagnostics=False, expver="abcd")
@@ -116,7 +116,7 @@ def test_expver_adds_quaver_only():
 def test_host_constrained_evaluator_is_skipped_off_host(monkeypatch, tmp_path):
     import socket
 
-    from eval import cli
+    from eval.cli import evaluate as cli
 
     monkeypatch.setattr(socket, "gethostname", lambda: "ag6-001")
     assert cli._host_mismatch("spectra_ecmwf_v2")
