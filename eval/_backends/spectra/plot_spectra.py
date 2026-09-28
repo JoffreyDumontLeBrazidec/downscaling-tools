@@ -164,15 +164,15 @@ def _curve_style(conf, index):
 
 def main():
     from eval.plotting import AXIS, eval_style, save_figure, variable_spec
-    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_in_display, spectral_amplitude_label
 
     with eval_style():
-        _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_to_power,
-                  spectral_power_label)
+        _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_in_display,
+                  spectral_amplitude_label)
 
 
-def _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_to_power,
-              spectral_power_label):
+def _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_in_display,
+              spectral_amplitude_label):
     for cfg in PARAM_CONFIGS:
         param, level, dir_name = cfg["param"], cfg["level"], cfg["dir_name"]
         print(f"{param} {level}")
@@ -219,20 +219,20 @@ def _plot_all(AXIS, save_figure, variable_spec, add_wavelength_axis, amplitude_t
                 y = avg_a[iok]
                 ax.plot(
                     x,
-                    amplitude_to_power(dir_name, y),
+                    amplitude_in_display(dir_name, y),
                     label=f"{conf.get('label', conf['name'])} (n = {found_counter} fields)",
                     **_curve_style(conf, ie),
                 )
                 any_data = True
         ax.set_yscale("log")
-        ax.set_ylabel(spectral_power_label(dir_name))
+        ax.set_ylabel(spectral_amplitude_label(dir_name))
         ax.set_xscale("log")
         ax.set_xlabel(AXIS["wavenumber"])
         if any_data:
             ax.set_xlim([x.min(), x.max() * 1.1])
             add_wavelength_axis(ax)
         ax.legend(loc=LEG_LOC, fontsize=LEG_FS)
-        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectrum")
+        ax.set_title(f"{variable_spec(dir_name).name}: mean amplitude spectrum")
         fig.tight_layout()
         out = f"{OUTPUT_DIR}/spectra_{param}_{level}.pdf"
         save_figure(fig, out, close=True)   # the PDF as before plus a PNG, 150 dpi

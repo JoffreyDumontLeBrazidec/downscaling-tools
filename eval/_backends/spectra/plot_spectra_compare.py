@@ -147,7 +147,7 @@ def _curve_style(conf: dict, n_ai: int, ai_index: int) -> dict:
 
 def _draw_all(args, expvers, date_list, steps, members, output_dir) -> None:
     from eval.plotting import AXIS, save_figure, variable_spec
-    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_in_display, spectral_amplitude_label
 
     n_ai = sum(1 for c in expvers if c["type"] == "ai")
     ai_rank = {id(c): i for i, c in enumerate(c for c in expvers if c["type"] == "ai")}
@@ -186,7 +186,7 @@ def _draw_all(args, expvers, date_list, steps, members, output_dir) -> None:
                         style = _curve_style(conf, n_ai, ai_rank.get(id(conf), 0))
                         ax.plot(
                             avg_w[iok],
-                            amplitude_to_power(dir_name, avg_a[iok]),
+                            amplitude_in_display(dir_name, avg_a[iok]),
                             label=f"{conf['label']}, lead time {step} h",
                             **style,
                         )
@@ -199,7 +199,7 @@ def _draw_all(args, expvers, date_list, steps, members, output_dir) -> None:
                 iok = range(3, len(avg_w))
                 ax.plot(
                     avg_w[iok],
-                    amplitude_to_power(dir_name, avg_a[iok]),
+                    amplitude_in_display(dir_name, avg_a[iok]),
                     label=f"{conf['label']} (n = {found} fields)",
                     **_curve_style(conf, n_ai, ai_rank.get(id(conf), 0)),
                 )
@@ -208,8 +208,8 @@ def _draw_all(args, expvers, date_list, steps, members, output_dir) -> None:
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(AXIS["wavenumber"])
-        ax.set_ylabel(spectral_power_label(dir_name))
-        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectrum")
+        ax.set_ylabel(spectral_amplitude_label(dir_name))
+        ax.set_title(f"{variable_spec(dir_name).name}: mean amplitude spectrum")
         ax.legend(loc="lower left", fontsize=8)
         if any_data:
             add_wavelength_axis(ax)

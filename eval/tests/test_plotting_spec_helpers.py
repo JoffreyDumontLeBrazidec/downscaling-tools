@@ -30,11 +30,13 @@ def test_spectral_power_label_uses_the_variable_table():
     assert H.spectral_power_label(None) == "Spectral power"
 
 
-def test_amplitude_to_power_converts_before_squaring():
-    # 100 Pa amplitude = 1 hPa -> power 1 hPa²
-    np.testing.assert_allclose(H.amplitude_to_power("msl", [100.0, 200.0]), [1.0, 4.0])
-    # temperature has no offset in a spectral amplitude
-    np.testing.assert_allclose(H.amplitude_to_power("2t", [3.0]), [9.0])
+def test_spectral_amplitude_label_and_conversion():
+    assert H.spectral_amplitude_label("msl_sfc") == "Spectral amplitude (hPa)"
+    assert H.spectral_amplitude_label("z_500") == "Spectral amplitude (dam)"
+    assert H.spectral_amplitude_label(None) == "Spectral amplitude"
+    # 100 Pa amplitude = 1 hPa; no offset for temperature
+    np.testing.assert_allclose(H.amplitude_in_display("msl", [100.0, 200.0]), [1.0, 2.0])
+    np.testing.assert_allclose(H.amplitude_in_display("2t", [3.0]), [3.0])
 
 
 def test_wavelength_axis_is_its_own_inverse():

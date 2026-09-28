@@ -109,7 +109,7 @@ def main() -> None:
         )
 
     from eval.plotting import AXIS, eval_style, readable_label, reference_styles, save_figure, variable_spec
-    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_to_power, spectral_power_label
+    from eval.plotting.spec_helpers import add_wavelength_axis, amplitude_in_display, spectral_amplitude_label
 
     # every curve here is an anchor (operational forecasts on various grids), so each gets its
     # own fixed reference style; well-known anchors look the same as in every other figure
@@ -142,7 +142,7 @@ def main() -> None:
             iok = np.arange(3, len(avg_w))
             ax.plot(
                 avg_w[iok],
-                amplitude_to_power(dir_name, avg_a[iok]),
+                amplitude_in_display(dir_name, avg_a[iok]),
                 label=f"{readable_label(m['name'])}, lead time {chosen} h (n = {len(w_arrays)} fields)",
                 **styles[m["name"]],
             )
@@ -152,8 +152,8 @@ def main() -> None:
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_xlabel(AXIS["wavenumber"])
-        ax.set_ylabel(spectral_power_label(dir_name))
-        ax.set_title(f"{variable_spec(dir_name).name}: mean power spectra of the reference forecasts")
+        ax.set_ylabel(spectral_amplitude_label(dir_name))
+        ax.set_title(f"{variable_spec(dir_name).name}: mean amplitude spectra of the reference forecasts")
         if plotted:
             add_wavelength_axis(ax)
             ax.legend(loc="best", fontsize=8)

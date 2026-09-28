@@ -17,6 +17,8 @@ AXIS: dict[str, str] = {
     "wavenumber": "Total wavenumber ℓ",
     "wavelength": "Wavelength (km)",
     "power": "Spectral power",
+    "amplitude": "Spectral amplitude",
+    "amplitude_ratio": "Spectral amplitude ratio (model / truth)",
     "power_ratio": "Spectral power ratio (model / truth)",
     "pdf": "Probability density",
     "lead": "Lead time (h)",

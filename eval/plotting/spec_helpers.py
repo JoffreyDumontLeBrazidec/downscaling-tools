@@ -3,9 +3,10 @@
 Written by the "spec" plotting group; kept separate from the core ``eval.plotting`` modules so
 that it can be reviewed and merged on its own. Nothing here touches Matplotlib's global state.
 
-* ``power_unit`` / ``spectral_power_label``  unit of a power spectrum (the square of the
+* ``power_unit`` / ``spectral_power_label``  unit of a genuine power spectrum (the square of the
   variable's display unit) and the matching axis label, e.g. "Spectral power (hPa²)".
-* ``amplitude_to_power``  squared spectral amplitudes in display units.
+* ``spectral_amplitude_label`` / ``amplitude_in_display``  axis label and unit conversion of the
+  stored spectral amplitudes (the figures of spectra_ecmwf_v2 show amplitudes, not power).
 * ``add_wavelength_axis``  secondary top axis giving the wavelength in km for a total
   wavenumber axis.
 * ``count_phrase``  "5 dates" / "1 date": sample counts for legends.
@@ -53,16 +54,22 @@ def spectral_power_label(variable: str | None = None) -> str:
     return f"{AXIS['power']} ({unit})" if unit else AXIS["power"]
 
 
-def amplitude_to_power(variable: str, amplitudes, native_unit: str | None = None) -> np.ndarray:
-    """Square spectral amplitudes after converting them to the variable's display unit.
+def spectral_amplitude_label(variable: str | None = None) -> str:
+    """"Spectral amplitude (hPa)" for ``msl``; plain "Spectral amplitude" for an unknown variable."""
+    unit = variable_spec(variable).unit if variable else ""
+    return f"{AXIS['amplitude']} ({unit})" if unit else AXIS["amplitude"]
+
+
+def amplitude_in_display(variable: str, amplitudes, native_unit: str | None = None) -> np.ndarray:
+    """Spectral amplitudes converted to the variable's display unit.
 
     Amplitudes are stored as ``sqrt(sum_m |X_nm|^2)`` in the native unit of the field (Pa for
-    pressure, m² s⁻² for geopotential). A spectral amplitude transforms like a difference
-    (no offset), so it is scaled with ``convert_difference`` before squaring.
+    pressure, m² s⁻² for geopotential). A spectral amplitude scales like a difference (no
+    offset), so ``convert_difference`` is used. The figures show amplitudes, the quantity the
+    spectra scorer's relative L2 error is computed on, not their square.
     """
-    scaled = np.asarray(convert_difference(variable, np.asarray(amplitudes, dtype=float),
-                                           native_unit=native_unit), dtype=float)
-    return scaled * scaled
+    return np.asarray(convert_difference(variable, np.asarray(amplitudes, dtype=float),
+                                         native_unit=native_unit), dtype=float)
 
 
 def _wavelength(ell):

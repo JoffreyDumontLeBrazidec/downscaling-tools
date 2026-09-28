@@ -1,4 +1,4 @@
-"""Plot the prediction/truth spectral POWER ratio against wavenumber.
+"""Plot the prediction/truth spectral AMPLITUDE ratio against wavenumber.
 
 Reading a deficit off a log-log spectrum is unreliable: a 15% shortfall is a
 0.07-decade offset, which is a couple of percent of a four-decade axis, and it
@@ -8,8 +8,8 @@ departs and by how much, with no eyeballing.
 
 Reads the spectra_ecmwf evaluator's own .npy output, so it inherits that
 evaluator's proper spectral transform rather than any HEALPix approximation.
-The stored curves are amplitudes; the figure shows the smoothed power ratio (their
-square ratio) in the house style of ``eval.plotting``, as PNG and PDF.
+The stored curves are amplitudes and the figure shows the smoothed amplitude ratio
+(the amplitude, not its square, is what the spectra scorer compares) in the house style of ``eval.plotting``, as PNG and PDF.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _stack(root: str, grp: str):
 
 
 def _smooth_ratio(w, num, den, width=12):
-    """Log-spaced running mean of the POWER ratio, then square-rooted."""
+    """Log-spaced running mean of the power, then square-rooted: the amplitude ratio."""
     r = np.full(len(w), np.nan)
     for i in range(len(w)):
         lo = max(1, int(i / (1.0 + 1.0 / width)))
@@ -81,15 +81,14 @@ def main():
             w, am, at = w[:n], am[:n], at[:n]
             keep = w >= 2
 
-            # _smooth_ratio returns sqrt(power ratio); the figure shows the power ratio itself.
             ax.axhline(1.0, label="Truth = 1", **role_style("truth", linewidth=1.6))
-            ax.semilogx(w[keep], _smooth_ratio(w, am, at)[keep] ** 2,
+            ax.semilogx(w[keep], _smooth_ratio(w, am, at)[keep],
                         label="Model / truth", **role_style("model"))
             if a.input_spectra:
                 _, ai, _ = _stack(a.input_spectra, grp)
                 if ai is not None:
                     ai = ai[:n]
-                    ax.semilogx(w[keep], _smooth_ratio(w, ai, at)[keep] ** 2,
+                    ax.semilogx(w[keep], _smooth_ratio(w, ai, at)[keep],
                                 label="Coarse input / truth", **role_style("input"))
             ax.axvline(320, color="0.45", lw=1.0, ls=":", label="O320 truncation (ℓ = 320)")
             ax.set_ylim(0.0, 1.8)
@@ -97,14 +96,14 @@ def main():
             ax.set_title(f"{name} (n = {nm} fields)")
             ax.set_xlabel(AXIS["wavenumber"])
             if idx % 3 == 0:
-                ax.set_ylabel(AXIS["power_ratio"])
+                ax.set_ylabel(AXIS["amplitude_ratio"])
             if handles is None:
                 handles = ax.get_legend_handles_labels()
 
         if handles is not None:
             fig.legend(*handles, loc="lower center", ncol=4, bbox_to_anchor=(0.5, 0.0))
         fig.suptitle(
-            "Spectral power ratio to the truth" + (f": {a.label}" if a.label else "")
+            "Spectral amplitude ratio to the truth" + (f": {a.label}" if a.label else "")
             + "\n1 = the right amount of variance at that scale; dotted line = O320 truncation")
         fig.tight_layout(rect=(0, 0.035, 1, 0.96))
         out = Path(a.out)
