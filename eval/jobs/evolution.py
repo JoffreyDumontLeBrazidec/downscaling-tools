@@ -43,8 +43,10 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+
+from eval.plotting import convert_difference  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -78,29 +80,30 @@ ROWS: dict[str, Row] = {
 DEFAULT_ROWS = "10u,10v,2t,tp"
 
 COLUMNS: dict[str, Column] = {
-    "rmse": Column("RMSE (ens mean)", "probabilistic_{f}_{region}_rmse_ens_mean_mean", "ws", True),
+    "rmse": Column("RMSE of the ensemble mean", "probabilistic_{f}_{region}_rmse_ens_mean_mean", "ws", True),
     # spectra_ecmwf_v2 (ECMWF transform, complete grid). The retired HEALPix proxy's rows,
     # present only on cards scored before 2026-09-28, stay readable under their own column;
     # the two instruments give different numbers and are never drawn as one column.
-    "spectra": Column("spectra v2 rel-L2", "spectra_v2_{f}_relative_l2", "sf", True,
-                      unit="relative L2"),
-    "spectra_proxy": Column("spectra proxy rel-L2 (retired)", "spectra_{f}_relative_l2", "sf", True,
-                            unit="relative L2"),
+    "spectra": Column("Spectral relative L2 distance", "spectra_v2_{f}_relative_l2", "sf", True,
+                      unit="relative L2 distance"),
+    "spectra_proxy": Column("Spectral relative L2 distance (retired proxy)", "spectra_{f}_relative_l2", "sf", True,
+                            unit="relative L2 distance"),
     # spread has no "better" direction, so it carries lower_better=None
-    "spread": Column("spread", "probabilistic_{f}_{region}_spread_mean", "ws", None),
+    "spread": Column("Ensemble spread", "probabilistic_{f}_{region}_spread_mean", "ws", None),
     # CRPS family. Prefer `fcrps`: it is the ensemble-size-FAIR form, and the anchors do not
     # all carry the same member count -- the ENFO-target hline drops its verifying member, so
     # it is scored with one member fewer than the model. Plain `crps` is biased by that
     # difference; fair CRPS is not, which makes it the honest column against these hlines.
-    "fcrps": Column("fair CRPS", "probabilistic_{f}_{region}_fcrps_mean", "ws", True),
+    "fcrps": Column("Fair CRPS", "probabilistic_{f}_{region}_fcrps_mean", "ws", True),
     "crps": Column("CRPS", "probabilistic_{f}_{region}_crps_mean", "ws", True),
 }
 DEFAULT_COLUMNS = "rmse,spectra"
 
-CURVE_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
-REF_COLOR = "#d62728"
-# non-training anchors: solid black reads as "the target", grey dash-dot as "the raw input"
-HLINE_STYLES = [("black", "-"), ("#777777", "-."), ("#2ca02c", "-.")]
+# Line styles come from the house role table (eval.plotting.roles), applied in render():
+#   one experiment      -> "model" (red, solid);  several -> sequence_style(i)
+#   --ref run           -> "baseline" (dark grey, dash-dot)
+#   --target anchor     -> "truth" (black, solid, thick);  --input anchor -> "input" (blue, dashed)
+#   further --hline     -> reference_style(i)
 
 
 def _absent_reason(payload: dict) -> str | None:
@@ -192,86 +195,135 @@ def render(
             + "\n  ".join(sorted(supports))
             + "\nRe-score onto one budget, or pass --allow-mixed-support.")
 
-    fig, axes = plt.subplots(len(row_specs), len(col_specs),
-                             figsize=(6.6 * len(col_specs), 3.6 * len(row_specs)), squeeze=False)
-    legend_done = False
-    for ri, row in enumerate(row_specs):
-        for ci, col in enumerate(col_specs):
-            ax = axes[ri][ci]
-            field = row.ws if col.field == "ws" else row.sf
-            key = col.key.format(f=field, region=region) if field else None
-            drew = False
+    from eval.plotting import (
+        AXIS, WORSE_COLOR, eval_style, reference_style, role_style, save_figure, sequence_style,
+        variable_spec,
+    )
+    from eval.plotting.probabilistic import DOMAIN_NAMES
+    from eval.plotting.spec_helpers import format_steps
 
-            if key is not None:
-                for ei, (label, ladder) in enumerate(experiments):
-                    st, v = series(ladder, key)
-                    if np.isfinite(v).any():
-                        ax.plot(st, v, "-o", ms=5, lw=1.8, zorder=3, label=label,
-                                color=CURVE_COLORS[ei % len(CURVE_COLORS)])
+    # Styles by role: one experiment is "the model" (red); several are arms told apart by the
+    # colour-blind-safe sequence. The --ref run is the lane's baseline; the target anchor is the
+    # truth line, the input anchor the input line, any further anchor a reference style.
+    if len(experiments) == 1:
+        exp_styles = [role_style("model")]
+    else:
+        exp_styles = [sequence_style(i) for i in range(len(experiments))]
+    anchor_styles: list[dict] = []
+    n_extra = 0
+    for h in hlines:
+        if target_ref is not None and h is target_ref:
+            anchor_styles.append(role_style("truth"))
+        elif input_ref is not None and h is input_ref:
+            anchor_styles.append(role_style("input"))
+        else:
+            anchor_styles.append(reference_style(n_extra))
+            n_extra += 1
+
+    with eval_style():
+        fig, axes = plt.subplots(len(row_specs), len(col_specs),
+                                 figsize=(6.2 * len(col_specs), 3.5 * len(row_specs)),
+                                 squeeze=False)
+        legend_done = False
+        for ri, row in enumerate(row_specs):
+            var_name = variable_spec(row.ws or row.sf or row.label).name
+            for ci, col in enumerate(col_specs):
+                ax = axes[ri][ci]
+                field = row.ws if col.field == "ws" else row.sf
+                key = col.key.format(f=field, region=region) if field else None
+                drew = False
+                # scores in the variable's own unit are shown in its display unit (hPa, not Pa);
+                # dimensionless columns carry their own `unit` and are left alone
+                if col.unit is None:
+                    spec = variable_spec(row.ws or row.label)
+                    unit = spec.unit or row.unit
+
+                    def disp(v, _row=row):
+                        return np.asarray(convert_difference(_row.ws or _row.label, v,
+                                                             native_unit=_row.unit), dtype=float)
+                else:
+                    unit = None
+
+                    def disp(v):
+                        return np.asarray(v, dtype=float)
+
+                if key is not None:
+                    for ei, (label, ladder) in enumerate(experiments):
+                        st, v = series(ladder, key)
+                        if np.isfinite(v).any():
+                            ax.plot(st, disp(v), marker="o", markersize=5, label=label,
+                                    **exp_styles[ei])
+                            drew = True
+
+                    if reference is not None:
+                        # the reference is another RUN: its score moves with step, so it is a curve
+                        rlabel, rladder = reference
+                        st, v = series(rladder, key)
+                        if np.isfinite(v).any():
+                            ax.plot(st, disp(v), marker="s", markersize=4,
+                                    label="Baseline run: %s" % rlabel, **role_style("baseline"))
+                            drew = True
+
+                    for hi, (hlabel, hvals) in enumerate(hlines):
+                        hv = hvals.get(key)
+                        if hv is None:
+                            continue
+                        ax.axhline(float(disp(float(hv))), label=hlabel.replace("_", " "),
+                                   **anchor_styles[hi])
                         drew = True
 
-                if reference is not None:
-                    # the reference is another RUN: its score moves with step, so it is a curve
-                    rlabel, rladder = reference
-                    st, v = series(rladder, key)
-                    if np.isfinite(v).any():
-                        ax.plot(st, v, "--s", ms=4, lw=1.6, color=REF_COLOR, zorder=2,
-                                label="ref: %s" % rlabel)
-                        drew = True
+                if not drew:
+                    ax.text(0.5, 0.5, "not available\non this lane", transform=ax.transAxes,
+                            ha="center", va="center", fontsize=11, color="0.45")
+                    ax.set_facecolor("#f5f5f5")
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    ax.grid(False)
+                else:
+                    format_steps(ax)
+                    ax.set_xlabel(AXIS["step"])
+                    ax.set_ylabel(f"{col.label} ({unit})" if unit else
+                                  (col.unit[:1].upper() + col.unit[1:] if col.unit else col.label))
 
-                for hi, (hlabel, hvals) in enumerate(hlines):
-                    hv = hvals.get(key)
-                    if hv is None:
-                        continue
-                    color, ls = HLINE_STYLES[hi % len(HLINE_STYLES)]
-                    ax.axhline(float(hv), lw=2.0, color=color, ls=ls, zorder=4, label=hlabel)
-                    drew = True
+                arrow = "" if col.lower_better is None else " (lower is better)"
+                ax.set_title("%s%s" % (col.label, arrow))
+                # the legend belongs on the first panel that HAS content; pinning it to [0][0]
+                # loses it entirely whenever that panel is one of the empty ones
+                if drew and not legend_done:
+                    ax.legend(loc="best")
+                    legend_done = True
+                if ci == 0:
+                    ax.text(-0.24, 0.5, var_name, transform=ax.transAxes, rotation=90,
+                            va="center", ha="center", fontsize=12, fontweight="bold")
 
-            if not drew:
-                ax.text(0.5, 0.5, "not available\non this lane", transform=ax.transAxes,
-                        ha="center", va="center", fontsize=11, color="#888888")
-                ax.set_facecolor("#f5f5f5")
-                ax.set_xticks([])
-                ax.set_yticks([])
-            else:
-                ax.xaxis.set_major_formatter(
-                    matplotlib.ticker.FuncFormatter(lambda x, _: "%gk" % (x / 1000)))
-                ax.grid(alpha=0.25)
-                ax.set_xlabel("training step", fontsize=9)
-                ax.set_ylabel(col.unit or row.unit, fontsize=9)
-
-            arrow = "" if col.lower_better is None else "  (lower = better)"
-            ax.set_title("%s — %s%s" % (col.label, field or row.label, arrow), fontsize=11)
-            # the legend belongs on the first panel that HAS content; pinning it to [0][0]
-            # loses it entirely whenever that panel is one of the empty ones
-            if drew and not legend_done:
-                ax.legend(fontsize=8.5, loc="best")
-                legend_done = True
-            if ci == 0:
-                ax.text(-0.20, 0.5, row.label, transform=ax.transAxes, rotation=90,
-                        va="center", ha="center", fontsize=13, fontweight="bold")
-
-    # No title by default. The one exception is a figure that would otherwise mislead: when
-    # mixed support has been forced, that warning is stamped on regardless.
-    if mixed:
-        banner = "MIXED SUPPORT — these curves are NOT comparable: " + " || ".join(sorted(supports))
-    elif missing:
-        banner = "INCOMPLETE — missing " + ", ".join(missing)
-    elif not_applicable:
-        banner = "  |  ".join("%s not applicable on this lane — %s" % (lab, why)
-                              for lab, why in not_applicable)
-    else:
-        banner = title
-    if banner:
-        fig.suptitle(banner, fontsize=9.5, wrap=True,
-                     color="#b00020" if (mixed or missing) else "#555555")
-        fig.tight_layout(rect=[0.012, 0, 1, 0.95])
-    else:
-        fig.tight_layout(rect=[0.012, 0, 1, 1])
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=130)
-    plt.close(fig)
+        # No title by default. The one exception is a figure that would otherwise mislead: when
+        # mixed support has been forced, that warning is stamped on regardless.
+        if mixed:
+            banner = ("MIXED SUPPORT: these curves are NOT comparable: "
+                      + " || ".join(sorted(supports)))
+        elif missing:
+            banner = "INCOMPLETE: missing " + ", ".join(missing)
+        elif not_applicable:
+            banner = "  |  ".join("%s not applicable on this lane: %s" % (lab, why)
+                                  for lab, why in not_applicable)
+        else:
+            banner = title
+        # the scoring support (sample counts) always goes in a small footer
+        fig.text(0.01, 0.002, "Scored on: " + " || ".join(sorted(supports))
+                 + "  |  region: %s" % DOMAIN_NAMES.get(region, region),
+                 fontsize=8, color="0.35", ha="left", va="bottom")
+        bottom = 0.025
+        if banner:
+            fig.suptitle(banner, fontsize=10, wrap=True,
+                         color=WORSE_COLOR if (mixed or missing) else "0.35",
+                         fontweight="bold" if (mixed or missing) else "normal")
+            fig.tight_layout(rect=[0.02, bottom, 1, 0.95])
+        else:
+            fig.tight_layout(rect=[0.02, bottom, 1, 1])
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # the requested file plus its sibling format (PNG at 150 dpi and PDF)
+        save_figure(fig, out, close=True)
     print("support: %s" % " || ".join(sorted(supports)))
     print("wrote %s" % out)
     return out
