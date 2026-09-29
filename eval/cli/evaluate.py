@@ -121,6 +121,25 @@ def _host_mismatch(name: str) -> str | None:
     )
 
 
+def _lane_block(lane_config: dict, name: str) -> dict:
+    """The lane's ``<name>:`` block, or the block under a former name of a renamed evaluator.
+
+    Tracked lanes written before a rename keep the old block name (a canonical lane
+    edit changes a certified hash), so the old block is read when the lane has none
+    under the new name.
+    """
+    if name in lane_config:
+        return lane_config.get(name) or {}
+    for old_name in evaluator_registry.former_names(name):
+        if old_name in lane_config:
+            LOG.warning(
+                "Lane block '%s:' is deprecated; read it for '%s'. Rename the block to '%s:'.",
+                old_name, name, name,
+            )
+            return lane_config.get(old_name) or {}
+    return {}
+
+
 def _declared_evaluators(
     lane_config: dict, evaluators: list[str], *, checkpoint: str | None,
 ) -> list[str]:
@@ -219,7 +238,7 @@ def _run_evaluators(
 
         # Determine results directory
         results_dir = output_dir / "evaluators" / name
-        eval_config = dict(lane_config.get(name, {}))
+        eval_config = dict(_lane_block(lane_config, name))
         if stages is not None:
             eval_config["stages"] = list(stages)
 

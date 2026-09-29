@@ -39,6 +39,8 @@ def _package_dir(name: str) -> Path | None:
     entry = registry.get(name)
     if entry is None:
         return None
+    if entry.renamed:
+        return EVAL_ROOT / "evaluators" / str(entry.replacement)
     if entry.group == registry.RETIRED:
         return EVAL_ROOT / "_quarantine" / str(entry.retired_on) / name
     return EVAL_ROOT / "evaluators" / name
@@ -80,7 +82,11 @@ def config_keys_read(name: str) -> list[str]:
 
 
 def lane_keys_set(name: str) -> dict[str, int]:
-    """For each key of the ``<name>:`` block in the tracked lane YAML files, how many lanes set it."""
+    """For each key of the ``<name>:`` block in the tracked lane YAML files, how many lanes set it.
+
+    A lane that still holds the block under a former name of a renamed evaluator
+    (``registry.former_names``) is counted too, because ``evaluate`` reads that block.
+    """
     import yaml
 
     loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -90,7 +96,12 @@ def lane_keys_set(name: str) -> dict[str, int]:
             data = yaml.load(path.read_text(), Loader=loader) or {}
         except Exception:
             continue
-        block = data.get(name) if isinstance(data, dict) else None
+        block = None
+        if isinstance(data, dict):
+            for key_name in [name, *registry.former_names(name)]:
+                if key_name in data:
+                    block = data.get(key_name)
+                    break
         if isinstance(block, dict):
             for key in block:
                 counts[str(key)] = counts.get(str(key), 0) + 1

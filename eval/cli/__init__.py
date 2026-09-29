@@ -7,11 +7,13 @@ dispatches. Commands that need a lane and a host go through ``_session`` first.
 Groups (see ``python -m eval.cli --help``):
 
     discovery    list, describe
-    pipeline     run, predict, prepare, evaluate, scoreboard, report
+    pipeline     run, predict, prepare, evaluate, scoreboard
     comparison   evolution
     tc_tracks    tctracker, tccompare
-    figures      membermaps, videogen
+    figures      zoom_maps
     maintenance  prepml-cleanup, config
+    retired      membermaps (renamed zoom_maps), report, videogen: tombstones
+                 that print where the tool went and exit with status 1
 
 The shared argument groups are in ``_common``; evaluator selection (``--only``)
 is in ``_selection``.
@@ -26,9 +28,9 @@ from eval.cli._common import ALL_EVALUATORS, DEFAULT_HOST, GROUP_TITLES, Command
 
 # Modules that publish commands, in the order they appear in the help.
 _COMMAND_MODULES = (
-    "discover", "run", "predict", "prepare", "evaluate", "scoreboard", "report",
-    "evolution", "tctracker", "tccompare", "membermaps", "videogen",
-    "prepml_cleanup", "lane_config",
+    "discover", "run", "predict", "prepare", "evaluate", "scoreboard",
+    "evolution", "tctracker", "tccompare", "zoom_maps",
+    "prepml_cleanup", "lane_config", "retired",
 )
 
 __all__ = ["ALL_EVALUATORS", "DEFAULT_HOST", "build_parser", "commands", "main"]
@@ -82,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     """Parse args, resolve config when the command needs a lane, and dispatch."""
+    import sys
+
+    from eval.cli.retired import TOMBSTONES, exit_with_tombstone
+
+    # A retired command exits before parsing, so that its old flags cannot turn
+    # the tombstone message into an argparse usage error.
+    words = list(sys.argv[1:] if argv is None else argv)
+    if words and words[0] in TOMBSTONES and not {"-h", "--help"} & set(words[1:]):
+        exit_with_tombstone(words[0])
     parser = build_parser()
     args = parser.parse_args(argv)
 

@@ -80,16 +80,17 @@ evaluator owned what. There is now one convention, and it has three parts.
    `surface/core/compute.py`; `spread_proxy` imports four helpers from `probabilistic/core`.
    Anything else that two evaluators need belongs in `eval/shared/`.
 3. Analysis code that has no live evaluator goes to `eval/tools/<name>/`, next to
-   `eval/tools/parity/`. That covers `videogen` (used only by `eval.cli videogen`),
-   `sigma_evaluator`, `obs_crps`, `plot_intermediate`, `weight_diagnostics` and
-   `spectra_analysis`; the evaluators of the last five were retired on 2026-09-28. The tools
+   `eval/tools/parity/`. That covers `sigma_evaluator`, `obs_crps`, `plot_intermediate`,
+   `weight_diagnostics` and `spectra_analysis`; their evaluators were retired on 2026-09-28.
+   (`videogen` was also here until it was retired on 2026-09-29; its code is in
+   `eval/_quarantine/20260929/videogen/`.) The tools
    `plot_intermediate` and `weight_diagnostics` borrow the region helpers of
    `region_plot/core`.
 
 Code outside the evaluators may import an evaluator's `core/` when it needs that
 evaluator's computation: `eval/jobs/scoreboard_metrics.py` reads the scoreboard files of the
-tc, surface and spectra_ecmwf_v2 cores (`core/scoreboard.py`), `eval.cli membermaps` and
-`eval.cli tctracker` call the cores of membermaps and tctracks, and the scripts in
+tc, surface and spectra_ecmwf_v2 cores (`core/scoreboard.py`), `eval.cli zoom_maps` and
+`eval.cli tctracker` call the cores of zoom_maps and tctracks, and the scripts in
 `scripts/` reuse the tc core.
 
 Importing anything below `eval.evaluators.<name>` first runs the `__init__.py` of that
@@ -281,11 +282,12 @@ and afterwards writes the `--vs-baseline` diff.
 | Group | Commands |
 |---|---|
 | discovery | `list`, `describe <evaluator>` |
-| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard`, `report` |
+| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
-| figures | `membermaps`, `videogen` |
+| figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
+| retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
 
 ```bash
 # What can be evaluated, and how does one evaluator work?

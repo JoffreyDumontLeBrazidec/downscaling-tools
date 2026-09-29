@@ -1,4 +1,4 @@
-"""Helpers for the regional map figures (region_plot, membermaps, precip maps, video frames).
+"""Helpers for the regional map figures (region_plot, zoom_maps, precip maps).
 
 These complement ``eval.plotting.maps``; they were written for the map figures of the
 ``maps`` conversion group and are kept out of the shared modules on purpose.

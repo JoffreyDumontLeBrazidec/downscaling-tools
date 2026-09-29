@@ -69,11 +69,10 @@ lane's configuration after its `base:` chain is merged.
 | `eval/scoreboard/` | Collecting the scoring rows of the scored evaluators and formatting `scores.csv` and `scores.md` |
 | `eval/baseline.py` | The lane baseline (the top of the lane scoreboard) and the `--vs-baseline` diff |
 | `eval/lean_layout.py` | Projects an evaluator tree into the tidy run-root layout |
-| `eval/report/` | The HTML report of a run |
 | `eval/discovery/` | Finding prediction files and identifying checkpoints |
 | `eval/shared/` | Code used by several evaluators: grid and plotting helpers, the precipitation truth source, the toolchain recipes |
 | `eval/jobs/` | SLURM orchestration (`pipeline.py`, `renderer.py`, `resources.py`), the ladder and evolution figures, `scripts/` for one-off jobs, `templates/` for sbatch templates |
-| `eval/tools/` | Analysis tools with no live evaluator, one folder each: `parity/` (diffs two scoreboards), `videogen/`, `sigma_evaluator/`, `obs_crps/`, `plot_intermediate/`, `weight_diagnostics/`, `spectra_analysis/` |
+| `eval/tools/` | Analysis tools with no live evaluator, one folder each: `parity/` (diffs two scoreboards), `sigma_evaluator/`, `obs_crps/`, `plot_intermediate/`, `weight_diagnostics/`, `spectra_analysis/` |
 | `eval/_backends/` | Only 15 forwarding modules for callers outside the repository; see its `README.md` |
 | `eval/tests/` | The unit tests of the framework as a whole |
 | `eval/archive/` | Frozen legacy scripts that a few tests and one tool still import |

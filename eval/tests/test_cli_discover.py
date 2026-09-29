@@ -85,3 +85,18 @@ def test_every_command_renders_its_help(name, capsys):
         cli.main([name, "--help"])
     assert exc.value.code == 0
     assert "usage: python -m eval.cli " + name in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv, words", [
+    (["membermaps", "--run", "a=/x", "--date", "20250926", "--step", "72"], "renamed to zoom_maps"),
+    (["report", "--run-dir", "/x"], "retired on 2026-09-29, no replacement"),
+    (["videogen", "--scene", "franklin_dual"],
+     "retired on 2026-09-29; the code is in eval/_quarantine/20260929/videogen/"),
+    (["videogen"], "retired on 2026-09-29"),
+])
+def test_retired_commands_are_tombstones(argv, words, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 1
+    assert words in capsys.readouterr().err
+

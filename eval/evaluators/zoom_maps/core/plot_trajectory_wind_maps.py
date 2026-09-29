@@ -1,4 +1,4 @@
-"""Saved trajectory panels, invoked only by the opt-in eval.cli membermaps mode."""
+"""Saved trajectory panels, invoked only by the opt-in eval.cli zoom_maps mode."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -33,7 +33,7 @@ def run(args):
     if not args.rotation_instrument:
         raise SystemExit("--trajectory-npz requires --rotation-instrument.")
     instrument = Path(args.rotation_instrument).resolve()
-    spec = importlib.util.spec_from_file_location("membermaps_tc_rotation", instrument)
+    spec = importlib.util.spec_from_file_location("zoom_maps_tc_rotation", instrument)
     T = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(T)
 

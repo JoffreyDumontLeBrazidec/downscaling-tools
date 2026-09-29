@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from eval.evaluators.membermaps.core.plot_member_wind_maps import (
+from eval.evaluators.zoom_maps.core.plot_member_wind_maps import (
     VARIABLES,
     _field,
     _parse_kv,

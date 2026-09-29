@@ -25,8 +25,8 @@ paired); the panel is labelled "Operational ENFO" accordingly.
 
 Diagnostic maps only — nothing here scores anything.
 
-Canonical invocation: ``python -m eval.cli membermaps ...`` (also runnable as
-``python -m eval.evaluators.membermaps.core.plot_member_wind_maps``).
+Canonical invocation: ``python -m eval.cli zoom_maps ...`` (also runnable as
+``python -m eval.evaluators.zoom_maps.core.plot_member_wind_maps``).
 """
 from __future__ import annotations
 
@@ -169,7 +169,7 @@ def resolve_scale(args: argparse.Namespace) -> tuple[dict, float, float]:
 
 def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="membermaps",
+        prog="zoom_maps",
         add_help=add_help,
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -586,13 +586,13 @@ def run_member_grid(args: argparse.Namespace) -> int:
         print(f"saved {out_path}", flush=True)
 
     write_manifest(out_root=out_dir, payload={
-        "tool": "membermaps", "mode": "member_grid",
+        "tool": "zoom_maps", "mode": "member_grid",
         "date": args.date, "time": args.time, "step": args.step, "members": members,
         "variable": args.variable, "field": args.field, "fine_cut_deg": args.fine_cut_deg,
         "runs": runs, "extent": list(extent), "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
     }, filename=(
-        f"membermaps_manifest_{token}_init{args.date}"
+        f"zoom_maps_manifest_{token}_init{args.date}"
         f"_members{len(members):02d}_f{args.step:03d}.json"
     ))
     return 0
@@ -661,7 +661,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"saved {out_path}", flush=True)
 
     write_manifest(out_root=out_dir, payload={
-        "tool": "membermaps",
+        "tool": "zoom_maps",
         "date": args.date, "time": args.time, "step": args.step, "member": args.member,
         "variable": args.variable,
         "field": args.field, "fine_cut_deg": args.fine_cut_deg,
@@ -669,7 +669,7 @@ def run(args: argparse.Namespace) -> int:
         "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
     }, filename=(
-        f"membermaps_manifest_{token}_init{args.date}"
+        f"zoom_maps_manifest_{token}_init{args.date}"
         f"_n{args.member:03d}_f{args.step:03d}.json"
     ))
     return 0

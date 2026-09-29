@@ -54,10 +54,20 @@ def _drop_retired_from_lane_group(evaluators: list[str], group: str) -> list[str
     """Skip retired evaluators that a lane YAML group still lists, with a warning.
 
     Tracked lanes were repointed when the evaluators were retired; this keeps an
-    old or untracked lane running instead of failing on a name that is gone.
+    old or untracked lane running instead of failing on a name that is gone. A
+    renamed evaluator is not skipped: its new name runs in its place.
     """
     kept: list[str] = []
     for name in evaluators:
+        if evaluator_registry.is_renamed(name):
+            new_name = evaluator_registry.get(name).replacement
+            LOG.warning(
+                "Lane evaluator group '%s' lists '%s', which was renamed to '%s'; running '%s'.",
+                group, name, new_name, new_name,
+            )
+            if new_name not in kept:
+                kept.append(new_name)
+            continue
         if evaluator_registry.is_retired(name):
             LOG.warning(
                 "Lane evaluator group '%s' lists a retired evaluator; skipping it. %s",

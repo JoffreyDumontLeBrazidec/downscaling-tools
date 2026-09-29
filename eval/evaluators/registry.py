@@ -23,6 +23,12 @@ Each entry records:
 ``replacement`` / ``retired_on``
     For retired evaluators only: what to use instead (None when nothing
     replaces it) and the date it was retired.
+``renamed``
+    For retired evaluators only: True when the evaluator was renamed rather
+    than retired. Its code lives on under the replacement's name, so nothing
+    is quarantined; a lane group that lists the old name runs the new one, and
+    a lane block under the old name is read when the lane has none under the
+    new name (both with a warning).
 ``host_prefix``
     When set, the evaluator can only run on a machine whose host name starts
     with this prefix (``"ac"`` for the ECMWF spectral transform, which exists
@@ -67,6 +73,7 @@ class Evaluator:
     # kept so that re-projecting an old run directory (eval.lean_layout) still
     # gives the same top-level file names after the package was quarantined.
     legacy_deliverables: dict | None = None
+    renamed: bool = False
 
 
 _ENTRIES: tuple[Evaluator, ...] = (
@@ -132,7 +139,7 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "in phase with the truth?",
     ),
     Evaluator(
-        "membermaps", DIAGNOSTIC, False,
+        "zoom_maps", DIAGNOSTIC, False,
         "What do the driving input, the truth and a model member look like on a map, "
         "as full fields and as high-pass fine-scale views?",
     ),
@@ -239,6 +246,12 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "What do the intermediate steps of the diffusion sampler look like?",
         replacement=None, retired_on="20260928",
     ),
+    Evaluator(
+        "membermaps", RETIRED, False,
+        "What do the driving input, the truth and a model member look like on a map, "
+        "as full fields and as high-pass fine-scale views? (Renamed, not removed.)",
+        replacement="zoom_maps", retired_on="20260929", renamed=True,
+    ),
 )
 
 REGISTRY: dict[str, Evaluator] = {e.name: e for e in _ENTRIES}
@@ -250,6 +263,8 @@ for _e in _ENTRIES:  # pragma: no cover - guards a hand edit
         raise RuntimeError(f"evaluator {_e.name!r} has unknown group {_e.group!r}")
     if (_e.group == RETIRED) != (_e.retired_on is not None):
         raise RuntimeError(f"evaluator {_e.name!r}: retired_on must be set exactly when retired")
+    if _e.renamed and (_e.group != RETIRED or not _e.replacement):
+        raise RuntimeError(f"evaluator {_e.name!r}: a renamed entry must be retired and name its replacement")
     if _e.feeds_scoreboard and _e.group != SCORED:
         raise RuntimeError(f"evaluator {_e.name!r}: only scored evaluators feed the scoreboard")
 
@@ -278,9 +293,25 @@ def is_retired(name: str) -> bool:
     return entry is not None and entry.group == RETIRED
 
 
+def is_renamed(name: str) -> bool:
+    entry = REGISTRY.get(name)
+    return entry is not None and entry.renamed
+
+
+def former_names(name: str) -> list[str]:
+    """Old names that were renamed to ``name``, in registry order."""
+    return [e.name for e in _ENTRIES if e.renamed and e.replacement == name]
+
+
 def retired_message(name: str) -> str:
     """The tombstone text for a retired evaluator."""
     entry = REGISTRY[name]
+    if entry.renamed:
+        return (
+            f"Evaluator '{name}' was renamed to '{entry.replacement}' on {entry.retired_on}. "
+            f"Use '{entry.replacement}' instead (the code is the same, now under "
+            f"eval/evaluators/{entry.replacement}/)."
+        )
     where = f"{QUARANTINE_ROOT}/{entry.retired_on}/{name}/"
     if entry.replacement:
         instead = f"Use '{entry.replacement}' instead."

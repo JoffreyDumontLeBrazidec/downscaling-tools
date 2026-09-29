@@ -20,11 +20,12 @@ command.
 | Group | Commands |
 |---|---|
 | discovery | `list`, `describe <evaluator>` |
-| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard`, `report` |
+| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
-| figures | `membermaps`, `videogen` |
+| figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
+| retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
 
 Start with discovery. `python -m eval.cli list` prints every evaluator with the
 question it answers, whether it feeds the scoreboard, and the host it needs;
@@ -190,10 +191,11 @@ Each evaluator package keeps its contract files (`runner.py`, `scorer.py`, `plot
 top and its computation in `core/`, with its tests in `tests/`; see `ARCHITECTURE.md`, section 2,
 for the rules and for the short list of imports between evaluators. Code that several
 evaluators use is in `eval/shared/`. Analysis code without a live evaluator is in
-`eval/tools/<name>/`, one folder each: `videogen`, `sigma_evaluator`, `obs_crps`,
+`eval/tools/<name>/`, one folder each: `sigma_evaluator`, `obs_crps`,
 `plot_intermediate`, `weight_diagnostics`, `spectra_analysis`, and the older `parity`. Prefer
 the `python -m eval.cli` commands to running modules of `core/` directly. A few modules have a command line of their own, such as
-`python -m eval.evaluators.tc.core.workflows` and `python -m eval.tools.videogen`.
+`python -m eval.evaluators.tc.core.workflows`. (`videogen` and the HTML `report` were retired on
+2026-09-29; their code is in `eval/_quarantine/20260929/`.)
 
 Until 2026-09-29 this code lived in `eval/_backends/`. Only 15 forwarding modules remain there,
 for callers outside the repository, and `eval/_backends/README.md` lists them. Old import

@@ -71,7 +71,11 @@ def test_retired_packages_are_quarantined_and_not_importable():
     for name in registry.names(registry.RETIRED):
         entry = registry.get(name)
         assert not (EVALUATORS_DIR / name).exists(), name
-        assert (quarantine / entry.retired_on / name / "__init__.py").exists(), name
+        if entry.renamed:
+            # Renamed, not retired: the code lives on under the new name.
+            assert (EVALUATORS_DIR / entry.replacement / "__init__.py").exists(), name
+        else:
+            assert (quarantine / entry.retired_on / name / "__init__.py").exists(), name
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(f"eval.evaluators.{name}")
 
@@ -132,3 +136,41 @@ def test_lane_loader_allows_every_registered_section():
     from eval.config import loader
 
     assert set(registry.names()) <= loader._LANE_ALLOWED_KEYS
+
+
+def test_only_renamed_evaluator_names_the_new_name(tmp_path, capsys):
+    from eval import cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main([
+            "evaluate", "--dry-run", "--lane", "o96_o320",
+            "--predictions-dir", str(tmp_path), "--only", "membermaps",
+        ])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "renamed to 'zoom_maps'" in err
+
+
+def test_lane_group_renamed_name_runs_the_new_name(caplog):
+    import argparse
+
+    from eval.cli import _selection as cli
+
+    lane = {"evaluator_groups": {"default": ["tc"], "diagnostics": ["membermaps", "zoom_maps"]}}
+    args = argparse.Namespace(only=None, include_diagnostics=True, expver=None)
+    with caplog.at_level(logging.WARNING, logger="eval.cli"):
+        resolved = cli._resolve_evaluators(args, lane)
+    assert resolved == ["tc", "zoom_maps"]
+    assert "renamed to 'zoom_maps'" in caplog.text
+
+
+def test_renamed_evaluator_reads_the_old_lane_block_with_a_warning(caplog):
+    from eval.cli.evaluate import _lane_block
+
+    old_only = {"membermaps": {"steps": [72]}}
+    with caplog.at_level(logging.WARNING, logger="eval.cli"):
+        assert _lane_block(old_only, "zoom_maps") == {"steps": [72]}
+    assert "deprecated" in caplog.text
+    both = {"membermaps": {"steps": [72]}, "zoom_maps": {"steps": [24]}}
+    assert _lane_block(both, "zoom_maps") == {"steps": [24]}
+    assert _lane_block({}, "zoom_maps") == {}

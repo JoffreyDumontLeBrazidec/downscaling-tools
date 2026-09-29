@@ -1,6 +1,6 @@
 """Member maps evaluator: the four-panel case-inspection maps, driven by a lane.
 
-The `eval.cli membermaps` subcommand renders these panels but has to be told
+The `eval.cli zoom_maps` subcommand renders these panels but has to be told
 everything: which prediction directories, which date, step, member, extent and
 projection. That is the right shape for comparing two ARMS of a campaign against
 each other. It is the wrong shape for the ordinary question "show me what this
@@ -36,7 +36,7 @@ def _regions(lane_config: dict, eval_config: dict) -> dict[str, list[float] | No
 
     Falls back to the `texture` evaluator's regions so the two diagnostics of the
     fine-scale epic always speak about the same boxes, and finally to a single
-    entry with no box, which lets the membermaps core use its own default extent.
+    entry with no box, which lets the zoom_maps core use its own default extent.
     """
     boxes = eval_config.get("regions")
     if not boxes:
@@ -45,7 +45,7 @@ def _regions(lane_config: dict, eval_config: dict) -> dict[str, list[float] | No
 
 
 def _extent_args(box: list[float] | None) -> list[str]:
-    """Translate a lane region box into the extent and projection flags of the membermaps core."""
+    """Translate a lane region box into the extent and projection flags of the zoom_maps core."""
     if box is None:
         return []
     lat_min, lat_max, lon_min, lon_max = (float(v) for v in box)
@@ -67,12 +67,12 @@ def run(
     run_label: str = "",
     **kwargs,
 ) -> Path:
-    from eval.evaluators.membermaps.core.plot_member_wind_maps import (
-        build_arg_parser, run as membermaps_run,
+    from eval.evaluators.zoom_maps.core.plot_member_wind_maps import (
+        build_arg_parser, run as zoom_maps_run,
     )
 
     predictions_dir = Path(predictions_dir).expanduser().resolve()
-    output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "membermaps"
+    output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "zoom_maps"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     preds = find_predictions(predictions_dir)
@@ -98,10 +98,10 @@ def run(
     combos = len(dates) * len(steps) * len(members) * len(variables) * len(fields) * len(regions)
     if combos > MAX_COMBINATIONS:
         raise ValueError(
-            f"membermaps was asked for {combos} renders "
+            f"zoom_maps was asked for {combos} renders "
             f"({len(dates)} dates x {len(steps)} steps x {len(members)} members x "
             f"{len(variables)} variables x {len(fields)} fields x {len(regions)} regions), "
-            f"above the {MAX_COMBINATIONS} ceiling. Narrow the membermaps block in the lane "
+            f"above the {MAX_COMBINATIONS} ceiling. Narrow the zoom_maps block (or the older membermaps block) in the lane "
             f"config, or raise the ceiling deliberately."
         )
 
@@ -111,7 +111,7 @@ def run(
     ]
     if missing:
         raise FileNotFoundError(
-            f"membermaps: no prediction file for {missing} in {predictions_dir}. "
+            f"zoom_maps: no prediction file for {missing} in {predictions_dir}. "
             f"Available dates {available_dates}, steps {available_steps}."
         )
 
@@ -139,10 +139,10 @@ def run(
                                 "--region-tag", region_name,
                                 "--output-dir", str(region_dir),
                             ] + _extent_args(box)
-                            LOG.info("membermaps: %s", " ".join(argv))
-                            membermaps_run(build_arg_parser().parse_args(argv))
+                            LOG.info("zoom_maps: %s", " ".join(argv))
+                            zoom_maps_run(build_arg_parser().parse_args(argv))
                             written += 1
 
-    LOG.info("membermaps: %d renders over %d region(s) into %s",
+    LOG.info("zoom_maps: %d renders over %d region(s) into %s",
              written, len(regions), output_dir)
     return output_dir
