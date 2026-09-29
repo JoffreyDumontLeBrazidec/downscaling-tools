@@ -87,7 +87,7 @@ in all. The table gives the disposition of each group. None is left failing.
 | 16 | `eval/jobs/tests/test_predictions_jobs.py` | The scripts moved to `eval/archive/jobs/` | Fixed: paths repointed |
 | 1 + 1 | `eval/jobs/tests/test_checkpoint_profile.py`, `test_o1280_o2560_bundle_preflight.py` | Import archived jobs from `eval.jobs`; the archived preflight also imported a moved sibling | Fixed: imports repointed, and one stale import inside the archive repaired |
 | 2 | `eval/tests/test_mlflow_loader.py`, `test_mlflow_plot.py` | Loaded `mlflow/loader.py` and `plot.py`, which moved into `eval/evaluators/mlflow/` | Fixed: path repointed |
-| 1 | `eval/evaluators/membermaps/tests/test_member_wind_maps.py` | The variable spec gained a `fine_vmax` key | Fixed |
+| 1 | `eval/evaluators/zoom_maps/tests/test_member_wind_maps.py` (called `membermaps` until 2026-09-29) | The variable spec gained a `fine_vmax` key | Fixed |
 | 4 | `eval/predict/tests/test_dataset_builder.py` | `eval.predict` now also imports `manual_inference.prediction.predict`; the stub did not provide it | Fixed: the stub provides it |
 | 15 | `eval/jobs/tests/test_scoreboard_metrics.py` | Tests of the anchored TC scores (reach, ENFO match, tail ratios), removed by the raw-extremes contract of 2026-06-21 | Moved to `eval/_quarantine/20260928/jobs/tests/`; three live tests now assert the raw-extremes contract |
 | 4 + 4 + 1 | `test_predictions_dir_spectra.py`, `test_spectra_plot_pdf.py`, one test in `test_predictions_jobs.py` | Test helpers that were deleted when the spectra templates were archived | Moved to the quarantine (recoverable from git history) |
