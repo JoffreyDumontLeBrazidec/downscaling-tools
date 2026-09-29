@@ -5,8 +5,12 @@ Selection is delegated to eval.evaluators.precip_events.core.precip_events
 (find_precip_events), so the pages always match the evaluator's events.json.
 
 Each event page shows, zoomed tightly around the event centre, as Cartopy maps:
-  truth | interpolated input | model | model minus truth
-The pages go to one PDF plus a PNG per page in ``<name>_pages/``.
+  truth | interpolated input | model
+on one discrete colour scale whose top level is taken from the 99.9th percentile
+of the three panels together, so a sharp model peak is not hidden by a scale set
+by the truth; values above the top level are shown by the extend arrow, and each
+panel title states that panel's own maximum. The pages go to one PDF plus a PNG
+per page in ``<name>_pages/``.
 
 Truth and the interp-input baseline fall back to the lane's GRIB sources when
 the predictions do not embed them (tp truth was historically missing from the
@@ -44,20 +48,21 @@ def _zoom_mask(lat: np.ndarray, lon: np.ndarray, clat: float, clon: float,
     )
 
 
-def _robust_limits(*arrays) -> tuple[float, float]:
+# Precipitation levels (mm per 6 h) of the discrete colour scale; the scale stops at the
+# first level at or above the 99.9th percentile of the three panels together.
+PRECIP_LEVELS = (0.0, 0.1, 0.5, 1, 2, 5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000)
+TOP_PERCENTILE = 99.9
+
+
+def _precip_levels(*arrays) -> list[float]:
+    """Discrete colour levels from 0 to the first PRECIP_LEVELS value >= the pooled p99.9."""
     vals = np.concatenate([a[np.isfinite(a)] for a in arrays
                            if a is not None and a.size])
-    vals = vals[vals >= 0]
-    if vals.size == 0:
-        return 0.0, 1.0
-    return 0.0, max(float(np.nanpercentile(vals, 99.7)), 1.0)
-
-
-def _error_limit(error: np.ndarray) -> float:
-    vals = np.abs(error[np.isfinite(error)])
-    if vals.size == 0:
-        return 1.0
-    return max(float(np.nanpercentile(vals, 99.0)), 1.0)
+    top = float(np.nanpercentile(vals, TOP_PERCENTILE)) if vals.size else 1.0
+    top = max(top, 5.0)
+    levels = [lv for lv in PRECIP_LEVELS if lv < top]
+    levels.append(next((lv for lv in PRECIP_LEVELS if lv >= top), PRECIP_LEVELS[-1]))
+    return [float(lv) for lv in levels]
 
 
 def _member_id(ds: xr.Dataset, mi: int) -> int:
@@ -130,14 +135,14 @@ class _EventData:
 
 def _make_event_figure(event: Event, data: _EventData, run_label: str,
                        dlat: float, dlon: float) -> plt.Figure:
-    """Truth | interpolated input | model | model minus truth, zoomed on the event.
+    """Truth | interpolated input | model, zoomed on the event.
 
-    Cartopy maps (projection from ``select_projection``, coastlines, borders, labelled grid
-    lines). The three fields share one colour scale; the error panel is zero-centred
-    (``BrBG``: wetter than truth is blue-green, drier is brown). Values in mm per 6 h.
+    Cartopy maps (projection from ``region_projection``, coastlines, borders, labelled grid
+    lines). The three fields share one discrete colour scale (``_precip_levels``) with an
+    extend arrow when a panel exceeds its top level; every title states the panel maximum.
+    Values in mm per 6 h.
     """
     from eval.plotting import add_geography, eval_style, extend_for, variable_spec
-    from eval.plotting.maps import symmetric_norm
     from eval.plotting.maps_helpers import (
         colorbar_beside,
         draw_unstructured,
@@ -145,7 +150,7 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
         set_grid_ticks,
         set_inner_extent,
     )
-    from matplotlib.colors import Normalize
+    from matplotlib.colors import BoundaryNorm
 
     lat_hr, lon_hr, truth, base, pred = data.load(event)
     clat, clon = event.lat, event.lon
@@ -166,53 +171,36 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
     base_z = base_z[finite] if base_z is not None else None
 
     spec = variable_spec(data.var)
-    vmin, vmax = _robust_limits(truth_z, base_z, pred_z)
-    field_norm = Normalize(vmin=vmin, vmax=vmax)
+    levels = _precip_levels(truth_z, base_z, pred_z)
+    cmap = spec.field_cmap()
+    field_norm = BoundaryNorm(levels, cmap.N, extend="max")
     field_label = f"{spec.name}, 6 h accumulation ({spec.unit})"
     tgt = f" ({data.target_grid})" if data.target_grid else ""
-    panels = []  # (values, title, group)
+    panels = []  # (values, title)
     if truth_z is not None:
-        panels.append((truth_z, f"Truth{tgt}", "field"))
+        panels.append((truth_z, f"Truth{tgt}"))
     if base_z is not None:
         into = f" to {data.target_grid}" if data.target_grid else ""
         src = f" ({data.input_grid})" if data.input_grid else ""
-        panels.append((base_z, f"Input{src} interpolated{into}", "field"))
-    panels.append((pred_z, f"Model{tgt}", "field"))
-    error_z = None
-    if truth_z is not None:
-        error_z = pred_z - truth_z
-        err_norm, _ = symmetric_norm(error_z, limit=_error_limit(error_z))
-        panels.append((error_z, "Model minus truth", "error"))
-        peak_summary = (f"peak truth {float(np.nanmax(truth_z)):.1f} mm, "
-                        f"peak model {float(np.nanmax(pred_z)):.1f} mm")
-    else:
-        peak_summary = f"peak model {float(np.nanmax(pred_z)):.1f} mm (no truth)"
+        panels.append((base_z, f"Input{src} interpolated{into}"))
+    panels.append((pred_z, f"Model{tgt}"))
+    panels = [(arr, f"{title}\nmaximum {float(np.nanmax(arr)):.1f} {spec.unit}")
+              for arr, title in panels]
 
     extent = (clon - dlon, clon + dlon, clat - dlat, clat + dlat)
     n = len(panels)
-    n_field = sum(1 for p in panels if p[2] == "field")
     with eval_style():
-        fig = plt.figure(figsize=(4.3 * n + 1.6, 4.9))
-        ratios = [1.0] * n_field + [0.16] + ([1.0, 0.16] if error_z is not None else [])
-        gs = fig.add_gridspec(1, len(ratios), width_ratios=ratios, wspace=0.08,
-                              left=0.05, right=0.97, bottom=0.08, top=0.80)
+        fig = plt.figure(figsize=(4.3 * n + 1.4, 5.0))
+        gs = fig.add_gridspec(1, n + 1, width_ratios=[1.0] * n + [0.10], wspace=0.08,
+                              left=0.05, right=0.95, bottom=0.08, top=0.80)
         proj = region_projection(*extent)
-        field_axes, error_axes, field_mesh, error_mesh = [], [], None, None
-        slot = 0
-        for k, (arr, title, group) in enumerate(panels):
-            if group == "error":
-                slot = n_field + 1
-            ax = fig.add_subplot(gs[0, slot], projection=proj)
-            slot += 1
+        field_axes, field_mesh = [], None
+        for k, (arr, title) in enumerate(panels):
+            ax = fig.add_subplot(gs[0, k], projection=proj)
             set_inner_extent(ax, extent)
-            if group == "field":
-                field_mesh = draw_unstructured(ax, lon_z, lat_z, arr, extent,
-                                               cmap=spec.field_cmap(), norm=field_norm)
-                field_axes.append(ax)
-            else:
-                error_mesh = draw_unstructured(ax, lon_z, lat_z, arr, extent,
-                                               cmap=spec.error_cmap(), norm=err_norm)
-                error_axes.append(ax)
+            field_mesh = draw_unstructured(ax, lon_z, lat_z, arr, extent,
+                                           cmap=cmap, norm=field_norm)
+            field_axes.append(ax)
             gl = add_geography(ax, label_size=7, resolution="10m")
             set_grid_ticks(gl, extent)
             if gl is not None:
@@ -222,20 +210,22 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
             ax.plot(clon, clat, marker="+", color="black", markersize=9, markeredgewidth=1.2,
                     transform=_plate_carree(), zorder=9)
             ax.set_title(title, fontsize=10)
-        fields = [p[0] for p in panels if p[2] == "field"]
+        fields = [p[0] for p in panels]
         if field_mesh is not None:
-            colorbar_beside(fig, field_axes, field_mesh, field_label,
-                            extend=extend_for(field_norm, *fields), width=0.012, pad=0.008)
-        if error_mesh is not None:
-            colorbar_beside(fig, error_axes, error_mesh, f"Model minus truth ({spec.unit})",
-                            extend=extend_for(err_norm, error_z), width=0.012, pad=0.008)
+            cb = colorbar_beside(fig, field_axes, field_mesh, field_label,
+                                 extend=extend_for(field_norm, *fields), width=0.012, pad=0.008)
+            if cb is not None:
+                cb.set_ticks(levels)
+                cb.set_ticklabels([f"{lv:g}" for lv in levels])
+                cb.ax.tick_params(labelsize=8)
         head = f"{run_label}: " if run_label else ""
         fig.suptitle(
             f"{head}heavy-precipitation event {event.label.split('_')[0].replace('event', '')} "
             f"({event.date}, lead time {event.step} h)\n"
             f"centre {abs(clat):.2f}°{'N' if clat >= 0 else 'S'} "
-            f"{abs(clon):.2f}°{'E' if clon >= 0 else 'W'}, window ±{dlat:g}° latitude × ±{dlon:g}° longitude; "
-            f"{peak_summary}",
+            f"{abs(clon):.2f}°{'E' if clon >= 0 else 'W'} (+), window ±{dlat:g}° latitude × "
+            f"±{dlon:g}° longitude; colour scale tops at the {TOP_PERCENTILE:g}th percentile "
+            f"of the three panels",
             fontsize=11,
         )
     return fig

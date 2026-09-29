@@ -9,7 +9,8 @@ otherwise from the driving o1280 member tp via `precip.baseline_lres_grib_tpl`
 (tp is output-only on this lane, so the exported x_interp tp is all zero).
 
 Outputs: scores.json (machine-readable, scoreboard-ingestable), scores_rows.csv,
-plots/precip_scores.pdf.
+plots/precip_scores.pdf (skill, tail ratios and a summary table;
+``render_from_json`` redraws it from scores.json).
 """
 from __future__ import annotations
 
@@ -325,126 +326,214 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
                         t.get("p999_mm"), t.get("wet_frac"), t.get("neg_frac")])
 
 
-_SERIES_WORDS = {"model": "model", "baseline": "interpolated input", "truth": "truth"}
-_METRIC_WORDS = {
-    "rmse_mm": "RMSE (mm)", "bias_mm": "bias (mm)", "corr": "correlation",
-    "ens_rmse_mm": "RMSE of the ensemble mean (mm)", "p999_mm": "99.9th percentile (mm)",
-    "max_mm": "maximum (mm)", "wet_frac": "wet fraction", "neg_frac": "negative fraction",
-}
+def _baseline_bias_by_step(rows: list[dict]) -> dict:
+    """Member-mean bias of the interpolated input per step (figure only, not in scores.json).
+
+    Same aggregation as ``aggregate_rows``: mean over members, then over the dates of a step.
+    """
+    per_step: dict[int, list[float]] = defaultdict(list)
+    for row in rows:
+        vals = [m.get("baseline", {}).get("bias_mm") for m in row["members"]]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            per_step[row["step"]].append(M.nanmean(vals))
+    return {str(s): M.nanmean(vs) for s, vs in sorted(per_step.items())}
 
 
-def _summary_label(key: str) -> str:
-    """Readable text for a summary key such as ``model_rmse_mm``."""
-    if key == "model_over_baseline_rmse_ratio":
-        return "RMSE ratio, model / interpolated input"
-    series, _, metric = key.partition("_")
-    if series in _SERIES_WORDS and metric in _METRIC_WORDS:
-        text = f"{_SERIES_WORDS[series]}: {_METRIC_WORDS[metric]}"
-        return text[:1].upper() + text[1:]
-    return key.replace("_", " ")
+def _short_source(src: str) -> str:
+    kind, sep, rest = str(src).partition(":")
+    words = {"grib": "GRIB", "lres-nn": "nearest-neighbour interpolation of GRIB",
+             "embedded-y": "embedded y", "x_interp": "embedded x_interp", "none": "none"}
+    if sep and "/" in rest:
+        return f"{words.get(kind, kind)} {Path(rest).name}"
+    return words.get(str(src), str(src))
+
+
+def render_from_json(scores_json: str | Path, out_pdf: str | Path, *, run_label: str) -> None:
+    """Redraw the figures from a saved scores.json (no re-scoring)."""
+    payload = json.loads(Path(scores_json).read_text())
+    _render_pdf(Path(out_pdf), payload, run_label=run_label)
 
 
 def _render_pdf(path: Path, payload: dict, *, run_label: str) -> None:
-    """Skill and tail curves against lead time, plus a summary page (PDF + PNG per page).
+    """Three pages (PDF + PNG per page): skill, tail ratios, summary table.
 
-    Colours by role: model red, truth black, interpolated input (the baseline) blue dashed.
-    Solid lines with markers are member means; thinner dashed or dotted lines are scores
-    of the ensemble mean.
+    Colours by role: model red solid, interpolated input (the baseline) blue dashed, truth
+    black. Filled markers are member means (each member scored, then averaged); open markers
+    on thinner lines are scores of the ensemble mean. Every number drawn is read from the
+    scores.json payload, except the input bias per step, which is averaged from its rows the
+    same way.
     """
+    import textwrap
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from eval.plotting import AXIS, FigureBook, eval_style, role_style
 
-    per_step = payload["per_step"]
+    per_step = dict(payload["per_step"])
+    per_step["baseline_bias_mm"] = _baseline_bias_by_step(payload.get("rows", []))
     meta = payload["meta"]
+    has_baseline = meta["baseline_source"] != "none"
+    steps_all = sorted({int(s) for s in per_step.get("model_rmse_mm", {})})
+    n_dates = len({r["date"] for r in payload.get("rows", [])})
+    thr = meta["wet_threshold_mm"]
 
     def series(key):
         d = per_step.get(key, {})
-        steps = sorted(int(s) for s in d)
+        steps = [s for s in sorted(int(s) for s in d) if d[str(s)] is not None]
         return steps, [d[str(s)] for s in steps]
 
-    has_baseline = meta["baseline_source"] != "none"
-    counts = f"n = {meta['n_slices']} date and lead cases, {meta['n_members']} members"
-    model_mean = role_style("model", marker="o", markersize=3.5)
-    model_ens = role_style("model", linestyle=(0, (5, 2)), linewidth=1.5, alpha=0.8)
-    input_mean = role_style("input", marker="s", markersize=3.5)
-    input_ens = role_style("input", linestyle=(0, (1.5, 1.5)), linewidth=1.5, alpha=0.8)
-    truth = role_style("truth")
-    def _short_source(src: str) -> str:
-        kind, sep, rest = str(src).partition(":")
-        return f"{kind}: {Path(rest).name}" if sep and "/" in rest else str(src)
+    def plural(n, word):
+        return f"{n} {word}{'' if n == 1 else 's'}"
 
-    import textwrap
-
+    cases = (f"{plural(meta['n_slices'], 'case')} ({plural(n_dates, 'date')} × "
+             f"{plural(len(steps_all), 'lead time')}), {plural(meta['n_members'], 'member')}")
+    model_mean = role_style("model", marker="o", markersize=5)
+    input_mean = role_style("input", marker="s", markersize=5)
+    model_ens = role_style("model", linewidth=1.2, alpha=0.75, marker="o", markersize=5,
+                           markerfacecolor="white", linestyle=(0, (1.5, 1.5)))
+    input_ens = role_style("input", linewidth=1.2, alpha=0.75, marker="s", markersize=5,
+                           markerfacecolor="white", linestyle=(0, (1.5, 1.5)))
     footer = textwrap.fill(
-        f"truth source: {_short_source(meta['truth_source'])}; input (baseline) source: "
-        f"{_short_source(meta['baseline_source'])}; checkpoint: {meta.get('checkpoint_id', '')}",
-        width=180)
+        f"Truth: {_short_source(meta['truth_source'])}. Input (interpolation baseline): "
+        f"{_short_source(meta['baseline_source'])}. Checkpoint {meta.get('checkpoint_id', '')}. "
+        f"Units: mm per 6 h window; negative values are kept in RMSE, bias and correlation.",
+        width=170)
+
+    def finish(fig, axes, handles, labels, name, top_note):
+        for ax in axes:
+            ax.set_xlabel(AXIS["lead"])
+            if steps_all:
+                ax.set_xticks(steps_all if len(steps_all) <= 12 else steps_all[::2])
+        fig.legend(handles, labels, loc="lower center", ncol=len(labels),
+                   bbox_to_anchor=(0.5, -0.075), fontsize=9)
+        fig.text(0.5, -0.11, footer, ha="center", va="top", fontsize=7.5, color="0.35")
+        fig.suptitle(f"{run_label}: {top_note}\n{cases}", fontsize=12)
+        pdf.add(fig, name=name)
 
     with FigureBook(path, png=True) as pdf, eval_style():
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.9), constrained_layout=True)
-        fig.suptitle(f"Total precipitation (6 h accumulation) skill against lead time: {run_label}")
-        for i, (ax, (mkey, bkey, ekey, title, ylabel)) in enumerate(zip(axes, [
-            ("model_rmse_mm", "baseline_rmse_mm", "model_ens_rmse_mm",
-             "Root-mean-square error", "RMSE (mm)"),
-            ("model_bias_mm", None, None, "Bias (model minus truth)", "Bias (mm)"),
-            ("model_corr", "baseline_corr", None, "Correlation with truth", "Correlation"),
-        ])):
-            suffix = f" ({counts})" if i == 0 else ""
-            s, v = series(mkey)
-            ax.plot(s, v, label=f"Model, member mean{suffix}", **model_mean)
-            if bkey and has_baseline:
-                s, v = series(bkey)
-                ax.plot(s, v, label="Input (interpolated), member mean", **input_mean)
-            if ekey:
-                s, v = series(ekey)
-                ax.plot(s, v, label="Model, ensemble mean", **model_ens)
-                if has_baseline:
-                    s, v = series("baseline_ens_rmse_mm")
-                    ax.plot(s, v, label="Input (interpolated), ensemble mean", **input_ens)
-            if mkey == "model_bias_mm":
-                ax.axhline(0, color="0.3", lw=0.8, zorder=1)
-            ax.set_title(title)
-            ax.set_xlabel(AXIS["lead"])
-            ax.set_ylabel(ylabel)
-            ax.legend(fontsize=8)
-        fig.text(0.5, -0.02, footer, ha="center", va="top", fontsize=7, color="0.35")
-        pdf.add(fig, name="skill")
-
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4.9), constrained_layout=True)
-        fig.suptitle(f"Total precipitation (6 h accumulation) distribution tails against lead time: {run_label}")
-        for i, (ax, (tkey, mkey, bkey, title, ylabel)) in enumerate(zip(axes, [
-            ("truth_p999_mm", "model_p999_mm", "baseline_p999_mm",
-             "99.9th percentile", "99.9th percentile (mm)"),
-            ("truth_max_mm", "model_max_mm", "baseline_max_mm", "Maximum", "Maximum (mm)"),
-            ("truth_wet_frac", "model_wet_frac", "baseline_wet_frac",
-             f"Wet fraction (above {meta['wet_threshold_mm']:g} mm)", "Fraction of grid points"),
-        ])):
-            suffix = f" ({counts})" if i == 0 else ""
-            s, v = series(tkey)
-            ax.plot(s, v, label="Truth", **truth)
-            s, v = series(mkey)
-            ax.plot(s, v, label=f"Model, member mean{suffix}", **model_mean)
+        # ---- page 1: skill against lead time --------------------------------
+        fig, axes = plt.subplots(1, 3, figsize=(14, 4.3), constrained_layout=True)
+        panels = [
+            ("Root-mean-square error (mm)", "model_rmse_mm", "baseline_rmse_mm",
+             ("model_ens_rmse_mm", "baseline_ens_rmse_mm"), None),
+            ("Bias, series minus truth (mm)", "model_bias_mm", "baseline_bias_mm", None, 0.0),
+            ("Correlation with truth", "model_corr", "baseline_corr", None, None),
+        ]
+        for ax, (title, mkey, bkey, ens, ref) in zip(axes, panels):
+            if ref is not None:
+                ax.axhline(ref, color="0.3", linewidth=0.9, zorder=1)
+            ax.plot(*series(mkey), **model_mean)
             if has_baseline:
-                s, v = series(bkey)
-                ax.plot(s, v, label="Input (interpolated), member mean", **input_mean)
+                ax.plot(*series(bkey), **input_mean)
+            if ens:
+                ax.plot(*series(ens[0]), **model_ens)
+                if has_baseline:
+                    ax.plot(*series(ens[1]), **input_ens)
             ax.set_title(title)
-            ax.set_xlabel(AXIS["lead"])
-            ax.set_ylabel(ylabel)
-            ax.legend(fontsize=8)
-        fig.text(0.5, -0.02, footer, ha="center", va="top", fontsize=7, color="0.35")
-        pdf.add(fig, name="tails")
+        handles = [plt.Line2D([], [], **model_mean)]
+        labels = ["Model, member mean"]
+        if has_baseline:
+            handles.append(plt.Line2D([], [], **input_mean))
+            labels.append("Input (interpolated), member mean")
+        handles.append(plt.Line2D([], [], **model_ens))
+        labels.append("Model, ensemble mean (RMSE only)")
+        if has_baseline:
+            handles.append(plt.Line2D([], [], **input_ens))
+            labels.append("Input, ensemble mean (RMSE only)")
+        finish(fig, axes, handles, labels, "skill",
+               "6 h precipitation skill against lead time")
 
-        fig, ax = plt.subplots(figsize=(11, 6))
+        # ---- page 2: tail ratios against lead time --------------------------
+        fig, axes = plt.subplots(1, 3, figsize=(14, 4.3), constrained_layout=True)
+        panels = [
+            ("99.9th percentile", "p999_mm", "mm"),
+            ("Maximum", "max_mm", "mm"),
+            (f"Wet fraction (at least {thr:g} mm)", "wet_frac", ""),
+        ]
+        for ax, (title, key, unit) in zip(axes, panels):
+            ax.axhline(1.0, color=role_style("truth")["color"], linewidth=1.2, zorder=1)
+            t_steps, t_vals = series(f"truth_{key}")
+            truth_at = dict(zip(t_steps, t_vals))
+            for skey, style in (("model", model_mean), ("baseline", input_mean)):
+                if skey == "baseline" and not has_baseline:
+                    continue
+                s, v = series(f"{skey}_{key}")
+                pairs = [(st, val / truth_at[st]) for st, val in zip(s, v)
+                         if truth_at.get(st)]
+                if pairs:
+                    ax.plot(*zip(*pairs), **style)
+            if t_vals:
+                lo, hi = min(t_vals), max(t_vals)
+                fmt = (lambda x: f"{x:.0f} {unit}") if unit else (lambda x: f"{100 * x:.0f} %")
+                span = fmt(lo) if fmt(lo) == fmt(hi) else f"{fmt(lo)} to {fmt(hi)}"
+                title = f"{title}, series / truth\n(truth: {span})"
+            ax.set_title(title, fontsize=10.5)
+            ax.set_ylabel("Ratio to truth")
+            lo, hi = ax.get_ylim()
+            pad = max(abs(1 - lo), abs(hi - 1), 0.05) * 1.1
+            ax.set_ylim(1 - pad, 1 + pad)
+        handles = [plt.Line2D([], [], **model_mean)]
+        labels = ["Model, member mean"]
+        if has_baseline:
+            handles.append(plt.Line2D([], [], **input_mean))
+            labels.append("Input (interpolated), member mean")
+        handles.append(plt.Line2D([], [], color=role_style("truth")["color"], linewidth=1.2))
+        labels.append("Truth (ratio 1)")
+        finish(fig, axes, handles, labels, "tails",
+               "6 h precipitation distribution tails relative to truth")
+
+        # ---- page 3: summary table -----------------------------------------
+        summ = payload["summary"]
+        b_bias = [v for v in per_step["baseline_bias_mm"].values() if v is not None]
+        summ_b_bias = M.nanmean(b_bias) if b_bias else None
+
+        def cell(v, fmt):
+            return "" if v is None else format(v, fmt)
+
+        table_rows = [
+            ("RMSE, member mean (mm)", "rmse_mm", ".2f", True),
+            ("RMSE of the ensemble mean (mm)", "ens_rmse_mm", ".2f", True),
+            ("Bias (mm)", "bias_mm", "+.3f", True),
+            ("Correlation", "corr", ".3f", True),
+            ("99.9th percentile (mm)", "p999_mm", ".1f", False),
+            ("Maximum (mm)", "max_mm", ".1f", False),
+            (f"Wet fraction (at least {thr:g} mm)", "wet_frac", ".3f", False),
+            ("Negative fraction", "neg_frac", ".3f", False),
+        ]
+        cells = []
+        for label, key, fmt, paired in table_rows:
+            model_v = summ.get(f"model_{key}")
+            base_v = summ_b_bias if key == "bias_mm" else summ.get(f"baseline_{key}")
+            truth_v = None if paired else summ.get(f"truth_{key}")
+            cells.append([label, cell(model_v, fmt),
+                          cell(base_v, fmt) if has_baseline else "", cell(truth_v, fmt)])
+        ratio = summ.get("model_over_baseline_rmse_ratio")
+        if ratio is not None:
+            cells.append(["RMSE ratio, model / input", f"{ratio:.3f}", "", ""])
+        n_rows = len(cells) + 1
+        fig = plt.figure(figsize=(9.0, 0.34 * n_rows + 1.5))
+        ax = fig.add_axes([0.03, 0.9 / (0.34 * n_rows + 1.5), 0.94,
+                           0.34 * n_rows / (0.34 * n_rows + 1.5)])
         ax.axis("off")
-        lines = [f"Total precipitation scores, summary over all lead times: {run_label}",
-                 f"checkpoint: {meta['checkpoint_id']}",
-                 f"cases (date and lead time): {meta['n_slices']}   members: {meta['n_members']}",
-                 f"negative values: {meta['negative_handling']}", ""]
-        for k, v in payload["summary"].items():
-            if v is not None:
-                lines.append(f"{_summary_label(k):50s} {v:10.4f}")
-        ax.text(0.02, 0.98, "\n".join(lines), va="top", family="monospace",
-                fontsize=9, transform=ax.transAxes)
+        tab = ax.table(cellText=cells,
+                       colLabels=["Mean over lead times", "Model",
+                                  "Input (interpolated)", "Truth"],
+                       colLoc="center", cellLoc="right", bbox=[0, 0, 1, 1],
+                       colWidths=[0.43, 0.17, 0.24, 0.16])
+        tab.auto_set_font_size(False)
+        tab.set_fontsize(9.5)
+        for (r, c), cl in tab.get_celld().items():
+            cl.set_edgecolor("0.8")
+            if r == 0:
+                cl.set_text_props(weight="bold")
+                cl.set_facecolor("0.93")
+            if c == 0:
+                cl.set_text_props(ha="left")
+                cl.PAD = 0.03
+        fig.suptitle(f"{run_label}: 6 h precipitation scores, mean over lead times\n{cases}",
+                     fontsize=12)
+        fig.text(0.5, 0.1 / (0.34 * n_rows + 1.5), footer, ha="center", va="bottom",
+                 fontsize=7.5, color="0.35")
         pdf.add(fig, name="summary")
