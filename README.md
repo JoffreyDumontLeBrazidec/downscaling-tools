@@ -51,6 +51,8 @@ lane's configuration after its `base:` chain is merged.
 | `distributed/` | Small helpers for distributed (multi-process) runs |
 | `tools/` | Stand-alone toolkits: `aifsens2_regen` (rebuilds the AIFS ensemble datasets) and `station_head` (building code for the station head adapter) |
 | `scripts/` | One-off analysis and figure scripts written for single investigations |
+| `docs/eval-repertoire/` | The repertoire of eval.cli tools: one section and one example figure per tool (`REPERTOIRE.md`) |
+| `docs-proposals/` | Maps and proposals written during the 2026-09 refactor (old-to-new backend paths, external references) |
 | `tests/` | GPU overfit smoke jobs (`tests/overfit/`); the unit tests live next to the code they test |
 | `conftest.py`, `pytest.ini`, `sitecustomize.py` | Test configuration and interpreter start-up hooks; see `TESTING.md` |
 
