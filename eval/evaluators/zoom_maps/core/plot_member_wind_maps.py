@@ -1,4 +1,4 @@
-"""Single-member field cutout maps: EEFO input / ENFO truth / prediction arms.
+"""Zoom maps (called membermaps until 2026-09-29): EEFO input / ENFO truth / prediction arms.
 
 Renders 10 m wind speed by default; ``--variable`` also takes ``msl`` (mean
 sea level pressure), ``2t`` (2 m temperature), ``t_850`` (850 hPa temperature)
@@ -22,6 +22,13 @@ mixed in one invocation:
 The embedded ``y`` is the *same-index* ENFO member — a genuine ENFO member,
 but an independent realization from the EEFO driver (EEFO/ENFO are not
 paired); the panel is labelled "Operational ENFO" accordingly.
+
+The O1280 panels (truth, model, and O1280 GRIB panels) are drawn on the native
+grid points with a triangulation and Gouraud shading, so a zoomed map shows no
+grid-cell blocks; the O320 input panel keeps its nearest-neighbour cells, whose
+coarseness is the point of showing it. A map box smaller than ``MIN_SPAN_DEG``
+is widened around its centre, and the box actually drawn is printed and written
+in the figure title.
 
 Diagnostic maps only — nothing here scores anything.
 
@@ -55,6 +62,16 @@ LAT_LOOKUP_SCALE = 1.4
 # carry; that leakage is inherited correctly by both truth and model, so it
 # biases a truth-versus-model contrast towards agreement, never away from it.
 DEFAULT_FINE_CUT_DEG = 0.6
+# Smallest map drawn, in degrees of latitude (about 1330 km), in both directions:
+# the east-west span is widened to MIN_SPAN_DEG / cos(central latitude) degrees
+# of longitude. Below this an O1280 cell (about 9 km) covers ten or more pixels
+# and the map shows grid cells rather than weather. The texture regions' west
+# tropical Atlantic box (15 x 25 deg) is above it; the Alps box (6 x 12 deg) is
+# widened around its centre.
+MIN_SPAN_DEG = 12.0
+# Triangles longer than this multiple of the median edge bridge a gap in the
+# source points (for example the edge of a local domain) and are not drawn.
+MAX_EDGE_RATIO = 6.0
 
 DEFAULT_TITLES = {
     "eefo": "Input (EEFO O320)",
@@ -228,8 +245,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--region-tag", default="europe-cutout", help="Region tag used in output filenames (default: europe-cutout).")
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
-    p.add_argument("--proj-lon", type=float, default=5.0, help="Lambert conformal central longitude (default: 5.0). Ignored when the extent crosses the dateline (plate carree is used).")
-    p.add_argument("--proj-lat", type=float, default=50.0, help="Lambert conformal central latitude (default: 50.0).")
+    p.add_argument("--proj-lon", type=float, default=None, help="Lambert conformal central longitude (default: the centre of --extent). Ignored when the extent crosses the dateline (plate carree is used).")
+    p.add_argument("--proj-lat", type=float, default=None, help="Lambert conformal central latitude (default: the centre of --extent).")
     return p
 
 
@@ -271,6 +288,192 @@ def nearest_grid(
     grid_x, grid_y = np.meshgrid(gx, gy)
     _, idx = tree.query(np.column_stack([grid_x.ravel(), grid_y.ravel() * LAT_LOOKUP_SCALE]), workers=-1)
     return gx, gy, val[m][idx].reshape(grid_y.shape)
+
+
+def widen_extent(
+    extent: tuple[float, float, float, float], min_span_deg: float = MIN_SPAN_DEG,
+) -> tuple[float, float, float, float]:
+    """(lon_min, lon_max, lat_min, lat_max) widened around its centre to the minimum span.
+
+    Both spans are measured in degrees of latitude, so the longitude span becomes at
+    least ``min_span_deg / cos(central latitude)``. A box that is large enough, or one
+    that crosses the dateline (lon_min > lon_max), is returned unchanged.
+    """
+    lon_min, lon_max, lat_min, lat_max = (float(v) for v in extent)
+    if lon_min > lon_max:
+        return (lon_min, lon_max, lat_min, lat_max)
+    lat_c = 0.5 * (lat_min + lat_max)
+    lat_half = max(0.5 * (lat_max - lat_min), 0.5 * min_span_deg)
+    coslat = max(np.cos(np.radians(lat_c)), 0.1)
+    lon_c = 0.5 * (lon_min + lon_max)
+    lon_half = max(0.5 * (lon_max - lon_min), 0.5 * min_span_deg / coslat)
+    widened = (
+        round(lon_c - lon_half, 2), round(lon_c + lon_half, 2),
+        round(max(lat_c - lat_half, -90.0), 2), round(min(lat_c + lat_half, 90.0), 2),
+    )
+    if (lon_max - lon_min) >= 2 * lon_half - 1e-9 and (lat_max - lat_min) >= 2 * lat_half - 1e-9:
+        return (lon_min, lon_max, lat_min, lat_max)
+    return widened
+
+
+def _span_text(lo: float, hi: float, positive: str, negative: str) -> str:
+    """"40.0–52.0°N" when both ends share a hemisphere, else "5.0°W–10.0°E"."""
+    def word(v: float) -> tuple[str, str]:
+        return f"{abs(v):.1f}", positive if v >= 0 else negative
+
+    (a, ha), (b, hb) = word(lo), word(hi)
+    return f"{a}–{b}°{ha}" if ha == hb else f"{a}°{ha}–{b}°{hb}"
+
+
+def box_text(extent: tuple[float, float, float, float]) -> str:
+    """The longitude and latitude span of a map box, e.g. "76.0–64.0°W, 22.0–34.0°N"."""
+    lon_min, lon_max = (((float(v) + 180.0) % 360.0) - 180.0 for v in extent[:2])
+    return (f"{_span_text(lon_min, lon_max, 'E', 'W')}, "
+            f"{_span_text(float(extent[2]), float(extent[3]), 'N', 'S')}")
+
+
+def resolve_extent(args: argparse.Namespace) -> tuple[tuple[float, float, float, float], str]:
+    """(extent drawn, title line) for the requested --extent, printing what is used.
+
+    The requested box is widened to ``MIN_SPAN_DEG`` when it is smaller. The
+    projection centre defaults to the centre of the box drawn, so a box far from
+    Europe is not drawn on a cone centred on Europe.
+    """
+    requested = tuple(float(v) for v in args.extent)
+    extent = widen_extent(requested)
+    line = f"map box {box_text(extent)}"
+    if extent != requested:
+        line += f" (widened from {box_text(requested)})"
+        print(f"warning: the requested map box {box_text(requested)} is smaller than the "
+              f"{MIN_SPAN_DEG:g}-degree minimum; drawing {box_text(extent)}", flush=True)
+    if list(requested) == list(DEFAULT_EXTENT):
+        print("note: no --extent given, so the default Europe box is drawn", flush=True)
+    print(f"extent used: {line}", flush=True)
+    if getattr(args, "proj_lon", None) is None:
+        args.proj_lon = 0.5 * (extent[0] + extent[1])
+    if getattr(args, "proj_lat", None) is None:
+        args.proj_lat = 0.5 * (extent[2] + extent[3])
+    return extent, line
+
+
+def highpass_at_points(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    val: np.ndarray,
+    *,
+    extent: tuple[float, float, float, float],
+    res: float,
+    fine_cut_deg: float,
+    margin: float = DEFAULT_MARGIN,
+) -> np.ndarray:
+    """The --field fine high-pass of unstructured values, evaluated at the source points.
+
+    The low-pass is the Gaussian smooth of the nearest-neighbour regular grid
+    (spacing ``res``, sigma half of ``fine_cut_deg``) that the regular-grid view
+    uses. It is interpolated bilinearly back to the source points, which is
+    accurate because it is smooth on the grid spacing, and subtracted there. The
+    grid-scale detail of the result is therefore the source's own, point by point;
+    nothing smooths it. Points outside the grid get NaN.
+    """
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.ndimage import gaussian_filter
+
+    gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, margin=margin, res=res)
+    low = gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
+    lon = np.where(lon > 180.0, lon - 360.0, lon)
+    lookup = RegularGridInterpolator((gy, gx), low, bounds_error=False, fill_value=np.nan)
+    return val - lookup(np.column_stack([lat, lon]))
+
+
+def native_triangulation(
+    ax,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    values: list[np.ndarray],
+    *,
+    extent: tuple[float, float, float, float],
+    field: str,
+    fine_cut_deg: float,
+    res: float,
+    margin: float = DEFAULT_MARGIN,
+):
+    """(triangulation, [values]) of the native points that cover the map of ``ax``.
+
+    The points are projected into the map's own coordinates and triangulated
+    there, so ``ax.tripcolor(..., shading="gouraud")`` draws each value at its own
+    grid point and blends linearly between neighbours. Call after the axes extent
+    is set; points more than 3 % outside the view are dropped.
+    """
+    import cartopy.crs as ccrs
+    from matplotlib.tri import Triangulation
+
+    lon = np.where(lon > 180.0, lon - 360.0, lon)
+    m = ((lon >= extent[0] - margin) & (lon <= extent[1] + margin)
+         & (lat >= extent[2] - margin) & (lat <= extent[3] + margin))
+    if not np.any(m):
+        raise ValueError("No source points fall inside the requested extent.")
+    lat_m, lon_m = lat[m], lon[m]
+    vals = [np.asarray(v, dtype=np.float64)[m] for v in values]
+    if field == "fine":
+        vals = [highpass_at_points(lat_m, lon_m, v, extent=extent, res=res,
+                                   fine_cut_deg=fine_cut_deg, margin=margin) for v in vals]
+    xy = ax.projection.transform_points(ccrs.PlateCarree(), lon_m, lat_m)
+    x, y = xy[:, 0], xy[:, 1]
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    px, py = 0.03 * (x1 - x0), 0.03 * (y1 - y0)
+    keep = (np.isfinite(x) & np.isfinite(y)
+            & (x >= x0 - px) & (x <= x1 + px) & (y >= y0 - py) & (y <= y1 + py))
+    for v in vals:
+        keep &= np.isfinite(v)
+    if keep.sum() < 3:
+        raise ValueError("Fewer than three source points fall inside the map.")
+    tri = Triangulation(x[keep], y[keep])
+    tx, ty = tri.x[tri.triangles], tri.y[tri.triangles]
+    longest = np.hypot(tx - np.roll(tx, 1, axis=1), ty - np.roll(ty, 1, axis=1)).max(axis=1)
+    tri.set_mask(longest > MAX_EDGE_RATIO * np.median(longest))
+    return tri, [v[keep] for v in vals]
+
+
+def _source_layers(
+    ax, *, lat, lon, values, res, extent, field, fine_cut_deg,
+) -> list[tuple]:
+    """What to draw for one source, one layer per value array.
+
+    Native O1280 sources (``res`` below the O320 one) become a triangulation of
+    their own points, drawn with Gouraud shading: no grid-cell blocks at any zoom.
+    The O320 input stays a nearest-neighbour mesh on purpose, so its coarse cells
+    remain visible.
+    """
+    if res < DEFAULT_LRES_RES:
+        tri, vals = native_triangulation(ax, lat, lon, values, extent=extent, field=field,
+                                         fine_cut_deg=fine_cut_deg, res=res)
+        return [("tri", tri, v) for v in vals]
+    layers = []
+    for val in values:
+        gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
+        if field == "fine":
+            from scipy.ndimage import gaussian_filter
+            # Subtract a Gaussian smooth of the regridded field: a high-pass built as
+            # identity minus low-pass, in real space, with no transform involved. sigma
+            # is half --fine-cut-deg, which makes the high-pass transmit 99% at a
+            # wavelength of fine_cut_deg and 50% at 2.67x it. The rolloff is gradual, so
+            # the panel is not a sharp band.
+            grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
+        layers.append(("mesh", (gx, gy), grid))
+    return layers
+
+
+def _draw_layer(ax, layer: tuple, *, cmap, vmin: float, vmax: float):
+    import cartopy.crs as ccrs
+
+    kind, geometry, data = layer
+    if kind == "tri":
+        return ax.tripcolor(geometry, data, shading="gouraud", cmap=cmap,
+                            vmin=vmin, vmax=vmax, rasterized=True)
+    gx, gy = geometry
+    return ax.pcolormesh(gx, gy, data, transform=ccrs.PlateCarree(), cmap=cmap,
+                         vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
 
 
 def _member_slice(da, member: int) -> np.ndarray:
@@ -370,6 +573,7 @@ def _render(
     proj_lat: float,
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
+    box_line: str = "",
 ) -> None:
     """One map panel, written as ``out_path`` (PNG, 150 dpi) plus a PDF sibling."""
     import matplotlib
@@ -378,15 +582,6 @@ def _render(
     import cartopy.crs as ccrs
     from eval.plotting import add_geography, eval_style, save_figure
 
-    gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
-    if field == "fine":
-        from scipy.ndimage import gaussian_filter
-        # Subtract a Gaussian smooth of the regridded field: a high-pass built as
-        # identity minus low-pass, in real space, with no transform involved. sigma
-        # is half --fine-cut-deg, which makes the high-pass transmit 99% at a
-        # wavelength of fine_cut_deg and 50% at 2.67x it. The rolloff is gradual, so
-        # the panel is not a sharp band.
-        grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
     cmap, cbar_label = _style_for(spec, field)
@@ -395,12 +590,15 @@ def _render(
         fig = plt.figure(figsize=(11, 7.5))
         ax = fig.add_subplot(1, 1, 1, projection=_projection(extent, proj_lon, proj_lat))
         ax.set_extent(extent, crs=ccrs.PlateCarree())
-        mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
-                             vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
+        (layer,) = _source_layers(ax, lat=lat, lon=lon, values=[val], res=res, extent=extent,
+                                  field=field, fine_cut_deg=fine_cut_deg)
+        mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
+        ax.set_extent(extent, crs=ccrs.PlateCarree())  # drawing may have autoscaled the view
         add_geography(ax, coast_lw=0.9, label_size=8)
         ax.set_title(
             f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, member {member}\n"
-            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC",
+            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
+            + (f"\n{box_line}" if box_line else ""),
             fontsize=12,
         )
         cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.06, aspect=40, shrink=0.8,
@@ -461,10 +659,11 @@ def _render_grid(
     ncols: int = 5,
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
+    box_line: str = "",
 ) -> None:
     """One figure holding every member of a single source on a shared colour scale.
 
-    The members are regridded and drawn exactly as the single-member renderer
+    The members are prepared and drawn exactly as the single-member renderer
     does, so a panel of this figure and the corresponding standalone PNG show
     the same field; only the layout differs.
     """
@@ -473,15 +672,6 @@ def _render_grid(
     import matplotlib.pyplot as plt
     import cartopy.crs as ccrs
     from eval.plotting import add_geography, eval_style, save_figure, variable_spec
-
-    grids = []
-    for val in values:
-        gx, gy, grid = nearest_grid(lat, lon, val, extent=extent, res=res)
-        if field == "fine":
-            from scipy.ndimage import gaussian_filter
-            # Same real-space high-pass as the single-member renderer.
-            grid = grid - gaussian_filter(grid, fine_cut_deg / res / 2.0, mode="nearest")
-        grids.append((gx, gy, grid))
 
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
@@ -496,11 +686,17 @@ def _render_grid(
             subplot_kw={"projection": proj}, squeeze=False,
         )
         axes = np.atleast_1d(axes).ravel()
-        mesh = None
-        for i, (ax, member, (gx, gy, grid)) in enumerate(zip(axes, members, grids)):
+        for ax in axes:
             ax.set_extent(extent, crs=ccrs.PlateCarree())
-            mesh = ax.pcolormesh(gx, gy, grid, transform=ccrs.PlateCarree(), cmap=cmap,
-                                 vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
+        # Every panel shares the projection and extent, so one set of layers
+        # (one triangulation for a native source) serves all members.
+        layers = _source_layers(axes[0], lat=lat, lon=lon, values=values, res=res,
+                                extent=extent, field=field, fine_cut_deg=fine_cut_deg)
+        mesh = None
+        for i, (ax, member, layer) in enumerate(zip(axes, members, layers)):
+            mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
+            grid = layer[2]
             gl = add_geography(ax, label_size=6.5)
             if gl is not None:
                 gl.left_labels = i % ncols == 0
@@ -514,8 +710,9 @@ def _render_grid(
         # titles; bbox_inches="tight" then crops back to the drawn extent.
         fig.suptitle(
             f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, {len(members)} members\n"
-            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC",
-            y=1.06,
+            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
+            + (f"\n{box_line}" if box_line else ""),
+            y=1.08 if box_line else 1.06,
         )
         if mesh is not None:
             cbar = fig.colorbar(mesh, ax=axes.tolist(), orientation="horizontal",
@@ -536,7 +733,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
         raise SystemExit("--members needs at least one --run panel (GRIB files hold one member).")
     if gribs:
         raise SystemExit("--members and --grib cannot be combined: a GRIB panel has no member axis.")
-    extent = tuple(args.extent)
+    extent, box_line = resolve_extent(args)
     spec, vmin, vmax = resolve_scale(args)
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -580,7 +777,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             step=args.step,
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
-            field=args.field, fine_cut_deg=args.fine_cut_deg,
+            field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
@@ -589,7 +786,8 @@ def run_member_grid(args: argparse.Namespace) -> int:
         "tool": "zoom_maps", "mode": "member_grid",
         "date": args.date, "time": args.time, "step": args.step, "members": members,
         "variable": args.variable, "field": args.field, "fine_cut_deg": args.fine_cut_deg,
-        "runs": runs, "extent": list(extent), "vmin": vmin, "vmax": vmax,
+        "runs": runs, "extent": list(extent), "extent_requested": list(args.extent),
+        "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
     }, filename=(
         f"zoom_maps_manifest_{token}_init{args.date}"
@@ -613,7 +811,7 @@ def run(args: argparse.Namespace) -> int:
     titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
     if not runs and not gribs:
         raise SystemExit("Nothing to plot: give at least one --run or --grib panel.")
-    extent = tuple(args.extent)
+    extent, box_line = resolve_extent(args)
     spec, vmin, vmax = resolve_scale(args)
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -655,7 +853,7 @@ def run(args: argparse.Namespace) -> int:
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
-            field=args.field, fine_cut_deg=args.fine_cut_deg,
+            field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
@@ -666,6 +864,7 @@ def run(args: argparse.Namespace) -> int:
         "variable": args.variable,
         "field": args.field, "fine_cut_deg": args.fine_cut_deg,
         "runs": runs, "gribs": gribs, "extent": list(extent),
+        "extent_requested": list(args.extent),
         "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
     }, filename=(

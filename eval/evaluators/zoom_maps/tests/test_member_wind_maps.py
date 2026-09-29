@@ -5,12 +5,17 @@ import numpy as np
 import pytest
 
 from eval.evaluators.zoom_maps.core.plot_member_wind_maps import (
+    MIN_SPAN_DEG,
     VARIABLES,
     _field,
     _parse_kv,
+    box_text,
     build_arg_parser,
+    highpass_at_points,
     nearest_grid,
+    resolve_extent,
     resolve_scale,
+    widen_extent,
 )
 
 
@@ -29,7 +34,11 @@ def test_build_arg_parser_defaults():
         ["--date", "20250926", "--step", "24", "--member", "2", "--output-dir", "/tmp/x"]
     )
     assert args.extent == [-45.0, 55.0, 27.0, 72.0]
-    assert args.proj_lon == 5.0 and args.proj_lat == 50.0
+    # The projection centre defaults to the centre of the box drawn.
+    assert args.proj_lon is None and args.proj_lat is None
+    extent, _ = resolve_extent(args)
+    assert extent == (-45.0, 55.0, 27.0, 72.0)
+    assert (args.proj_lon, args.proj_lat) == (5.0, 49.5)
     assert args.region_tag == "europe-cutout"
     # The default variable and its resolved colour scale must stay exactly what
     # the tool did before --variable existed.
@@ -141,3 +150,52 @@ def test_nearest_grid_raises_outside_extent():
             np.array([50.0]), np.array([120.0]), np.array([1.0]),
             extent=(0.0, 10.0, 0.0, 10.0), margin=1.0, res=1.0,
         )
+
+
+def test_widen_extent_keeps_a_large_box_and_widens_a_small_one_around_its_centre():
+    wta = (-70.0, -45.0, 10.0, 25.0)
+    assert widen_extent(wta) == wta
+    alps = widen_extent((4.0, 16.0, 43.0, 49.0))
+    lon_min, lon_max, lat_min, lat_max = alps
+    assert (lat_min, lat_max) == (40.0, 52.0)
+    assert 0.5 * (lon_min + lon_max) == pytest.approx(10.0, abs=0.01)
+    # east-west span measured in degrees of latitude at the centre (46 N)
+    assert (lon_max - lon_min) * np.cos(np.radians(46.0)) == pytest.approx(MIN_SPAN_DEG, abs=0.02)
+    # a box that crosses the dateline is left alone
+    assert widen_extent((170.0, -170.0, 0.0, 5.0)) == (170.0, -170.0, 0.0, 5.0)
+
+
+def test_resolve_extent_centres_the_projection_on_the_box_drawn(capsys):
+    args = build_arg_parser().parse_args(
+        ["--date", "20230828", "--step", "24", "--output-dir", "/tmp/x",
+         "--extent", "-76", "-64", "22", "34"]
+    )
+    extent, line = resolve_extent(args)
+    assert extent[2:] == (22.0, 34.0)
+    assert args.proj_lon == pytest.approx(-70.0) and args.proj_lat == pytest.approx(28.0)
+    assert line.startswith("map box ") and "widened from 76.0–64.0°W, 22.0–34.0°N" in line
+    assert "extent used" in capsys.readouterr().out
+
+
+def test_box_text_names_hemispheres():
+    assert box_text((-76.0, -64.0, 22.0, 34.0)) == "76.0–64.0°W, 22.0–34.0°N"
+    assert box_text((-10.0, 25.0, -5.0, 5.0)) == "10.0°W–25.0°E, 5.0°S–5.0°N"
+
+
+def test_highpass_at_points_keeps_grid_scale_detail_and_removes_the_large_scale():
+    # Points on a 0.1 degree lattice: a smooth large-scale ramp plus a
+    # checkerboard at the grid scale. The high-pass at the points must return the
+    # checkerboard with its full amplitude and no trace of the ramp.
+    lon1 = np.arange(0.0, 20.0, 0.1)
+    lat1 = np.arange(40.0, 55.0, 0.1)
+    lon, lat = (a.ravel() for a in np.meshgrid(lon1, lat1))
+    i, j = (a.ravel() for a in np.meshgrid(np.arange(lon1.size), np.arange(lat1.size)))
+    checker = np.where((i + j) % 2 == 0, 1.0, -1.0)
+    ramp = 0.5 * lon + 0.2 * lat
+    fine = highpass_at_points(lat, lon, ramp + checker, extent=(6.0, 14.0, 44.0, 51.0),
+                              res=0.1, fine_cut_deg=0.6, margin=3.0)
+    inner = (lon > 6) & (lon < 14) & (lat > 44) & (lat < 51)
+    assert np.isfinite(fine[inner]).all()
+    assert np.corrcoef(fine[inner], checker[inner])[0, 1] > 0.99
+    assert np.abs(fine[inner] - checker[inner]).max() < 0.05
+

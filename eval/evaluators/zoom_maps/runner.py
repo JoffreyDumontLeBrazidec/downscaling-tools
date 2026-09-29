@@ -1,4 +1,4 @@
-"""Member maps evaluator: the four-panel case-inspection maps, driven by a lane.
+"""Zoom maps evaluator (called membermaps until 2026-09-29): case-inspection maps, driven by a lane.
 
 The `eval.cli zoom_maps` subcommand renders these panels but has to be told
 everything: which prediction directories, which date, step, member, extent and
@@ -11,6 +11,13 @@ configuration and every variable asked for, the driving O320 input, the embedded
 same-index ENFO member as truth, and this run's prediction. It does that twice:
 once as the field itself and once as `--field fine`, the high-pass view that
 shows only the detail the O320 driver could not carry.
+
+The lane block is `zoom_maps:`. A lane that still holds the older `membermaps:`
+block and no `zoom_maps:` block has that block read instead (`eval.cli evaluate`
+does this, with a deprecation warning). A region box smaller than the core's
+`MIN_SPAN_DEG` (12 degrees of latitude each way) is widened around its centre by
+the core, so the Alps box of the texture regions is drawn with its surroundings
+rather than as a map of single O1280 cells; each figure title states the box drawn.
 
 Diagnostic only. Nothing here scores anything, so there is no `score` function
 and nothing reaches a scoreboard.

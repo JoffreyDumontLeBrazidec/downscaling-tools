@@ -5,7 +5,11 @@ configuration and every variable asked for, the driving O320 input, the embedded
 same-index ENFO member as truth, and this run's prediction. It does that twice:
 once as the field itself and once as the high-pass view that shows only the detail
 the O320 driver could not carry. Unlike the `eval.cli zoom_maps` command, which
-must be told every detail, this evaluator takes them from the lane.
+must be told every detail, this evaluator takes them from the lane (its
+`zoom_maps:` block, or the older `membermaps:` block when a lane has only that).
+The O1280 panels are drawn on the native grid points with Gouraud shading, so
+no grid-cell blocks show; region boxes smaller than 12 degrees each way are
+widened around their centre.
 
 Diagnostic only. Nothing here scores anything, so nothing reaches a scoreboard.
 """
