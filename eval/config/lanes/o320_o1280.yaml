@@ -272,9 +272,11 @@ texture:
     open_north_atlantic: [35, 55, -45, -20]
     west_tropical_atlantic: [10, 25, -70, -45]
 
-# membermaps (added 2026-09-02): the four-panel case-inspection maps, as an
-# evaluator rather than a hand-written sbatch. Default OFF because it is a figure
-# bundle, not a measurement: run it with `eval.cli evaluate --only membermaps`.
+# zoom_maps (added 2026-09-02 as membermaps, renamed 2026-09-29): the four-panel
+# case-inspection maps, as an evaluator rather than a hand-written sbatch. Default
+# OFF because it is a figure bundle, not a measurement: run it with
+# `eval.cli evaluate --only zoom_maps`. The block below keeps the old key
+# `membermaps:`; zoom_maps reads it with a warning while no `zoom_maps:` block exists.
 # Each combination renders input, truth and prediction, twice — the field itself
 # and the fine-scale high-pass view.
 membermaps:
