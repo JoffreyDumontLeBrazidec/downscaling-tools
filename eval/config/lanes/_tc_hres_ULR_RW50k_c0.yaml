@@ -1,0 +1,19 @@
+# RW50k sampler campaign (2026-09-29, task note epics/fine-scale-o320-o1280/in-progress/
+# 20260929_RW50k_sampler_churn_noise_campaign.md), arm RW50k_c0: S_churn 0.0, S_noise 1.05.
+# Copy of the untracked lane _tc_hres_ULR_ctrl.yaml that the RW50k cyclone screen used
+# (Franklin/Idalia regional box), with only S_churn and S_noise set through
+# predict.sampler_overrides (merged key by key, so every other sampler key, including the
+# 10 + 20 piecewise split, stays as in tc_o320_o1280_ft400k_gmass_ctrl).
+base: tc_o320_o1280_ft400k_gmass_ctrl
+default_host: atos_ac_hreslead
+allowed_hosts:
+  prepare: [atos_ag]
+  predict: [atos_ac_hreslead]
+  run: []
+  evaluate: [atos_ac]
+  scoreboard: [atos_ac]
+
+predict:
+  sampler_overrides:
+    S_churn: 0.0
+    S_noise: 1.05
