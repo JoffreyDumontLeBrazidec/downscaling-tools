@@ -114,3 +114,53 @@ def test_probabilistic_reference_compare_writes_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.csv").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.json").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_overlay.pdf").exists()
+
+
+def _write_ensemble_prediction(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Three members whose target varies across members, plus an x_interp input."""
+    rng = np.random.default_rng(5)
+    n_mem, n_pt = 3, 6
+    lat = np.linspace(-60.0, 60.0, n_pt).astype(np.float32)
+    lon = np.linspace(0.0, 50.0, n_pt).astype(np.float32)
+    y = (280.0 + rng.normal(0.0, 1.0, (1, n_mem, n_pt, 1))).astype(np.float32)
+    y_pred = (y + rng.normal(0.0, 0.5, y.shape)).astype(np.float32)
+    x_interp = (y + 0.7).astype(np.float32)
+    dims = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
+    ds = xr.Dataset(
+        {"y_pred": (dims, y_pred), "y": (dims, y), "x_interp": (dims, x_interp),
+         "lat_hres": (("grid_point_hres",), lat), "lon_hres": (("grid_point_hres",), lon)},
+        coords={"sample": [0], "ensemble_member": np.arange(1, n_mem + 1),
+                "grid_point_hres": np.arange(n_pt), "weather_state": np.array(["2t"], dtype=object)},
+    )
+    ds.to_netcdf(path)
+    return y[0, :, :, 0], x_interp[0, :, :, 0]
+
+
+def test_reference_ensembles_are_scored_like_the_model(tmp_path: Path) -> None:
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    y, x_interp = _write_ensemble_prediction(pred_dir / "predictions_20230816_step024.nc")
+    cfg = {"weather_states": ["2t"], "domains": ["global"]}
+    on, off = tmp_path / "on", tmp_path / "off"
+    run(pred_dir, {}, cfg, output_dir=on, overwrite=True)
+    run(pred_dir, {}, {**cfg, "references": False}, output_dir=off, overwrite=True)
+
+    # The model numbers do not depend on the references.
+    assert (on / "summary_by_lead.csv").read_bytes() == (off / "summary_by_lead.csv").read_bytes()
+    assert not (off / "reference_summary_by_lead.csv").exists()
+
+    with (on / "reference_summary_by_lead.csv").open(newline="") as f:
+        refs = {(r["source"], r["metric"]): r for r in csv.DictReader(f)}
+    assert refs[("target", "fcrps")]["n_members"] == "2"   # member 0 left out
+    assert refs[("input", "fcrps")]["n_members"] == "3"
+
+    # Target reference = members 1..2 against member 0, area weighted like the model.
+    weights = np.cos(np.deg2rad(np.linspace(-60.0, 60.0, 6)))
+    _, fcrps_target = _brute_crps(y[1:].astype(np.float64), y[0].astype(np.float64))
+    _, fcrps_input = _brute_crps(x_interp.astype(np.float64), y[0].astype(np.float64))
+    for source, expected in (("target", fcrps_target), ("input", fcrps_input)):
+        got = float(refs[(source, "fcrps")]["mean"])
+        np.testing.assert_allclose(got, np.sum(expected * weights) / weights.sum(), rtol=1e-5)
+
+    plot(on, {}, cfg)
+    assert (on / "plots" / "probabilistic_scores.pdf").exists()

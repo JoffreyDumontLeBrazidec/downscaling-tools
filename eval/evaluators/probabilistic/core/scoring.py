@@ -1,4 +1,21 @@
-"""Local spread/CRPS scoring for eval.cli prediction NetCDFs."""
+"""Local spread/CRPS scoring for eval.cli prediction NetCDFs.
+
+The truth is member 0 of the stored target ensemble ``y``. Besides the model (``y_pred``),
+two reference ensembles are scored from the same files against the same truth, exactly like
+the model (the rule of ``eval.jobs.ladder_references``):
+
+* ``input``:  ``x_interp``, the lane input interpolated onto the target grid, all members:
+  what one gets with no downscaling at all;
+* ``target``: the target ensemble ``y`` itself WITHOUT member 0. Member 0 is the verifying
+  truth; leaving it in would score the truth against itself. Scored only when the target
+  varies across members (on a lane whose target is one deterministic field there is no
+  ensemble to score).
+
+The fair CRPS handles the different member counts (the target reference has one member
+fewer than the model). Model rows keep their files (``scores_by_lead.csv``,
+``summary_by_lead.csv``); reference rows go to ``reference_scores_by_lead.csv`` and
+``reference_summary_by_lead.csv``, the same columns plus ``source`` and ``n_members``.
+"""
 from __future__ import annotations
 
 import csv
@@ -21,6 +38,13 @@ from eval.discovery.predictions import find_predictions
 DEFAULT_WEATHER_STATES = ["2t", "10ff", "2d", "msl", "t_850", "z_500"]
 DEFAULT_DOMAINS = ["n.hem", "tropics", "s.hem", "europe"]
 METRICS = ("crps", "fcrps", "spread", "rmse_ens_mean")
+REFERENCE_SOURCES = ("input", "target")
+REFERENCE_NOTES = {
+    "input": "x_interp: the lane input interpolated onto the target grid, all members, "
+             "scored against y member 0",
+    "target": "y members 1..N-1 (the target ensemble without its verifying member 0), "
+              "scored against y member 0",
+}
 
 
 def _as_list(value: Any, *, cast=str) -> list[Any]:
@@ -141,6 +165,70 @@ def crps_ensemble_components(
     return out
 
 
+def _target_is_ensemble(y_all: xr.DataArray) -> bool:
+    """Does the target vary across members? (``eval.jobs.ladder_references.target_is_ensemble``)"""
+    if y_all.sizes["member"] < 2:
+        return False
+    a = np.asarray(y_all.isel(weather_state=0).values)
+    return bool(np.abs(a - a[0:1]).max() > 0)
+
+
+def _reference_forecasts(ds: xr.Dataset, y_all: xr.DataArray, n_points: int,
+                         use_target: bool) -> dict[str, xr.DataArray]:
+    """The reference ensembles of one file, as (member, grid_point_hres, weather_state)."""
+    out: dict[str, xr.DataArray] = {}
+    if "x_interp" in ds:
+        xi = _to_member_point_weather(ds["x_interp"], ds, label="x_interp")
+        if int(xi.sizes["grid_point_hres"]) == n_points:
+            out["input"] = xi
+    if use_target:
+        # Member 0 is the truth and MUST stay out of the forecast.
+        out["target"] = y_all.isel(member=slice(1, None))
+    return out
+
+
+def _domain_rows(pred, field, pred_values, truth_point, weights, domain_masks, spread_ddof,
+                 rows, skipped, extra=None) -> None:
+    """Score one forecast ensemble of one field and append a row per domain and metric."""
+    components = crps_ensemble_components(
+        pred_values,
+        truth_point,
+        spread_ddof=spread_ddof,
+    )
+    valid_base = np.isfinite(truth_point) & np.all(np.isfinite(pred_values), axis=0)
+    for domain_name, domain_mask in domain_masks.items():
+        mask = valid_base & domain_mask
+        if not np.any(mask):
+            skipped.append({
+                "path": str(pred.path),
+                "date": pred.date,
+                "step": pred.step,
+                "weather_state": field,
+                "domain": domain_name,
+                "reason": "no valid points",
+                **(extra or {}),
+            })
+            continue
+        domain_weights = np.where(mask, weights, 0.0)
+        for metric in METRICS:
+            point_values = components[metric]
+            value = _weighted_mean(point_values, domain_weights)
+            if metric == "rmse_ens_mean" and math.isfinite(value):
+                value = math.sqrt(value)
+            rows.append({
+                **(extra or {}),
+                "date": pred.date,
+                "step": int(pred.step),
+                "weather_state": field,
+                "domain": domain_name,
+                "metric": metric,
+                "value": value,
+                "n_points": int(mask.sum()),
+                "n_members": int(pred_values.shape[0]),
+                "source_path": str(pred.path),
+            })
+
+
 def _summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[Any, ...], list[float]] = defaultdict(list)
     n_points: dict[tuple[Any, ...], int] = defaultdict(int)
@@ -192,6 +280,39 @@ def _headline_metrics(summary_rows: list[dict[str, Any]]) -> dict[str, Any]:
     return metrics
 
 
+def _write_references(output_dir: Path, ref_rows: list[dict[str, Any]], references: bool,
+                      use_target: bool | None) -> dict[str, Any] | None:
+    """Write the reference CSVs; return the ``references`` block of the summary JSON."""
+    if not references:
+        return None
+    score_cols = ["source", "date", "step", "weather_state", "domain", "metric", "value",
+                  "n_points", "n_members", "source_path"]
+    summary_cols = ["source", "step", "weather_state", "domain", "metric", "mean", "std",
+                    "stderr", "n_dates", "n_points_total", "n_members"]
+    block: dict[str, Any] = {
+        "score_csv": str(output_dir / "reference_scores_by_lead.csv"),
+        "summary_csv": str(output_dir / "reference_summary_by_lead.csv"),
+        "truth": "y member 0, as for the model",
+        "sources": {},
+    }
+    summary_rows: list[dict[str, Any]] = []
+    for source in REFERENCE_SOURCES:
+        rows = [r for r in ref_rows if r["source"] == source]
+        if not rows:
+            reason = ("the target is identical across members on this lane (no ensemble)"
+                      if source == "target" and use_target is False
+                      else "not in the prediction files")
+            block["sources"][source] = {"absent": reason}
+            continue
+        n_members = max(int(r["n_members"]) for r in rows)
+        for r in _summarize(rows):
+            summary_rows.append({"source": source, **r, "n_members": n_members})
+        block["sources"][source] = {"n_members": n_members, "note": REFERENCE_NOTES[source]}
+    _write_csv(output_dir / "reference_scores_by_lead.csv", ref_rows, score_cols)
+    _write_csv(output_dir / "reference_summary_by_lead.csv", summary_rows, summary_cols)
+    return block
+
+
 def compute_probabilistic_scores(
     predictions_dir: str | Path,
     output_dir: str | Path,
@@ -201,8 +322,14 @@ def compute_probabilistic_scores(
     steps: Iterable[int] | str | None = None,
     dates: Iterable[str] | str | None = None,
     spread_ddof: int = 1,
+    references: bool = True,
 ) -> dict[str, Any]:
-    """Compute local probabilistic scores and write CSV/JSON artifacts."""
+    """Compute local probabilistic scores and write CSV/JSON artifacts.
+
+    ``references`` (default on) also scores the input and target reference ensembles (see
+    the module docstring) into ``reference_*_by_lead.csv``; the model numbers do not depend
+    on it.
+    """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -222,6 +349,9 @@ def compute_probabilistic_scores(
 
     rows: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    ref_rows: list[dict[str, Any]] = []
+    ref_skipped: list[dict[str, Any]] = []
+    use_target: bool | None = None
 
     for pred in pred_files:
         with xr.open_dataset(pred.path, cache=False, decode_timedelta=False) as ds:
@@ -230,6 +360,7 @@ def compute_probabilistic_scores(
                     raise ValueError(f"{pred.path}: missing required variable {required!r}")
             y_pred = _to_member_point_weather(ds["y_pred"], ds, label="y_pred")
             y_true = _to_member_point_weather(ds["y"], ds, label="y")
+            y_all = y_true
             if y_true.sizes["member"] > 1:
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
             ws_index = _weather_state_index(ds)
@@ -237,6 +368,11 @@ def compute_probabilistic_scores(
             weights = _area_weights(ds, n_points)
             lat, lon = _lat_lon(ds, n_points)
             domain_masks = {name: _domain_mask(name, lat, lon) for name in domain_names}
+            ref_forecasts: dict[str, xr.DataArray] = {}
+            if references:
+                if use_target is None:
+                    use_target = _target_is_ensemble(y_all)
+                ref_forecasts = _reference_forecasts(ds, y_all, n_points, use_target)
 
             for field in fields:
                 pred_values = _select_field(y_pred, ws_index, field)
@@ -254,41 +390,14 @@ def compute_probabilistic_scores(
                     truth_point = truth_values[0]
                 else:
                     truth_point = np.asarray(truth_values).reshape(-1)
-                components = crps_ensemble_components(
-                    pred_values,
-                    truth_point,
-                    spread_ddof=spread_ddof,
-                )
-                valid_base = np.isfinite(truth_point) & np.all(np.isfinite(pred_values), axis=0)
-                for domain_name, domain_mask in domain_masks.items():
-                    mask = valid_base & domain_mask
-                    if not np.any(mask):
-                        skipped.append({
-                            "path": str(pred.path),
-                            "date": pred.date,
-                            "step": pred.step,
-                            "weather_state": field,
-                            "domain": domain_name,
-                            "reason": "no valid points",
-                        })
+                _domain_rows(pred, field, pred_values, truth_point, weights, domain_masks,
+                             spread_ddof, rows, skipped)
+                for source, ref_da in ref_forecasts.items():
+                    ref_values = _select_field(ref_da, ws_index, field)
+                    if ref_values is None:
                         continue
-                    domain_weights = np.where(mask, weights, 0.0)
-                    for metric in METRICS:
-                        point_values = components[metric]
-                        value = _weighted_mean(point_values, domain_weights)
-                        if metric == "rmse_ens_mean" and math.isfinite(value):
-                            value = math.sqrt(value)
-                        rows.append({
-                            "date": pred.date,
-                            "step": int(pred.step),
-                            "weather_state": field,
-                            "domain": domain_name,
-                            "metric": metric,
-                            "value": value,
-                            "n_points": int(mask.sum()),
-                            "n_members": int(pred_values.shape[0]),
-                            "source_path": str(pred.path),
-                        })
+                    _domain_rows(pred, field, ref_values, truth_point, weights, domain_masks,
+                                 spread_ddof, ref_rows, ref_skipped, extra={"source": source})
 
     if not rows:
         raise ValueError(
@@ -312,6 +421,9 @@ def compute_probabilistic_scores(
         ["step", "weather_state", "domain", "metric", "mean", "std", "stderr", "n_dates", "n_points_total"],
     )
     skipped_json.write_text(json.dumps(skipped, indent=2) + "\n")
+    ref_block = _write_references(output_dir, ref_rows, references, use_target)
+    if ref_block is not None:
+        ref_block["skipped_count"] = len(ref_skipped)
     payload = {
         "schema_version": "1.0",
         "predictions_dir": str(predictions_dir),
@@ -327,5 +439,7 @@ def compute_probabilistic_scores(
         "skipped_count": len(skipped),
         "headline_metrics": _headline_metrics(summary_rows),
     }
+    if ref_block is not None:
+        payload["references"] = ref_block
     summary_json.write_text(json.dumps(payload, indent=2, default=str) + "\n")
     return payload

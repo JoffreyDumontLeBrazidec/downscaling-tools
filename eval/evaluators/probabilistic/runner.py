@@ -42,6 +42,9 @@ def run(
     steps = eval_config.get("steps")
     dates = eval_config.get("dates")
     spread_ddof = int(eval_config.get("spread_ddof", 1))
+    # Input (x_interp) and target (y without member 0) reference ensembles, scored like the
+    # model against the same truth; they never change the model numbers.
+    references = bool(_config_value(eval_config, "references", True))
 
     payload = compute_probabilistic_scores(
         predictions_dir,
@@ -51,6 +54,7 @@ def run(
         steps=steps,
         dates=dates,
         spread_ddof=spread_ddof,
+        references=references,
     )
     LOG.info(
         "Probabilistic scores written to %s (%s rows)",
