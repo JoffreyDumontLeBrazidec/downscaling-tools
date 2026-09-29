@@ -1,8 +1,6 @@
 # Repertoire of the evaluation framework `eval.cli`
 
-Written on 2026-09-29 from a reading of the code in `downscaling-tools` on `main`. The method descriptions and the line numbers were taken at commit `bf24cbe`. The same night the code was reorganised (up to commit `d46d457`): `eval/cli.py` became the package `eval/cli/` with new `list` and `describe` subcommands; the computation of each evaluator moved from `eval/_backends/<name>/` into `eval/evaluators/<name>/core/`, shared code into `eval/shared/`, and standalone tools into `eval/tools/` (see `ARCHITECTURE.md`); every figure now uses the house style of `eval/plotting/` and is written as PNG and PDF; and a bug in the precipitation evaluators on regional runs was fixed. File paths in this document have been updated to the new layout, but line numbers still refer to `bf24cbe` and may have moved by a few lines. What each tool computes did not change. The figures were drawn with the new style. For the current list of tools, run `python -m eval.cli list`; for one tool, `python -m eval.cli describe <name>`.
-
-**Update of 2026-09-29, after this document was written.** The subcommand and evaluator called `membermaps` in the sections below were renamed `zoom_maps` (code in `eval/evaluators/zoom_maps/`). The subcommands `report` and `videogen` were retired: their sections below describe tools that no longer run, and `python -m eval.cli membermaps`, `report` and `videogen` now print where the tool went and exit with status 1 (`eval/cli/retired.py`, `eval/_quarantine/20260929/README.md`). Paths and commands in the text below still use the old names.
+Written on 2026-09-29 from a reading of the code in `downscaling-tools` on `main`. The method descriptions and the line numbers were taken at commit `bf24cbe`. The same night the code was reorganised (up to commit `d46d457`): `eval/cli.py` became the package `eval/cli/` with new `list` and `describe` subcommands; the computation of each evaluator moved from `eval/_backends/<name>/` into `eval/evaluators/<name>/core/`, shared code into `eval/shared/`, and standalone tools into `eval/tools/` (see `ARCHITECTURE.md`); every figure now uses the house style of `eval/plotting/` and is written as PNG and PDF; and a bug in the precipitation evaluators on regional runs was fixed. File paths in this document have been updated to the new layout, but line numbers still refer to `bf24cbe` and may have moved by a few lines. What each tool computes did not change. The figures were drawn with the new style. Later the same day the subcommand and evaluator `membermaps` were renamed `zoom_maps`, and the subcommands `report` and `videogen` were retired (2026-09-29); the text below uses the new name and describes the retirements in section 4. For the current list of tools, run `python -m eval.cli list`; for one tool, `python -m eval.cli describe <name>`.
 
 The purpose of this document is to let a scientist, and the AI agents that work for that scientist, decide which evaluation tool answers a given question, and whether each tool deserves to be kept. Each tool has its own section with the same layout. The sections contain recommendations, always marked as such. They are not decisions; the decisions are listed at the end as open questions.
 
@@ -28,7 +26,7 @@ The table below uses ECMWF terms, explained here first. A grid named O followed 
 | `o320_o1280` | about 36 km to 9 km | EEFO on grid O320 | ENFO on grid O1280 |
 | `o1280_o2560` | about 9 km to 4.5 km | ENFO on grid O1280 | IEKM on grid O2560 |
 
-In this framework, **truth** means the field called `y` that is stored inside every prediction file. It is the lane's target field, cut from the same bundle that supplied the input. On the two ENFO lanes it is one ENFO member per model member. That member is a real forecast member, but it is not the realisation that the EEFO input describes: EEFO and ENFO are two different ensembles, and the pairing of member number k of one with member number k of the other is only a storage convention. The code says so in several places (for example `eval/evaluators/membermaps/core/plot_member_wind_maps.py`, docstring, and `eval/evaluators/tc_structure/runner.py`, docstring). Every tool that compares a model member with a truth member therefore compares distributions, not individual cases, unless the tool says otherwise.
+In this framework, **truth** means the field called `y` that is stored inside every prediction file. It is the lane's target field, cut from the same bundle that supplied the input. On the two ENFO lanes it is one ENFO member per model member. That member is a real forecast member, but it is not the realisation that the EEFO input describes: EEFO and ENFO are two different ensembles, and the pairing of member number k of one with member number k of the other is only a storage convention. The code says so in several places (for example `eval/evaluators/zoom_maps/core/plot_member_wind_maps.py`, docstring, and `eval/evaluators/tc_structure/runner.py`, docstring). Every tool that compares a model member with a truth member therefore compares distributions, not individual cases, unless the tool says otherwise.
 
 **Input** means the coarse forecast that drives the model, stored as `x`, and its interpolation to the fine grid, stored as `x_interp`. Comparing the model with `x_interp` answers the question "what did the downscaling add?", because `x_interp` is what one gets with no downscaling at all.
 
@@ -98,7 +96,7 @@ Each section ends with a paragraph called "Keep, merge or retire?". It is my rec
 
 ## 2. Overview table
 
-The table has one row per tool: every subcommand, every live evaluator, and the two front ends. Retired evaluators are in section 4.
+The table has one row per tool: every live subcommand, every live evaluator, and the two front ends. Retired evaluators and subcommands are in section 4.
 
 How the usage count was made. For evaluators, the count is the number of directories named `evaluators/<name>` found with `find . -maxdepth N -type d -path "*/evaluators/<name>"` (N from 5 to 8, under `timeout 120`) in `/home/ecm5702/scratch/eval`. It is a lower bound: scratch is cleaned automatically, results moved elsewhere are not seen, and one campaign often holds several arms. For subcommands the count is whatever trace the command leaves; the trace is named in the cell. The column "Cost" gives measured wall-clock time from `sacct` where I could tie a job name to the tool with confidence, and otherwise says "declared" (a requested ceiling) or "not measured".
 
@@ -109,13 +107,11 @@ How the usage count was made. For evaluators, the count is the number of directo
 | `prepare` | subcommand | not applicable | Can the truth-aware input bundles be built from source GRIB files? | No | CPU only; not measured | Not countable |
 | `evaluate` | subcommand | not applicable | Can the chosen evaluators be run on predictions that already exist? | Only through `scoreboard` | Depends on the evaluators | Shared with `run` |
 | `scoreboard` | subcommand | not applicable | What are the scored numbers of this run, and how do they differ from the lane baseline? | It is the scoreboard writer | Seconds to minutes, CPU | 25 `scoreboard/scores.csv` files and 13 `vs_baseline.md` files |
-| `report` | subcommand | not applicable | Can a run directory be shown as one HTML page? | No | Expected to be seconds, CPU; not measured | 0 `report.html` files |
 | `prepml-cleanup` | subcommand | not applicable | Which expvers have I consumed, and can their FDB data be deleted through ecFlow? | No | Seconds, needs ecFlow | The ledger has 127 rows; 14 rows, covering 5 expvers, are marked cleaned |
-| `videogen` | subcommand | not applicable | Can the predictions of one storm be rendered as an MP4 video? | No | CPU, not measured | 1 output directory (`video_o320_o1280_idalia_franklin_24h`) |
 | `evolution` | subcommand | not applicable | How does a training run evolve against a reference run, the input and the target? | No | Seconds, CPU | Not countable; the dashboard calls it |
 | `tctracker` | subcommand | not applicable | What cyclone tracks does the ECMWF tracker find in the ensemble published to the FDB? | No | CPU, AC only; not measured | 11 tracker run directories and 6 shared reference caches |
 | `tccompare` | subcommand | not applicable | How do track statistics compare between the model, a control, the target and the input? | No | Minutes, CPU | 16 `tc_tracks_metrics.json` files |
-| `membermaps` | subcommand | not applicable | What does one member look like next to the input and the truth, with a shared colour scale? | No | CPU, measured 11.5 min for one job | Shares the count of the evaluator |
+| `zoom_maps` | subcommand | not applicable | What does one member look like next to the input and the truth, with a shared colour scale? | No | CPU, measured 11.5 min for one job | Shares the count of the evaluator |
 | `config` | subcommand | not applicable | What configuration will a lane really use once its `base:` chain is merged? | No | Seconds, reads YAML only | Not countable |
 | `ladder` | front end | not applicable | Is a training run improving, checkpoint by checkpoint, against a frozen baseline recipe? | No, it keeps its own cards | One GPU job per rung, declared walltime 2 to 4 h | 22 cards in `/home/ecm5702/perm/eval-ladders` |
 | `pipeline` | front end | not applicable | Can a chain of SLURM jobs (predict, evaluators, scoreboard) be generated with dependencies? | It generates the scoreboard job | Generation takes seconds | 2 generated `submit_pipeline.sh` files |
@@ -130,7 +126,7 @@ How the usage count was made. For evaluators, the count is the number of directo
 | `wind_extremes` | evaluator | diagnostic | Is the strongest 10 m wind a coherent feature or isolated grid-scale noise? | No | Measured 7.5 min for 8 files | 10 |
 | `displacement` | evaluator | diagnostic | Does the model move weather features away from where its input puts them? | No | Measured 7.7 min for 8 files | 10 |
 | `spectra_coherence` | evaluator | diagnostic | At each scale, does the model have the right amplitude and is it in phase with the truth? | No | CPU; not measured | 6 |
-| `membermaps` | evaluator | diagnostic | What do input, truth and one member look like on a map, as full fields and as high-pass views? | No | Measured 11.5 min for one job | 4 |
+| `zoom_maps` | evaluator | diagnostic | What do input, truth and one member look like on a map, as full fields and as high-pass views? | No | Measured 11.5 min for one job | 4 |
 | `spread_proxy` | evaluator | diagnostic | Is the model ensemble's spread similar to the spread of the ENFO truth ensemble? | No | CPU; not measured | 4 |
 | `precip_dist` | evaluator | diagnostic | Does the distribution of precipitation values match the truth's at each lead time? | No | CPU; not measured | 3 |
 | `precip_events` | evaluator | diagnostic | What do model and truth look like at the heaviest precipitation events? | No | CPU; not measured | 4 |
@@ -154,7 +150,7 @@ This table is a shortcut for choosing a tool. It gives the first tool to reach f
 | Is the error at fine scales acceptable? | `spectra_ecmwf_v2` | `texture`, `spectra_coherence`, `storm_maps` |
 | Is the pointwise error low? | `surface` | `probabilistic` |
 | Is the ensemble well spread and skilful? | `quaver` (canonical) | `probabilistic`, `spread_proxy` |
-| Did the run look sane on a map? | `region_plot` | `membermaps`, `storm_maps` |
+| Did the run look sane on a map? | `region_plot` | `zoom_maps`, `storm_maps` |
 | Is a training run improving? | `ladder` | `evolution`, `mlflow` |
 | Does the model move features? | `displacement` | `wind_extremes` |
 | How is precipitation? | `precip_scores` | `precip_dist`, `precip_events` |
@@ -310,31 +306,11 @@ python -m eval.cli scoreboard --lane o320_o1280 --eval-dir <run> --vs-baseline
 ![scoreboard example figure](figures/scoreboard.png)
 Figure caption: This table is the file `scoreboard/vs_baseline.md` written by `scoreboard --vs-baseline`, redrawn as a figure: for each metric it gives the run's value, the value of the lane baseline and their difference. Blue cells mean the run is better than the baseline and orange cells mean it is worse, and the tropical cyclone rows are raw extremes that receive no verdict. The run is the manual evaluation `/home/ecm5702/scratch/eval/o320_o1280/manual_731d203a_pristine_20260818` (18 August 2026), and the baseline is the one named in that file (the rebaseline checkpoint at step 397,434); the differences in normalised mean squared error (nmse) are at most 0.0004, so this run is practically equal to the baseline.
 
-### 3.1.6 `report`
+### 3.1.6 `report` (retired on 2026-09-29)
 
-**Question it answers.** Can a run directory be presented as one self-contained HTML page?
+`python -m eval.cli report` was retired on 2026-09-29, with no replacement. The command now prints that message and exits with status 1. Its code is kept, but is not importable under the old name, in `eval/_quarantine/20260929/report/` (`eval/_quarantine/20260929/README.md` explains why).
 
-**Method.** `generate_report` collects PDF files from `plots/` (falling back to the evaluator directories), names a tab for each by its file name, reads the metrics from `data/scoreboard/scores.csv` (the lean run layout; a run in the older layout therefore shows no metrics) or `metrics.json`, reads the run's identity from `effective_config.json`, and writes `report.html` plus a `report_assets/` folder of copied PDFs (`eval/report/__init__.py:262`).
-
-**Inputs and outputs.** Input: a run directory. Output: `report.html` and `report_assets/`.
-
-**How to run it.**
-
-```
-python -m eval.cli report --run-dir <run> --output <run>/report.html
-```
-
-**Cost and constraints.** It takes seconds on a CPU.
-
-**How to read the result.** It is a viewer; it computes nothing.
-
-**Overlaps.** The lean layout already puts the same PDFs and metrics at the run root; the scoreboard files hold the numbers.
-
-**Keep, merge or retire?** My recommendation is to retire it, unless you use it. I found no `report.html` anywhere under scratch (bounded search), and the code has not changed since 1 July 2026 apart from the 28 September sweep.
-
-**Figure.**
-![report example figure](figures/report.png)
-Figure caption: This is the top of the HTML page made by `eval.cli report`: a header, cards with the headline metrics, and the table of all metrics; below the visible part a row of tabs shows each PDF figure of the run, but a PDF is not drawn in this browser screenshot. The page was generated from a folder rebuilt from the run `/home/ecm5702/scratch/eval/o320_o1280/manual_731d203a_pristine_20260818`, with its `scores.csv` placed at `data/scoreboard/scores.csv` and three of its PDF files placed in `plots/` (folder `/home/ecm5702/scratch/eval/_repertoire_gallery_20260929/report_run_named/manual_731d203a_pristine_20260818`). The command reads that layout, which this older run does not have: run on the original folder it found six PDF files and no metrics.
+What it did: it presented a run directory as one HTML page, `report.html`, with a tab for each PDF file of `plots/`, the headline metrics read from `data/scoreboard/scores.csv`, and the run's identity read from `effective_config.json`. It computed nothing. It looked for its files at the top level of the run, which the lean run layout no longer matches, so on a current run it wrote an empty page, and no `report.html` was found anywhere under scratch. The lean layout already puts the same PDFs and metrics at the run root, and the scoreboard files hold the numbers.
 
 ### 3.1.7 `prepml-cleanup`
 
@@ -363,32 +339,11 @@ python -m eval.cli prepml-cleanup --expver <expver> --scope fdb --dry-run
 ![prepml-cleanup example figure](figures/prepml-cleanup.png)
 Figure caption: The bars count the rows of the ledger file `/home/ecm5702/.config/eval/prepml_consumed.jsonl` by month, where the ledger records every prediction submitted through prepml (the ECMWF tool that runs a model and publishes the forecasts to the FDB, the Fields Database); the blue part marks rows that carry a cleaning time stamp. The ledger holds 127 rows for 60 distinct experiment versions, from 15 June to 15 September 2026, and 14 rows (five experiment versions) carry a cleaning time stamp, which differs from the statement in the text above that none is marked cleaned. Nothing was deleted to make this figure.
 
-### 3.1.8 `videogen`
+### 3.1.8 `videogen` (retired on 2026-09-29)
 
-**Question it answers.** Can the predictions of one storm be rendered as an MP4 video?
+`python -m eval.cli videogen` (and `python -m eval.tools.videogen`) was retired on 2026-09-29. Both now print that message and exit with status 1. There is no replacement; the code is quarantined in `eval/_quarantine/20260929/videogen/`.
 
-**Method.** A scene (`SceneConfig`, `eval/tools/videogen/config.py`) names a predictions directory, initial dates, steps, a background box, an inset that either is fixed or follows the minimum of MSLP inside a search box, the variables (`msl`, `wind`) and a layout (`single_inset` or `dual_row`). The pipeline computes colour limits with a cache, renders one PNG frame per valid time, and calls `ffmpeg` (module `ffmpeg/7.1.1`) to encode the MP4. Three scenes exist: `franklin_dual`, `franklin` and `himalayas` (`eval/tools/videogen/scenes.py:79`); their default predictions directory is a manual evaluation of the checkpoint `2241ade8` from May 2026, and the dates are 26 to 30 August 2023.
-
-**Inputs and outputs.** Input: a predictions directory (overridable). Output: frames and an MP4 in the scene's output directory.
-
-**How to run it.**
-
-```
-python -m eval.cli videogen --scene franklin_dual --mode preview --preview-valid 2023-08-29
-python -m eval.cli videogen --scene franklin_dual --mode all --predictions-dir <predictions>
-```
-
-**Cost and constraints.** It runs on CPUs, I did not measure its run time, and it needs the `ffmpeg` module on the host.
-
-**How to read the result.** It is a presentation tool; it computes nothing.
-
-**Overlaps.** `membermaps` and `region_plot` draw single frames.
-
-**Keep, merge or retire?** My recommendation is to retire it from `eval.cli`, or to move it to a presentation folder. Its scenes are hard-coded to one old checkpoint, only one output directory exists, and the code has not been touched since July apart from the 28 September sweep.
-
-**Figure.**
-![videogen example figure](figures/videogen.jpg)
-Figure caption: This is one preview frame made by the video tool: the coarse input and the model, at their own resolutions, over a box around Hurricane Franklin, with pressure (mean sea level pressure, MSLP) on the left and 10 m wind speed on the right, and a regional map of the input that shows where the box lies. It uses the file `/home/ecm5702/scratch/eval/o320_o1280/se_R47k_idalia/predictions/predictions_20230826_step024.nc` (start 26 August 2023, lead time 24 hours, valid 27 August 2023 at 00 UTC, checkpoint label se_R47k), with the box and the title set by hand for this preview instead of the built-in scene, which points to a checkpoint from May. The colour bars now sit above the panels, so the two lines that join the box to its outer panels cross nothing (in the earlier layout they ran across the colour bars). For this redraw the box was set to 17 to 26 degrees north and 73 to 63 degrees west, and the regional map to 12 to 37 degrees north and 92 to 54 degrees west, with the code at commit d46d457 of the branch style/figure-polish-20260929.
+What it did: it rendered an MP4 video of the predictions of one storm, frame by frame, from a scene (a predictions directory, dates, a background box and an inset that could follow the pressure minimum) and encoded the frames with `ffmpeg`. Its three scenes (`franklin_dual`, `franklin` and `himalayas`) were tied to a manual evaluation of one checkpoint from May 2026, only one output directory of it was found, and it had no tests. It computed nothing.
 
 ### 3.1.9 `evolution`
 
@@ -478,22 +433,24 @@ Pin `--dates` to the dates that all sources have completely; otherwise different
 ![tccompare example figure](figures/tccompare.jpg)
 Figure caption: This is a case page of `tccompare`: the deepest West Pacific cyclone of 23 September 2025 (truth minimum 899 hPa near 20 degrees north, 118 degrees east), with mean sea level pressure along every associated track of the model (red), of ENFO as truth (black) and of the input EEFO (blue), the deepest value of each track, and all tracks on a map. It comes from the comparison `/home/ecm5702/scratch/eval/o320_o1280/tctracks/sept2025_ja6g_allbasins` (model ja6g, September 2025), redrawn with the current code into `/home/ecm5702/scratch/eval/_repertoire_gallery_20260929/tctracks/figures/`. The median deepest pressure of the model (958 hPa) lies between that of the input (974 hPa) and that of the truth (951 hPa), so the model deepens storms more than the input does but not as much as ENFO.
 
-### 3.1.12 `membermaps` (subcommand and evaluator)
+### 3.1.12 `zoom_maps` (subcommand and evaluator)
+
+Until 2026-09-29 this tool was called `membermaps`; the code moved from `eval/evaluators/membermaps/` to `eval/evaluators/zoom_maps/`.
 
 **Question it answers.** What do the driving input, the truth and a model member look like on a map, as full fields and as high-pass views that show only the fine-scale detail?
 
-**Method.** Both entry points call the same backend (`eval/evaluators/membermaps/core/plot_member_wind_maps.py`). For each variable (10 m wind speed `wind10m`, `msl`, `2t`, `t_850`, `z_500`) it cuts a region from the O1280 points, resamples by nearest neighbour to a regular mesh (0.08 degree for the fine grid, 0.28 degree for the coarse), and draws one PNG per panel with a shared colour scale and projection. The option `--field fine` shows the field minus a Gaussian smoothing with a scale of `--fine-cut-deg` (default 0.6 degree): the filter is chosen so that the high-pass passes 99 per cent of a wavelength of 0.6 degree and 50 per cent at 1.6 degrees, so it keeps roughly what the O320 input could not carry (the code comment says the leakage biases a truth-versus-model contrast towards agreement) (`plot_member_wind_maps.py:51-57`, `:344-351`). The truth panel is the stored member of `y`, labelled "Operational ENFO". Nothing is scored.
+**Method.** Both entry points call the same backend (`eval/evaluators/zoom_maps/core/plot_member_wind_maps.py`). For each variable (10 m wind speed `wind10m`, `msl`, `2t`, `t_850`, `z_500`) it cuts a region from the O1280 points, draws the O1280 panels on the native grid points with Gouraud shading (so no grid-cell blocks show at any zoom) and the O320 input panel as its nearest-neighbour cells, and writes one PNG per panel with a shared colour scale and projection. The option `--field fine` shows the field minus a Gaussian smoothing with a scale of `--fine-cut-deg` (default 0.6 degree): the filter is chosen so that the high-pass passes 99 per cent of a wavelength of 0.6 degree and 50 per cent at 1.6 degrees, so it keeps roughly what the O320 input could not carry (the code comment says the leakage biases a truth-versus-model contrast towards agreement) (`plot_member_wind_maps.py:51-57`, `:344-351`). The truth panel is the stored member of `y`, labelled "Operational ENFO". Nothing is scored.
 
-The subcommand takes everything on the command line, including several `--run key=<predictions_dir>` arms for comparing arms of a campaign, `--grib key=<file>` panels for steps that are absent from the predictions, and `--no-truth` / `--no-input`. The evaluator (`eval/evaluators/membermaps/runner.py:59`) takes one predictions directory and renders every region of the lane (falling back to the `texture` regions) for the configured variables, both fields, dates, steps and members, refusing more than 120 renders (`:31`). The evaluator always uses the stored `y` as truth panel, whereas the subcommand can omit it, which the lane file `o320_o1280_aifs_crps_to_analysis.yaml` explains is needed when the stored `y` is not the intended truth.
+The subcommand takes everything on the command line, including several `--run key=<predictions_dir>` arms for comparing arms of a campaign, `--grib key=<file>` panels for steps that are absent from the predictions, and `--no-truth` / `--no-input`. The evaluator (`eval/evaluators/zoom_maps/runner.py`) takes one predictions directory and renders every region of the lane (falling back to the `texture` regions) for the configured variables, both fields, dates, steps and members, refusing more than 120 renders (`MAX_COMBINATIONS`). A map box smaller than 12 degrees each way is widened around its centre, and each figure title states the box drawn. The evaluator reads the lane block `zoom_maps:`, or the older block `membermaps:` (with a warning) when a lane has only that one. The evaluator always uses the stored `y` as truth panel, whereas the subcommand can omit it, which the lane file `o320_o1280_aifs_crps_to_analysis.yaml` explains is needed when the stored `y` is not the intended truth.
 
 **Inputs and outputs.** Input: prediction files. Output: PNG panels and a manifest JSON per render.
 
 **How to run it.**
 
 ```
-python -m eval.cli membermaps --run mine=<predictions_dir> --date 20230829 --step 72 \
+python -m eval.cli zoom_maps --run mine=<predictions_dir> --date 20230829 --step 72 \
     --member 1 --variable wind10m --field fine --output-dir <out>
-python -m eval.cli evaluate --lane o320_o1280 --predictions-dir <run>/predictions --only membermaps
+python -m eval.cli evaluate --lane o320_o1280 --predictions-dir <run>/predictions --only zoom_maps
 ```
 
 **Cost and constraints.** It runs on CPUs. Each render opens a multi-gigabyte prediction file; one job took 11.5 minutes.
@@ -505,8 +462,8 @@ python -m eval.cli evaluate --lane o320_o1280 --predictions-dir <run>/prediction
 **Keep, merge or retire?** My recommendation is to keep one of the two entry points as the primary, and let the other call it. The subcommand is the more general, so the evaluator could become a thin loop over it.
 
 **Figure.**
-![membermaps example figure](figures/membermaps.jpg)
-Figure caption: These are three maps of the fine-scale part of 2 m temperature (the field left after a high-pass filter removes the smooth large scales) over the Alps, on one colour scale: the coarse input (EEFO on the grid O320), the truth (member 1 of ENFO on O1280) and member 1 of the model, for the start of 26 September 2025 and lead time 24 hours. The three files are separate outputs of the tool, named `eefo_`, `enfo_` and `model_2t-fine_init20250926_n001_alps_f024.png`; they come from `/home/ecm5702/scratch/eval/o320_o1280/se_F/predictions`, were re-rendered into `/home/ecm5702/scratch/eval/_repertoire_gallery_20260929/membermaps/alps/` and were placed side by side for this document. Member 1 of ENFO is not the weather that member 1 of the model reproduces, so compare the amount and shape of the fine detail and not individual features.
+![zoom_maps example figure](figures/membermaps.jpg)
+Figure caption: These are three maps of the fine-scale part of 2 m temperature (the field left after a high-pass filter removes the smooth large scales) over the Alps, on one colour scale: the coarse input (EEFO on the grid O320), the truth (member 1 of ENFO on O1280) and member 1 of the model, for the start of 26 September 2025 and lead time 24 hours. The three files are separate outputs of the tool, named `eefo_`, `enfo_` and `model_2t-fine_init20250926_n001_alps_f024.png`; they come from `/home/ecm5702/scratch/eval/o320_o1280/se_F/predictions`, were re-rendered, before the rename and before the box widening, into `/home/ecm5702/scratch/eval/_repertoire_gallery_20260929/membermaps/alps/` (that folder and the figure file `figures/membermaps.jpg` keep the old name) and were placed side by side for this document. Member 1 of ENFO is not the weather that member 1 of the model reproduces, so compare the amount and shape of the fine detail and not individual features.
 
 ### 3.1.13 `config`
 
@@ -785,7 +742,7 @@ python -m eval.cli evaluate --lane o320_o1280 --host atos_ac \
 
 **How to read the result.** Look for whether the model's fine detail sits where the truth's does, and whether the residual panels show structure or noise. Because it uses the first file only, it shows one case, so it cannot support a claim about the campaign.
 
-**Overlaps.** `membermaps`, `storm_maps`, `precip_events` and the member maps of `tc` are four other figure generators. All render maps of the same files.
+**Overlaps.** `zoom_maps`, `storm_maps`, `precip_events` and the member maps of `tc` are four other figure generators. All render maps of the same files.
 
 **Keep, merge or retire?** My recommendation is to keep it as the one standing overview figure. Consider making the choice of date, lead and member explicit in the lane file, because the silent choice of the first file makes the figure look representative when it is one draw.
 
@@ -841,7 +798,7 @@ Figure caption: For mean sea level pressure, the rows are four scores (fair CRPS
 
 ## 3.4 Diagnostic evaluators
 
-A diagnostic evaluator is asked for explicitly (with `--only`, or through a lane's `diagnostics` group and `--include-diagnostics`). It explains a result; it does not rank runs. The fifteen diagnostic evaluators are described in this order: the four that measure fine scales (`texture`, `wind_extremes`, `displacement`, `spectra_coherence`), `membermaps`, the ensemble and precipitation group (`spread_proxy`, `precip_dist`, `precip_events`), `local_global`, `lane_diagnostics`, `mlflow`, `quaver`, `storm_maps`, and the two newest, `shape` and `tc_structure`. Note that most of them are written for the `o320_o1280` lane. `texture`, `wind_extremes` and `displacement` load the O320 to O1280 interpolation matrices (`interpol_O320_to_O1280_linear.mat.npz` and its inverse) from `INTER_MAT_DIR`; `spectra_coherence` uses degree bands that assume the O1280 truncation of 1279; and `shape` and `tc_structure` use constants of the O1280 grid (a fixed box in the first, the O1280 cell area in the second).
+A diagnostic evaluator is asked for explicitly (with `--only`, or through a lane's `diagnostics` group and `--include-diagnostics`). It explains a result; it does not rank runs. The fifteen diagnostic evaluators are described in this order: the four that measure fine scales (`texture`, `wind_extremes`, `displacement`, `spectra_coherence`), `zoom_maps`, the ensemble and precipitation group (`spread_proxy`, `precip_dist`, `precip_events`), `local_global`, `lane_diagnostics`, `mlflow`, `quaver`, `storm_maps`, and the two newest, `shape` and `tc_structure`. Note that most of them are written for the `o320_o1280` lane. `texture`, `wind_extremes` and `displacement` load the O320 to O1280 interpolation matrices (`interpol_O320_to_O1280_linear.mat.npz` and its inverse) from `INTER_MAT_DIR`; `spectra_coherence` uses degree bands that assume the O1280 truncation of 1279; and `shape` and `tc_structure` use constants of the O1280 grid (a fixed box in the first, the O1280 cell area in the second).
 
 ### 3.4.1 `texture`
 
@@ -961,7 +918,7 @@ python -m eval.cli evaluate --lane o320_o1280 --host atos_ac \
 ![spectra_coherence example figure](figures/spectra_coherence.png)
 Figure caption: The top row shows, against total wavenumber, the amplitude ratio R of model to truth (orange) and the coherence C between model and truth (green; dashed for the interpolated input) for four variables, and the bottom row shows the error E = 1 + R squared - 2RC, normalised by the truth power, with the floor 1 - C squared that phase differences alone would give. The amplitude ratio stays near 1 at every scale, but the coherence of the wind components falls to about 0.3 at small scales, so the fine-scale error of the model comes from phase and not from amplitude. The data are lead time 120 hours and 50 fields per variable from `/home/ecm5702/scratch/eval/o320_o1280_ladder_20260828/eval/s400000/evaluators/spectra_coherence` (checkpoint at step 400,000), redrawn at commit c7e1ccf.
 
-### 3.4.5 `membermaps`
+### 3.4.5 `zoom_maps`
 
 Described together with the subcommand of the same name in section 3.1.12. In the registry it is a diagnostic evaluator with the question "What do the driving input, the truth and a model member look like on a map, as full fields and as high-pass fine-scale views?". Four result directories exist (usage count 4).
 
@@ -1039,7 +996,7 @@ python -m eval.cli evaluate --lane o1280_o2560_humberto6h_pristine --host atos_a
 
 **How to read the result.** Judge by eye whether the model has an event of the right intensity and shape in the right place. Because the top events are chosen on the truth, the selection is deliberately extreme. Four result directories exist; the one I opened (`/home/ecm5702/scratch/eval/manual_fb21124e_tp_only_ln35_75k_6h_eval/evaluators/precip_events`) has no `events.json` at its top level.
 
-**Overlaps.** `region_plot`, `storm_maps` and `membermaps` draw maps of other features; `precip_scores` scores precipitation numerically.
+**Overlaps.** `region_plot`, `storm_maps` and `zoom_maps` draw maps of other features; `precip_scores` scores precipitation numerically.
 
 **Keep, merge or retire?** My recommendation is to retire it or to fold it into `region_plot` as an option ("centre the box on the strongest event"). Same reasoning as `precip_dist`.
 
@@ -1257,6 +1214,8 @@ Figure caption: No figure exists, so the image only says so. The evaluator measu
 
 ## 4. Retired tools
 
+This section covers the tools retired on 28 September 2026 (evaluators) and the changes of 29 September 2026 (the rename of `membermaps` and the retirement of two subcommands), in that order.
+
 Eight evaluators were retired on 28 September 2026. Their code is kept, but cannot be imported, under `/home/ecm5702/dev/downscaling-tools/eval/_quarantine/20260928/<name>/` (the file `eval/_quarantine/20260928/README.md` lists them). Naming a retired evaluator with `--only` prints its replacement and exits with status 1, and a retired name left in a lane's evaluator group is skipped with a warning (`eval/evaluators/registry.py:281`, `eval/cli.py:556`). The registry reason is recorded only as the replacement; where I found a measured reason, I give it.
 
 **`spectra`.** It estimated the power spectrum of each field with a fast proxy: the field was binned onto a HEALPix map and transformed with a calibrated approximation (the backend `eval/tools/spectra_analysis` still holds the calibration scripts). It produced the scoreboard rows named `spectra_<variable>_relative_l2` and `spectra_<variable>_score`, and compared the model with the truth above wavenumber 100. It was retired because `spectra_ecmwf_v2` computes the same comparison with the real ECMWF transform, and the scorer of the replacement says that the two instruments give different numbers for the same run. Replacement: `spectra_ecmwf_v2` (rows `spectra_v2_*`). Code: `eval/_quarantine/20260928/spectra/`. Its `relative_l2` and `spectra_score` functions were kept in `eval/evaluators/spectra_ecmwf_v2/core/scoreboard.py`, where the replacement uses them. Cards and scoreboard records made before the retirement still carry the old rows.
@@ -1276,6 +1235,14 @@ Eight evaluators were retired on 28 September 2026. Their code is kept, but cann
 **`intermediate`.** Plots of the intermediate steps of the diffusion sampler. No replacement. Code: `eval/_quarantine/20260928/intermediate/`; the backend `eval/tools/plot_intermediate` stays in place.
 
 The same quarantine folder also holds dead job scripts and archived templates (`jobs/autopilot*.py`, `jobs/codex_eval*`, `jobs/generate_clean_scoreboards.py`, `jobs/generate_enfo_o320_scoreboard.py`, and others listed in its README).
+
+Three more changes were made on 29 September 2026, after the owner judged the tools of the framework in a trial. The old names are tombstones, defined in `eval/cli/retired.py`: each prints where the tool went and exits with status 1, and the code of the retired ones is kept in `eval/_quarantine/20260929/` (its `README.md` lists them).
+
+**`membermaps` (renamed `zoom_maps`, 2026-09-29).** Not retired; renamed. `python -m eval.cli membermaps` and `--only membermaps` print the new name and exit with status 1. The code moved from `eval/evaluators/membermaps/` to `eval/evaluators/zoom_maps/`, so nothing is quarantined. A lane that still holds a `membermaps:` block (the tracked `o320_o1280.yaml` does) keeps working, because `zoom_maps` reads that block when the lane has no `zoom_maps:` block, with a warning. A lane's evaluator group that lists `membermaps` runs `zoom_maps` instead, with a warning. Result directories named `evaluators/membermaps` from earlier runs stay where they are and are not read by any code except the lean-layout projection.
+
+**`report` (retired 2026-09-29, no replacement).** The subcommand that wrote an HTML page of a run. Section 3.1.6 says what it did and why it went. Code: `eval/_quarantine/20260929/report/`.
+
+**`videogen` (retired 2026-09-29).** The subcommand that rendered MP4 videos of one storm. Section 3.1.8 says what it did. There is no replacement; the code is quarantined in `eval/_quarantine/20260929/videogen/`, and `python -m eval.tools.videogen` is also a tombstone.
 
 ## 5. Known documentation errors
 
@@ -1301,14 +1268,14 @@ These are places where the documentation, or a comment, says something that the 
 
 Each question is a decision that the review needs. My recommendation is in section 3 under the tool's name; the number in brackets is the section.
 
-1. `report` [3.1.6]: retire it (no `report.html` found anywhere), or keep it?
-2. `videogen` [3.1.8]: retire it, or move it out of `eval.cli` into a presentation folder? Its scenes are tied to one old checkpoint.
+1. `report` [3.1.6]: decided, retired on 2026-09-29 with no replacement (section 4).
+2. `videogen` [3.1.8]: decided, retired on 2026-09-29 and quarantined in `eval/_quarantine/20260929/videogen/` (section 4).
 3. `prepml-cleanup` [3.1.7]: keep it in `eval.cli`, or move it to prepml tooling? And is the ecFlow route or `prepml housekeeping --cleanup-expver` the sanctioned way to delete FDB data?
 4. `pipeline` [3.1.15]: is it still used? Two generated launchers exist against a thousand direct runs.
 5. `evolution` [3.1.9]: fold it into `ladder` as a subcommand, since it only reads ladder cards?
 6. `tctracker` and `tccompare` [3.1.10, 3.1.11]: keep as two subcommands or merge them into one that tracks and then compares?
-7. `membermaps` [3.1.12]: make the subcommand the primary tool and turn the evaluator into a thin loop over it?
-8. `region_plot`, `membermaps`, `storm_maps`, `precip_events` and the member maps inside `tc` [3.3.1]: five map generators over the same files. Which do you want to keep as separate tools?
+7. `zoom_maps` [3.1.12]: make the subcommand the primary tool and turn the evaluator into a thin loop over it?
+8. `region_plot`, `zoom_maps`, `storm_maps`, `precip_events` and the member maps inside `tc` [3.3.1]: five map generators over the same files. Which do you want to keep as separate tools?
 9. `tc` [3.2.1]: should the evaluator print the pooled sample size beside each extreme, and should a native-grid support be run beside the 0.25 degree one?
 10. `surface` [3.2.2]: stop publishing `surface_weighted_mse` (mixed units), and accept that `surface_weighted_nmse` is 87 per cent wind error in the one example I read?
 11. `spectra_ecmwf_v2` [3.2.3]: add sub-band scores so that the finest scales count, and absorb the coherence into this evaluator?
