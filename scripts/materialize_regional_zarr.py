@@ -38,6 +38,10 @@ BOX_PRESETS: dict[str, list[float]] = {
     # Canonical regional o320->o1280 TC training box, selected from HURDAT2
     # 2003-2023 coverage versus O1280 cell cost.
     "tc_atlantic_mdr_west": [5.0, 35.0, -100.0, -40.0],
+    # Europe plus the Atlantic main development region and the western Atlantic, the
+    # o320->o1280 box of the fast-generative-downscaling epic (owner's choice E2,
+    # 2026-09-29): 814,810 O1280 cells, 2.86 x the Atlantic box; one A100 per model.
+    "europe_tc_e2": [10.0, 70.0, -80.0, 40.0],
 }
 
 
