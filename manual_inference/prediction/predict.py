@@ -61,6 +61,7 @@ _NOISE_SCHEDULER_KEYS = _LOOSE_NOISE_SCHEDULER_KEYS | {
     "num_steps_low",
     "rho_high",
     "rho_low",
+    "sigmas",  # explicit noise levels of schedule_type "custom" (few-step sampler campaign, 2026-09-30)
 }
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
 
