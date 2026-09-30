@@ -1,6 +1,6 @@
 # Repertoire of the evaluation framework `eval.cli`
 
-Written on 2026-09-29 from a reading of the code in `downscaling-tools` on `main`. The method descriptions and the line numbers were taken at commit `bf24cbe`. The same night the code was reorganised (up to commit `d46d457`): `eval/cli.py` became the package `eval/cli/` with new `list` and `describe` subcommands; the computation of each evaluator moved from `eval/_backends/<name>/` into `eval/evaluators/<name>/core/`, shared code into `eval/shared/`, and standalone tools into `eval/tools/` (see `ARCHITECTURE.md`); every figure now uses the house style of `eval/plotting/` and is written as PNG and PDF; and a bug in the precipitation evaluators on regional runs was fixed. File paths in this document have been updated to the new layout, but line numbers still refer to `bf24cbe` and may have moved by a few lines. What each tool computes did not change. The figures were drawn with the new style. Later the same day the subcommand and evaluator `membermaps` were renamed `zoom_maps`, and the subcommands `report` and `videogen` were retired (2026-09-29); the text below uses the new name and describes the retirements in section 4. For the current list of tools, run `python -m eval.cli list`; for one tool, `python -m eval.cli describe <name>`.
+Written on 2026-09-29 from a reading of the code in `downscaling-tools` on `main`. The method descriptions and the line numbers were taken at commit `bf24cbe`. The same night the code was reorganised (up to commit `d46d457`): `eval/cli.py` became the package `eval/cli/` with new `list` and `describe` subcommands; the computation of each evaluator moved from `eval/_backends/<name>/` into `eval/evaluators/<name>/core/`, shared code into `eval/shared/`, and standalone tools into `eval/tools/` (see `ARCHITECTURE.md`); every figure now uses the house style of `eval/plotting/` and is written as PNG and PDF; and a bug in the precipitation evaluators on regional runs was fixed. File paths in this document have been updated to the new layout, but line numbers still refer to `bf24cbe` and may have moved by a few lines. What each tool computes did not change. The figures were drawn with the new style. Later the same day the subcommand and evaluator `membermaps` were renamed `zoom_maps`, and the subcommands `report` and `videogen` were retired (2026-09-29). On 2026-09-30 the per-member maps that `tc` could draw were retired too. The text below uses the new name and describes the retirements in section 4. For the current list of tools, run `python -m eval.cli list`; for one tool, `python -m eval.cli describe <name>`.
 
 The purpose of this document is to let a scientist, and the AI agents that work for that scientist, decide which evaluation tool answers a given question, and whether each tool deserves to be kept. Each tool has its own section with the same layout. The sections contain recommendations, always marked as such. They are not decisions; the decisions are listed at the end as open questions.
 
@@ -457,7 +457,7 @@ python -m eval.cli evaluate --lane o320_o1280 --predictions-dir <run>/prediction
 
 **How to read the result.** Judge shape and placement of the fine-scale features by eye. The mid-lead step (72 hours) is the default because the shortest lead is the easiest case and the longest is where input and truth have drifted furthest apart.
 
-**Overlaps.** `region_plot` draws six panels for the first file only; `storm_maps` zooms on the deepest storm; `precip_events` centres on precipitation maxima; `tc` writes per-member TC maps of its own.
+**Overlaps.** `region_plot` draws six panels for the first file only; `storm_maps` zooms on the deepest storm; `precip_events` centres on precipitation maxima. (`tc` used to write per-member cyclone maps of its own; they were retired on 2026-09-30, see section 4.)
 
 **Keep, merge or retire?** My recommendation is to keep one of the two entry points as the primary, and let the other call it. The subcommand is the more general, so the evaluator could become a thin loop over it.
 
@@ -565,7 +565,7 @@ Per source, the statistics are the minimum, the 0.01th percentile, the maximum a
 
 Known caveats. First, the sample sizes differ greatly: in the Idalia example below the model and the target each pool 2,450,250 values and the analysis pools 49,005, so a raw minimum is compared across samples that differ by a factor of fifty. Second, single-seed extremes are noisy: the project rules give 8 to 12 hPa of noise for a single seed and about 5 to 7 hPa for the difference of a single storm between two runs. Third, the percentile names are misdocumented in several places (section 5). Fourth, the lane keys `tc.beta`, `tc.mslp_ref` and `tc.tail_keys` are not read by any code I could find.
 
-**Inputs and outputs.** Inputs: prediction files, and for the analysis the GRIB files under `tc.grib_dir`. Outputs in `evaluators/tc/`: `stats.json`, `metrics.json`, `plots/all_tc_distributions.pdf` (promoted to `tc_pdf_distributions.pdf`), and optionally `member_maps/` (one map page per member, controlled by `tc.member_maps`).
+**Inputs and outputs.** Inputs: prediction files, and for the analysis the GRIB files under `tc.grib_dir`. Outputs in `evaluators/tc/`: `stats.json`, `metrics.json`, `plots/all_tc_distributions.pdf` (promoted to `tc_pdf_distributions.pdf`). Until 2026-09-30 it could also write `member_maps/` (one map page per member, controlled by `tc.member_maps`); that feature was retired (section 4), and a lane's `tc.member_maps` block is now ignored with a warning.
 
 **How to run it.**
 
@@ -742,7 +742,7 @@ python -m eval.cli evaluate --lane o320_o1280 --host atos_ac \
 
 **How to read the result.** Look for whether the model's fine detail sits where the truth's does, and whether the residual panels show structure or noise. Because it uses the first file only, it shows one case, so it cannot support a claim about the campaign.
 
-**Overlaps.** `zoom_maps`, `storm_maps`, `precip_events` and the member maps of `tc` are four other figure generators. All render maps of the same files.
+**Overlaps.** `zoom_maps`, `storm_maps` and `precip_events` are three other figure generators. All render maps of the same files. (The per-member maps of `tc` were a fourth until they were retired on 2026-09-30.)
 
 **Keep, merge or retire?** My recommendation is to keep it as the one standing overview figure. Consider making the choice of date, lead and member explicit in the lane file, because the silent choice of the first file makes the figure look representative when it is one draw.
 
@@ -1214,7 +1214,7 @@ Figure caption: No figure exists, so the image only says so. The evaluator measu
 
 ## 4. Retired tools
 
-This section covers the tools retired on 28 September 2026 (evaluators) and the changes of 29 September 2026 (the rename of `membermaps` and the retirement of two subcommands), in that order.
+This section covers the tools retired on 28 September 2026 (evaluators), the changes of 29 September 2026 (the rename of `membermaps` and the retirement of two subcommands) and the retirement of the per-member maps of `tc` on 30 September 2026, in that order.
 
 Eight evaluators were retired on 28 September 2026. Their code is kept, but cannot be imported, under `/home/ecm5702/dev/downscaling-tools/eval/_quarantine/20260928/<name>/` (the file `eval/_quarantine/20260928/README.md` lists them). Naming a retired evaluator with `--only` prints its replacement and exits with status 1, and a retired name left in a lane's evaluator group is skipped with a warning (`eval/evaluators/registry.py:281`, `eval/cli.py:556`). The registry reason is recorded only as the replacement; where I found a measured reason, I give it.
 
@@ -1243,6 +1243,8 @@ Three more changes were made on 29 September 2026, after the owner judged the to
 **`report` (retired 2026-09-29, no replacement).** The subcommand that wrote an HTML page of a run. Section 3.1.6 says what it did and why it went. Code: `eval/_quarantine/20260929/report/`.
 
 **`videogen` (retired 2026-09-29).** The subcommand that rendered MP4 videos of one storm. Section 3.1.8 says what it did. There is no replacement; the code is quarantined in `eval/_quarantine/20260929/videogen/`, and `python -m eval.tools.videogen` is also a tombstone.
+
+**The per-member maps of `tc` (retired 2026-09-30).** When a lane's `tc.member_maps.enabled` was true, the `tc` evaluator also wrote `member_maps/tc_members_<event>_<run>_<date>.pdf`: for one ensemble member, a row of three maps (input, model, truth) of mean sea level pressure and a row of 10 m wind speed over the event box. The owner decided on 2026-09-30 to remove these plots from `eval.cli` for good. The distributions figure, the statistics and the scoreboard rows of `tc` are unchanged. A lane that still holds a `tc.member_maps` block keeps working: the block is ignored, and when it has `enabled: true` the evaluator logs one warning per run that names the retirement and the replacement. The direct entry point `python -m eval.evaluators.tc.core.workflows member-maps` (also reached through `eval._backends.tc.workflows`) is a tombstone that prints the same message and exits with status 1. Old run folders that hold `evaluators/tc/member_maps/` are still projected by the lean layout (`plots/tc_member_maps`). For single-member maps of a storm, use `zoom_maps`. Code: `eval/_quarantine/20260930/tc_member_maps/` (`eval/_quarantine/20260930/README.md` says where each piece lived).
 
 ## 5. Known documentation errors
 
@@ -1275,7 +1277,7 @@ Each question is a decision that the review needs. My recommendation is in secti
 5. `evolution` [3.1.9]: fold it into `ladder` as a subcommand, since it only reads ladder cards?
 6. `tctracker` and `tccompare` [3.1.10, 3.1.11]: keep as two subcommands or merge them into one that tracks and then compares?
 7. `zoom_maps` [3.1.12]: make the subcommand the primary tool and turn the evaluator into a thin loop over it?
-8. `region_plot`, `zoom_maps`, `storm_maps`, `precip_events` and the member maps inside `tc` [3.3.1]: five map generators over the same files. Which do you want to keep as separate tools?
+8. `region_plot`, `zoom_maps`, `storm_maps` and `precip_events` [3.3.1]: four map generators over the same files. Which do you want to keep as separate tools? (The member maps inside `tc`, a fifth, were retired on 2026-09-30; section 4.)
 9. `tc` [3.2.1]: should the evaluator print the pooled sample size beside each extreme, and should a native-grid support be run beside the 0.25 degree one?
 10. `surface` [3.2.2]: stop publishing `surface_weighted_mse` (mixed units), and accept that `surface_weighted_nmse` is 87 per cent wind error in the one example I read?
 11. `spectra_ecmwf_v2` [3.2.3]: add sub-band scores so that the finest scales count, and absorb the coherence into this evaluator?

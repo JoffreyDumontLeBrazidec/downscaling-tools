@@ -31,13 +31,28 @@ from eval.evaluators.tc.comparison_contract import (
     validate_comparison_contracts,
 )
 from eval.evaluators.tc.core.workflows import (
+    MEMBER_MAPS_RETIRED,
     _json_default,
     compute_event_stats,
     load_curves_for_event,
-    run_member_maps,
 )
 
 LOG = logging.getLogger(__name__)
+
+
+def _warn_if_member_maps_requested(eval_config) -> bool:
+    """Warn once when the lane still asks for the retired per-member maps.
+
+    Lanes keep their tc.member_maps block; it is accepted and ignored so that
+    they run unedited (checks warn, never gate). Returns True when it warned.
+    """
+    mm_cfg = eval_config.get("member_maps")
+    enabled = mm_cfg.get("enabled") if isinstance(mm_cfg, dict) else bool(mm_cfg)
+    if not enabled:
+        return False
+    LOG.warning("TC: the lane sets tc.member_maps.enabled, which is now ignored. %s",
+                MEMBER_MAPS_RETIRED)
+    return True
 
 
 _GRIB_EXPID_RE = re.compile(r"([A-Za-z]+)_([Oo]\d+)_(\d{4})")
@@ -232,6 +247,7 @@ def run(
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"TC output directory already has content: {output_dir}. Pass overwrite=True to replace.")
     output_dir.mkdir(parents=True, exist_ok=True)
+    _warn_if_member_maps_requested(eval_config)
 
     # Fall back to lane config for reference data not supplied by the caller.
     grib_dir = grib_dir or eval_config.get("grib_dir")
@@ -488,66 +504,5 @@ def run(
         json.dump(payload, f, indent=2, sort_keys=True, default=_json_default)
 
     LOG.info("TC stats written to %s", stats_path)
-
-    # Member maps (optional, controlled by eval_config["member_maps"])
-    mm_cfg = eval_config.get("member_maps") or {}
-    if mm_cfg.get("enabled"):
-        mm_steps = mm_cfg.get("steps") or [24, 120]
-        mm_members = mm_cfg.get("members") or list(range(10))
-        mm_outdir = output_dir / "member_maps"
-
-        # Per-event dates (preferred) or global dates (legacy)
-        event_dates = mm_cfg.get("event_dates") or {}
-        if event_dates:
-            for evt, date in event_dates.items():
-                try:
-                    run_member_maps(
-                        predictions_dir=str(predictions_dir),
-                        outdir=str(mm_outdir),
-                        run_label=run_label,
-                        event_names=[evt],
-                        date=str(date),
-                        steps=mm_steps,
-                        members=mm_members,
-                    )
-                    LOG.info("Member maps written for event=%s date=%s", evt, date)
-                except Exception:
-                    LOG.error("Member maps failed for event=%s date=%s", evt, date, exc_info=True)
-        else:
-            mm_dates = mm_cfg.get("dates") or []
-            mm_events = mm_cfg.get("events") or list(event_names)
-            for date in mm_dates:
-                try:
-                    run_member_maps(
-                        predictions_dir=str(predictions_dir),
-                        outdir=str(mm_outdir),
-                        run_label=run_label,
-                        event_names=mm_events,
-                        date=date,
-                        steps=mm_steps,
-                        members=mm_members,
-                    )
-                    LOG.info("Member maps written for date=%s", date)
-                except Exception:
-                    LOG.error("Member maps failed for date=%s", date, exc_info=True)
-
-        # Combined PDF: merge all individual member map PDFs into one
-        if mm_cfg.get("combined_pdf") and mm_outdir.exists():
-            individual_pdfs = sorted(mm_outdir.glob("tc_members_*.pdf"))
-            if len(individual_pdfs) > 1:
-                try:
-                    from pypdf import PdfReader, PdfWriter
-                    writer = PdfWriter()
-                    for pdf_path in individual_pdfs:
-                        for page in PdfReader(str(pdf_path)).pages:
-                            writer.add_page(page)
-                    combined_name = "_".join(event_dates.keys()) if event_dates else "combined"
-                    safe_label = run_label.replace(" ", "_").replace("/", "_")
-                    combined_path = mm_outdir / f"tc_members_{combined_name}_{safe_label}.pdf"
-                    with open(combined_path, "wb") as f:
-                        writer.write(f)
-                    LOG.info("Combined member maps PDF: %s", combined_path)
-                except Exception:
-                    LOG.error("Failed to merge member map PDFs", exc_info=True)
 
     return output_dir
