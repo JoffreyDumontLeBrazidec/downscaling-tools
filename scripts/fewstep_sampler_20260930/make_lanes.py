@@ -85,6 +85,28 @@ STAGE_1B = {
                    sigmas=[100000.0, 300.0, 30.0, 12.0, 6.0, 3.0, 1.5, 0.75, 0.35, 0.15, 0.07, 0.03],
                    num_steps_high=3, num_steps_low=9),
 }
+
+
+def exp_list(n, sigma_max=100000.0, sigma_min=0.03):
+    """N sigmas spaced exponentially from sigma_max to sigma_min; the custom scheduler appends the
+    terminal zero. The fork's ExponentialScheduler lacks that zero (stage-1a exp16/exp12 were
+    cancelled for it, note section 9), so the one-segment arms run as explicit lists instead."""
+    import math
+    r = math.log(sigma_min / sigma_max) / (n - 1)
+    return [round(sigma_max * math.exp(r * i), 6) for i in range(n)]
+
+
+def custom(sigmas, **kw):
+    # num_steps_high/low and sigma_transition are inert for the custom scheduler; zeroed to say so.
+    d = dict(PW30, schedule_type="custom", num_steps=len(sigmas), sigma_max=sigmas[0],
+             sigma_min=sigmas[-1], sigmas=list(sigmas), num_steps_high=0, num_steps_low=0)
+    d.update(kw)
+    return d
+
+
+# one-segment exponential arms of E5, re-registered as explicit lists (stage 1b, patched runtime)
+STAGE_1B["exp16_x"] = custom(exp_list(16))
+STAGE_1B["exp12_x"] = custom(exp_list(12))
 DONOR_1A = {"pw20": pw(7, 13), "pw12": pw(4, 8), "pw8": pw(3, 5), "pw16_s10k": pw(5, 11, sigma_max=10000.0)}
 
 BASES = {

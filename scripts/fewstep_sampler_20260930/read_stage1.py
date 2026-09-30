@@ -100,16 +100,23 @@ def main() -> None:
     calls = {k: int(v) for k, v in (c.split("=", 1) for c in args.calls)}
     arms = {k: Path(v) for k, v in (a.split("=", 1) for a in args.arm)}
 
-    # noise band per metric
+    # noise band per metric (section 6a of the note: the replicates are unpaired 100-draw
+    # runs of the baseline, so their deviation is the null for an unpaired arm difference)
     band = {}
+    band_detail = {}
     for metric, bval in base.items():
         kind = next((k for _, rx, k in HEADLINE if rx.match(metric)), None)
         if kind is None:
             continue
         devs = [abs(diff(kind, s[metric], bval) or 0.0) for s in seeds if metric in s]
         band[metric] = max([1.5 * d for d in devs] + [floor_for(metric)])
+        band_detail[metric] = {
+            "baseline": bval, "seed_deviations": devs, "floor": floor_for(metric),
+            "band": band[metric], "limited_by": "floor" if band[metric] == floor_for(metric) else "seeds",
+        }
 
-    result = {"baseline_metrics": len(base), "seed_replicates": len(seeds), "arms": {}}
+    result = {"baseline_metrics": len(base), "seed_replicates": len(seeds),
+              "noise_band": band_detail, "arms": {}}
     for name, run_dir in arms.items():
         m = load_metrics(run_dir)
         cases = load_cases(run_dir)
@@ -160,6 +167,18 @@ def main() -> None:
     for name, r in sorted(result["arms"].items(), key=lambda kv: (kv[1]["calls"] or 999, kv[0])):
         outs = ", ".join(f"{k}: {len(v)}" for k, v in r["outside_noise"].items()) or "none"
         lines.append(f"| {name} | {r['calls'] or '?'} | {'yes' if r['inside_on_all_judged'] else 'no'} | {outs} |")
+    lines.append("")
+    lines.append("Measured noise band per headline metric (relative for ratios, absolute for correlations and deltas):")
+    lines.append("")
+    lines.append("| metric | baseline | seed deviations | floor | band | limited by |")
+    lines.append("|---|---:|---|---:|---:|---|")
+    for metric, d in sorted(band_detail.items()):
+        devs = ", ".join(f"{x:.4f}" for x in d["seed_deviations"]) or "none"
+        lines.append(f"| {metric} | {d['baseline']:.4g} | {devs} | {d['floor']:.3g} | {d['band']:.4f} | {d['limited_by']} |")
+    lines.append("")
+    seed_limited = [m for m, d in band_detail.items() if d["limited_by"] == "seeds"]
+    lines.append(f"{len(seed_limited)} of {len(band_detail)} metrics have a band wider than the floor; on those the "
+                 "100-draw screen resolves less than the pre-registered threshold and the verdict is 'not resolved at stage 1'.")
     lines.append("")
     lines.append(f"Noise band from {len(seeds)} seed replicate(s), 1.5 x the largest seed deviation, floors fair CRPS 1 %, nMSE 1 %, spread 5 %. "
                  "Spread convention: eval.cli probabilistic, domain mean of the pointwise member standard deviation (ddof 1). "
