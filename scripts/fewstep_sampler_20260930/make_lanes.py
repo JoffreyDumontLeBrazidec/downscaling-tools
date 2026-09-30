@@ -109,19 +109,38 @@ STAGE_1B["exp16_x"] = custom(exp_list(16))
 STAGE_1B["exp12_x"] = custom(exp_list(12))
 
 
-def n100(n_high, n_low, **kw):
-    """Heun piecewise with the noise multiplier at 1.0 (churn 2.5 kept): the reference the stage-1a read
-    of 2026-09-30 points at (b0's S_noise 1.05 gives 1.27x the truth's fine variance on 10u; n100_30 1.00)."""
-    return pw(n_high, n_low, S_noise=1.0, **kw)
+def c0(n_high, n_low, **kw):
+    """Heun piecewise with churn OFF (S_churn 0; S_noise inert, kept at 1.05 like the campaign's RW50k_c0).
+    Stage-1a read of 2026-09-30 (lead-matched): b0's S_noise 1.05 gives 1.27x the truth's fine variance on
+    10u and c0_30 gives 1.00 with 3 % lower nMSE at equal fair CRPS; churn also makes the draws depend on
+    the step count, so churn-off arms are the only ones paired across the whole ensemble."""
+    return pw(n_high, n_low, S_churn=0.0, **kw)
 
 
-# stage 1b, noise-1.0 ladder (owner's reference decision of 2026-09-30 pending; recommended option)
-STAGE_1B_N100 = {
-    "n100_pw24": n100(8, 16), "n100_pw20": n100(7, 13), "n100_pw16": n100(5, 11), "n100_pw12": n100(4, 8),
-    # replicate of the campaign's n100_30 at another base seed, for the noise band of the new reference
-    # (submit with ANEMOI_BASE_SEED=757 exported, i.e. base 757000, like pw30_s757)
-    "n100_pw30_s757": n100(10, 20),
+# stage 1b-Heun: the churn-off ladder on the existing runtime (owner's reference decision of 2026-09-30
+# pending; this is the recommended option). pw20_c0, pw16_c0 and pw12_c0 already exist from stage 1a.
+STAGE_1B_C0 = {
+    "c0_pw24": c0(8, 16),
+    "c0_pw16_s10k": c0(5, 11, sigma_max=10000.0),
+    "c0_pw16_s1k": c0(5, 11, sigma_max=1000.0),
+    "c0_pw12_s1k": c0(4, 8, sigma_max=1000.0),
+    "c0_pw12_s100": c0(4, 8, sigma_max=100.0),
+    "c0_pw16_h3l13": c0(3, 13),
+    # replicates of the campaign's c0_30 at other base seeds, for the noise band of the churn-off reference
+    # (submit with ANEMOI_BASE_SEED=757 / 758 exported, i.e. bases 757000 / 758000, like pw30_s757/s758)
+    "c0_pw30_s757": c0(10, 20),
+    "c0_pw30_s758": c0(10, 20),
 }
+# noise-multiplier-1.0 ladder, kept for reference: n100_30 equals c0_30 on texture, nMSE and CRPS on the
+# box (0.999 / 0.3210 / 0.8503 vs 0.998 / 0.3209 / 0.8499), so the cheaper deterministic churn-off arms
+# carry stage 1b; run these only if the owner prefers churn on.
+STAGE_1B_N100 = {
+    "n100_pw24": pw(8, 16, S_noise=1.0), "n100_pw20": pw(7, 13, S_noise=1.0),
+    "n100_pw16": pw(5, 11, S_noise=1.0), "n100_pw12": pw(4, 8, S_noise=1.0),
+    "n100_pw30_s757": pw(10, 20, S_noise=1.0),
+}
+
+
 DONOR_1A = {"pw20": pw(7, 13), "pw12": pw(4, 8), "pw8": pw(3, 5), "pw16_s10k": pw(5, 11, sigma_max=10000.0)}
 
 BASES = {
@@ -158,7 +177,7 @@ def lane_text(prefix, arm, block, base, note):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True, help="the lanes directory (eval/config/lanes of the worktree)")
-    ap.add_argument("--stage", default="1a", choices=["1a", "1b", "all"])
+    ap.add_argument("--stage", default="1a", choices=["1a", "1b", "1b-heun", "1b-n100", "all"])
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     out = Path(args.out)
@@ -168,7 +187,9 @@ def main():
         plan += [("fs", a, b) for a, b in STAGE_1A.items()] + [("fd", a, b) for a, b in DONOR_1A.items()]
     if args.stage in ("1b", "all"):
         plan += [("fs", a, b) for a, b in STAGE_1B.items()]
-    if args.stage in ("1b", "all"):
+    if args.stage in ("1b", "1b-heun", "all"):
+        plan += [("fs", a, b) for a, b in STAGE_1B_C0.items()]
+    if args.stage in ("1b-n100", "all"):
         plan += [("fs", a, b) for a, b in STAGE_1B_N100.items()]
     print(f"{'lane':34s} {'sampler':9s} {'steps':>5s} {'calls':>5s}  block")
     for prefix, arm, block in plan:
