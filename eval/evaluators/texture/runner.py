@@ -60,6 +60,17 @@ So the evaluator also pushes Gaussian white noise through the same operator
 which is 0 when the model's fine part is textured like the truth and 1 when it
 is indistinguishable from white noise through the same filter.
 
+Regional (cut-graph) prediction files. When the file's hres points are a subset of
+the global grid, the evaluator runs in *regional mode*: every point is mapped to its
+global index, the static fields, strata and the up/down matrices are restricted to
+the file's points, the neighbour graph and zonal successor are rebuilt on the subset,
+and the model's own exported ``x_interp`` is the driver instead of ``up @ x``. The
+fine-part operator ``r - up(down(r))`` is exact wherever the coarse stencil lies
+inside the file, so points within ``edge_margin_deg`` (default 0.75) of the file's
+lat/lon bounds are removed from every stratum, ``all`` included. The statistics are
+then identical to a global run's on the same points; ``grid.regional`` in the JSON
+records the subset, the margin and the global index range.
+
 Strata: ``all``; five terrain classes from the lane's forcings zarr (``ocean``,
 ``open_ocean``, ``coastal``, ``flat_land``, ``mountain``, from the land-sea mask
 and the standard deviation of the orography over the 32 nearest neighbours); and
@@ -501,6 +512,87 @@ def _grain_index(model: float, truth: float, noise) -> float:
     return float((model - truth) / den)
 
 
+EDGE_MARGIN_DEG = 0.75   # regional mode: strip this much from the file's lat/lon bounds
+MIN_STRATUM_POINTS = 200 # regional mode: strata with fewer points are dropped
+
+
+def _subset_static(static: dict, idx: np.ndarray, up, down, nn_count: int,
+                   edge_margin_deg: float, min_points: int = MIN_STRATUM_POINTS):
+    """Restrict the static structures to the global points ``idx`` (a regional file).
+
+    Returns (static_subset, up_subset, down_subset). ``up_subset = up[idx]`` maps the
+    full coarse grid onto the subset and ``down_subset = down[:, idx]`` gathers the
+    subset only, so ``up(down(r))`` equals the global operator at every point whose
+    coarse stencil is covered by the subset; the edge margin removes the rest from
+    the strata. Neighbours and zonal successors are rebuilt on the subset.
+    """
+    t0 = time.time()
+    lat = np.asarray(static["lat"])[idx]
+    lon = np.asarray(static["lon"])[idx]
+    n = lat.size
+    knn_idx, knn_dist = _build_knn(lat, lon, min(KNN_K, n - 1))
+    nn = np.ascontiguousarray(knn_idx[:, :nn_count])
+    nn_dist_km = {
+        "nearest_km_median": float(np.median(knn_dist[:, 0])),
+        "sixth_km_median": float(np.median(knn_dist[:, min(nn_count, knn_dist.shape[1]) - 1])),
+    }
+    nxt, row_info = _zonal_successor(lat, lon)
+
+    lon360 = np.mod(lon, 360.0)
+    lon180 = np.where(lon360 > 180.0, lon360 - 360.0, lon360)
+    lat_lo, lat_hi = float(lat.min()), float(lat.max())
+    lon_lo, lon_hi = float(lon180.min()), float(lon180.max())
+    interior = (
+        (lat >= lat_lo + edge_margin_deg) & (lat <= lat_hi - edge_margin_deg)
+        & (lon180 >= lon_lo + edge_margin_deg) & (lon180 <= lon_hi - edge_margin_deg)
+    )
+    if int(interior.sum()) < min_points:
+        raise RuntimeError(
+            f"texture: only {int(interior.sum())} interior points after a {edge_margin_deg} deg "
+            f"edge margin on a {n}-point regional file")
+
+    masks: dict[str, np.ndarray | None] = {}
+    strata: dict[str, dict[str, Any]] = {}
+    dropped: list[str] = []
+    for name, m in static["masks"].items():
+        sub = interior.copy() if m is None else (np.asarray(m)[idx] & interior)
+        count = int(sub.sum())
+        if count < min_points:
+            dropped.append(name)
+            LOG.warning("texture: stratum %r has %d points in the regional file; dropped",
+                        name, count)
+            continue
+        masks[name] = sub
+        entry = dict(static["strata"][name])
+        entry["n_points"] = count
+        strata[name] = entry
+
+    up_sub = up[idx].tocsr()
+    down_sub = down[:, idx].tocsr()
+    LOG.info(
+        "texture: regional subset of %d points built in %.1fs (rows=%d, interior=%d, strata=%s)",
+        n, time.time() - t0, row_info["n_rows"], int(interior.sum()),
+        {k: v["n_points"] for k, v in strata.items()},
+    )
+    grid = dict(static["grid"])
+    grid.update({
+        "n_points": int(n), **row_info, **nn_dist_km,
+        "regional": {
+            "n_global": int(np.asarray(static["lat"]).size),
+            "edge_margin_deg": float(edge_margin_deg),
+            "n_interior": int(interior.sum()),
+            "lat_bounds": [lat_lo, lat_hi], "lon_bounds": [lon_lo, lon_hi],
+            "global_index_min": int(idx.min()), "global_index_max": int(idx.max()),
+            "strata_dropped": dropped,
+        },
+    })
+    return {
+        "lat": lat, "lon": lon, "nn": nn, "nxt": nxt,
+        "masks": masks, "strata": strata, "strata_order": list(masks.keys()),
+        "grid": grid,
+    }, up_sub, down_sub
+
+
 def _noise_reference(n_points: int, up, down, nxt, nn, sels: dict, strata_order: list[str],
                      frac: float, seeds=NOISE_SEEDS) -> dict[str, dict[str, dict]]:
     """Statistics of Gaussian white noise pushed through the same fine-part operator,
@@ -786,6 +878,33 @@ def run(
         raise RuntimeError(
             f"grid size mismatch: forcings {n_points} points, up {up.shape}, down {down.shape}"
         )
+
+    # Regional (cut-graph) files: a subset of the global grid in the file's own order.
+    regional = False
+    with netCDF4.Dataset(files[0]) as ds0:
+        ds0.set_auto_mask(False)
+        lat0 = np.asarray(ds0.variables["lat_hres"][:]).reshape(-1)
+        lon0 = np.asarray(ds0.variables["lon_hres"][:]).reshape(-1)
+        has_x_interp = "x_interp" in ds0.variables
+    if not _lonlat_match(lat0, lon0, static["lat"], static["lon"]):
+        if lat0.size >= n_points:
+            raise RuntimeError(
+                f"{files[0].name}: {lat0.size} points do not match the forcings grid "
+                f"({n_points} points) and are not a subset of it")
+        if not has_x_interp:
+            raise RuntimeError(
+                f"{files[0].name}: regional file without x_interp; the evaluator needs the "
+                "exported driver on the file's points")
+        from eval.shared.grid import global_point_index
+
+        t_idx = time.time()
+        idx_global = global_point_index(lat0, lon0, static["lat"], static["lon"])
+        LOG.info("texture: regional file, %d of %d global points mapped in %.1fs",
+                 lat0.size, n_points, time.time() - t_idx)
+        edge_margin = float(eval_config.get("edge_margin_deg", EDGE_MARGIN_DEG))
+        static, up, down = _subset_static(static, idx_global, up, down, nn_count, edge_margin)
+        n_points = static["grid"]["n_points"]
+        regional = True
     masks = static["masks"]
     strata_order = static["strata_order"]
     sels = {name: (None if m is None else np.flatnonzero(m)) for name, m in masks.items()}
@@ -820,16 +939,22 @@ def run(
             lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)
             if not _lonlat_match(lat_f, lon_f, static["lat"], static["lon"]):
                 raise RuntimeError(
-                    f"{file_path.name}: lat/lon_hres do not match the forcings grid "
+                    f"{file_path.name}: lat/lon_hres do not match the "
+                    f"{'first file' if regional else 'forcings grid'} "
                     f"({lat_f.size} vs {n_points} points); the evaluator relies on identical point order"
                 )
+            if regional and "x_interp" not in ds.variables:
+                raise RuntimeError(f"{file_path.name}: regional file without x_interp")
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
                 yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)
                 yt = np.asarray(_read_member(ds.variables["y"], member_index))
-                xx = np.asarray(_read_member(ds.variables["x"], member_index))
+                if regional:
+                    xi = np.asarray(_read_member(ds.variables["x_interp"], member_index))
+                else:
+                    xx = np.asarray(_read_member(ds.variables["x"], member_index))
                 t_read = time.time() - t_mem
                 for state in states:
                     si = idx_of.get(state)
@@ -846,6 +971,9 @@ def run(
                             )
                         else:
                             y_state = np.asarray(yt[:, si], dtype=np.float64)
+                    elif regional:
+                        x_interp = np.asarray(xi[:, si], dtype=np.float64)
+                        y_state = np.asarray(yt[:, si], dtype=np.float64)
                     else:
                         x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
                         y_state = np.asarray(yt[:, si], dtype=np.float64)
@@ -895,6 +1023,8 @@ def run(
         "n_files": len(files),
         "files": [f.name for f in files],
         "n_samples_per_cell": n_cell,
+        "regional": bool(regional),
+        "driver_source": "x_interp" if regional else "up @ x",
         "states": [s for s in states if any(r["state"] == s for r in aggregate)],
         "strata_order": strata_order,
         "strata": static["strata"],
