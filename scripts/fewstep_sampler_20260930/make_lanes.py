@@ -126,6 +126,9 @@ STAGE_1B_C0 = {
     "c0_pw12_s1k": c0(4, 8, sigma_max=1000.0),
     "c0_pw12_s100": c0(4, 8, sigma_max=100.0),
     "c0_pw16_h3l13": c0(3, 13),
+    # added 13:10 UTC after the bundle read: pw16_h8l8 (8+8) beat pw16 (5+11) on every metric with churn on
+    "c0_pw16_h8l8": c0(8, 8),
+    "c0_pw12_s1k_h6l6": c0(6, 6, sigma_max=1000.0),
     # replicates of the campaign's c0_30 at other base seeds, for the noise band of the churn-off reference
     # (submit with ANEMOI_BASE_SEED=757 / 758 exported, i.e. bases 757000 / 758000, like pw30_s757/s758)
     "c0_pw30_s757": c0(10, 20),
