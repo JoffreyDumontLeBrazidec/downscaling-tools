@@ -149,7 +149,6 @@ def _draw_member_page(fields, *, bbox, plot_config, exp_config, member_idx, memb
         else:
             norm = shared_norm(*arrays, q=(0.0, 100.0))
         row_extend[row_i] = extend_for(norm, *arrays)
-        contour_levels = np.linspace(norm.vmin, norm.vmax, 12)
         cmap = spec.field_cmap()
 
         for col_i, (src_prefix, col_title) in enumerate(col_defs):
@@ -178,17 +177,6 @@ def _draw_member_page(fields, *, bbox, plot_config, exp_config, member_idx, memb
                 cmap=cmap,
                 rasterized=True,
             )
-            try:
-                ax.contour(
-                    lon, lat, arr,
-                    transform=crs.PlateCarree(),
-                    levels=contour_levels,
-                    colors="black",
-                    linewidths=0.4,
-                    alpha=0.5,
-                )
-            except Exception:
-                pass
             row_images.setdefault(row_i, im)
 
     # One horizontal colour bar per row, centred under the row, with the unit.

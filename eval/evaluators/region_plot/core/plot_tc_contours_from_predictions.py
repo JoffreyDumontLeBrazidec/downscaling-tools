@@ -59,7 +59,7 @@ def _levels(fields: list[np.ndarray], *, n_levels: int = 21) -> np.ndarray:
 
 def _draw_panel(ax, lon: np.ndarray, lat: np.ndarray, field: np.ndarray, *, levels: np.ndarray, title: str,
                 cmap=None, left_labels: bool = True, bottom_labels: bool = True):
-    """Filled contours plus contour lines of one field on a Cartopy map panel.
+    """Filled contours of one field on a Cartopy map panel (no contour lines).
 
     The points are projected first and triangulated in map coordinates: letting Cartopy
     reproject filled tricontour paths can merge or drop polygons.
@@ -72,7 +72,6 @@ def _draw_panel(ax, lon: np.ndarray, lat: np.ndarray, field: np.ndarray, *, leve
     ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(field)
     contourf = ax.tricontourf(x[ok], y[ok], field[ok], levels=levels, cmap=cmap or "viridis", extend="both")
     contourf.set_rasterized(True)
-    ax.tricontour(x[ok], y[ok], field[ok], levels=levels, colors="black", linewidths=0.4, alpha=0.6)
     gl = add_geography(ax, label_size=7)
     if gl is not None:
         gl.left_labels = left_labels

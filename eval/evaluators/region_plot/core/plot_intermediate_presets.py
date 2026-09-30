@@ -158,12 +158,9 @@ def _plot_minimal_pcolor_contour(
                 tri = Triangulation(lon, lat)
                 grid = np.asarray(LinearTriInterpolator(tri, field)(lon2, lat2))
 
-                levels = np.linspace(vmin, vmax, 21)
                 set_inner_extent(ax, extent)
                 im = ax.pcolormesh(lon2, lat2, grid, shading="gouraud", cmap=spec.field_cmap(),
                                    vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree(), rasterized=True)
-                ax.contour(lon2, lat2, grid, levels=levels, colors="black", linewidths=0.35,
-                           transform=ccrs.PlateCarree())
                 gl = add_geography(ax, label_size=6.5)
                 set_grid_ticks(gl, extent)
                 if gl is not None:

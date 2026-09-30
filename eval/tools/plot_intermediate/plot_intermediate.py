@@ -601,15 +601,6 @@ def _draw_field(
             vmin=float(vmin),
             vmax=float(vmax),
         )
-        ax.tricontour(
-            lon,
-            lat,
-            field,
-            levels=levels,
-            transform=ccrs.PlateCarree(),
-            colors="black",
-            linewidths=0.5,
-        )
         ax.coastlines()
         ax.grid(color="white", linestyle="--", linewidth=0.5)
         gl = ax.gridlines(draw_labels=False, dms=True, x_inline=False, y_inline=False)

@@ -775,9 +775,6 @@ def _plot_legacy_member_fields(case, msl_data, wind_data, safe_members, t_idx, l
                     im = ax.pcolormesh(lon2[10:100, 10:100], lat2[10:100, 10:100], arr,
                                        transform=crs_mod.PlateCarree(), norm=norm,
                                        shading="gouraud", cmap=spec.field_cmap(), rasterized=True)
-                    ax.contour(lon2[10:100, 10:100], lat2[10:100, 10:100], arr,
-                               transform=crs_mod.PlateCarree(), levels=levels,
-                               colors="black", linewidths=0.4, alpha=0.6)
                     ax.set_title(f"{readable_label(label)}, member {member}", fontsize=10)
                     gl = add_geography(ax, label_size=7)
                     if gl is not None and col > 0:
