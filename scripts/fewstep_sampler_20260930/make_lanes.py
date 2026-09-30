@@ -107,6 +107,21 @@ def custom(sigmas, **kw):
 # one-segment exponential arms of E5, re-registered as explicit lists (stage 1b, patched runtime)
 STAGE_1B["exp16_x"] = custom(exp_list(16))
 STAGE_1B["exp12_x"] = custom(exp_list(12))
+
+
+def n100(n_high, n_low, **kw):
+    """Heun piecewise with the noise multiplier at 1.0 (churn 2.5 kept): the reference the stage-1a read
+    of 2026-09-30 points at (b0's S_noise 1.05 gives 1.27x the truth's fine variance on 10u; n100_30 1.00)."""
+    return pw(n_high, n_low, S_noise=1.0, **kw)
+
+
+# stage 1b, noise-1.0 ladder (owner's reference decision of 2026-09-30 pending; recommended option)
+STAGE_1B_N100 = {
+    "n100_pw24": n100(8, 16), "n100_pw20": n100(7, 13), "n100_pw16": n100(5, 11), "n100_pw12": n100(4, 8),
+    # replicate of the campaign's n100_30 at another base seed, for the noise band of the new reference
+    # (submit with ANEMOI_BASE_SEED=757 exported, i.e. base 757000, like pw30_s757)
+    "n100_pw30_s757": n100(10, 20),
+}
 DONOR_1A = {"pw20": pw(7, 13), "pw12": pw(4, 8), "pw8": pw(3, 5), "pw16_s10k": pw(5, 11, sigma_max=10000.0)}
 
 BASES = {
@@ -153,6 +168,8 @@ def main():
         plan += [("fs", a, b) for a, b in STAGE_1A.items()] + [("fd", a, b) for a, b in DONOR_1A.items()]
     if args.stage in ("1b", "all"):
         plan += [("fs", a, b) for a, b in STAGE_1B.items()]
+    if args.stage in ("1b", "all"):
+        plan += [("fs", a, b) for a, b in STAGE_1B_N100.items()]
     print(f"{'lane':34s} {'sampler':9s} {'steps':>5s} {'calls':>5s}  block")
     for prefix, arm, block in plan:
         base, note = BASES[prefix]
