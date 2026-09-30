@@ -32,7 +32,7 @@ from pathlib import Path
 # difference in the ratio; "relative" metrics as a percent difference to the baseline.
 HEADLINE = [
     ("texture", re.compile(r"^tex_(10u|10v|2t)_(all|sea|land|global)_fine_var_ratio$"), "ratio"),
-    ("texture", re.compile(r"^tex_(10u|10v|2t)_(all|sea|land|global)_fine_var_grain$"), "ratio"),
+    ("texture", re.compile(r"^tex_(10u|10v|2t)_all_fine_(lag1_zonal|nn_corr)_grain$"), "ratio"),
     ("wind_extremes", re.compile(r"^wx_.*_retention\d+_delta$"), "ratio"),
     ("wind_extremes", re.compile(r"^wx_.*_peak_model$"), "relative"),
     ("probabilistic", re.compile(r"^probabilistic_(2t|10ff|msl|10u|10v)_.*_fcrps_mean$"), "relative"),
@@ -44,7 +44,7 @@ HEADLINE = [
     ("tc", re.compile(r"^tc_(idalia|franklin)_(mslp_min|wind_max|mslp_p01|wind_p9999)$"), "relative"),
 ]
 FLOORS = {"fcrps": 0.01, "rmse_ens_mean": 0.01, "nmse": 0.01, "spread": 0.05,
-          "fine_var_ratio": 0.03, "fine_var_grain": 0.05, "retention": 0.02}
+          "fine_var_ratio": 0.03, "_grain": 0.05, "retention": 0.02}
 JUDGED = ("texture", "wind_extremes", "probabilistic", "surface")  # tc and shape are recorded, not judged
 
 
