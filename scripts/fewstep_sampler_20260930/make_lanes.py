@@ -84,9 +84,10 @@ STAGE_1B = {
     "dpm16_s1k": dpm(5, 11, sigma_max=1000.0),
     "dpm12_s1k": dpm(4, 8, sigma_max=1000.0),
     # hand-designed lists come after the 1a read; one placeholder exercises the code path
+    # churn off, noise 1.0: explicit lists are read as paired schedule arms against c0_30 (owner's rule)
     "cu12_a": dict(PW30, schedule_type="custom", num_steps=12, sigma_max=100000.0, sigma_min=0.03,
                    sigmas=[100000.0, 300.0, 30.0, 12.0, 6.0, 3.0, 1.5, 0.75, 0.35, 0.15, 0.07, 0.03],
-                   num_steps_high=3, num_steps_low=9),
+                   num_steps_high=3, num_steps_low=9, S_churn=0.0, S_noise=1.0),
 }
 
 
@@ -102,7 +103,8 @@ def exp_list(n, sigma_max=100000.0, sigma_min=0.03):
 def custom(sigmas, **kw):
     # num_steps_high/low and sigma_transition are inert for the custom scheduler; zeroed to say so.
     d = dict(PW30, schedule_type="custom", num_steps=len(sigmas), sigma_max=sigmas[0],
-             sigma_min=sigmas[-1], sigmas=list(sigmas), num_steps_high=0, num_steps_low=0)
+             sigma_min=sigmas[-1], sigmas=list(sigmas), num_steps_high=0, num_steps_low=0,
+             S_churn=0.0, S_noise=1.0)  # churn off: read paired against c0_30 (owner's rule)
     d.update(kw)
     return d
 
