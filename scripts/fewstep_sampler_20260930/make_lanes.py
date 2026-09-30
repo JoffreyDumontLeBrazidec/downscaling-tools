@@ -80,6 +80,9 @@ STAGE_1A = {
 STAGE_1B = {
     "dpm30": dpm(10, 20), "dpm20": dpm(7, 13), "dpm16": dpm(5, 11), "dpm12": dpm(4, 8), "dpm8": dpm(3, 5),
     "dpm16_s10k": dpm(5, 11, sigma_max=10000.0),
+    # sigma_max 1e3 after the stage 1a read (sigma_max is a grain lever; the Heun analogues run in 1b-Heun)
+    "dpm16_s1k": dpm(5, 11, sigma_max=1000.0),
+    "dpm12_s1k": dpm(4, 8, sigma_max=1000.0),
     # hand-designed lists come after the 1a read; one placeholder exercises the code path
     "cu12_a": dict(PW30, schedule_type="custom", num_steps=12, sigma_max=100000.0, sigma_min=0.03,
                    sigmas=[100000.0, 300.0, 30.0, 12.0, 6.0, 3.0, 1.5, 0.75, 0.35, 0.15, 0.07, 0.03],
