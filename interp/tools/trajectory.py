@@ -355,9 +355,14 @@ def reduce_box(field5d, indices, box_t, has_wind):
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def capture_denoiser(inner, on_call):
+def capture_denoiser(inner, on_call, pass_input=False):
     """Temporarily wrap inner.fwd_with_preconditioning so every x̂₀ estimate
-    along the REAL sampler trajectory is handed to on_call(sigma_scalar, D)."""
+    along the REAL sampler trajectory is handed to on_call(sigma_scalar, D).
+
+    With pass_input=True the denoiser INPUT (the noised state x_t the sampler hands
+    the network, normalised residual units, same layout as D) is passed as a third
+    argument: on_call(sigma_scalar, D, x_t). Off by default, so existing callers see
+    the old two-argument call."""
     orig = inner.fwd_with_preconditioning
 
     def wrapped(*args, **kwargs):
@@ -366,9 +371,13 @@ def capture_denoiser(inner, on_call):
             if args and isinstance(args[0], dict):       # unified: (x_dict, y_dict, sigma_dict, ...)
                 sig = next(iter(args[2].values()))
                 D_t = D["out_hres"] if isinstance(D, dict) else D
+                y_in = args[1]["out_hres"] if isinstance(args[1], dict) else args[1]
             else:                                        # ds: (x_interp, x_hres, y_noised, sigma, ...)
-                sig, D_t = args[3], D
-            on_call(float(sig.reshape(-1)[0].item()), D_t)
+                sig, D_t, y_in = args[3], D, args[2]
+            if pass_input:
+                on_call(float(sig.reshape(-1)[0].item()), D_t, y_in)
+            else:
+                on_call(float(sig.reshape(-1)[0].item()), D_t)
         except Exception:
             LOGGER.exception("trajectory capture reducer failed (continuing)")
         return D
@@ -411,6 +420,62 @@ def force_fp32_sampler():
     finally:
         for cls, orig in saved:
             cls.get_schedule = orig
+
+
+# ---------------------------------------------------------------------------
+# --save-trajectory-states writer (one file per seed, rank 0)
+# ---------------------------------------------------------------------------
+
+TRAJECTORY_STATES_FORMAT = "trajectory_states/v1"
+
+
+def _write_trajectory_states(path, calls, final, truth, names, out_index, lat, lon,
+                             rows, stride, n_box_full, meta):
+    """Write one seed's per-call denoiser inputs/outputs on the box.
+
+    calls: [(sigma, x_in (V, N) float32, D (V, N) float32)] in call order. Units are the
+    sampler's own state space: NORMALISED residual (not physical). Float32, not float16:
+    at sigma 1e5 the state x_t exceeds the float16 range (65504), and float16's 5e-4
+    relative rounding times sigma_j would put an error floor above the true one-step
+    errors for sigma_j above about 10.
+
+    Call bookkeeping: a Heun step i makes its FIRST evaluation at its own level on the
+    sampler state (the reference state x_i), then, unless the next level is the terminal
+    zero, a SECOND evaluation at the next level on the Euler-predicted point. The count
+    of evaluations per step does not depend on churn, so heun_eval follows the parity of
+    the call index (1 = first, 2 = second) and step_idx = call_idx // 2.
+    """
+    n = len(calls)
+    call_idx = np.arange(n, dtype=np.int32)
+    arrs = {
+        "format": np.asarray(TRAJECTORY_STATES_FORMAT),
+        "units": np.asarray("normalised residual (sampler state space)"),
+        "vars": np.asarray(list(names)),
+        "var_out_index": np.asarray(out_index, dtype=np.int32),
+        "sigma": np.asarray([c[0] for c in calls], dtype=np.float64),
+        "call_idx": call_idx,
+        "step_idx": (call_idx // 2).astype(np.int32),
+        "heun_eval": np.where(call_idx % 2 == 0, 1, 2).astype(np.int8),
+        "x_in": np.stack([c[1] for c in calls]).astype(np.float32),     # (n_calls, V, N)
+        "D": np.stack([c[2] for c in calls]).astype(np.float32),        # (n_calls, V, N)
+        "final": np.asarray(final, dtype=np.float32),                   # (V, N) sampler output
+        "truth_residual": np.asarray(truth, dtype=np.float32),          # (V, N)
+        "lat": np.asarray(lat, dtype=np.float64),
+        "lon": np.asarray(lon, dtype=np.float64) % 360.0,
+        "box_rows": np.asarray(rows, dtype=np.int64),
+        "stride": np.int32(stride),
+        "n_box_full": np.int32(n_box_full),
+    }
+    for k, v in meta.items():
+        arrs["meta_%s" % k] = np.asarray(v)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.stem + ".partial.npz")
+    np.savez(tmp, **arrs)                                   # uncompressed: noise does not compress
+    os.replace(tmp, path)
+    LOGGER.info("saved %d calls x %d vars x %d cells to %s (%.1f MB)", n, len(names),
+                arrs["x_in"].shape[-1], path, path.stat().st_size / 1e6)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -1324,6 +1389,8 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             "surface_targets": list(target_indices.keys()), "metrics_reported": metrics_reported,
             "num_steps": args.num_steps, "fp32_sampler": bool(args.fp32_sampler),
             "seeds": [int(s) for s in seeds],
+            "local_scope": cut_scope,
+            "trajectory_states": bool(save_states),
             "box": {"name": "storm", "lat": clat, "lon": clon % 360.0,
                     "radius_km": args.eye_radius_km, "n_cells": int(box_np.sum())},
             "window": list(window), "references": references,
@@ -1586,6 +1653,34 @@ def run_trajectory(args):
             raise SystemExit("--tp-scale needs tp in the output schema")
         eb.y[..., idx_tp] *= tp_scale
         LOGGER.info("tp truth scaled by %.3g before residual computation", tp_scale)
+    cut_scope = None
+    if getattr(args, "local_scope_json", None):
+        # Regional cut graph (eval/predict/graph_cut.py, as the tc_o320_o1280 lane's
+        # local_scope.cut_graph): the global checkpoint runs on the local data/hidden
+        # graph of the scope, on ONE GPU. The patched _before_sampling and
+        # apply_interpolate_to_high_res return tensors on the cut grid, so the truth and
+        # the hres coordinates are cut with the same data mask here (as
+        # manual_inference/prediction/predict.py does for its outputs). Everything below
+        # then lives on the cut grid. Off by default.
+        if sharded:
+            raise SystemExit("--local-scope-json (cut graph) is single-GPU only")
+        if not is_dict_api(inner):
+            raise SystemExit("--local-scope-json needs a unified (dict-API) checkpoint")
+        from eval.predict.graph_cut import activate_local_graph_cut
+        cut_stats = activate_local_graph_cut(bundle.model, args.local_scope_json)
+        if cut_stats.get("mode") != "cut_graph":
+            raise SystemExit("--local-scope-json did not activate a cut graph "
+                             "(the scope needs \"cut_graph\": true and a non-global mode)")
+        cut_mask = bundle.model._local_graph_cut_data_mask.detach().cpu().numpy().astype(bool)
+        lat_l, lon_l, lat_h_full, lon_h_full = eb.coords
+        if cut_mask.size != len(lat_h_full) or cut_mask.size != eb.y.shape[-2]:
+            raise SystemExit("cut-graph data mask (%d) does not match the bundle hres grid (%d)"
+                             % (cut_mask.size, len(lat_h_full)))
+        eb.y = eb.y[..., torch.from_numpy(cut_mask), :]
+        eb.coords = (lat_l, lon_l, np.asarray(lat_h_full)[cut_mask],
+                     np.asarray(lon_h_full)[cut_mask])
+        cut_scope = json.loads(args.local_scope_json)
+        LOGGER.info("local cut graph active: %s", cut_stats)
     _, _, lat_hres, lon_hres = eb.coords
     y0 = eb.y[0:1].to(device)                                 # observed, physical, FULL grid
     log_mem("after y0 -> device")
@@ -1977,11 +2072,37 @@ def run_trajectory(args):
         seeds = []
     trajectories = []
     saved_lockin = {}                                        # seed -> arrays (rank 0, opt-in)
+    save_states = bool(getattr(args, "save_trajectory_states", False))
+    if save_states:
+        ts_stride = max(1, int(getattr(args, "trajectory_states_stride", 1) or 1))
+        ts_rows_np = np.flatnonzero(box_np)[::ts_stride]
+        ts_rows = torch.from_numpy(ts_rows_np).to(device)
+        ts_names = list(target_indices.keys())
+        ts_idx = torch.tensor([target_indices[n] for n in ts_names], device=device)
+
+        def states_of(t):
+            """(1,1,1,G,V) normalised residual (sampler state space) -> (n_vars, n_sel)
+            float32 numpy on rank 0 (None elsewhere). Collective when sharded."""
+            sub = t[..., ts_idx]
+            if sharded:
+                sub = _gather_full(sub.contiguous())
+                if global_rank != 0:
+                    return None
+            return sub[0, 0, 0][ts_rows].T.detach().float().cpu().numpy()
+
+        ts_truth = states_of(y_residual_cond)                # collective when sharded
+        LOGGER.info("--save-trajectory-states: %d of %d box cells (stride %d), vars %s",
+                    len(ts_rows_np), int(box_np.sum()), ts_stride, ts_names)
     for seed in seeds:
         records = []
         lock_fields = []                                     # [(sigma, {var: box np array})]
+        ts_calls = []                                        # [(sigma, x_in, D)] rank 0
 
-        def on_call(sigma_scalar, D, _rec=records, _lf=lock_fields):
+        def on_call(sigma_scalar, D, x_in=None, _rec=records, _lf=lock_fields, _ts=ts_calls):
+            if save_states and x_in is not None:
+                xs, ds = states_of(x_in), states_of(D)       # collective when sharded
+                if xs is not None:
+                    _ts.append((float(sigma_scalar), xs, ds))
             m = metrics_of(D)                                # collective; runs on all ranks
             g_tail = None
             if getattr(args, "grid_tail", False):
@@ -2000,7 +2121,7 @@ def run_trajectory(args):
 
         torch.manual_seed(int(seed))
         sampler_ctx = force_fp32_sampler() if args.fp32_sampler else contextlib.nullcontext()
-        with capture_denoiser(inner, on_call), sampler_ctx:
+        with capture_denoiser(inner, on_call, pass_input=save_states), sampler_ctx:
             final_resid = sample_full(bundle, x_interp_cond, x_hres_cond,
                                       num_steps=args.num_steps, seed=int(seed),
                                       model_comm_group=mcg, grid_shard_shapes=gss_arg,
@@ -2041,6 +2162,23 @@ def run_trajectory(args):
                     "amp_ratio_anom": [float(np.std(f[name] - ref[name]) / max(np.std(fin_a), 1e-12))
                                          for _, f in lock_fields],
                 }
+        if save_states:
+            ts_final = states_of(final_resid)                # collective when sharded
+            if global_rank == 0 and ts_calls:
+                _write_trajectory_states(
+                    out_path / ("trajectory_states_s%d.npz" % int(seed)), ts_calls, ts_final,
+                    ts_truth, ts_names, [target_indices[n] for n in ts_names],
+                    np.asarray(lat_hres)[ts_rows_np], np.asarray(lon_hres)[ts_rows_np],
+                    ts_rows_np, ts_stride, int(box_np.sum()),
+                    meta={"seed": int(seed), "checkpoint": str(args.checkpoint),
+                          "bundle": str(eb.paths[0]) if eb.paths else "",
+                          "center_lat": float(clat), "center_lon": float(clon % 360.0),
+                          "radius_km": float(args.eye_radius_km),
+                          "local_scope": json.dumps(cut_scope) if cut_scope else "",
+                          "noise_scheduler": json.dumps(nsp_over) if nsp_over else "",
+                          "sampler_params": json.dumps(spp_over) if spp_over else "",
+                          "num_steps": int(args.num_steps)})
+            del ts_calls[:]                                  # bounded memory: one seed at a time
         if (getattr(args, "save_lockin_fields", False) and global_rank == 0
                 and fin is not None and lock_fields):
             saved_lockin[int(seed)] = {
@@ -2134,6 +2272,20 @@ def main(argv=None):
                    help="with --lockin (trajectory mode): also save the per-call box fields, the "
                         "final sample, the truth and the input to lockin_fields.npz (rank 0); "
                         "off by default, sampling is unchanged")
+    p.add_argument("--save-trajectory-states", action="store_true", default=False,
+                   help="trajectory mode: at every denoiser call also save the denoiser INPUT "
+                        "x_t and OUTPUT D on the box, in normalised residual units (the "
+                        "sampler's state space), with sigma, call index and Heun evaluation "
+                        "(first/second), plus the truth residual and the final state, for the "
+                        "surface targets; one trajectory_states_s<seed>.npz per seed (rank 0)")
+    p.add_argument("--trajectory-states-stride", type=int, default=1,
+                   help="with --save-trajectory-states: keep every n-th box cell (fixed stride, "
+                        "recorded in the file); 1 keeps the whole box")
+    p.add_argument("--local-scope-json", default=None,
+                   help="run the global checkpoint on a regional CUT GRAPH (single GPU, dict "
+                        "API), as an eval lane's local_scope with cut_graph: true, e.g. "
+                        "'{\"mode\":\"bbox\",\"cut_graph\":true,\"hidden_halo_hops\":1,"
+                        "\"lat_min\":10,\"lat_max\":40,\"lon_min\":-100,\"lon_max\":-58}'")
     p.add_argument("--mode", default="trajectory",
                    choices=["trajectory", "seeding", "residual_diag", "guidance", "tp_sweep"],
                    help="trajectory = ceiling + realized x̂₀ vs σ (default); "
