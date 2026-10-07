@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import netCDF4
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_lanes_t1d as mk  # noqa: E402
@@ -43,7 +44,7 @@ def main():
             ck = d.getncattr("checkpoint_id")
             cp = d.getncattr("checkpoint_path") if "checkpoint_path" in d.ncattrs() else ""
             mem = d.getncattr("member_ids")
-        mem = mem if isinstance(mem, str) else ",".join(str(int(m)) for m in mem)
+        mem = mem if isinstance(mem, str) else ",".join(str(int(m)) for m in np.atleast_1d(mem))
         ok = cfg == want and ck == RUN_1P2M and mem == args.members and (not cp or (RUN_1P2M in cp and DONOR not in cp))
         bad += not ok
         print(("OK  " if ok else "BAD ") + f + f" ckpt_id={ck} ckpt_path={cp or 'n/a'} members={mem}"

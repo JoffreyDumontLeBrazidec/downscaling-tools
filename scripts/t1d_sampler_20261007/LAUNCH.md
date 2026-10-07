@@ -147,6 +147,12 @@ The predictions run in the sandbox with the probe on (print-only). Evaluations, 
 CPU (qos nf) in the certified venv from the same worktree. Evaluators: `tc,texture,wind_extremes,probabilistic,
 surface,shape` (all of stage 1; stage 3 ran only `tc` and lost the peak-wind row).
 
+If a prediction job fails, its evaluation and the three final jobs stay pending with reason DependencyNeverSatisfied:
+`scancel <its eval id> <tc_intensity id> <spectra id> <read id>` (ids in `$W/notes/jobs.tsv`), report, and on the
+owner's word move the failed run root aside (`mv $RR ${RR}_failed_<jobid>`) and resubmit that one chain by hand with the
+`sbatch` lines the submit script prints (predict, then its eval `--dependency=afterok:<new predict id>`), then the three
+final jobs with `--dependency=afterok:<all five eval ids>`; append every new id to `jobs.tsv`.
+
 ## 5. Gate G2, part 2: after the first file of each run lands
 
 ```bash

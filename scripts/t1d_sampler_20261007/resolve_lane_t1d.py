@@ -65,7 +65,7 @@ def main() -> None:
     print(f"CHECKPOINT inference={ckp} base(--name-ckpt)={base} run={ckp.parent.name}")
     print(f"SCOPE {json.dumps(scope)}")
     print(f"SAMPLER {json.dumps(sampler)}")
-    print(f"APPLIED levels={len(sig)} calls={calls} sigmas=[{', '.join(f'{s:.6g}' for s in sig)}, 0]")
+    print(f"APPLIED levels={len(sig)} calls={calls} S_churn={sampler.get('S_churn')} S_noise={sampler.get('S_noise')} sigmas=[{', '.join(f'{s:.6g}' for s in sig)}, 0]")
     print(f"MEMBERS {pred['members']} DATES {pred['dates']} STEPS(lane) {pred['steps']} GPUS {pred.get('num_gpus_per_model')}")
     qos = (cfg.get("resource_profiles", {}).get("predict") or {}).get("qos")
     print(f"QOS(predict) {qos}")
