@@ -1,0 +1,23 @@
+# campaign T1d stage A (2026-10-07), arm p12m_pw30_c0: quality reference, 30 steps churn off; runs at base seeds 756 and 757000.
+# Written by scripts/t1d_sampler_20261007/make_lanes_t1d.py; 59 denoiser calls per member.
+# Only sampler keys change; sampler_overrides merges key by key onto the base lane's block.
+# The checkpoint (1.2M parent, 551dfd1e step 400k) comes from the base lane's predict.checkpoint.
+base: tc_o320_o1280_p12m_ctrl
+
+predict:
+  sampler_overrides:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.0

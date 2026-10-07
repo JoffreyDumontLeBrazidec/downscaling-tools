@@ -1,0 +1,24 @@
+# campaign T1d stage A (2026-10-07), arm p12m_st4: sparse top: 1e5, 3e4, 1e4, 3e3 above the cost reference's 1e3 start.
+# Written by scripts/t1d_sampler_20261007/make_lanes_t1d.py; 39 denoiser calls per member.
+# Only sampler keys change; sampler_overrides merges key by key onto the base lane's block.
+# The checkpoint (1.2M parent, 551dfd1e step 400k) comes from the base lane's predict.checkpoint.
+base: tc_o320_o1280_p12m_ctrl
+
+predict:
+  sampler_overrides:
+    schedule_type: "custom"
+    num_steps: 20
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.030000000000000016
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 0
+    num_steps_low: 0
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.0
+    sigmas: [100000.0, 30000.0, 10000.0, 3000.0, 1000.0, 398.10717055349727, 158.4893192461114, 63.095734448019364, 25.1188643150958, 10.000000000000002, 6.661140664942193, 4.32734076619129, 2.7326758924155907, 1.6707775628560801, 0.984211575637684, 0.5552026606870647, 0.29761406154448494, 0.1500906703570927, 0.07027434034106143, 0.030000000000000016]
