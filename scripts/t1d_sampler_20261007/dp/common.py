@@ -34,13 +34,15 @@ EDGE_MARGIN_DEG = 1.0                        # the 500 km disc must stay this fa
 BOX_RADIUS_KM = 500.0
 # msl-minimum search windows per (date, lead), chosen to contain Idalia and exclude Franklin (which sits at
 # about 289-295E on 27-31 Aug). Idalia (NHC track, valid times): 27 Aug 00Z TD near 20.5N 86W (274E, NW
-# Caribbean); 29 Aug 00Z near 23N 85W (275E); 31 Aug 00Z near 32.5N 80W (280E, SE US coast); 2 Sep 00Z
-# post-tropical near 32N 65W (295E, near Bermuda). Each window keeps the disc at least 1 deg inside the cut.
+# Caribbean); 29 Aug 00Z near 23N 85W (275E); 31 Aug 00Z near 32.5N 80W (280E, SE US coast); 1 Sep 00Z
+# near 31N 70W (290E; Franklin by then north of 40N, outside the cut). Each window keeps the disc at least 1 deg
+# inside the cut. The 0828 draws use lead 096, not 120: at +120 h (2 Sep) Idalia sits near 32N 295E, within
+# 0.5 deg of the upper bound the cut edge forces, and the 290-295.6E part of that window could hold Franklin.
 IDALIA_WINDOWS = {
     ("20230826", "024"): (17.0, 26.0, 270.0, 280.0),
     ("20230826", "120"): (27.0, 34.0, 272.0, 285.0),
     ("20230828", "024"): (19.0, 28.0, 270.0, 280.0),
-    ("20230828", "120"): (27.0, 34.0, 284.0, 295.6),
+    ("20230828", "096"): (27.0, 34.0, 284.0, 293.0),
 }
 
 

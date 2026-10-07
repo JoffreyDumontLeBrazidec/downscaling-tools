@@ -26,14 +26,15 @@ sub() {  # name script args...
 }
 J=$(t1d_jn)
 BUNDLES=("20230826 024 1000 1001 1002 1003" "20230826 120 1010 1011 1012 1013"
-         "20230828 024 1020 1021 1022 1023" "20230828 120 1030 1031 1032 1033")
+         "20230828 024 1020 1021 1022 1023" "20230828 096 1030 1031 1032 1033")
 case "$WHAT" in
   smoke) sub t1d_${J}smoke12 traj_states.sbatch 20230826 024 12 "$T1D_OUT/smoke12_d20230826_l024" 1000 ;;
   full)
     for b in "${BUNDLES[@]}"; do set -- $b; d=$1; s=$2; shift 2
       sub t1d_${J}d${d:4}_l$s traj_states.sbatch "$d" "$s" 240 "$T1D_OUT/d${d}_l$s" "$@"; done ;;
   verify)
-    SCHEDS="${2:?schedule file from verify_schedules make}"
+    SCHEDS="$(realpath "${2:?schedule file from verify_schedules make}")"   # the job cd's into $T1D_CODE
+    [[ -f "$SCHEDS" ]] || { echo "no schedule file $SCHEDS"; exit 2; }
     for b in "${BUNDLES[@]}"; do set -- $b; d=$1; s=$2; shift 2
       sub t1d_${J}verify_d${d:4}_l$s verify.sbatch "$d" "$s" "$T1D_OUT/verify" "$SCHEDS" "$@"; done ;;
   *) echo "smoke|full|verify"; exit 2 ;;

@@ -65,7 +65,9 @@ K = sampler steps = positive levels from 1e5 to 0.03 inclusive (K - 1 intervals)
 the custom scheduler appends: 2K - 1 Heun calls. K = 8, 10, 12, 16 (plan), 20, 29, 30 (comparison; c0_30
 has K = 30, 29 intervals, 59 calls; c0_pw16_s1k has K = 16, 31 calls). The last step 0.03 -> 0 is the same
 for all and not costed. DP: exact minimum of the summed cost over paths through K dense levels, O(K N^2).
-Fits on 20230826, on 20230828 (each evaluated on the other date, hold-out) and on all.
+Fits on 20230826, on 20230828 (each evaluated on the other date, hold-out) and on all. Draws: 0826 at +24 h and
++120 h, 0828 at +24 h and +96 h (on 2 Sep, +120 h, Idalia is too close to the cut edge and to Franklin's window),
+four seeds each; the date split is the hold-out.
 
 References costed on the same matrices, mapped to the nearest dense level (max ln error 0.031): c0_30
 (piecewise 10 + 20, 1e5, transition 10, exponential above, Karras rho 7 below) and c0_pw16_s1k

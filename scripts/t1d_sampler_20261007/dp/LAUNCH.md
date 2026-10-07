@@ -26,8 +26,10 @@ Cluster: `T1D_HOST=ac` (default, A100) or `T1D_HOST=ag` (GH200; owner's decision
 over it). On AG the per-call time is not measured; expect it no slower than A100. Smoke about 0.1 GPU-h; verification
 (step 6) about 1.6 GPU-h. Total about 5 GPU-h.
 
-Draws: dates 20230826 and 20230828, leads 024 and 120 h, member 01, four seeds each (16 draws): seeds 1000-1003
-(0826/024), 1010-1013 (0826/120), 1020-1023 (0828/024), 1030-1033 (0828/120). Schedule: 240 log-uniform levels
+Draws: date 20230826 at leads 024 and 120 h, date 20230828 at leads 024 and 096 h, member 01, four seeds each (16
+draws): seeds 1000-1003 (0826/024), 1010-1013 (0826/120), 1020-1023 (0828/024), 1030-1033 (0828/096). The 0828 draws
+use +96 h, not +120 h: on 2 Sep Idalia sits near 32N 295E, within 0.5 deg of the window bound the cut edge forces, and
+that window's 290-295.6E part could hold Franklin. The date hold-out is unchanged (fit on 0826, test on 0828 and back). Schedule: 240 log-uniform levels
 1e5 -> 0.03 as `schedule_type: custom` (`schedules/dense240.json`, `--num-steps 240`, 479 Heun calls per draw), churn
 off (`{"sampler":"heun","S_churn":0.0,"S_noise":1.0}`), fp32; `--lockin` on.
 
@@ -39,10 +41,10 @@ excludes Franklin (about 289-295E on 27-31 Aug) and keeps the disc at least 1 de
 | 0826 + 24 h (27 Aug 00Z) | 17-26N, 270-280E | TD near 20.5N 86W (274E), NW Caribbean |
 | 0826 + 120 h (31 Aug 00Z) | 27-34N, 272-285E | near 32.5N 80W (280E), SE US coast |
 | 0828 + 24 h (29 Aug 00Z) | 19-28N, 270-280E | near 23N 85W (275E) |
-| 0828 + 120 h (2 Sep 00Z) | 27-34N, 284-295.6E | post-tropical near 32N 65W (295E), Bermuda |
+| 0828 + 96 h (1 Sep 00Z) | 27-34N, 284-293E | near 31N 70W (290E); Franklin north of 40N, outside the cut |
 
-Two of the four centres fall outside a single "25-33N, 273-290E" range (27 Aug: about 20.5N; 2 Sep: about 295E); the
-per-bundle windows follow the track. `locate_storms` (step 2) checks all four on the truth before any GPU use.
+The 27 Aug centre (about 20.5N) falls outside a single "25-33N, 273-290E" range; the per-bundle windows follow the
+track. `locate_storms` (step 2) checks all four on the truth before any GPU use.
 
 Output: `/home/ecm5702/hpcperm/t1d_traj_20261007/` (about 3.2 GB in about 60 files, plus about 0.1 GB of
 verification). Per draw `trajectory_states_s<seed>.npz` about 195 MB.
@@ -105,7 +107,7 @@ If the cut graph fails (an error at `activate_local_graph_cut` or a size mismatc
 bash $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh full      # 4 jobs x 1 GPU, about 40 min each on A100
 cat $T1D_OUT/jobs.txt
 # when they end:
-grep -h T1D_TRAJ $T1D_OUT/logs/t1d_*d08*.out
+grep -h T1D_TRAJ $T1D_OUT/logs/t1d_*d08*_l*.out
 cd $T1D_CODE && for d in $T1D_OUT/d2023*_l*; do echo $d; python -m scripts.t1d_sampler_20261007.dp.check_states $d \
   --schedule scripts/t1d_sampler_20261007/dp/schedules/dense240.json | grep -E "FAIL|box centre"; done
 du -sh $T1D_OUT
