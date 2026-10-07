@@ -470,8 +470,9 @@ def _write_trajectory_states(path, calls, final, truth, names, out_index, lat, l
         arrs["meta_%s" % k] = np.asarray(v)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.stem + ".partial.npz")
-    np.savez(tmp, **arrs)                                   # uncompressed: noise does not compress
+    tmp = path.with_name(path.name + ".partial")             # not *.npz: never matched by readers' globs
+    with open(tmp, "wb") as fh:
+        np.savez(fh, **arrs)                                # uncompressed: noise does not compress
     os.replace(tmp, path)
     LOGGER.info("saved %d calls x %d vars x %d cells to %s (%.1f MB)", n, len(names),
                 arrs["x_in"].shape[-1], path, path.stat().st_size / 1e6)
@@ -1389,8 +1390,6 @@ def _run_guidance(args, bundle, inner, global_rank, world_size, mcg, gss_arg,
             "surface_targets": list(target_indices.keys()), "metrics_reported": metrics_reported,
             "num_steps": args.num_steps, "fp32_sampler": bool(args.fp32_sampler),
             "seeds": [int(s) for s in seeds],
-            "local_scope": cut_scope,
-            "trajectory_states": bool(save_states),
             "box": {"name": "storm", "lat": clat, "lon": clon % 360.0,
                     "radius_km": args.eye_radius_km, "n_cells": int(box_np.sum())},
             "window": list(window), "references": references,
@@ -1667,7 +1666,16 @@ def run_trajectory(args):
         if not is_dict_api(inner):
             raise SystemExit("--local-scope-json needs a unified (dict-API) checkpoint")
         from eval.predict.graph_cut import activate_local_graph_cut
-        cut_stats = activate_local_graph_cut(bundle.model, args.local_scope_json)
+        from eval.predict.local_scope import load_local_scope
+        prev_scope = getattr(bundle.model, "_local_graph_cut_scope_json", None)
+        if prev_scope is not None:
+            # A model reused in-process (dp/verify_schedules.py caches the loaded model across
+            # schedules) is already cut: never cut twice, and only for the same scope.
+            if load_local_scope(prev_scope) != load_local_scope(args.local_scope_json):
+                raise SystemExit("model already cut for a different local scope: %s" % prev_scope)
+            cut_stats = dict(getattr(bundle.model, "_local_graph_cut_stats", {}), reused=True)
+        else:
+            cut_stats = activate_local_graph_cut(bundle.model, args.local_scope_json)
         if cut_stats.get("mode") != "cut_graph":
             raise SystemExit("--local-scope-json did not activate a cut graph "
                              "(the scope needs \"cut_graph\": true and a non-global mode)")
@@ -2233,6 +2241,8 @@ def run_trajectory(args):
             "noise_scheduler_override": nsp_over,
             "sampler_params_override": spp_over,
             "seeds": [int(s) for s in seeds],
+            "local_scope": cut_scope,
+            "trajectory_states": bool(save_states),
             "box": {"name": "storm", "lat": clat, "lon": clon % 360.0,
                     "radius_km": args.eye_radius_km, "n_cells": int(box_np.sum())},
             "probe_field": "msl",

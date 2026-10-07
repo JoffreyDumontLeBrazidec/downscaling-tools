@@ -27,6 +27,7 @@ import common  # noqa: E402
 import cost_matrix  # noqa: E402
 import dp_schedule  # noqa: E402
 import lockin_read  # noqa: E402
+import verify_schedules  # noqa: E402
 
 
 def test_dp_bruteforce():
@@ -71,7 +72,7 @@ def write_fake(path, write, sig, lat, lon, date, seed, rng, names=("10u", "10v",
     for i, s in enumerate(sig):
         t = i / (len(sig) - 1)
         D = base * t + 0.1 * rng.normal(size=(V, n))
-        x = D + s * eps
+        x = s * eps if i == 0 else D + s * eps           # call 0: pure noise, as the sampler's y_init
         calls.append((float(s), x.astype(np.float32), D.astype(np.float32)))
         if i < len(sig) - 1:
             s2 = sig[i + 1]
@@ -158,12 +159,12 @@ def test_end_to_end(tmp=None):
     tmp = Path(tmp or tempfile.mkdtemp())
     sig = common.dense_levels(12)
     lat, lon = fake_box()
-    rng = np.random.default_rng(2)
     files = []
-    for date, seeds in (("20230826", (1000, 1001)), ("20230828", (1020, 1021))):
+    draws = (("20230826", (1000, 1001)), ("20230828", (1020, 1021)))
+    for date, seeds in draws:
         for sd in seeds:
             p = tmp / f"d{date}_l024" / f"trajectory_states_s{sd}.npz"
-            write_fake(p, fx["_write_trajectory_states"], sig, lat, lon, date, sd, rng)
+            write_fake(p, fx["_write_trajectory_states"], sig, lat, lon, date, sd, np.random.default_rng(sd))
             files.append(str(p))
     cost_matrix.main(["--inputs", str(tmp / "d*" / "trajectory_states_s*.npz"), "--out-dir", str(tmp / "cost")])
     for s in ("all", "20230826", "20230828"):
@@ -178,10 +179,56 @@ def test_end_to_end(tmp=None):
     assert d["noise_scheduler"]["schedule_type"] == "custom" and len(d["noise_scheduler"]["sigmas"]) == 6
     assert d["noise_scheduler"]["sigmas"][0] == 1e5 and d["noise_scheduler"]["sigmas"][-1] == 0.03
     assert (tmp / "dp" / "dp_summary.md").exists() and (tmp / "dp" / "c0_30_running_cost.json").exists()
+    # verification: make the candidate file, fake the GPU runs (same seed -> same unit noise), analyze
+    verify_schedules.main(["make", "--dp-json", str(tmp / "dp" / "dp_schedules.json"),
+                           "--out", str(tmp / "verify" / "schedules_verify.json"), "--budgets", "4", "6"])
+    cands = json.load(open(tmp / "verify" / "schedules_verify.json"))["candidates"]
+    assert {"c0_30", "c0_pw16_s1k", "logu_16"} <= set(cands)
+    for label, c in cands.items():
+        vs = np.asarray(c["noise_scheduler"]["sigmas"])
+        for date, seeds in draws:
+            for sd in seeds:
+                write_fake(tmp / "verify" / label / f"d{date}_l024" / f"trajectory_states_s{sd}.npz",
+                           fx["_write_trajectory_states"], vs, lat, lon, date, sd, np.random.default_rng(sd))
+    verify_schedules.main(["analyze", "--verify-root", str(tmp / "verify"), "--dense-root", str(tmp),
+                           "--dp-json", str(tmp / "dp" / "dp_schedules.json"), "--out", str(tmp / "verify" / "table")])
+    vt = json.load(open(tmp / "verify" / "table.json"))
+    assert all(r["n_draws"] == 4 and r["noise_identical"] and r["calls_as_expected"] for r in vt["rows"]), vt["rows"]
+    assert all(r["C_band_run"] > 0 for r in vt["rows"])
     lockin_read.main(["--from-states", "--inputs", *files, "--out", str(tmp / "lockin.json")])
     lk = json.load(open(tmp / "lockin.json"))
     assert lk["n_draws"] == 4 and set(lk["vars"]) == {"10u", "10v", "2t", "msl", "tp"}
     return tmp
+
+
+def test_verify_run_argv(tmp=None):
+    """verify_schedules run builds a trajectory argv that the tool's own parser accepts (skipped when the
+    tool's imports are not installed)."""
+    try:
+        sys.path.insert(0, str(HERE.parents[3]))
+        import interp.tools.trajectory as T
+    except Exception as e:                                  # pragma: no cover
+        return f"skipped ({type(e).__name__}: {e})"
+    tmp = Path(tmp or tempfile.mkdtemp())
+    seen = []
+    orig = T.run_trajectory
+    T.run_trajectory = lambda args: seen.append(args)
+    try:
+        sched = {"candidates": {"c0_30": {"noise_scheduler": common.custom_scheduler_json(common.reference_levels("c0_30")),
+                                          "dp_name": "c0_30", "also": [], "calls": 59}}}
+        (tmp / "s.json").write_text(json.dumps(sched))
+        scope = '{"mode":"bbox","cut_graph":true,"hidden_halo_hops":1,"lat_min":10,"lat_max":40,"lon_min":-100,"lon_max":-58}'
+        verify_schedules.main(["run", "--schedules", str(tmp / "s.json"), "--checkpoint", "x.ckpt", "--bundle-dir", "b",
+                               "--date", "20230826", "--step", "024", "--seeds", "1000", "1001", "--window", "17,26,270,280",
+                               "--scope", scope, "--sampler-params", '{"sampler":"heun","S_churn":0.0,"S_noise":1.0}',
+                               "--out-root", str(tmp / "v")])
+    finally:
+        T.run_trajectory = orig
+    a = seen[0]
+    assert a.save_trajectory_states and a.num_steps == 30 and a.seeds == [1000, 1001] and a.local_scope_json == scope
+    assert json.loads(a.noise_scheduler_json)["schedule_type"] == "custom" and a.ceiling_sigmas == [10.0]
+    assert a.output_dir.endswith("v/c0_30/d20230826_l024") and a.auto_window == "17,26,270,280"
+    return "ok"
 
 
 if __name__ == "__main__":
@@ -194,6 +241,7 @@ if __name__ == "__main__":
     print("capture_denoiser OK (2-arg default, 3-arg with pass_input, method restored)")
     test_schedules_match_fork()
     print("piecewise schedules match the fork; custom JSON accepted by the fork's CustomScheduler")
+    print("verify run argv:", test_verify_run_argv())
     out = test_end_to_end()
     print("end to end OK:", out)
     print((out / "dp" / "dp_summary.md").read_text()[:1500])

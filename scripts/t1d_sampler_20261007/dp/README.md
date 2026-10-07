@@ -27,7 +27,12 @@ sigma_j above about 10. Size: 479 calls x 2 x 5 vars x about 10,160 cells x 4 B 
 
 `--local-scope-json` (new flag, default off) runs the global checkpoint on a regional cut graph on one GPU
 (`eval/predict/graph_cut.py`, the `tc_o320_o1280` lane's `local_scope`), cutting the truth and the hres
-coordinates with the same data mask.
+coordinates with the same data mask; a model already cut for the same scope (reused in-process by
+`verify_schedules run`) is not cut twice. Files are written to `<name>.npz.partial` and renamed, so a crash never
+leaves a file that matches the readers' `trajectory_states_s*.npz` globs.
+
+Runtime: the GPU jobs source `jobs/_runtime.sh`, i.e. stage A's `t1d_env.sh` and its sandbox runtime (T1D_HOST=ac:
+the sandbox uv venv; T1D_HOST=ag: certified arm venv + overlay + import guard). Stage A's gate G1 is the runtime gate.
 
 ## Costs (weights FIXED before any read)
 
@@ -68,6 +73,19 @@ References costed on the same matrices, mapped to the nearest dense level (max l
 at its first level against `sigma_s * x_0 / sigma_0`, the noise pw16 would start from with the same seed);
 log-uniform K-step baselines. c0_30's running sum and the share of its cost below sigma 10.
 
+## Box
+
+The 500 km disc is centred on Idalia: the truth-msl minimum inside a per-bundle window (`common.IDALIA_WINDOWS`,
+following the NHC track and excluding Franklin), with the disc at least 1 deg inside the cut graph.
+`locate_storms.py` checks this on the truth before any GPU use; `check_states.py` checks it again on the run.
+
+## Verification (batch 2)
+
+`verify_schedules.py`: `make` writes the candidates (DP fits on all draws, K = 8-16, both costs; c0_30, c0_pw16_s1k
+on their nominal levels; log-uniform 16), `run` (GPU, `jobs/verify.sbatch`) runs them on the same bundles and seeds
+with the model loaded once, `analyze` compares each final state with the dense run's (same seed, same unit noise,
+checked) per variable and band and tabulates run error, predicted summed cost and their ratio.
+
 ## Outputs
 
 - `cost/per_draw/cost_<bundle>_s<seed>.npz`: raw energies `E_<method>_<var>_<band>`, `V_<var>_<band>`,
@@ -89,6 +107,8 @@ python -m scripts.t1d_sampler_20261007.dp.check_states <traj out dir> --schedule
 python -m scripts.t1d_sampler_20261007.dp.cost_matrix --inputs '<root>/d2023*_l*/trajectory_states_s*.npz' --out-dir <root>/cost
 python -m scripts.t1d_sampler_20261007.dp.dp_schedule --cost-dir <root>/cost --out-dir <root>/dp
 python -m scripts.t1d_sampler_20261007.dp.lockin_read --inputs '<root>/d2023*_l*/trajectory.json' --out <root>/lockin/lockin_sigma50.json
+python -m scripts.t1d_sampler_20261007.dp.locate_storms --bundle-dir <bundle root>
+python -m scripts.t1d_sampler_20261007.dp.verify_schedules make|run|analyze ...      # see its docstring
 python scripts/t1d_sampler_20261007/dp/tests/test_dp.py        # CPU, about 10 s
 python scripts/t1d_sampler_20261007/dp/tests/toy_linear.py      # CPU, about 3.5 min; needs torch and the fork's samplers
 ```

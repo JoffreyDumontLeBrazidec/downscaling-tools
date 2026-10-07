@@ -26,6 +26,48 @@ W_FINE, W_COARSE = 0.5, 0.5                       # C_band weights, FIXED before
 
 
 # ---------------------------------------------------------------------------
+# the storm box: Idalia, inside the Franklin-Idalia cut graph
+# ---------------------------------------------------------------------------
+
+CUT_BOX = (10.0, 40.0, 260.0, 302.0)        # lat0, lat1, lon0, lon1 (0..360) of the cut graph (10-40N, 100-58W)
+EDGE_MARGIN_DEG = 1.0                        # the 500 km disc must stay this far inside the cut edges
+BOX_RADIUS_KM = 500.0
+# msl-minimum search windows per (date, lead), chosen to contain Idalia and exclude Franklin (which sits at
+# about 289-295E on 27-31 Aug). Idalia (NHC track, valid times): 27 Aug 00Z TD near 20.5N 86W (274E, NW
+# Caribbean); 29 Aug 00Z near 23N 85W (275E); 31 Aug 00Z near 32.5N 80W (280E, SE US coast); 2 Sep 00Z
+# post-tropical near 32N 65W (295E, near Bermuda). Each window keeps the disc at least 1 deg inside the cut.
+IDALIA_WINDOWS = {
+    ("20230826", "024"): (17.0, 26.0, 270.0, 280.0),
+    ("20230826", "120"): (27.0, 34.0, 272.0, 285.0),
+    ("20230828", "024"): (19.0, 28.0, 270.0, 280.0),
+    ("20230828", "120"): (27.0, 34.0, 284.0, 295.6),
+}
+
+
+def disc_extent(clat, clon, radius_km=BOX_RADIUS_KM):
+    dlat = radius_km / KM_PER_DEG
+    dlon = radius_km / (KM_PER_DEG * math.cos(math.radians(clat)))
+    return clat - dlat, clat + dlat, clon - dlon, clon + dlon
+
+
+def box_checks(clat, clon, radius_km, window=None, cut=CUT_BOX, margin=EDGE_MARGIN_DEG):
+    """[(ok, message)]: the disc stays `margin` deg inside the cut graph, and the centre lies strictly
+    inside the Idalia window (a centre on the window edge means the minimum there was cut off: another
+    low, or the storm outside the window)."""
+    clon = clon % 360.0
+    la0, la1, lo0, lo1 = disc_extent(clat, clon, radius_km)
+    out = [(la0 >= cut[0] + margin and la1 <= cut[1] - margin and lo0 >= cut[2] + margin and lo1 <= cut[3] - margin,
+            f"disc {la0:.2f}..{la1:.2f}N {lo0:.2f}..{lo1:.2f}E at least {margin} deg inside the cut "
+            f"{cut[0]:.0f}-{cut[1]:.0f}N {cut[2]:.0f}-{cut[3]:.0f}E")]
+    if window is not None:
+        w0, w1, w2, w3 = window
+        e = 0.15
+        out.append((w0 + e < clat < w1 - e and w2 + e < clon < w3 - e,
+                    f"centre {clat:.2f}N {clon:.2f}E strictly inside the Idalia window {window} (not on its edge)"))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # schedules
 # ---------------------------------------------------------------------------
 
@@ -136,13 +178,18 @@ def draw_label(path: Path) -> str:
 
 
 def draw_date(tr: Trajectory, path: Path) -> str:
-    """YYYYMMDD of the draw, from the bundle path in the metadata or else the path."""
+    """YYYYMMDD of the draw from the bundle file name in the metadata (`..._date20230826_...`),
+    else from the output directory name (`d20230826_l024`). Raises when neither carries it:
+    a bare 8-digit run is never trusted (the bundle root itself contains `_20260818`)."""
     import re
-    for txt in (str(tr.meta.get("bundle", "")), str(path)):
-        m = re.search(r"date(20\d{6})", txt) or re.search(r"(20\d{6})", txt)
+    m = re.search(r"date(\d{8})", Path(str(tr.meta.get("bundle", ""))).name)
+    if m:
+        return m.group(1)
+    for part in Path(path).parts[::-1]:
+        m = re.fullmatch(r"d(\d{8})_l\d{3}", part)
         if m:
             return m.group(1)
-    return "unknown"
+    raise ValueError(f"{path}: no draw date in the bundle name {tr.meta.get('bundle')!r} or a d<YYYYMMDD>_l<LLL> dir")
 
 
 # ---------------------------------------------------------------------------

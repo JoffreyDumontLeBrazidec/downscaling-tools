@@ -1,131 +1,155 @@
 # LAUNCH: T1d dense-trajectory diagnostic on the 1.2M parent (Atos)
 
-For the executing session on the owner's Mac (Remote Control, `/Users/ecm5702/doc/docs`), commands run on
-Atos AC. **Every GPU submission below (step 3 smoke, step 4 full) waits for Joffrey's typed go in that
-session.** Nothing here has run yet; the CPU parts were tested in the cloud thread (section 7).
+For the executing session on the owner's Mac (Remote Control, `/Users/ecm5702/doc/docs`). Commands run on Atos
+(hpc-login for CPU and AC, ag-login for AG). **Every GPU submission below (step 3 smoke, step 4 full, step 6
+verification) waits for Joffrey's typed go in that session.** Nothing here has run yet; the CPU parts were tested in
+the cloud thread (section 8).
 
-Code: downscaling-tools branch `claude/project-thread-tpts4t` (this directory), anemoi-core
-`claude/project-thread-ncf9gh` = `27391c159` (custom schedules; EDMHeunSampler unchanged) on hres-lead
-`00472fb6f`. Checkpoint: the 1.2M parent, NOT the donor 12dcefea:
+Code: downscaling-tools branch `claude/project-thread-tpts4t` (this directory). Runtime: the SAME as stage A
+(`../t1d_env.sh`: sandbox `exp new t1d-stagea` with anemoi-core `27391c1` = custom schedules on hres-lead `00472fb6f`;
+on AG the certified arm venv + overlay + import guard). **Stage A's gate G1 is this diagnostic's runtime gate: do not
+submit step 3 before G1 has passed on the cluster you use.** Checkpoint: the 1.2M parent, NOT the donor 12dcefea:
 `/home/ecm5702/perm/checkpoints/o320_o1280/551dfd1eb2a649d49f099acd30b59483/inference-anemoi-by_step-epoch_171-step_400000.ckpt`.
 
 ## Route and cost
 
-The trajectory tool now runs the global checkpoint on the regional Franklin-Idalia cut graph
-(10-40N, 100-58W, hidden halo 1, exactly the `tc_o320_o1280` lane's `local_scope`) on ONE A100
-(`--local-scope-json`, single-GPU, dict-API; the truth and the hres coordinates are cut with the model's
-data mask). Chosen over the global graph sharded on 4 A100 (the tool's path of jobs 39291117/39291122):
+The trajectory tool runs the global checkpoint on the regional Franklin-Idalia cut graph (10-40N, 100-58W, hidden
+halo 1, the `tc_o320_o1280` lane's `local_scope`) on ONE GPU (`--local-scope-json`). Chosen over the global graph
+sharded on 4 A100 (the path of jobs 39291117/39291122):
 
 | route | s per call | GPU-s per call | 16 draws x 479 calls | with loads (4 jobs) |
 |---|---:|---:|---:|---:|
-| box, cut graph, 1 A100 (chosen) | about 1.1 | 1.1 | 2.3 GPU-h | **about 3 GPU-h** (time limit 2 h x 4 jobs = 8 GPU-h max) |
-| global, sharded, 4 A100 (fallback) | about 3 | 12 | 25.5 GPU-h | about 28 GPU-h (too close to the 30 GPU-h cap; use 3 seeds per bundle if needed) |
+| box, cut graph, 1 GPU (chosen) | about 1.1 (A100) | 1.1 | 2.3 GPU-h | **about 3 GPU-h** (limits: 2 h x 4 jobs = 8 GPU-h max) |
+| global, sharded, 4 A100 (fallback, AC only) | about 3 | 12 | 25.5 GPU-h | about 28 GPU-h (too close to the 30 GPU-h cap) |
 
-Smoke: 23 calls plus the model load, about 0.1 GPU-h. Total expected about 3.2 GPU-h.
+Cluster: `T1D_HOST=ac` (default, A100) or `T1D_HOST=ag` (GH200; owner's decision for stage A: AG is under the cap, AC
+over it). On AG the per-call time is not measured; expect it no slower than A100. Smoke about 0.1 GPU-h; verification
+(step 6) about 1.6 GPU-h. Total about 5 GPU-h.
 
-Draws: dates 20230826 and 20230828, leads 024 and 120 h, member 01, four seeds each (16 draws):
-seeds 1000-1003 (0826/024), 1010-1013 (0826/120), 1020-1023 (0828/024), 1030-1033 (0828/120). Schedule:
-240 log-uniform levels 1e5 -> 0.03 as `schedule_type: custom` (`schedules/dense240.json`, `--num-steps 240`,
-479 Heun calls per draw), churn off (`{"sampler":"heun","S_churn":0.0,"S_noise":1.0}`), fp32. Box: 500 km disc
-around the deepest msl minimum inside the window 15-35N, 266-296E (5-6 deg inside the cut region, so the
-disc never touches the cut edge); `--lockin` on (per-variable lock-in curves from the same run).
+Draws: dates 20230826 and 20230828, leads 024 and 120 h, member 01, four seeds each (16 draws): seeds 1000-1003
+(0826/024), 1010-1013 (0826/120), 1020-1023 (0828/024), 1030-1033 (0828/120). Schedule: 240 log-uniform levels
+1e5 -> 0.03 as `schedule_type: custom` (`schedules/dense240.json`, `--num-steps 240`, 479 Heun calls per draw), churn
+off (`{"sampler":"heun","S_churn":0.0,"S_noise":1.0}`), fp32; `--lockin` on.
 
-Output: `/home/ecm5702/hpcperm/t1d_traj_20261007/` (about 3.2 GB in about 60 files: HPCPERM is inode-bound,
-this is bytes-light in files). Per draw `trajectory_states_s<seed>.npz` about 195 MB.
+Box: a 500 km disc around IDALIA: the truth-msl minimum inside a per-bundle window (`common.IDALIA_WINDOWS`) that
+excludes Franklin (about 289-295E on 27-31 Aug) and keeps the disc at least 1 deg inside the cut graph:
 
-## 1. Sandbox (experiment-isolation v2, RUNTIME-LAYOUT.md), on hpc-login (x86)
+| bundle (valid time) | window lat, lon (E) | Idalia then (NHC) |
+|---|---|---|
+| 0826 + 24 h (27 Aug 00Z) | 17-26N, 270-280E | TD near 20.5N 86W (274E), NW Caribbean |
+| 0826 + 120 h (31 Aug 00Z) | 27-34N, 272-285E | near 32.5N 80W (280E), SE US coast |
+| 0828 + 24 h (29 Aug 00Z) | 19-28N, 270-280E | near 23N 85W (275E) |
+| 0828 + 120 h (2 Sep 00Z) | 27-34N, 284-295.6E | post-tropical near 32N 65W (295E), Bermuda |
 
-Same recipe as stage A (`../LAUNCH.md` section 0): a fresh `exp new` folder whose uv venv is synced from the
-pristine lock, with only anemoi-core moved to the patched fork commit; a separate slug so the diagnostic has its
-own folder. If `quota` shows fewer than about 10k free inodes on HPCPERM, reuse the stage-A folder instead
-(`20261007-t1d-stagea`, same code: anemoi-core 27391c1) and record that in the note.
+Two of the four centres fall outside a single "25-33N, 273-290E" range (27 Aug: about 20.5N; 2 Sep: about 295E); the
+per-bundle windows follow the track. `locate_storms` (step 2) checks all four on the truth before any GPU use.
+
+Output: `/home/ecm5702/hpcperm/t1d_traj_20261007/` (about 3.2 GB in about 60 files, plus about 0.1 GB of
+verification). Per draw `trajectory_states_s<seed>.npz` about 195 MB.
+
+## 1. Code and runtime
+
+Stage A's section 0 builds the sandbox (`exp new t1d-stagea`, anemoi-core reset to 27391c1) and its worktree
+`$T1D_W/code/downscaling-tools`. The diagnostic uses that sandbox unchanged and its own detached worktree of the
+same branch at the commit that has `dp/` (so stage A's recorded `dstools=` does not move):
 
 ```bash
-quota                                                  # HPCPERM is inode-bound: a uv venv costs about 6k inodes
-exp new t1d-traj                                       # -> ~/hpcperm/sandbox/<YYYYMMDD>-t1d-traj (uv sync --frozen, about 1 min)
-SB=$HOME/hpcperm/sandbox/$(date -u +%Y%m%d)-t1d-traj; echo "SB=$SB"   # record it in the note
-C=$SB/code/anemoi-core
-git -C $C fetch https://github.com/JoffreyDumontLeBrazidec/anemoi-core claude/project-thread-ncf9gh
-git -C $C reset --hard 27391c1597e8090b6e0da9a9ce79352eaa6c6530    # samplers patch on hres-lead 00472fb6f
-git -C $C merge-base --is-ancestor c286c1a3 HEAD && echo "c286c1a3 (the core the 1.2M checkpoint records) is an ancestor"
-git -C $C push fork HEAD:exp/t1d-traj-$(date -u +%Y%m%d)    # best effort; 27391c1 itself is already on the fork
-# downscaling-tools at the pushed branch, inside the sandbox folder
-git -C ~/dev/downscaling-tools fetch https://github.com/JoffreyDumontLeBrazidec/downscaling-tools claude/project-thread-tpts4t
-git -C ~/dev/downscaling-tools worktree add --detach $SB/downscaling-tools FETCH_HEAD
-git -C $SB/downscaling-tools rev-parse HEAD            # record: every job logs it as dstools=
+source /home/ecm5702/work-t1d-20261007/code/downscaling-tools/scripts/t1d_sampler_20261007/t1d_env.sh
+git -C $T1D_CODE fetch https://github.com/JoffreyDumontLeBrazidec/downscaling-tools claude/project-thread-tpts4t
+git -C $T1D_CODE worktree add --detach $T1D_W/code/downscaling-tools-diag FETCH_HEAD
+export T1D_CODE=$T1D_W/code/downscaling-tools-diag            # every diagnostic command below uses this
+git -C $T1D_CODE rev-parse HEAD | tee $T1D_W/notes/dstools_diag_sha.txt
+export T1D_OUT=/home/ecm5702/hpcperm/t1d_traj_20261007 T1D_HOST=ag   # or ac; same value as stage A uses
+ls $T1D_SANDBOX/activate.sh && git -C $T1D_SANDBOX/code/anemoi-core rev-parse HEAD   # 27391c1597e8...
 ```
-If the Atos downscaling-tools clone is elsewhere than `~/dev/downscaling-tools`, use that clone (any clone works:
-the worktree is detached at the fetched commit).
+Keep `T1D_CODE` and `T1D_OUT` exported in the shell that submits (sbatch passes the environment).
 
-## 2. CPU checks (login node; no GPU)
+## 2. CPU checks (hpc-login; no GPU)
 
 ```bash
-source $SB/activate.sh && cd $SB/downscaling-tools
-python -c "import anemoi.models.samplers.diffusion_samplers as d; assert 'custom' in d.NOISE_SCHEDULERS; print(d.__file__)"
-python -c "import interp.tools.trajectory, eval.predict.graph_cut, scipy, netCDF4; print('imports ok')"
-# if an import fails inside the sandbox venv: STOP and report (a dependency change is a uv lock edit on the
-# exp branch, the owner's call; never an untracked pip install)
+cd $T1D_CODE && set +u && source $T1D_SANDBOX/activate.sh && set -u       # x86 sandbox venv on hpc-login
+python -c "import interp.tools.trajectory, eval.predict.graph_cut, scipy, netCDF4, xarray; print('imports ok')"
 python -m interp trajectory --help | grep -E -- "--save-trajectory-states|--local-scope-json|--trajectory-states-stride"
-python scripts/t1d_sampler_20261007/dp/tests/test_dp.py      # against the sandbox's own fork samplers; about 10 s
-B=/ec/res4/scratch/ecm5702/eval/o320_o1280/manual_731d203a_pristine_20260818/bundles_with_y   # stage A's T1D_INPUT_ROOT
-for d in 20230826 20230828; do for s in 024 120; do ls $B/*date${d}*mem01*step${s}h*input_bundle.nc; done; done
-ls -la /home/ecm5702/perm/checkpoints/o320_o1280/551dfd1eb2a649d49f099acd30b59483/inference-anemoi-by_step-epoch_171-step_400000.ckpt
+python scripts/t1d_sampler_20261007/dp/tests/test_dp.py            # about 10 s; includes the trajectory argv check
+python -m scripts.t1d_sampler_20261007.dp.locate_storms --bundle-dir $T1D_INPUT_ROOT   # all four PASS, or stop
+deactivate
 ```
-If a bundle is missing there, use the o320_o1280 lane's root `/home/ecm5702/hpcperm/data/input_data/o320_o1280/idalia`
-via `export T1D_BUNDLES=...` before submitting.
-Pre-register in the note before step 3: expectation (T1c section 6) msl lock-in sigma50 above 300; fewer than
-half of c0_30's 19 intervals below sigma 10 carry measurable cost.
+`locate_storms` prints each bundle's centre, truth msl minimum and disc, and FAILs when the disc comes within 1 deg of
+the cut edges (10-40N, 260-302E) or the centre sits on its window edge (the minimum was cut off: another low, or the
+storm outside the window). On a FAIL, adjust that bundle's window in `common.IDALIA_WINDOWS` (commit, push, re-fetch)
+or, for a test only, `export T1D_WINDOW=lat0,lat1,lon0,lon1`. Pre-register in the note before step 3: expectation (T1c
+section 6) msl lock-in sigma50 above 300; fewer than half of c0_30's 19 intervals below sigma 10 carry measurable cost.
 
-## 3. Smoke: one draw, 12 levels (23 calls). GPU: wait for the owner's typed go
+## 3. Smoke: one draw, 12 levels (23 calls). GPU: wait for the owner's typed go (and stage A's G1 PASS)
 
 ```bash
-export T1D_SB=$SB T1D_OUT=/home/ecm5702/hpcperm/t1d_traj_20261007
-bash $SB/downscaling-tools/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh smoke     # 1 x A100, AC, qos ng
+bash $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh smoke
 # when it ends:
-tail -n 30 $T1D_OUT/logs/t1d_smoke12_*.out
-grep -E "local cut graph active|storm box|saved .* calls" $T1D_OUT/logs/t1d_smoke12_*.out
-python -m scripts.t1d_sampler_20261007.dp.check_states $T1D_OUT/smoke12_d20230826_l024 \
+tail -n 40 $T1D_OUT/logs/t1d_*smoke12_*.out | grep -E "RUNTIME|GUARD|host=|local cut graph|storm box|saved|T1D_TRAJ"
+cd $T1D_CODE && python -m scripts.t1d_sampler_20261007.dp.check_states $T1D_OUT/smoke12_d20230826_l024 \
   --schedule scripts/t1d_sampler_20261007/dp/schedules/dense12.json --project-levels 240 --project-draws 16
 ```
-Gate (all must hold before step 4): rc 0; every `check_states` line PASS (23 calls, first-evaluation sigmas =
-the custom list, second evaluations at the next level, finite arrays, final = last D, projected total under
-30 GB); the log shows the cut graph active (data nodes about 1.8e5 of 6.6e6) and the storm box inside the
-window; `trajectory.json` has `schedule_type: custom` and a lock-in payload. Record the job id, wall time and
-peak memory (`sacct -j <id> -o JobID,Elapsed,MaxRSS,State`).
+Gate (all must hold before step 4): rc 0; every `check_states` line PASS: 23 calls, first-evaluation sigmas = the
+custom list, second evaluations at the next level, finite arrays, final = last D, projected total under 30 GB, the box
+centre and cell lat/lon range printed with the disc at least 1 deg inside the cut and the centre strictly inside the
+Idalia window, the disc not truncated, `trajectory.json` with `schedule_type: custom`, `local_scope` recorded and a
+lock-in payload. The log shows the cut graph active (data nodes about 1.8e5 of 6.6e6). Record the job id, wall time
+and peak memory (`sacct -j <id> -o JobID,Elapsed,MaxRSS,State`).
 
-If the cut graph fails (any error at `activate_local_graph_cut` or a size mismatch), stop and report; the
-fallback is `ROUTE=global` (4 A100 sharded, about 28 GPU-h for 16 draws), which needs a fresh go with that
-cost stated.
+If the cut graph fails (an error at `activate_local_graph_cut` or a size mismatch), stop and report; the fallback is
+`ROUTE=global` on AC (4 A100 sharded, about 28 GPU-h for 16 draws), which needs a fresh go with that cost stated.
 
 ## 4. Full: 16 draws, 240 levels. GPU: wait for the owner's typed go
 
 ```bash
-bash $SB/downscaling-tools/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh full      # 4 jobs x 1 A100, about 40 min each
+bash $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh full      # 4 jobs x 1 GPU, about 40 min each on A100
 cat $T1D_OUT/jobs.txt
 # when they end:
-grep T1D_TRAJ $T1D_OUT/logs/t1d_d08*.out
-for d in $T1D_OUT/d2023*_l*; do python -m scripts.t1d_sampler_20261007.dp.check_states $d \
-  --schedule scripts/t1d_sampler_20261007/dp/schedules/dense240.json --project-levels 240 --project-draws 16 | grep -c PASS; done
+grep -h T1D_TRAJ $T1D_OUT/logs/t1d_*d08*.out
+cd $T1D_CODE && for d in $T1D_OUT/d2023*_l*; do echo $d; python -m scripts.t1d_sampler_20261007.dp.check_states $d \
+  --schedule scripts/t1d_sampler_20261007/dp/schedules/dense240.json | grep -E "FAIL|box centre"; done
 du -sh $T1D_OUT
 ```
-Expected: 4 x 4 files of about 195 MB; about 3 GPU-h in total.
+Expected: 4 x 4 files of about 195 MB, no FAIL line, about 3 GPU-h in total.
 
-## 5. CPU: cost matrices, DP, lock-in (no GPU, no go needed)
+## 5. CPU: cost matrices, DP, lock-in, verification schedule file (hpc-login; no GPU, no go needed)
 
 ```bash
-sbatch --output=$T1D_OUT/logs/%x_%j.out $SB/downscaling-tools/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch
-# about 20-30 min: cost_matrix (about 4 min per draw per core, 4 workers), dp_schedule (seconds), lockin_read
+sbatch --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch
+# about 20-30 min (cost_matrix about 4 min per draw per core, 4 workers); certified x86 venv, as stage A's CPU jobs
 cat $T1D_OUT/dp/dp_summary.md; python -m json.tool $T1D_OUT/lockin/lockin_sigma50.json | head -40
+python -m json.tool $T1D_OUT/verify/schedules_verify.json | grep -E '"calls"|gpu_h'
 ```
 
-## 6. Bundle for docs
+## 6. Verification draws (batch 2). GPU: wait for the owner's typed go
+
+Runs the candidate schedules of `verify/schedules_verify.json` (DP fits on all draws for C_L2 and C_band at K = 8, 10,
+12, 16, identical ones merged; c0_30 and c0_pw16_s1k on their nominal levels; log-uniform 16) on the same 16 bundles and
+seeds, one draw each, the model loaded once per job. 297 calls per draw if all 11 differ, about 1.5 GPU-h plus 4 loads
+(under 0.2 GPU-h per 16-step schedule, about 0.3 for c0_30). The tool seeds `torch.manual_seed(seed)` right before
+`sample()`, whose first draw is `y_init = randn(shape) * sigma_max`, so the unit noise is the dense run's at equal seed;
+`analyze` checks it on the saved call-0 inputs and stops if it differs.
+
+```bash
+bash $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh verify $T1D_OUT/verify/schedules_verify.json   # 4 jobs x 1 GPU
+# when they end (CPU, from hpc-login):
+VERIFY=1 sbatch --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch
+cat $T1D_OUT/verify/verify_table.md
+```
+The table: schedules x (calls, draws, C_L2 run, C_band run, predicted L2, predicted band, ratio L2, ratio band, same
+noise), plus the log-log correlation of run against predicted. Run error = final state against the dense 240-level
+final state of the same seed, per variable and band with the cost's normaliser. On the linear toy the ratio was 1.0 to
+3.1 with log-log correlation 0.993; a much lower correlation here means the summed cost does not rank schedules on
+the real model and the DP schedules should not go to the screen without that caveat.
+
+## 7. Bundle for docs
 
 Copy `$T1D_OUT/bundle_for_docs/diag/` (a few MB) to
 `docs/epics/fast-generative-downscaling/in-progress/20261007_T1d_sampler_beat_1p2M_results/diag/`:
 
 ```
 diag/
-  jobs.txt                         job names, ids and arguments (smoke + 4 full)
+  jobs.txt                         job names, ids, cluster and arguments (smoke, 4 full, 4 verify)
   logs/<job>.out                   last 60 lines of every SLURM log
   cost/cost_manifest.json          draws, sets, grid, dx, Nyquist, box size, fixed weights
   cost/cost_C_all.npz              C_L2_*, C_band_*, C_band300_* (euler, heun_ref), trunc_C_*; float32, 240 x 240
@@ -138,18 +162,22 @@ diag/
   dp/schedules/dp_<cost>_K<k>_fit<set>.json   ready `schedule_type: custom` blocks (for lanes)
   lockin/lockin_sigma50.json       per-variable anomaly lock-in sigma50 (trajectory.json source)
   lockin/lockin_sigma50_from_states.json   same rule from the saved states
+  verify/schedules_verify.json     the batch-2 candidates and their GPU cost
+  verify/verify_table.md, .json    run error against predicted cost (after step 6)
 ```
-The raw states (`d*/trajectory_states_s*.npz`), `trajectory.json` files and per-draw cost matrices stay in
-`$T1D_OUT` on Atos HPCPERM; list their paths in the note. Do not copy the npz states into docs.
+The raw states (`d*/trajectory_states_s*.npz`, `verify/*/d*/...`), `trajectory.json` files and per-draw cost matrices
+stay in `$T1D_OUT` on Atos HPCPERM; list their paths in the note. Do not copy the npz states into docs.
 
-## 7. What was tested in the cloud thread (no cluster)
+## 8. What was tested in the cloud thread (no cluster)
 
-- `py_compile` of `interp/tools/trajectory.py` and every file here; `tests/test_dp.py` (DP vs brute force;
-  equal spacing on a convex cost; the real writer on fake arrays read back; the numpy piecewise schedules
-  equal to the fork's scheduler; the custom JSON accepted by the fork's CustomScheduler with num_steps 240 and
-  sigma_min 0.03; capture_denoiser two- and three-argument calls; cost_matrix -> dp_schedule -> lockin_read
-  end to end on four fake draws over two dates).
+- `py_compile` of `interp/tools/trajectory.py` and every file here; `tests/test_dp.py`: DP against brute force; equal
+  spacing on a convex cost; the real writer on fake arrays read back; the numpy piecewise schedules equal to the fork's
+  scheduler; the custom JSON accepted by the fork's CustomScheduler with num_steps 240 and sigma_min 0.03; both
+  capture_denoiser call forms; the verification `run` argv parsed by the trajectory tool's own parser; cost_matrix ->
+  dp_schedule -> verify make/analyze -> lockin_read end to end on four fake draws over two dates. The dense job's
+  argv was parsed by the tool's parser as well.
 - `tests/toy_linear.py`: the fork's EDMHeunSampler (27391c159) through the real capture and writer on a
-  linear-Gaussian toy, 240 levels, 479 calls, bookkeeping exact; see README for the numbers.
-- Not testable here: the cut-graph path inside the trajectory tool on the real checkpoint, the bundle reads,
-  the GPU timings, the sandbox build, the sharded fallback with `--save-trajectory-states`.
+  linear-Gaussian toy, 240 levels, 479 calls, bookkeeping exact; numbers in README.
+- Not testable here: the cut-graph path on the real checkpoint (including its reuse across schedules in
+  `verify_schedules run`), the bundle reads (`locate_storms`), the GPU timings, the AG overlay, the sharded fallback
+  with `--save-trajectory-states`.

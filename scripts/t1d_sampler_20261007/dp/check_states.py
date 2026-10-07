@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 import numpy as np
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from common import IDALIA_WINDOWS, box_checks  # type: ignore
+else:
+    from .common import IDALIA_WINDOWS, box_checks
 
 
 def main(argv=None):
@@ -22,6 +29,9 @@ def main(argv=None):
     ap.add_argument("--schedule", required=True, help="the noise-scheduler JSON that was passed")
     ap.add_argument("--project-levels", type=int, default=240)
     ap.add_argument("--project-draws", type=int, default=16)
+    ap.add_argument("--window", default=None,
+                    help="lat0,lat1,lon0,lon1 the centre must lie strictly inside (default: the Idalia "
+                         "window of the bundle's date and lead, common.IDALIA_WINDOWS)")
     a = ap.parse_args(argv)
     out = Path(a.out_dir)
     sched = json.loads(Path(a.schedule).read_text())["sigmas"]
@@ -59,6 +69,17 @@ def main(argv=None):
                   f"lat {z['lat'].min():.2f}..{z['lat'].max():.2f} lon {z['lon'].min():.2f}..{z['lon'].max():.2f}")
         meta = {k: str(z[k]) for k in z.files if k.startswith("meta_") and k != "meta_noise_scheduler"}
         print(f"  meta {meta}")
+        clat, clon, rad = float(z["meta_center_lat"]), float(z["meta_center_lon"]), float(z["meta_radius_km"])
+        m = re.search(r"date(\d{8}).*step(\d{3})h", Path(str(z["meta_bundle"])).name)
+        win = (tuple(float(x) for x in a.window.split(",")) if a.window
+               else IDALIA_WINDOWS.get((m.group(1), m.group(2))) if m else None)
+        print(f"  box centre {clat:.2f}N {clon:.2f}E, radius {rad:.0f} km; cells lat {z['lat'].min():.2f}..{z['lat'].max():.2f}"
+              f" lon {z['lon'].min():.2f}..{z['lon'].max():.2f}; expected window {win}")
+        check(win is not None, "an expected Idalia window is known for this bundle")
+        for good, msg in box_checks(clat, clon, rad, win):
+            check(good, msg)
+        cells_full = int(z["n_box_full"]) * 0.85 < np.pi * rad ** 2 / 77.3 < int(z["n_box_full"]) * 1.15
+        check(cells_full, f"disc not truncated: {int(z['n_box_full'])} cells vs about {np.pi * rad ** 2 / 77.3:.0f} expected")
         per_draw = (2 * a.project_levels - 1) * 2 * V * N * 4
         print(f"  projection: {a.project_levels} levels -> {per_draw / 1e6:.0f} MB per draw, "
               f"{a.project_draws * per_draw / 1e9:.2f} GB for {a.project_draws} draws (cap 30 GB)")
