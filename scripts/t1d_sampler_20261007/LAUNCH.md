@@ -6,7 +6,11 @@ For the executing session on the owner's Mac, run on hpc-login. Everything GPU w
 
 **Owner's-go rule.** Every GPU submission waits for the owner's typed go in the cluster thread. Two gos are needed:
 go 1 for the two gate jobs (G1, about 0.2 GPU-hours), go 2 for stage A (five prediction runs, about 6.7 GPU-hours).
-Steps 0-2 (preparation, G2 part 1, G3 test-only) are CPU only and need no go. Do not merge the two gos: stage A is
+Steps 0-2 (preparation, G2 part 1, G3 test-only) are CPU only and need no go.
+**Two routes, one switch:** `T1D_HOST=ac` (default, sections 0-8 as written: A100 on AC) or `T1D_HOST=ag` (GH200 on AG for
+the gate and the five predictions; everything CPU stays on AC). Section 10 lists what changes on AG. Pick one route
+for G1 AND all five predictions: never mix clusters inside stage A (the CUDA noise stream differs between A100 and
+GH200, `eval/predict/seeding.py`, so draws are only paired within one GPU class). Do not merge the two gos: stage A is
 submitted only after G1 passed and was reported.
 
 ## What runs
@@ -214,3 +218,72 @@ sandbox's exp branch).
   replicates s757 + s758 and "outside on surface (2 metrics)" with s757 alone. Read the flags with the band table.
 - The read lists the replicate itself as an arm (`p12m_pw30_c0_r757`): it must read "inside" (it set the band).
 - tc and shape are recorded, not judged (T1 section 6); with `--only tc` a read would say "inside" on nothing.
+
+## 10. AG route (`T1D_HOST=ag`): GH200 on Atos AG, CPU jobs on AC
+
+Why: AC is above its 10-GPU cap (start ~14 h out); AG has GH200s free under its cap, and the 1.2M parent's own reads of
+5 Oct ran on AG in `~/dev/.ds-ag-260616`. `tc_o320_o1280` allows predict on atos_ag. Everything not listed here is as
+in sections 0-9 (lanes, run roots, gates' pass rules, evaluators, bundle).
+
+**Runtime on AG (the documented rule).** `runbook-experiment-sandbox.md` and `exp.sh`: the uv layer of v2 sandboxes is
+validated on x86 only; an experiment that must run on AG/GH200 uses the grandfathered overlay pattern and says so in
+`EXPERIMENT.md`. So:
+- Build the sandbox exactly as in section 0, on hpc-login (x86): `exp new t1d-stagea`, anemoi-core reset to 27391c1.
+  Its git worktrees are architecture-independent; its `.venv-x86_64` is not used on AG. Do NOT run `exp new` or
+  `uv sync` on an AG node (exp.sh warns the aarch64 sync may fail; a `.venv-aarch64` costs ~6k inodes and is unvalidated).
+- Add one line to `$T1D_SANDBOX/EXPERIMENT.md`: "AG/GH200 runs (T1d stage A) use the grandfathered overlay: certified
+  arm venv ~/dev/.ds-ag-260616 + PYTHONPATH onto code/anemoi-core/{training,models,graphs}/src and
+  code/anemoi-inference/src, with an import guard; runbook aarch64 clause." Commit it on the exp branch.
+- `se_tc_predict_t1d.sbatch` does this when `T1D_HOST=ag`: sandbox = `.ds-ag-260616` + that PYTHONPATH + a guard that
+  refuses unless anemoi.models/training/graphs/inference and the samplers module resolve inside the sandbox (the stage 3
+  AG guard), then checks anemoi-core HEAD = 27391c1; certified = `.ds-ag-260616` alone (PYTHONPATH unset). It refuses
+  to start if `T1D_HOST` and the node's architecture disagree (ag = aarch64).
+- Check once on an AG node (interactive or the G1 log's GUARD lines): the overlay imports and
+  `cd $T1D_CODE && python -c "import eval.predict.main"` work under `.ds-ag-260616`.
+
+**Resources per job (passed on the sbatch command line by the submit scripts, overriding the AC header):**
+`--partition=gpu --qos=ng --nodes=1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=32 --mem=120G`
+(one GH200 = a quarter node: 72 Grace cores, ~120 GB LPDDR; the stage 3 AG jobs used 32 CPUs per GPU). Wall limits as on
+AC (4 h pw30, 2.5 h pw16/st2, 3 h st4, 45 min gates). If `--mem=120G` is refused by AG's limits, use
+`--mem=0` only with a whole node; otherwise lower to 100G and record it.
+
+**Commands (AG halves on ag-login, AC half on hpc-login; same `$W`, same worktree, shared filesystems):**
+```bash
+export T1D_HOST=ag
+# G3 (no go): on ag-login
+TEST=1 bash $T1D_S/submit_gates_t1d.sh; TEST=1 bash $T1D_S/submit_stageA_t1d.sh     # 2 + 5 "TEST: sbatch" lines
+# on hpc-login (AC half, no go): TEST=1 SKIPCHECK=1 bash $T1D_S/submit_post_t1d.sh    # 8 "TEST: sbatch" lines
+# G1 (go 1): on ag-login; both gate jobs on AG, sandbox overlay vs certified .ds-ag-260616, same GH200 class
+bash $T1D_S/submit_gates_t1d.sh
+python $T1D_S/g1_compare.py $(t1d_g1_root sandbox)/predictions/predictions_20230826_step024.nc \
+                            $(t1d_g1_root certified)/predictions/predictions_20230826_step024.nc | tee $W/notes/gates/g1_compare_ag.txt
+#   (+ check_attrs_t1d.py --members 1 --log $W/logs/t1d_g1_ag_sandbox_<jobid>.out, as in section 3)
+# Stage A predictions (go 2): on ag-login; five GH200 at once (6 free under the AG cap)
+bash $T1D_S/submit_stageA_t1d.sh                     # submits ONLY the five predictions; prints the next step
+# G2 part 2 as section 5 (logs are t1d_pred_ag_<arm>_<jobid>.out; the G1 member-1 check uses $(t1d_g1_root sandbox))
+# When all five are COMPLETED: on hpc-login (AC; Slurm cannot chain afterok across clusters)
+bash $T1D_S/submit_post_t1d.sh                       # refuses unless each run has 10 files and an rc=0 SE_TC_T1D line
+#   -> five evaluations on AC (no dependency), then intensity, spectra, read afterok on the five
+# sacct: AG ids on ag-login, AC ids on hpc-login
+awk -F'\t' 'NR>1 && $8=="ag" && $7 ~ /^[0-9]+$/ {print $7}' $W/notes/jobs.tsv | paste -sd, | xargs -I{} sacct -X -P -j {} \
+  --format=JobID,JobName%40,Partition,QOS,State,ExitCode,Submit,Start,End,Elapsed,AllocTRES%80,NodeList > $W/notes/sacct_ag.txt   # on ag-login
+```
+`build_bundle_t1d.py` (hpc-login) runs sacct for the AC ids itself and copies every `$W/notes/sacct_*.txt`; the
+timings table gets a `cluster` column. A failed AG prediction: nothing on AC is queued yet; move its root aside
+(`mv $RR ${RR}_failed_<jobid>`), resubmit that one prediction on ag-login with the sbatch line the script printed, and
+run `submit_post_t1d.sh` when all five are complete.
+
+**AG job table (stage A + gates; GPU-hours: A100 figure = upper bound, GH200 expected about 0.5-0.7 of it).**
+
+| job | cluster, resources | after | GPU-h upper (A100) | GPU-h expected (GH200) |
+|---|---|---|---:|---:|
+| t1d_g1_ag_sandbox, t1d_g1_ag_certified (1 draw each) | AG, 1 GH200, 32 CPU, 120G, 45 min | go 1 | 0.2 | ~0.15 |
+| t1d_pred_ag_p12m_pw30_c0 (s756), ..._r757 | AG, 1 GH200 each, 4 h | G1 pass + go 2 | 1.7 + 1.7 | ~1.0 + 1.0 |
+| t1d_pred_ag_p12m_c0_pw16_s1k, _st2, _st4 | AG, 1 GH200 each, 2.5/2.5/3 h | go 2 | 0.9 + 1.0 + 1.1 | ~0.55 + 0.6 + 0.7 |
+| loading, 5 jobs | | | 0.4 | ~0.3 |
+| t1d_eval_* (5) | AC CPU, qos nf, 8 CPU, 64G | all 5 AG predictions COMPLETED (manual) | - | - |
+| tc_intensity, spectra_v3, read | AC CPU, qos nf | afterok on the 5 evals | - | - |
+| **total GPU** | | | **6.9** | **~4.3** |
+
+The GH200 factor is an estimate (no T1d draw on GH200 yet); the G1 sandbox log's `s_per_draw` (one draw, includes no
+loading) and the first prediction's wall time give the measured figure; report it with the go-2 request.

@@ -89,7 +89,11 @@ def main():
 
     # timings: sacct of every job in jobs.tsv, plus the per-run summary line of each prediction log
     jobs = list(csv.DictReader(open(f"{W}/notes/jobs.tsv"), delimiter="\t")) if os.path.isfile(f"{W}/notes/jobs.tsv") else []
-    ids = [j["jobid"] for j in jobs if j["jobid"].isdigit()]
+    # sacct here sees the cluster it runs on (hpc-login: AC); AG job ids go through `sacct` on ag-login into
+    # $T1D_W/notes/sacct_ag.txt (LAUNCH.md), copied below with every other notes/sacct_*.txt
+    ids = [j["jobid"] for j in jobs if j["jobid"].isdigit() and (j.get("cluster") or "ac") == "ac"]
+    for f in sorted(glob.glob(f"{W}/notes/sacct_*.txt")):
+        put(f, "sacct/" + os.path.basename(f))
     os.makedirs(st, exist_ok=True)
     if ids:
         fmt = "JobID,JobName%40,Partition,QOS,State,ExitCode,Submit,Start,End,Elapsed,AllocTRES%80,NodeList"
@@ -99,7 +103,7 @@ def main():
         except FileNotFoundError:
             missing.append("sacct (not on PATH: run on hpc-login)")
     with open(f"{st}/timings.tsv", "w") as fh:
-        fh.write("kind\tarm\tseed\tjobid\truntime\trc\tfiles\twall_s\tdraws\ts_per_draw\tpeak_mem_mib\tlog\n")
+        fh.write("kind\tarm\tseed\tjobid\tcluster\truntime\trc\tfiles\twall_s\tdraws\ts_per_draw\tpeak_mem_mib\tlog\n")
         for j in jobs:
             if j["kind"] not in ("predict_box", "gate_g1"):
                 continue
@@ -110,7 +114,7 @@ def main():
                     if x.startswith("SE_TC_T1D "):
                         line = x
             kv = dict(t.split("=", 1) for t in line.split()[1:] if "=" in t)
-            fh.write("\t".join([j["kind"], j["arm"], j["seed"], j["jobid"], kv.get("runtime", ""), kv.get("rc", ""),
+            fh.write("\t".join([j["kind"], j["arm"], j["seed"], j["jobid"], kv.get("cluster", j.get("cluster") or "ac"), kv.get("runtime", ""), kv.get("rc", ""),
                                 kv.get("files", ""), kv.get("wall_s", ""), kv.get("draws", ""), kv.get("s_per_draw", ""),
                                 kv.get("peak_mem_mib", ""), logs[0] if logs else "missing"]) + "\n")
     with open(f"{st}/logs_rc.txt", "w") as fh:
