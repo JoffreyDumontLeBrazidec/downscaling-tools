@@ -1,0 +1,35 @@
+# tc_o320_o1280_p12m_ctrl -- base lane of campaign T1d (sampler screen on the 1.2M parent, 2026-10-07).
+# A copy of tc_o320_o1280_ft400k_gmass_ctrl (donor 12dcefea) for the "1.2M parent" checkpoint: run 551dfd1e,
+# step 400,000 of the c3 fork. Same base (tc_o320_o1280: Franklin+Idalia box 10-40N 100-58W, cut graph,
+# 1 GPU, dates 2023-08-26..30, members 1-10, resource profiles), same predict.sampler block (the pw30
+# lane standard, churn 2.5). SCREENING ONLY, never a scoreboard row.
+#
+# Keys changed against tc_o320_o1280_ft400k_gmass_ctrl: none of the inherited ones. One key added:
+#   predict.checkpoint  -- the 1.2M INFERENCE checkpoint. The lane framework never read a checkpoint from a
+#                          lane (the donor lane has none: the checkpoint was the --checkpoint / --name-ckpt
+#                          argument of each job), so this key is a record that the T1d job scripts read
+#                          (scripts/t1d_sampler_20261007/resolve_lane_t1d.py). They derive the BASE file
+#                          (same folder, without the "inference-" prefix) and pass it as --name-ckpt, as
+#                          eval.cli predict does in manual mode; the runtime then loads the inference file.
+#                          eval.cli itself ignores the key.
+# Do NOT point this lane at the donor 12dcefea (resolve_lane_t1d.py refuses it).
+base: tc_o320_o1280
+
+predict:
+  checkpoint: "/home/ecm5702/perm/checkpoints/o320_o1280/551dfd1eb2a649d49f099acd30b59483/inference-anemoi-by_step-epoch_171-step_400000.ckpt"
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 2.5
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
