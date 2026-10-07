@@ -32,7 +32,7 @@ coordinates with the same data mask; a model already cut for the same scope (reu
 leaves a file that matches the readers' `trajectory_states_s*.npz` globs.
 
 Runtime: the GPU jobs source `jobs/_runtime.sh`, i.e. stage A's `t1d_env.sh` and its sandbox runtime (T1D_HOST=ac:
-the sandbox uv venv; T1D_HOST=ag: certified arm venv + overlay + import guard). Stage A's gate G1 is the runtime gate.
+the sandbox uv venv; T1D_HOST=ag: the sandbox .venv-aarch64 through the same guarded activate.sh; T1D_RUNTIME=overlay opt-in; every sbatch line carries the settings in --export since Atos sets SBATCH_EXPORT=NONE). Stage A's gate G1 is the runtime gate.
 
 ## Costs (weights FIXED before any read)
 

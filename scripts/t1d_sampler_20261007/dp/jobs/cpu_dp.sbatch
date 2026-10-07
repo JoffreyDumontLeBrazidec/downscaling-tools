@@ -7,9 +7,11 @@
 #SBATCH --time=02:00:00
 # T1d CPU stage (Atos AC, certified x86 venv as every stage-A CPU job): cost matrices -> DP schedules -> lock-in
 # sigma50 -> verification schedule file -> docs bundle staging. With VERIFY=1 also the batch-2 analysis.
-#   T1D_OUT=<output root> sbatch --output=$T1D_OUT/logs/%x_%j.out cpu_dp.sbatch
+#   source <worktree>/scripts/t1d_sampler_20261007/t1d_env.sh; sbatch "$(t1d_export)" --output=<output root>/logs/%x_%j.out cpu_dp.sbatch <output root> [VERIFY 0|1]
+# The output root and VERIFY are positional: Atos sets SBATCH_EXPORT=NONE, so T1D_OUT/VERIFY exported in the submit
+# shell never reach the job (the environment fallbacks stay for an interactive run).
 set -euo pipefail
-OUT="${T1D_OUT:?}"
+OUT="${1:-${T1D_OUT:?output root: first argument}}"; VERIFY="${2:-${VERIFY:-0}}"
 source "${T1D_CODE:-/home/ecm5702/work-t1d-20261007/code/downscaling-tools}/scripts/t1d_sampler_20261007/t1d_env.sh"
 set +u; unset PYTHONPATH; source "$T1D_CERT_VENV/bin/activate"; set -u
 export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4

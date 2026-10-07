@@ -18,7 +18,7 @@ DATE="${1:?}"; STEP="${2:?}"; OUTROOT="${3:?}"; SCHEDS="${4:?}"; shift 4; SEEDS=
 source "${T1D_CODE:-/home/ecm5702/work-t1d-20261007/code/downscaling-tools}/scripts/t1d_sampler_20261007/dp/jobs/_runtime.sh" || exit 2
 WINDOW=$(t1d_window "$DATE" "$STEP") || exit 2
 cd "$T1D_CODE" || exit 5
-echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) cluster=$HOST dstools=$(git rev-parse --short HEAD) core=$(git -C "$CORE_DIR" rev-parse --short HEAD) date=$DATE step=$STEP seeds=${SEEDS[*]} window=$WINDOW scheds=$SCHEDS"
+echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) cluster=$HOST dstools=$(git rev-parse --short HEAD) core=$(t1d_git_head "$CORE_DIR" | cut -c1-9) date=$DATE step=$STEP seeds=${SEEDS[*]} window=$WINDOW scheds=$SCHEDS"
 t0=$(date +%s)
 python -m scripts.t1d_sampler_20261007.dp.verify_schedules run --schedules "$SCHEDS" \
   --checkpoint "$T1D_DIAG_CKPT" --bundle-dir "$T1D_DIAG_BUNDLES" --date "$DATE" --step "$STEP" --seeds "${SEEDS[@]}" \

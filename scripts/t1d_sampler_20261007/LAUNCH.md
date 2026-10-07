@@ -1,8 +1,22 @@
 # LAUNCH: T1d stage A on Atos (box screen of the 1.2M parent), 2026-10-07
 
 For the executing session on the owner's Mac, run on hpc-login. Everything GPU waits for the owner's typed go
-(rule below). Paths come from `t1d_env.sh`; export an override before any script if a path differs (for example
-`T1D_SANDBOX` when `exp new` runs on another date).
+(rule below). Paths come from `t1d_env.sh`; set an override in the SUBMIT shell before any script if a path differs
+(for example `T1D_SANDBOX` when `exp new` runs on another date). **Atos sets `SBATCH_EXPORT=NONE`: a job never sees the
+submit shell's environment.** The submit scripts therefore put every setting a job needs on each sbatch line
+(`--export=ALL,T1D_HOST=..,T1D_W=..,T1D_CODE=..,T1D_E=..,T1D_SANDBOX=..,T1D_CERT_VENV=..,T1D_CERT_VENV_AG=..,
+T1D_INPUT_ROOT=..,T1D_RUNTIME=..`, from `t1d_export`); `TEST=1` prints each full sbatch line (`TEST CMD:`) so the
+export list can be read before anything is queued. Never call `sbatch` on a kit script by hand without
+`"$(t1d_export)"` (after `source $T1D_S/t1d_env.sh`); "export VAR, then sbatch" does not work on Atos.
+
+**Atos traps (found by the executor, 2026-10-07):**
+- system `python3` on the login nodes is 3.6: run every kit python with a venv's python (the certified
+  `~/dev/.ds-260612` on hpc-login, `~/dev/.ds-ag-260616` on ag-login), never bare `python3`;
+- git commands in the sandbox (`$T1D_SANDBOX/code/*`) work only from ag-login; run them there (the jobs read the
+  anemoi-core HEAD with `t1d_git_head`, which falls back to reading `.git` directly when `git` fails);
+- `~/.local/bin` uv and its managed Python are x86 builds: do not use them on AG (the sandbox's `.venv-aarch64` is built);
+- https fetches fail on the login nodes: fetch and push through the fork remote already configured in each clone;
+- `$HPCPERM` inode margin is about 9,900: no new venv, no `uv sync`, no extra sandbox; outputs go to scratch.
 
 **Owner's-go rule.** Every GPU submission waits for the owner's typed go in the cluster thread. Two gos are needed:
 go 1 for the two gate jobs (G1, about 0.2 GPU-hours), go 2 for stage A (five prediction runs, about 6.7 GPU-hours).
@@ -30,7 +44,7 @@ same folder as `--name-ckpt`, as `eval.cli predict` does, and the runtime loads 
 
 All Heun, `S_churn 0`, `S_noise 1.0` (inert at churn 0: the Heun loop draws no noise, so all arms consume only the
 initial-noise draws and share them per member), sigma_min 0.03. The full lists with log10 and ln steps:
-`python3 make_lanes_t1d.py --out /tmp/t1d_lanes_check`. The T1 Heun high-segment rule is ln-step <= 1.15 safe,
+`python make_lanes_t1d.py --out /tmp/t1d_lanes_check` (a venv python; system python3 is 3.6). The T1 Heun high-segment rule is ln-step <= 1.15 safe,
 >= 1.3 fails: st2 (2.30) is beyond it by design of the arm, st4 (1.20) sits between the two.
 
 Box protocol (T1 stage 1): Franklin/Idalia box 10-40N 100-58W, cut graph, 1 A100 on AC, fp32; dates 20230826-30,
@@ -52,18 +66,21 @@ source $W/code/downscaling-tools/scripts/t1d_sampler_20261007/t1d_env.sh
 
 Lanes: they are committed; prove the generator reproduces them (no overwrite, temp dir):
 ```bash
-cd $T1D_CODE && python3 $T1D_S/make_lanes_t1d.py --out /tmp/t1d_lanes_check | tee $W/notes/gates/arm_table.txt
+cd $T1D_CODE && set +u && source $T1D_CERT_VENV/bin/activate && set -u   # system python3 is 3.6
+python $T1D_S/make_lanes_t1d.py --out /tmp/t1d_lanes_check | tee $W/notes/gates/arm_table.txt
 for f in /tmp/t1d_lanes_check/*.yaml; do diff -q $f eval/config/lanes/$(basename $f) || echo "LANE DIFFERS: $f"; done
 ```
 
 Sandbox (owner's rule: rebuild from git in a fresh sandbox with its own uv venv, never from memory; v2 convention of
 `docs/epics/certified-runtime-provenance/RUNTIME-LAYOUT.md`):
 ```bash
-quota                                       # $HPCPERM is inode-bound; a uv venv costs ~6k inodes
+# DONE on Atos 2026-10-07: /home/ecm5702/hpcperm/sandbox/20261007-t1d-stagea exists with .venv-aarch64 (torch 2.10.0+cu128,
+# Python 3.11.10, from the lock); the commands below are the record of how it is built. Git steps: on ag-login.
+quota                                       # $HPCPERM is inode-bound; a uv venv costs ~6k inodes (margin ~9,900)
 exp new t1d-stagea                          # -> ~/hpcperm/sandbox/<YYYYMMDD>-t1d-stagea, branch exp/t1d-stagea-<YYYYMMDD>
 export T1D_SANDBOX=~/hpcperm/sandbox/<YYYYMMDD>-t1d-stagea     # only if the date is not 20261007
 C=$T1D_SANDBOX/code/anemoi-core
-git -C $C fetch https://github.com/JoffreyDumontLeBrazidec/anemoi-core claude/project-thread-ncf9gh
+git -C $C fetch <fork remote> claude/project-thread-ncf9gh                # https fails on the login nodes
 git -C $C reset --hard 27391c1597e8090b6e0da9a9ce79352eaa6c6530          # samplers patch on hres-lead 00472fb6f
 git -C $C rev-parse HEAD                                                  # must be 27391c1597e8...
 git -C $C merge-base --is-ancestor c286c1a3 HEAD && echo "c286c1a3 (the core the 1.2M checkpoint records) is an ancestor"
@@ -225,21 +242,19 @@ Why: AC is above its 10-GPU cap (start ~14 h out); AG has GH200s free under its 
 5 Oct ran on AG in `~/dev/.ds-ag-260616`. `tc_o320_o1280` allows predict on atos_ag. Everything not listed here is as
 in sections 0-9 (lanes, run roots, gates' pass rules, evaluators, bundle).
 
-**Runtime on AG (the documented rule).** `runbook-experiment-sandbox.md` and `exp.sh`: the uv layer of v2 sandboxes is
-validated on x86 only; an experiment that must run on AG/GH200 uses the grandfathered overlay pattern and says so in
-`EXPERIMENT.md`. So:
-- Build the sandbox exactly as in section 0, on hpc-login (x86): `exp new t1d-stagea`, anemoi-core reset to 27391c1.
-  Its git worktrees are architecture-independent; its `.venv-x86_64` is not used on AG. Do NOT run `exp new` or
-  `uv sync` on an AG node (exp.sh warns the aarch64 sync may fail; a `.venv-aarch64` costs ~6k inodes and is unvalidated).
-- Add one line to `$T1D_SANDBOX/EXPERIMENT.md`: "AG/GH200 runs (T1d stage A) use the grandfathered overlay: certified
-  arm venv ~/dev/.ds-ag-260616 + PYTHONPATH onto code/anemoi-core/{training,models,graphs}/src and
-  code/anemoi-inference/src, with an import guard; runbook aarch64 clause." Commit it on the exp branch.
-- `se_tc_predict_t1d.sbatch` does this when `T1D_HOST=ag`: sandbox = `.ds-ag-260616` + that PYTHONPATH + a guard that
-  refuses unless anemoi.models/training/graphs/inference and the samplers module resolve inside the sandbox (the stage 3
-  AG guard), then checks anemoi-core HEAD = 27391c1; certified = `.ds-ag-260616` alone (PYTHONPATH unset). It refuses
-  to start if `T1D_HOST` and the node's architecture disagree (ag = aarch64).
-- Check once on an AG node (interactive or the G1 log's GUARD lines): the overlay imports and
-  `cd $T1D_CODE && python -c "import eval.predict.main"` work under `.ds-ag-260616`.
+**Runtime on AG: the sandbox's own arm venv (owner's option 1, 2026-10-07).** The sandbox
+`/home/ecm5702/hpcperm/sandbox/20261007-t1d-stagea` carries `.venv-aarch64` (torch 2.10.0+cu128, Python 3.11.10 managed by
+uv, built from the lock) next to `.venv-x86_64`; its `activate.sh` picks `.venv-$(uname -m)`. So AG uses the sandbox
+exactly as AC does: `t1d_activate_sandbox` (in `t1d_env.sh`, used by `se_tc_predict_t1d.sbatch` and the diagnostic's
+`_runtime.sh`) sources the guarded `activate.sh` (refuses unless anemoi.models/training/graphs/inference/datasets
+resolve inside the sandbox), then checks that the active venv is this sandbox's `.venv-<arch>`, that the samplers module
+loads from the sandbox with the custom schedule, and that anemoi-core HEAD is 27391c1. Certified = `.ds-ag-260616`
+alone, the G1 reference on AG (G1 compares the two on the same GH200 class). The job refuses to start if `T1D_HOST`
+and the node's architecture disagree (ag = aarch64). The sandbox G1 draw 50066842 already ran this way (286 s on one
+GH200, 59 calls, churn 0 in the probe); the certified draw 50066843 died in 11 s because `SBATCH_EXPORT=NONE` dropped
+`T1D_HOST` (fixed: the export list). `T1D_RUNTIME=overlay` (opt-in, AG only) keeps the older route: certified arm venv
++ PYTHONPATH onto the sandbox code + the same guard. Record in `$T1D_SANDBOX/EXPERIMENT.md` that the AG runs use
+`.venv-aarch64` (the runbook's aarch64 clause: the arm uv layer was unvalidated before this campaign).
 
 **Resources per job (passed on the sbatch command line by the submit scripts, overriding the AC header):**
 `--partition=gpu --qos=ng --nodes=1 --ntasks-per-node=1 --gpus-per-node=1 --cpus-per-task=32 --mem=120G`
@@ -249,12 +264,15 @@ AC (4 h pw30, 2.5 h pw16/st2, 3 h st4, 45 min gates). If `--mem=120G` is refused
 
 **Commands (AG halves on ag-login, AC half on hpc-login; same `$W`, same worktree, shared filesystems):**
 ```bash
-export T1D_HOST=ag
+export T1D_HOST=ag          # read by the submit scripts, which pass it to every job in --export
 # G3 (no go): on ag-login
 TEST=1 bash $T1D_S/submit_gates_t1d.sh; TEST=1 bash $T1D_S/submit_stageA_t1d.sh     # 2 + 5 "TEST: sbatch" lines
 # on hpc-login (AC half, no go): TEST=1 SKIPCHECK=1 bash $T1D_S/submit_post_t1d.sh    # 8 "TEST: sbatch" lines
-# G1 (go 1): on ag-login; both gate jobs on AG, sandbox overlay vs certified .ds-ag-260616, same GH200 class
-bash $T1D_S/submit_gates_t1d.sh
+# G1 (go 1): on ag-login; both gate jobs on AG, sandbox .venv-aarch64 vs certified .ds-ag-260616, same GH200 class
+# the sandbox draw 50066842 exists and is kept; move the dead certified root (50066843) aside and resubmit only that one:
+mv $(t1d_g1_root certified) $(t1d_g1_root certified)_failed_50066843
+ONLY=certified TEST=1 bash $T1D_S/submit_gates_t1d.sh    # read the TEST CMD line: --export=ALL,T1D_HOST=ag,... must be on it
+ONLY=certified bash $T1D_S/submit_gates_t1d.sh
 python $T1D_S/g1_compare.py $(t1d_g1_root sandbox)/predictions/predictions_20230826_step024.nc \
                             $(t1d_g1_root certified)/predictions/predictions_20230826_step024.nc | tee $W/notes/gates/g1_compare_ag.txt
 #   (+ check_attrs_t1d.py --members 1 --log $W/logs/t1d_g1_ag_sandbox_<jobid>.out, as in section 3)

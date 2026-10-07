@@ -3,7 +3,9 @@
 #   T1D_OUT=<output root> bash submit_traj.sh smoke            # 1 draw, 12 levels (23 calls)
 #   T1D_OUT=<output root> bash submit_traj.sh full             # 16 draws, 240 levels (479 calls each), 4 jobs
 #   T1D_OUT=<output root> bash submit_traj.sh verify <sched.json>   # batch 2: candidate schedules, 4 jobs (verify.sbatch)
-# Cluster: T1D_HOST=ac (default, A100) or ag (GH200), from t1d_env.sh / the environment, as stage A.
+# Cluster: T1D_HOST=ac (default, A100) or ag (GH200), set in THIS shell; every sbatch line carries it and the other
+# settings explicitly (--export=ALL,T1D_HOST=...,ROUTE=..., t1d_export in t1d_env.sh): Atos sets SBATCH_EXPORT=NONE.
+# TEST=1 prints each full sbatch line and runs it with --test-only (nothing queued, nothing appended to jobs.txt).
 # ROUTE=global (AC only, fallback) submits the 4-GPU sharded variant of smoke/full instead of the cut graph.
 set -euo pipefail
 WHAT="${1:?smoke|full|verify}"
@@ -17,11 +19,16 @@ if [[ "$ROUTE" == global ]]; then
   [[ "$T1D_HOST" == ac ]] || { echo "ROUTE=global is AC only"; exit 2; }
   RES=(--ntasks-per-node=4 --gpus-per-node=4 --mem=0 --time=03:00:00)
 fi
+[[ -n "${T1D_WINDOW:-}" ]] && T1D_WINDOW_COLON="${T1D_WINDOW//,/:}"   # commas cannot cross --export; _runtime.sh converts back
+EXP=$(T1D_OUT="$T1D_OUT" ROUTE="$ROUTE" T1D_WINDOW_COLON="${T1D_WINDOW_COLON:-}" t1d_export ROUTE T1D_OUT T1D_BUNDLES T1D_WINDOW_COLON) || exit 2
+EXP=${EXP%,T1D_WINDOW_COLON=}
 sub() {  # name script args...
   local name=$1 script=$2; shift 2
-  local jid
-  jid=$(T1D_HOST=$T1D_HOST ROUTE=$ROUTE sbatch --parsable --job-name="$name" ${RES[@]+"${RES[@]}"} \
-        --output="$LOGS/%x_%j.out" "$HERE/$script" "$@")
+  local jid T=()
+  [[ "${TEST:-0}" == 1 ]] && T=(--test-only)
+  local cmd=(sbatch --parsable ${T[@]+"${T[@]}"} "$EXP" --job-name="$name" ${RES[@]+"${RES[@]}"} --output="$LOGS/%x_%j.out" "$HERE/$script" "$@")
+  if [[ "${TEST:-0}" == 1 ]]; then echo "TEST CMD: ${cmd[*]}"; "${cmd[@]}" 2>&1 | sed 's/^/TEST: /'; return 0; fi
+  jid=$("${cmd[@]}")
   echo "$name $jid $T1D_HOST $script $*" | tee -a "$T1D_OUT/jobs.txt"
 }
 J=$(t1d_jn)

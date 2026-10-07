@@ -22,10 +22,11 @@
 #   sbatch se_tc_predict_t1d.sbatch ARM LANE SEED RR RUNTIME [DATES] [STEPS] [MEMBERS] [PROBE]
 #     SEED 756 = ANEMOI_BASE_SEED unset (default 756); 757 = export ANEMOI_BASE_SEED=757 (runtime base 757000)
 #     RUNTIME sandbox = the fresh `exp new` sandbox with anemoi-core 27391c1; certified = the certified venv (gate G1 only)
-#     T1D_HOST (exported by the submit script; default ac): ac = Atos AC, A100, x86_64: sandbox = its activate.sh,
-#       certified = ~/dev/.ds-260612. ag = Atos AG, GH200, aarch64: sandbox = ~/dev/.ds-ag-260616 + PYTHONPATH overlay of
-#       the sandbox code + guard (the runbook's AG rule), certified = ~/dev/.ds-ag-260616. The submit script passes the
-#       AG resources on the sbatch command line (1 GH200, 32 CPUs, 120G), overriding the AC header below.
+#     T1D_HOST (passed by the submit script in --export, Atos has SBATCH_EXPORT=NONE; default ac): ac = Atos AC, A100,
+#       x86_64; ag = Atos AG, GH200, aarch64. sandbox = the sandbox's own uv venv .venv-<arch> through its guarded
+#       activate.sh + the checks of t1d_activate_sandbox (T1D_RUNTIME=overlay = AG opt-in: certified arm venv + PYTHONPATH
+#       onto the sandbox code); certified = ~/dev/.ds-260612 (ac) or ~/dev/.ds-ag-260616 (ag). The submit script passes
+#       the AG resources on the sbatch command line (1 GH200, 32 CPUs, 120G), overriding the AC header below.
 #     PROBE 1 (default in the sandbox) = eval.predict.main through common/probe_sampler.py (prints the applied schedule
 #       and the denoiser calls; the wrappers return the originals' results unchanged)
 set -uo pipefail
@@ -42,23 +43,9 @@ mkdir -p "$PRED" "$META"
 module load ecmwf-toolbox 2>/dev/null || true
 [[ "$RUNTIME" == certified && "$ARM" != p12m_pw30_c0 && "$ARM" != p12m_c0_pw16_s1k ]] && { echo "FATAL the certified venv has no custom schedule; $ARM runs in the sandbox only"; exit 1; }
 case "$HOST:$RUNTIME" in
-  ac:sandbox)   # v2 sandbox: its own uv venv (.venv-x86_64), guarded activate.sh
-    set +u; source "$T1D_SANDBOX/activate.sh" || { echo "FATAL sandbox activation failed ($T1D_SANDBOX)"; exit 3; }; set -u
-    CORE_DIR=$T1D_SANDBOX/code/anemoi-core ;;
-  ag:sandbox)   # aarch64: the uv layer is not validated on AG (runbook-experiment-sandbox.md), so the documented
-                # grandfathered overlay: certified arm venv + PYTHONPATH onto the sandbox's code worktrees + import guard
-    set +u; unset PYTHONPATH; source "$T1D_CERT_VENV_AG/bin/activate" || exit 3; set -u
-    SBC=$T1D_SANDBOX/code
-    export PYTHONPATH="$SBC/anemoi-core/training/src:$SBC/anemoi-core/models/src:$SBC/anemoi-core/graphs/src:$SBC/anemoi-inference/src"
-    python - "$SBC" <<'PYGUARD' || { echo "FATAL GUARD: the overlay did not win"; exit 4; }
-import importlib, os, sys
-root = os.path.realpath(sys.argv[1]); bad = []
-for name in ("anemoi.models", "anemoi.training", "anemoi.graphs", "anemoi.inference", "anemoi.models.samplers.diffusion_samplers"):
-    p = os.path.realpath(importlib.import_module(name).__file__)
-    (bad.append if not p.startswith(root + os.sep) else print)(f"  GUARD {name} -> {p}")
-if bad: print("\n".join(bad)); sys.exit(1)
-PYGUARD
-    CORE_DIR=$SBC/anemoi-core ;;
+  ac:sandbox|ag:sandbox)   # the sandbox's own uv venv (.venv-x86_64 / .venv-aarch64) via its guarded activate.sh,
+                           # or T1D_RUNTIME=overlay on AG (opt-in); see t1d_activate_sandbox in t1d_env.sh
+    t1d_activate_sandbox || exit $? ;;
   ac:certified)
     set +u; unset PYTHONPATH; source "$T1D_CERT_VENV/bin/activate" || exit 3; set -u
     CORE_DIR=$(python -c "import anemoi.models, os; print(os.path.dirname(anemoi.models.__file__))") ;;
@@ -67,9 +54,6 @@ PYGUARD
     CORE_DIR=$(python -c "import anemoi.models, os; print(os.path.dirname(anemoi.models.__file__))") ;;
   *) echo "FATAL runtime $RUNTIME"; exit 1 ;;
 esac
-if [[ "$RUNTIME" == sandbox ]]; then
-  [[ "$(git -C "$CORE_DIR" rev-parse HEAD)" == "$T1D_CORE_SHA" ]] || { echo "FATAL sandbox anemoi-core is not $T1D_CORE_SHA"; exit 3; }
-fi
 export DATA_DIR=/home/mlx/ai-ml/datasets/ DATA_STABLE_DIR=/home/mlx/ai-ml/datasets/stable/ OUTPUT=/ec/res4/scratch/ecm5702/aifs
 export GRID_DIR=/home/mlx/ai-ml/grids/ INTER_MAT_DIR=/home/ecm5702/hpcperm/data/inter_mat RESIDUAL_STATISTICS_DIR=/home/ecm5702/hpcperm/data/residuals_statistics/
 export TORCHINDUCTOR_COMPILE_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
@@ -82,7 +66,7 @@ SAMPLER=$(cat "$META/$LANE.sampler.json"); SCOPE=$(cat "$META/$LANE.scope.json")
 python -c "import anemoi.models.samplers.diffusion_samplers as d, torch; print('RUNTIME', d.__file__, 'custom' in d.NOISE_SCHEDULERS, 'torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sed "s/^/GPU /"
 ENTRY=(-m eval.predict.main); [[ "$PROBE" == 1 ]] && ENTRY=("$T1D_S/common/probe_sampler.py")
-echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) dstools=$(git rev-parse --short HEAD) core=$(git -C "$CORE_DIR" rev-parse --short HEAD 2>/dev/null || echo "$CORE_DIR") runtime=$RUNTIME cluster=$HOST arm=$ARM lane=$LANE ckpt=$CKPT dates=$DATES steps=$STEPS members=$MEMBERS precision=fp32 ANEMOI_BASE_SEED=${ANEMOI_BASE_SEED:-unset} probe=$PROBE input=$T1D_INPUT_ROOT rr=$RR"
+echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) dstools=$(git rev-parse --short HEAD) core=$(t1d_git_head "$CORE_DIR" 2>/dev/null | cut -c1-9 || true) runtime=$RUNTIME t1d_runtime=$T1D_RUNTIME cluster=$HOST arm=$ARM lane=$LANE ckpt=$CKPT dates=$DATES steps=$STEPS members=$MEMBERS precision=fp32 ANEMOI_BASE_SEED=${ANEMOI_BASE_SEED:-unset} probe=$PROBE input=$T1D_INPUT_ROOT rr=$RR"
 nvidia-smi --query-gpu=timestamp,memory.used --format=csv,noheader -l 10 > "$META/nvsmi_${SLURM_JOB_ID:-local}.csv" & SIDE=$!
 t0=$(date +%s)
 python "${ENTRY[@]}" --name-ckpt "$CKPT" --out-dir "$PRED" --members "$MEMBERS" --steps "$STEPS" --dates "$DATES" \

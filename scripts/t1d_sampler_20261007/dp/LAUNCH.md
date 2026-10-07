@@ -7,7 +7,8 @@ the cloud thread (section 8).
 
 Code: downscaling-tools branch `claude/project-thread-tpts4t` (this directory). Runtime: the SAME as stage A
 (`../t1d_env.sh`: sandbox `exp new t1d-stagea` with anemoi-core `27391c1` = custom schedules on hres-lead `00472fb6f`;
-on AG the certified arm venv + overlay + import guard). **Stage A's gate G1 is this diagnostic's runtime gate: do not
+on AG the sandbox's own `.venv-aarch64`, owner's option 1 of 2026-10-07, through the same guarded `activate.sh` as
+`.venv-x86_64` on AC; `T1D_RUNTIME=overlay` = the older certified-arm-venv overlay, opt-in only). **Stage A's gate G1 is this diagnostic's runtime gate: do not
 submit step 3 before G1 has passed on the cluster you use.** Checkpoint: the 1.2M parent, NOT the donor 12dcefea:
 `/home/ecm5702/perm/checkpoints/o320_o1280/551dfd1eb2a649d49f099acd30b59483/inference-anemoi-by_step-epoch_171-step_400000.ckpt`.
 
@@ -57,14 +58,22 @@ same branch at the commit that has `dp/` (so stage A's recorded `dstools=` does 
 
 ```bash
 source /home/ecm5702/work-t1d-20261007/code/downscaling-tools/scripts/t1d_sampler_20261007/t1d_env.sh
-git -C $T1D_CODE fetch https://github.com/JoffreyDumontLeBrazidec/downscaling-tools claude/project-thread-tpts4t
+git -C $T1D_CODE fetch <fork remote> claude/project-thread-tpts4t      # https fetches fail on the login nodes
 git -C $T1D_CODE worktree add --detach $T1D_W/code/downscaling-tools-diag FETCH_HEAD
 export T1D_CODE=$T1D_W/code/downscaling-tools-diag            # every diagnostic command below uses this
 git -C $T1D_CODE rev-parse HEAD | tee $T1D_W/notes/dstools_diag_sha.txt
 export T1D_OUT=/home/ecm5702/hpcperm/t1d_traj_20261007 T1D_HOST=ag   # or ac; same value as stage A uses
-ls $T1D_SANDBOX/activate.sh && git -C $T1D_SANDBOX/code/anemoi-core rev-parse HEAD   # 27391c1597e8...
+ls $T1D_SANDBOX/activate.sh && git -C $T1D_SANDBOX/code/anemoi-core rev-parse HEAD   # 27391c1597e8... (sandbox git: ag-login only)
 ```
-Keep `T1D_CODE` and `T1D_OUT` exported in the shell that submits (sbatch passes the environment).
+Keep `T1D_CODE`, `T1D_OUT` and `T1D_HOST` set in the shell that runs `submit_traj.sh`. **Atos sets `SBATCH_EXPORT=NONE`:
+sbatch does NOT pass that environment to the job.** `submit_traj.sh` therefore writes every setting the job needs on each
+sbatch line (`--export=ALL,T1D_HOST=..,T1D_CODE=..,T1D_SANDBOX=..,T1D_RUNTIME=..,T1D_INPUT_ROOT=..,ROUTE=..,T1D_OUT=..`
+plus `T1D_BUNDLES` and `T1D_WINDOW` when set; the window travels as `T1D_WINDOW_COLON`, since --export splits on commas).
+`TEST=1 bash .../submit_traj.sh smoke|full|verify` prints each full sbatch line and runs it with `--test-only`; read the
+export list there before every real submission. `cpu_dp.sbatch` takes the output root (and VERIFY) as arguments.
+Atos traps: system `python3` is 3.6 (use a venv's python); sandbox git commands work only from ag-login; `~/.local/bin`
+uv and Python are x86; https fetches fail on the login nodes (use the fork remote); `$HPCPERM` inode margin is about
+9,900 (outputs under `T1D_OUT` count: prefer scratch if the npz states are many files).
 
 ## 2. CPU checks (hpc-login; no GPU)
 
@@ -117,7 +126,8 @@ Expected: 4 x 4 files of about 195 MB, no FAIL line, about 3 GPU-h in total.
 ## 5. CPU: cost matrices, DP, lock-in, verification schedule file (hpc-login; no GPU, no go needed)
 
 ```bash
-sbatch --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch
+source $T1D_CODE/scripts/t1d_sampler_20261007/t1d_env.sh     # for t1d_export (SBATCH_EXPORT=NONE on Atos)
+sbatch "$(t1d_export)" --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch $T1D_OUT
 # about 20-30 min (cost_matrix about 4 min per draw per core, 4 workers); certified x86 venv, as stage A's CPU jobs
 cat $T1D_OUT/dp/dp_summary.md; python -m json.tool $T1D_OUT/lockin/lockin_sigma50.json | head -40
 python -m json.tool $T1D_OUT/verify/schedules_verify.json | grep -E '"calls"|gpu_h'
@@ -135,7 +145,7 @@ seeds, one draw each, the model loaded once per job. 297 calls per draw if all 1
 ```bash
 bash $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/submit_traj.sh verify $T1D_OUT/verify/schedules_verify.json   # 4 jobs x 1 GPU
 # when they end (CPU, from hpc-login):
-VERIFY=1 sbatch --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch
+sbatch "$(t1d_export)" --output=$T1D_OUT/logs/%x_%j.out $T1D_CODE/scripts/t1d_sampler_20261007/dp/jobs/cpu_dp.sbatch $T1D_OUT 1
 cat $T1D_OUT/verify/verify_table.md
 ```
 The table: schedules x (calls, draws, C_L2 run, C_band run, predicted L2, predicted band, ratio L2, ratio band, same
@@ -181,5 +191,5 @@ stay in `$T1D_OUT` on Atos HPCPERM; list their paths in the note. Do not copy th
 - `tests/toy_linear.py`: the fork's EDMHeunSampler (27391c159) through the real capture and writer on a
   linear-Gaussian toy, 240 levels, 479 calls, bookkeeping exact; numbers in README.
 - Not testable here: the cut-graph path on the real checkpoint (including its reuse across schedules in
-  `verify_schedules run`), the bundle reads (`locate_storms`), the GPU timings, the AG overlay, the sharded fallback
+  `verify_schedules run`), the bundle reads (`locate_storms`), the GPU timings, the AG `.venv-aarch64` route (and the overlay opt-in), the sharded fallback
   with `--save-trajectory-states`.

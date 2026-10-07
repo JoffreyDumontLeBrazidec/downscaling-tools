@@ -11,7 +11,9 @@ TSV=$T1D_W/notes/jobs.tsv; mkdir -p "$T1D_W/notes" "$T1D_W/logs"
 T=(); [[ "${TEST:-0}" == 1 ]] && T=(--test-only)
 [[ -f $TSV || "${TEST:-0}" == 1 ]] || echo -e "kind\tarm\tlane\tseed\trun_root\tdepends\tjobid\tcluster" > $TSV
 rec() { [[ "${TEST:-0}" == 1 ]] || echo -e "$1" >> $TSV; echo -e "$1"; }
-jid() { local out; out=$(sbatch --parsable "$@" 2>&1); local rc=$?; [[ "${TEST:-0}" == 1 ]] && { echo "TEST: $out" >&2; echo TEST; return 0; }; [[ $rc == 0 ]] && echo "${out%%;*}" || { echo "SUBMIT FAILED: $out" >&2; return 1; }; }
+# every sbatch call carries the campaign settings explicitly (Atos: SBATCH_EXPORT=NONE); TEST=1 prints the full line
+EXP=$(t1d_export) || exit 2
+jid() { local out; [[ "${TEST:-0}" == 1 ]] && echo "TEST CMD: sbatch --parsable $EXP $*" >&2; out=$(sbatch --parsable "$EXP" "$@" 2>&1); local rc=$?; [[ "${TEST:-0}" == 1 ]] && { echo "TEST: $out" >&2; echo TEST; return 0; }; [[ $rc == 0 ]] && echo "${out%%;*}" || { echo "SUBMIT FAILED: $out" >&2; return 1; }; }
 dep() { [[ "${TEST:-0}" == 1 ]] && return; echo "--dependency=$1"; }
 [[ "$(hostname)" == ag* ]] && echo "WARNING: this half runs on AC; submit from hpc-login (this is $(hostname))" >&2
 L=--output=$T1D_W/logs/%x_%j.out

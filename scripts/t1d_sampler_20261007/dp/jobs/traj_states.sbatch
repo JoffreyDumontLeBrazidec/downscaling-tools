@@ -35,7 +35,7 @@ ARGS=(--checkpoint "$T1D_DIAG_CKPT" --output-dir "$OUTDIR"
       --num-steps "$NLEV" --seeds "${SEEDS[@]}"
       --eye-radius-km 500 --auto-window "$WINDOW" --precision fp32
       --noise-scheduler-json "$NSJ" --sampler-params-json "$T1D_DIAG_SPJ")
-echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) cluster=$HOST route=$ROUTE dstools=$(git rev-parse --short HEAD) core=$(git -C "$CORE_DIR" rev-parse --short HEAD) ckpt=$T1D_DIAG_CKPT date=$DATE step=$STEP member=01 seeds=${SEEDS[*]} nlev=$NLEV calls_per_seed=$((2*NLEV-1)) window=$WINDOW out=$OUTDIR bundles=$T1D_DIAG_BUNDLES"
+echo "host=$(hostname) arch=$(uname -m) start=$(date -Is) cluster=$HOST route=$ROUTE dstools=$(git rev-parse --short HEAD) core=$(t1d_git_head "$CORE_DIR" | cut -c1-9) ckpt=$T1D_DIAG_CKPT date=$DATE step=$STEP member=01 seeds=${SEEDS[*]} nlev=$NLEV calls_per_seed=$((2*NLEV-1)) window=$WINDOW out=$OUTDIR bundles=$T1D_DIAG_BUNDLES"
 mkdir -p "$OUTDIR"
 t0=$(date +%s)
 if [[ "$ROUTE" == box ]]; then

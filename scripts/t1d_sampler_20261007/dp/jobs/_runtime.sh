@@ -1,33 +1,17 @@
 # Sourced by the T1d diagnostic GPU jobs (traj_states.sbatch, verify.sbatch). The runtime is the one stage A's gate G1
 # validates: campaign settings from ../t1d_env.sh (T1D_SANDBOX = the `exp new t1d-stagea` folder, T1D_CORE_SHA,
-# T1D_HOST, T1D_CERT_VENV_AG, T1D_INPUT_ROOT), and the same activation as se_tc_predict_t1d.sbatch's sandbox runtime:
-#   T1D_HOST=ac (default): Atos AC, A100, x86_64 -> the sandbox's own uv venv via its guarded activate.sh
-#   T1D_HOST=ag          : Atos AG, GH200, aarch64 -> certified arm venv + PYTHONPATH overlay of the sandbox code
-#                          + import guard (the runbook's AG rule; the uv layer is not validated on aarch64)
+# T1D_HOST, T1D_RUNTIME, T1D_INPUT_ROOT), all passed into the job by submit_traj.sh's --export list (Atos sets
+# SBATCH_EXPORT=NONE, so nothing else from the submit shell arrives), and the same activation as
+# se_tc_predict_t1d.sbatch's sandbox runtime (t1d_activate_sandbox):
+#   default (T1D_RUNTIME=venv): the sandbox's own uv venv for this node, .venv-x86_64 on AC (A100) or .venv-aarch64 on
+#     AG (GH200, owner's option 1 of 2026-10-07), through its guarded activate.sh, + samplers/HEAD checks
+#   T1D_RUNTIME=overlay (AG opt-in): certified arm venv + PYTHONPATH onto the sandbox code + import guard
 source "${T1D_CODE:-/home/ecm5702/work-t1d-20261007/code/downscaling-tools}/scripts/t1d_sampler_20261007/t1d_env.sh" \
   || { echo "FATAL cannot source t1d_env.sh"; exit 2; }
 HOST="${T1D_HOST:-ac}"; ARCH=$(uname -m)
 case "$HOST:$ARCH" in ac:x86_64|ag:aarch64) ;; *) echo "FATAL T1D_HOST=$HOST on a $ARCH node (ac = x86_64 A100, ag = aarch64 GH200)"; exit 3 ;; esac
 module load ecmwf-toolbox 2>/dev/null || true
-case "$HOST" in
-  ac)
-    set +u; source "$T1D_SANDBOX/activate.sh" || { echo "FATAL sandbox activation failed ($T1D_SANDBOX)"; exit 3; }; set -u
-    CORE_DIR=$T1D_SANDBOX/code/anemoi-core ;;
-  ag)
-    set +u; unset PYTHONPATH; source "$T1D_CERT_VENV_AG/bin/activate" || exit 3; set -u
-    SBC=$T1D_SANDBOX/code
-    export PYTHONPATH="$SBC/anemoi-core/training/src:$SBC/anemoi-core/models/src:$SBC/anemoi-core/graphs/src:$SBC/anemoi-inference/src"
-    python - "$SBC" <<'PYGUARD' || { echo "FATAL GUARD: the overlay did not win"; exit 4; }
-import importlib, os, sys
-root = os.path.realpath(sys.argv[1]); bad = []
-for name in ("anemoi.models", "anemoi.training", "anemoi.graphs", "anemoi.inference", "anemoi.models.samplers.diffusion_samplers"):
-    p = os.path.realpath(importlib.import_module(name).__file__)
-    (bad.append if not p.startswith(root + os.sep) else print)(f"  GUARD {name} -> {p}")
-if bad: print("\n".join(bad)); sys.exit(1)
-PYGUARD
-    CORE_DIR=$SBC/anemoi-core ;;
-esac
-[[ "$(git -C "$CORE_DIR" rev-parse HEAD)" == "$T1D_CORE_SHA" ]] || { echo "FATAL sandbox anemoi-core is not $T1D_CORE_SHA"; exit 3; }
+t1d_activate_sandbox || exit $?
 python -c "import anemoi.models.samplers.diffusion_samplers as d, torch; assert 'custom' in d.NOISE_SCHEDULERS, 'not the patched fork'; print('RUNTIME', d.__file__, 'torch', torch.__version__, 'cuda', torch.cuda.is_available())" || exit 4
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | sort | uniq -c | sed "s/^/GPU /"
 export DATA_DIR=/home/mlx/ai-ml/datasets/ DATA_STABLE_DIR=/home/mlx/ai-ml/datasets/stable/ OUTPUT=/ec/res4/scratch/ecm5702/aifs
@@ -43,5 +27,7 @@ T1D_DIAG_SCOPE='{"mode":"bbox","cut_graph":true,"hidden_halo_hops":1,"label":"fr
 T1D_DIAG_SPJ='{"sampler":"heun","S_churn":0.0,"S_noise":1.0}'
 T1D_DIAG_BUNDLES="${T1D_BUNDLES:-$T1D_INPUT_ROOT}"
 [[ -f "$T1D_DIAG_CKPT" ]] || { echo "FATAL missing checkpoint $T1D_DIAG_CKPT"; exit 1; }
-# Idalia search window of a bundle (one table: dp/common.py IDALIA_WINDOWS); override with T1D_WINDOW
+# Idalia search window of a bundle (one table: dp/common.py IDALIA_WINDOWS); override with T1D_WINDOW. A job receives
+# it as T1D_WINDOW_COLON (lat0:lat1:lon0:lon1; sbatch --export splits on commas), converted back here.
+[[ -n "${T1D_WINDOW_COLON:-}" ]] && export T1D_WINDOW="${T1D_WINDOW_COLON//:/,}"
 t1d_window() { (cd "$T1D_CODE" && python -m scripts.t1d_sampler_20261007.dp.locate_storms --print-window "$1" "$2"); }
