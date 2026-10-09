@@ -86,6 +86,11 @@ DATASET_PATH_REWRITE_PREFIXES = (
     ("/leonardo_work/DestE_340_25/ai-ml/datasets/", "/home/mlx/ai-ml/datasets/"),
     ("/e/data1/jureap-data/ai-ml/datasets///", "/home/mlx/ai-ml/datasets/"),
     ("/e/data1/jureap-data/ai-ml/datasets/", "/home/mlx/ai-ml/datasets/"),
+    # C2D final eval (2026-10-09): the v4 stores of the Jupiter global lanes live under the ecmwf project root on
+    # Jupiter and under /ec/ai/project/ai-ml/datasets/ on Atos (references/dataset_locations.md). Inert unless the
+    # target exists.
+    ("/e/data1/jureap-data/ecmwf/ai-ml/datasets///", "/ec/ai/project/ai-ml/datasets/"),
+    ("/e/data1/jureap-data/ecmwf/ai-ml/datasets/", "/ec/ai/project/ai-ml/datasets/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets///", "/home/mlx/ai-ml/datasets/"),
     ("/e/home/jusers/dumontlebrazidec1/jupiter/gkpdm/datasets/", "/home/mlx/ai-ml/datasets/"),
     # Arm A (aifs-arm-a, 2026-09-08) trains on Jupiter from a scratch store root that has no
