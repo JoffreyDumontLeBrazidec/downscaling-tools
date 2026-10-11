@@ -95,7 +95,7 @@ No successor is queued when:
 - `sbatch` fails (warning in the `.err`, line in `CHAIN.log`; the current segment still trains).
 
 Tested on the clusters on 2026-10-11 (4-job toy chain 0→3000, one `sbatch`): Atos AC (`ecsbatch` wrapper works
-inside a job), Leonardo and Jupiter ran the whole chain; AG and MN5 `acc_ehpc` were still queued. Queue limits that
+inside a job), AG, Leonardo, Jupiter and MN5 (`acc_ehpc`) ran the whole chain. Queue limits that
 break self-submission: **MN5 `acc_debug` has MaxSubmitPU=1**, so a running job can never queue its successor (the
 segment warns and the chain ends): use `acc_ehpc`. Atos `dg` allows one running job per account, shared by all our
 sessions.
