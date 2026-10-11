@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake scontrol: 'show job <id>' prints the Command= line.
+f="$FAKE_SLURM_DIR/jobs/$3"; [[ -f "$f" ]] || exit 1
+cmd="$(sed -n 's/^command=//p' "$f")"
+echo "JobId=$3 JobName=toy"; echo "   Command=${cmd% }"; echo "   WorkDir=/tmp"

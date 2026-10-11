@@ -1,0 +1,17 @@
+#!/bin/bash
+# Fake sbatch for tests: records a pending job in $FAKE_SLURM_DIR/jobs/<id> (command, dependency, leaked env).
+set -eo pipefail
+dep=""; parsable=0; args=()
+for a in "$@"; do
+  case "$a" in
+    --parsable) parsable=1 ;;
+    --dependency=*) dep="${a#--dependency=}" ;;
+    *) args+=("$a") ;;
+  esac
+done
+mkdir -p "$FAKE_SLURM_DIR/jobs"
+n=$(( $(cat "$FAKE_SLURM_DIR/next_id" 2>/dev/null || echo 100) + 1 )); echo "$n" > "$FAKE_SLURM_DIR/next_id"
+script="$(cd "$(dirname "${args[0]}")" && pwd)/$(basename "${args[0]}")"
+{ echo "state=PENDING"; echo "command=$script ${args[*]:1}"; echo "dependency=$dep";
+  echo "leaked_job_id=${SLURM_JOB_ID:-}"; echo "submit_dir=$PWD"; } > "$FAKE_SLURM_DIR/jobs/$n"
+[[ $parsable == 1 ]] && echo "$n" || echo "Submitted batch job $n"

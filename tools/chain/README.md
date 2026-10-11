@@ -76,14 +76,39 @@ exit $rc
 j=$(sbatch --parsable job.sbatch); for i in 2 3 4; do j=$(sbatch --parsable --dependency=afterany:${j%%;*} job.sbatch); done
 ```
 
+### On-demand segments (one submission per chain)
+
+Instead of pre-submitting N segments, the job body may call `chain_next "$CKPT_ROOT"` right after `chain_resolve`.
+The segment then queues the same job file once more with `--dependency=afterany:<this job>`, before it trains, so
+a segment that dies in its first minutes still has its successor. The chain is submitted once
+(`sbatch job.sbatch`) and runs until `done`. Idea borrowed from ecmwf/ml-conductor's requeue loop, without its
+always-on supervisor (docs `epics/misc/20261011_ml_conductor_evaluation.md`).
+
+No successor is queued when:
+- the chain is `done` or refused (the segment exits before `chain_next`);
+- `CHAIN.stop` exists in the checkpoint root (also makes any queued segment exit 0 at once): **to stop a chain,
+  `touch <root>/CHAIN.stop`**, then `scancel` the running segment if it should not finish. A bare `scancel` of the
+  running segment is not a stop: its `afterany` successor starts;
+- three segments in a row started at the same step (no checkpoint written by the last two): the chain is not
+  progressing and needs a person (`--max-same-start`, second argument of `chain_next`);
+- a pending job already runs the same command (an older pre-submitted series, or a resubmission by hand);
+- `sbatch` fails (warning in the `.err`, line in `CHAIN.log`; the current segment still trains).
+
+Each decision is a line in `CHAIN.log` (`next queued job=...`, `next already queued`, `next NOT submitted`,
+`next-check REFUSED`). The job's own `SLURM_*` variables (except `SLURM_CONF`) are removed from the successor's
+`sbatch`; it is submitted from `SLURM_SUBMIT_DIR`, with the job file's own `#SBATCH` lines.
+
 Moving a run to another cluster: copy the run folder and `CHAIN.json` together (or `adopt` on arrival).
 Extending a run past its planned end: raise `END_STEP` in the job file (and switch the loss per the
 standing rules); the resolver then resumes instead of reporting `done`.
 
 ## Tests
 
-`python -m pytest tools/chain` (9 tests, about 30 s on CPU): the resolver's decision table on synthetic
+`python -m pytest tools/chain` (15 tests, about 35 s on CPU): the resolver's decision table on synthetic
 checkpoints, and an end-to-end chain through `tests/toy_job.sh` around a tiny Lightning trainer with anemoi's
 start semantics: refuse without a manifest, fresh from a donor, resume with the same job file, `done`, the
 guard stopping a weights-only resume, and the 2026-10-09 failure (a segment starting from the donor) stopped
-before it trains or writes a second run.
+before it trains or writes a second run. `tests/test_chain_next.py` runs the self-submitting job
+`tests/toy_next_job.sh` under a fake Slurm (`tests/fake_slurm/`): one submission runs a whole chain, no progress
+stops it after three segments, progress resets the count, `CHAIN.stop`, no duplicate of a pending segment, and no
+`SLURM_*` leak into the successor's submission.

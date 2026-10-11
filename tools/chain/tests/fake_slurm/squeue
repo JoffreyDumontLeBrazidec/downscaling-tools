@@ -1,0 +1,7 @@
+#!/bin/bash
+# Fake squeue: supports -h -u U -t PENDING -o '%i|%o' only.
+for f in "$FAKE_SLURM_DIR"/jobs/*; do
+  [[ -f "$f" ]] || continue
+  grep -q '^state=PENDING$' "$f" || continue
+  cmd="$(sed -n 's/^command=//p' "$f")"; echo "$(basename "$f")|${cmd% }"
+done

@@ -21,18 +21,24 @@ Each segment, inside the job, before training:
     done    the run's last.ckpt is at or past N: exit 0 without training
 
 and after training `chain_state.py record --root R` records the run id and fails if a second run appeared.
+
+A chain may also submit its own successor (on-demand segments, `chain_next` in chain_segment.sh) instead of a
+pre-submitted series: `chain_state.py next-check --root R` says whether a successor may be submitted (exit 3 when
+the chain has stalled or carries a stop file). A file `CHAIN.stop` in the root makes every segment exit 0 at once.
 Refusals exit 3 with the reason on stderr. Python 3.6 compatible (the Atos login nodes), stdlib only.
 """
 import argparse
 import json
 import os
 import pickle
+import re
 import sys
 import time
 import zipfile
 
 MANIFEST = "CHAIN.json"
 LOG = "CHAIN.log"
+STOP = "CHAIN.stop"
 REFUSE = 3
 
 
@@ -182,6 +188,9 @@ def cmd_adopt(a):
 
 def _resolve(root, end_step):
     m = _read_manifest(root)
+    if os.path.exists(os.path.join(root, STOP)):
+        return {"CHAIN_ACTION": "stopped", "CHAIN_RUN_ID": m.get("run_id") or "", "CHAIN_EXPECT_STEP": "",
+                "CHAIN_LAST_CKPT": ""}
     ignored = set(m.get("ignored_runs", []))
     runs = {r: has_last for r, has_last in runs_with_checkpoints(root).items() if r not in ignored}
     run_id = m.get("run_id")
@@ -247,6 +256,42 @@ def cmd_record(a):
     print("[chain] run {} last.ckpt step {}".format(run_id, step))
 
 
+_RESOLVE_RE = re.compile(r" resolve action=(fresh|resume) run_id=\S+ expect_step=(\d+) ")
+
+
+def resolved_start_steps(root):
+    """Start steps of the segments that trained (fresh or resume), oldest first, from CHAIN.log."""
+    path = os.path.join(root, LOG)
+    if not os.path.isfile(path):
+        return []
+    with open(path) as fh:
+        return [int(m.group(2)) for m in (_RESOLVE_RE.search(line) for line in fh) if m]
+
+
+def cmd_next_check(a):
+    """May this segment submit its successor? Called right after resolve, so the last start is this segment's."""
+    if os.path.exists(os.path.join(a.root, STOP)):
+        raise Refuse("{} exists: the chain is stopped; no successor".format(os.path.join(a.root, STOP)))
+    starts = resolved_start_steps(a.root)
+    if not starts:
+        raise Refuse("no resolve line in {}: next-check must run after chain_resolve".format(LOG))
+    same = 0
+    for step in reversed(starts):
+        if step != starts[-1]:
+            break
+        same += 1
+    if same >= a.max_same_start:
+        raise Refuse("{} segments in a row started at step {} (no checkpoint written by the last {}): the chain "
+                     "is not progressing; no successor. Read the last segments' logs, then resubmit the job file "
+                     "by hand.".format(same, starts[-1], same - 1))
+    print("[chain] successor allowed ({} segment(s) in a row at step {}, limit {})".format(
+        same, starts[-1], a.max_same_start))
+
+
+def cmd_log(a):
+    _log(a.root, " ".join(a.text))
+
+
 def cmd_step(a):
     print(checkpoint_step(a.ckpt))
 
@@ -254,6 +299,8 @@ def cmd_step(a):
 def cmd_status(a):
     m = _read_manifest(a.root)
     print(json.dumps(m, indent=2, sort_keys=True))
+    if os.path.exists(os.path.join(a.root, STOP)):
+        print("STOPPED: {} exists".format(os.path.join(a.root, STOP)))
     for r, has_last in sorted(runs_with_checkpoints(a.root).items()):
         step = checkpoint_step(os.path.join(a.root, r, "last.ckpt")) if has_last else None
         tag = "chain" if r == m.get("run_id") else ("ignored" if r in m.get("ignored_runs", []) else "STRAY")
@@ -277,6 +324,13 @@ def main(argv=None):
     s.add_argument("--format", choices=("shell", "json"), default="shell")
     s = sub.add_parser("record", help="record the run id and catch a second run (inside the job, after training)")
     s.add_argument("--root", required=True)
+    s = sub.add_parser("next-check", help="may this segment submit its successor (inside the job, after resolve)")
+    s.add_argument("--root", required=True)
+    s.add_argument("--max-same-start", type=int, default=3,
+                   help="stop when this many segments in a row started at the same step (default 3)")
+    s = sub.add_parser("log", help="append a line to CHAIN.log")
+    s.add_argument("--root", required=True)
+    s.add_argument("text", nargs="+")
     s = sub.add_parser("step", help="print the global_step of a checkpoint")
     s.add_argument("ckpt")
     s = sub.add_parser("status", help="manifest and runs of a chain")
@@ -288,10 +342,10 @@ def main(argv=None):
         a.root = os.path.abspath(a.root)
     try:
         {"init": cmd_init, "adopt": cmd_adopt, "resolve": cmd_resolve, "record": cmd_record,
-         "step": cmd_step, "status": cmd_status}[a.cmd](a)
+         "next-check": cmd_next_check, "log": cmd_log, "step": cmd_step, "status": cmd_status}[a.cmd](a)
     except Refuse as e:
         sys.stderr.write("[chain] REFUSED: {}\n".format(e))
-        if a.cmd in ("resolve", "record") and os.path.isdir(getattr(a, "root", "")):
+        if a.cmd in ("resolve", "record", "next-check") and os.path.isdir(getattr(a, "root", "")):
             try:
                 _log(a.root, "{} REFUSED: {}".format(a.cmd, e))
             except OSError:
