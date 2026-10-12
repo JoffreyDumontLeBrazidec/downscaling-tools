@@ -52,7 +52,7 @@ def _output_dir_for(subcommand: str, args: argparse.Namespace, host_config: dict
         # Place evaluator outputs alongside predictions, unless --output-dir overrides
         explicit_out = getattr(args, "output_dir", None)
         return Path(explicit_out) if explicit_out else Path(args.predictions_dir).parent
-    if subcommand in ("run", "predict") and getattr(args, "output_dir", None):
+    if subcommand in ("run", "predict", "judge") and getattr(args, "output_dir", None):
         return Path(args.output_dir)
     if subcommand == "prepare":
         bundle_dir_arg = getattr(args, "bundle_dir", None)

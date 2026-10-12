@@ -7,7 +7,7 @@ dispatches. Commands that need a lane and a host go through ``_session`` first.
 Groups (see ``python -m eval.cli --help``):
 
     discovery    list, describe
-    pipeline     run, predict, prepare, evaluate, scoreboard
+    pipeline     run, predict, prepare, evaluate, judge, scoreboard
     comparison   evolution
     tc_tracks    tctracker, tccompare
     figures      zoom_maps
@@ -28,7 +28,7 @@ from eval.cli._common import ALL_EVALUATORS, DEFAULT_HOST, GROUP_TITLES, Command
 
 # Modules that publish commands, in the order they appear in the help.
 _COMMAND_MODULES = (
-    "discover", "run", "predict", "prepare", "evaluate", "scoreboard",
+    "discover", "run", "predict", "prepare", "evaluate", "judge", "scoreboard",
     "evolution", "tctracker", "tccompare", "zoom_maps",
     "prepml_cleanup", "lane_config", "retired",
 )

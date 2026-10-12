@@ -97,6 +97,8 @@ from typing import Any
 
 import numpy as np
 
+from eval.shared.regions import ALPS
+
 LOG = logging.getLogger(__name__)
 
 # z_500 is left out by default: its fine band is numerically delicate (the
@@ -107,7 +109,7 @@ DEFAULT_STATES = ["10u", "10v", "2t", "msl", "t_850"]
 # [lat_min, lat_max, lon_min, lon_max], longitudes in -180..180.
 DEFAULT_REGIONS: dict[str, list[float]] = {
     "europe": [35.0, 60.0, -10.0, 25.0],
-    "alps": [43.0, 49.0, 4.0, 16.0],
+    "alps": list(ALPS),   # the protocol's Alps, eval/shared/regions.py
     "open_north_atlantic": [35.0, 55.0, -45.0, -20.0],
     "west_tropical_atlantic": [10.0, 25.0, -70.0, -45.0],
 }

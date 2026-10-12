@@ -275,16 +275,18 @@ texture:
 # zoom_maps (added 2026-09-02 as membermaps, renamed 2026-09-29): the four-panel
 # case-inspection maps, as an evaluator rather than a hand-written sbatch. Default
 # OFF because it is a figure bundle, not a measurement: run it with
-# `eval.cli evaluate --only zoom_maps`. The block below keeps the old key
-# `membermaps:`; zoom_maps reads it with a warning while no `zoom_maps:` block exists.
-# Each combination renders input, truth and prediction, twice — the field itself
-# and the fine-scale high-pass view.
-membermaps:
-  variables: ["wind10m", "msl", "2t"]
+# `eval.cli evaluate --only zoom_maps`. Each combination renders input, truth and
+# prediction, twice — the field itself and the fine-scale high-pass view.
+# 2026-10-12: aligned with the run-judging protocol (docs skills/downscaling-evaluation/
+# references/run-judging-protocol.md section 3): lead +24 h (was 72), wind10m and 2t
+# (msl dropped: over the Alps it is reduced to a surface that does not exist).
+zoom_maps:
+  variables: ["wind10m", "2t"]
   fields: ["value", "fine"]
-  # default = the middle step of the lane; listed so --steps propagates here
-  steps: [72]
+  # listed so --steps propagates here
+  steps: [24]
   members: [1]
   fine_cut_deg: 0.6
   # omitted on purpose: `regions` falls back to the texture block above, so the
-  # two fine-scale diagnostics always speak about the same boxes.
+  # two fine-scale diagnostics always speak about the same boxes (alps is
+  # eval/shared/regions.py ALPS).

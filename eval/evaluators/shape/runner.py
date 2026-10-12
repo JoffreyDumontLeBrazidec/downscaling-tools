@@ -17,7 +17,22 @@ from two results directories.
 
 eval_config keys (all optional): steps (default [24, 120]), dates, vars ("10u,10v"),
 bands ("mid,b12"), members, n_boot, seed, geom_cache, mask_cache, probe_file,
-stats_file, windows ({"YYYYMM": label}).
+stats_file, windows ({"YYYYMM": label}), and, for a box other than the epic's (boxes.py):
+
+- box: a name (tc_atlantic, the default; north_atlantic 35-55 N, 45-20 W; e2) or
+  [lat_min, lat_max, lon_min, lon_max]. Any box is cut out of each file by its own
+  coordinates, so Europe-box (E2) files and global files both work;
+- cache_dir: where the per-box geometry and mask caches live (default
+  <EVAL_ROOT>/_cache/shape);
+- regrid_deg: the regular grid of statistics 2 and 3 (default 0.09, the instrument's);
+- knn_file, forcings, inter_mat_dir: the global O1280 inputs that build a new box's
+  open-ocean mask once (Atos paths by default; copy the mask cache to other clusters).
+
+Off the epic's box, all dates pool into one window "all" unless ``windows`` is given, and
+files whose members share one input (matched-seed draws) are read member by member,
+since the full-rung reader asserts that inputs differ.
+
+From the command line: ``eval.cli evaluate --only shape --opt shape.box=north_atlantic``.
 """
 from __future__ import annotations
 
@@ -49,19 +64,57 @@ def _git_commit() -> str:
         return "unknown"
 
 
+_MODULE_DEFAULTS: dict = {}
+
+
 def _configure(eval_config: dict):
+    """Set the instrument's module constants for this run, starting from their defaults
+    each time, so that two runs in one process (a model and its reference) never inherit
+    each other's box or caches."""
     from . import fullrung as F
     from . import instrument as S
 
+    if not _MODULE_DEFAULTS:
+        _MODULE_DEFAULTS.update(
+            {("S", k): getattr(S, k) for k in ("GEOMCACHE", "DONOR_MASKCACHE", "LOCAL_MASKCACHE",
+                                               "STATS", "KNN", "FORC", "IM", "REGRID_DEG")})
+        _MODULE_DEFAULTS[("F", "PROBE")] = F.PROBE
+    for (mod, k), v in _MODULE_DEFAULTS.items():
+        setattr(S if mod == "S" else F, k, v)
+
+    if eval_config.get("regrid_deg"):
+        S.REGRID_DEG = float(eval_config["regrid_deg"])
+    for key, attr in (("knn_file", "KNN"), ("forcings", "FORC"), ("inter_mat_dir", "IM")):
+        if eval_config.get(key):
+            setattr(S, attr, str(eval_config[key]))
     if eval_config.get("geom_cache"):
         S.GEOMCACHE = str(eval_config["geom_cache"])
     if eval_config.get("mask_cache"):
         S.DONOR_MASKCACHE = str(eval_config["mask_cache"])
+        S.LOCAL_MASKCACHE = str(eval_config["mask_cache"])
     if eval_config.get("stats_file"):
         S.STATS = str(eval_config["stats_file"])
     if eval_config.get("probe_file"):
         F.PROBE = str(eval_config["probe_file"])
     return F, S
+
+
+def members_share_input(path, var_names, sel, members=None) -> list[int]:
+    """The member indices when every member of the file has the same ``x_interp`` on the
+    box (matched-seed draws), else [] (full-rung file: one input per member)."""
+    import netCDF4 as nc
+
+    with nc.Dataset(str(path)) as d:
+        nm = d.dimensions["ensemble_member"].size
+        ks = list(range(nm)) if members is None else [int(k) for k in members]
+        if len(ks) < 2:
+            return []
+        j = [str(x) for x in d["weather_state"][:]].index(var_names[0])
+        first = np.asarray(d["x_interp"][0, ks[0], :, j])[sel]
+        for k in ks[1:]:
+            if not np.array_equal(np.asarray(d["x_interp"][0, k, :, j])[sel], first):
+                return []
+    return ks
 
 
 def read_rows(path) -> list[dict]:
@@ -101,7 +154,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "shape"
     parts = output_dir / "parts"
     parts.mkdir(parents=True, exist_ok=True)
+    from . import boxes as B
+    box = B.resolve_box(eval_config.get("box"))
     F, S = _configure(eval_config)
+    use_probe = B.is_legacy(box) and os.path.exists(F.PROBE)
 
     steps = [int(s) for s in (eval_config.get("steps") or [24, 120])]
     dates = {str(d) for d in (eval_config.get("dates") or [])}
@@ -110,13 +166,18 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     members = eval_config.get("members")
     n_boot = int(eval_config.get("n_boot", DEFAULT_N_BOOT))
     seed = int(eval_config.get("seed", DEFAULT_SEED))
-    windows = dict(DEFAULT_WINDOWS, **(eval_config.get("windows") or {}))
+    if B.is_legacy(box) or eval_config.get("windows"):
+        windows = dict(DEFAULT_WINDOWS, **(eval_config.get("windows") or {}))
+    else:
+        windows = None   # one window "all", filled from the files' dates below
     arm = run_label or eval_config.get("run_label") or predictions_dir.name
 
     files = [p for p in find_predictions(predictions_dir)
              if p.step in steps and (not dates or p.date in dates)]
     if not files:
         raise FileNotFoundError(f"shape: no prediction files for steps {steps} under {predictions_dir}")
+    if windows is None:
+        windows = {str(p.date)[:6]: "all" for p in files}
     stdev = {str(k): float(v)
              for k, v in np.load(S.STATS, allow_pickle=True).item()["stdev"].items()}
     LOG.info("shape: %d files, arm %s, git %s", len(files), arm, _git_commit())
@@ -128,23 +189,42 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     for pf in files:
         path = str(pf.path)
         dirname = Path(os.path.realpath(path)).parent.parent.name
-        sel, blat, blon, selnote = F.box_selection(path)
+        if use_probe:
+            sel, blat, blon, selnote = F.box_selection(path)
+        else:
+            sel, blat, blon, selnote = B.select_box(path, box)
         if ap is None:
+            if not use_probe:
+                # one cache per box and grid; explicit geom_cache / mask_cache still win
+                cp = B.cache_paths(box, eval_config.get("cache_dir"), n_points=blat.size)
+                if not eval_config.get("geom_cache"):
+                    S.GEOMCACHE = cp["geom_cache"]
+                if not eval_config.get("mask_cache"):
+                    S.DONOR_MASKCACHE = S.LOCAL_MASKCACHE = cp["mask_cache"]
             ap = S.Apparatus(blat, blon)
             ap_grid = (blat, blon)
+            B.check_masks(ap, box)
         else:
             assert np.array_equal(ap_grid[0], blat) and np.array_equal(ap_grid[1], blon), \
                 f"{path}: box grid differs from the first file's"
         tf = time.time()
         rows: list[dict] = []
-        nk = F.run_file(ap, arm, dirname, pf.date, pf.step, path, var_names, sel, stdev, rows,
-                        members=members, bands=bands)
+        shared = members_share_input(path, var_names, sel, members)
+        if shared:
+            # matched-seed draws: one input for every member, which read_fullrung refuses
+            # when given several members at once; one member per call reads the same rows
+            nk = sum(F.run_file(ap, arm, dirname, pf.date, pf.step, path, var_names, sel, stdev,
+                                rows, members=[k], bands=bands) for k in shared)
+        else:
+            nk = F.run_file(ap, arm, dirname, pf.date, pf.step, path, var_names, sel, stdev, rows,
+                            members=members, bands=bands)
         out = parts / f"p1_{arm}_{pf.date}_s{int(pf.step):03d}.csv"
         F.write_csv(str(out), rows)
         dt = time.time() - tf
         per_file.append({"file": path, "resolved": os.path.realpath(path), "dirname": dirname,
                          "date": pf.date, "step": pf.step, "n_members": nk, "seconds": dt,
-                         "box_selection": selnote, "part": str(out)})
+                         "box_selection": selnote, "members_share_input": bool(shared),
+                         "part": str(out)})
         # re-read the part so that the pooled numbers are made from exactly what was written
         all_rows += read_rows(out)
         LOG.info("shape: %s done in %.1fs", Path(path).name, dt)
@@ -158,7 +238,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         {"arm": arm, "n_boot": n_boot, "seed": seed, "rows": summary}, indent=1) + "\n")
     meta = {"evaluator": "shape", "git_commit": _git_commit(), "arm": arm,
             "predictions_dir": str(predictions_dir), "steps": steps, "vars": var_names,
-            "bands": list(bands), "files": per_file, "geom_cache": S.GEOMCACHE,
+            "bands": list(bands), "box": box.tag, "box_bounds": box.as_list(),
+            "box_points": int(ap.n) if ap else None, "regrid_deg": S.REGRID_DEG,
+            "windows": windows, "files": per_file, "geom_cache": S.GEOMCACHE,
             "mask_cache": ap.maskcache if ap else None, "probe_file": F.PROBE, "stats_file": S.STATS,
             "n_boot": n_boot, "seed": seed, "seconds": time.time() - t0}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=1, default=str) + "\n")

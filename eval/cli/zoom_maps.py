@@ -12,6 +12,7 @@ import argparse
 import re
 
 from eval.cli._common import Command
+from eval.shared.regions import PROTOCOL_REGIONS
 
 SUMMARY = "Render zoomed single-member maps of the input, the truth and the predictions."
 DESCRIPTION = (
@@ -53,12 +54,31 @@ def register(subparsers) -> argparse.ArgumentParser:
         description=DESCRIPTION,
     )
     _escape_bare_percent(parser)
+    parser.add_argument(
+        "--region", choices=sorted(PROTOCOL_REGIONS), default=None,
+        help=("A fixed box of the run-judging protocol (eval/shared/regions.py): sets --extent "
+              "and, unless given, --region-tag. alps = 43-49 N, 4-16 E (drawn widened to the "
+              "12-degree minimum span). Use it instead of typing the extent, so every read "
+              "draws the same box."),
+    )
     return parser
+
+
+def apply_region(args: argparse.Namespace) -> argparse.Namespace:
+    """Turn ``--region`` into ``--extent`` (lon_min lon_max lat_min lat_max) and the tag."""
+    name = getattr(args, "region", None)
+    if not name:
+        return args
+    lat_min, lat_max, lon_min, lon_max = PROTOCOL_REGIONS[name]
+    args.extent = [lon_min, lon_max, lat_min, lat_max]
+    if args.region_tag == "europe-cutout":
+        args.region_tag = name
+    return args
 
 
 def run(args: argparse.Namespace) -> None:
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import run as zoom_maps_run
-    raise SystemExit(zoom_maps_run(args))
+    raise SystemExit(zoom_maps_run(apply_region(args)))
 
 
 COMMANDS = (Command("zoom_maps", "figures", SUMMARY, register, run),)

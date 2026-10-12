@@ -100,6 +100,14 @@ def add_lane_override_args(parser: argparse.ArgumentParser) -> None:
             "resolves the states from the checkpoint output."
         ),
     )
+    parser.add_argument(
+        "--opt", action="append", default=None, metavar="BLOCK.KEY=VALUE",
+        help=(
+            "Set one key of a lane block for this call, e.g. --opt shape.box=north_atlantic or "
+            "--opt 'zoom_maps.steps=[24]'. VALUE is read as YAML. Repeatable; recorded in "
+            "effective_config.json like the other overrides."
+        ),
+    )
 
 
 def add_prepare_args(parser: argparse.ArgumentParser) -> None:
@@ -184,9 +192,24 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
     # shallow at the second level, so injecting {"env": {...}} here would clobber
     # the lane YAML's full predict.env block. Instead, --num-chunks is applied
     # directly to lane_config["predict"]["env"] after load_lane returns.
-    if predict_overrides:
-        return {"predict": predict_overrides}
-    return {}
+    overrides: dict = {"predict": predict_overrides} if predict_overrides else {}
+    for block, key, value in parse_opts(getattr(args, "opt", None)):
+        overrides.setdefault(block, {})[key] = value
+    return overrides
+
+
+def parse_opts(raw: list[str] | None) -> list[tuple[str, str, object]]:
+    """``--opt BLOCK.KEY=VALUE`` items as (block, key, value), VALUE read as YAML."""
+    import yaml
+
+    out = []
+    for item in raw or []:
+        lhs, sep, rhs = item.partition("=")
+        block, dot, key = lhs.strip().partition(".")
+        if not (sep and dot and block and key):
+            raise SystemExit(f"--opt {item!r}: expected BLOCK.KEY=VALUE, e.g. shape.box=north_atlantic")
+        out.append((block, key, yaml.safe_load(rhs) if rhs.strip() else None))
+    return out
 
 
 # ---------------------------------------------------------------------------

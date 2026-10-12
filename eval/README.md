@@ -20,12 +20,25 @@ command.
 | Group | Commands |
 |---|---|
 | discovery | `list`, `describe <evaluator>` |
-| pipeline | `run`, `predict`, `prepare`, `evaluate`, `scoreboard` |
+| pipeline | `run`, `predict`, `prepare`, `evaluate`, `judge`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
 | figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
 | retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
+
+`judge` runs the run-judging protocol (docs `skills/downscaling-evaluation/references/
+run-judging-protocol.md`) on a run and its reference and writes `read.md`, the `## Run read:`
+section that docs `scripts/check_run_read.py` checks:
+
+```bash
+python -m eval.cli judge --lane o320_o1280 --host jupiter \
+    --run h9dm_nm50=<run>/predictions --reference h9dm_100k=<ref>/predictions \
+    --output-dir <read_dir> --weights "EMA-10000 / EMA-10000"
+```
+
+`--opt BLOCK.KEY=VALUE` (on `evaluate`, `run`, `predict` and `judge`) sets one key of a lane
+block for one call, for example `--opt shape.box=north_atlantic`.
 
 Start with discovery. `python -m eval.cli list` prints every evaluator with the
 question it answers, whether it feeds the scoreboard, and the host it needs;
