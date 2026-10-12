@@ -465,6 +465,14 @@ python -m eval.cli evaluate --lane o320_o1280 --predictions-dir <run>/prediction
 ![zoom_maps example figure](figures/membermaps.jpg)
 Figure caption: These are three maps of the fine-scale part of 2 m temperature (the field left after a high-pass filter removes the smooth large scales) over the Alps, on one colour scale: the coarse input (EEFO on the grid O320), the truth (member 1 of ENFO on O1280) and member 1 of the model, for the start of 26 September 2025 and lead time 24 hours. The three files are separate outputs of the tool, named `eefo_`, `enfo_` and `model_2t-fine_init20250926_n001_alps_f024.png`; they come from `/home/ecm5702/scratch/eval/o320_o1280/se_F/predictions`, were re-rendered, before the rename and before the box widening, into `/home/ecm5702/scratch/eval/_repertoire_gallery_20260929/membermaps/alps/` (that folder and the figure file `figures/membermaps.jpg` keep the old name) and were placed side by side for this document. Member 1 of ENFO is not the weather that member 1 of the model reproduces, so compare the amount and shape of the fine detail and not individual features.
 
+### 3.1.12b `judge` (added 2026-10-12)
+
+**Question it answers.** Is this run better than its reference, read the one fixed way of the run-judging protocol (docs `skills/downscaling-evaluation/references/run-judging-protocol.md`, standing rule 18)?
+
+**Method.** On both prediction directories it runs `shape` (on a box both hold: `north_atlantic` 35-55 N, 45-20 W for Europe-box and global files, the epic's `tc_atlantic` for the regional TC files), `tc_structure`, `texture`, `wind_extremes`, `box_spectra`, `probabilistic`, and `precip_dist` when the run predicts `tp`; it draws `zoom_maps` on the Alps box (43-49 N, 4-16 E, case 2023-02-26 + 24 h) and on a 12-degree box around the truth's msl minimum of the storm case (Franklin 2023-08-29 + 24 h); it writes `read.md`: the header (reference, instrument, the sampler read from the files, warnings when the two runs differ in points, sampler or members) and the four parts in the owner's order with the numbers, or "Not available: <reason>". Verdict lines are left as TODO for the reader. It runs `scripts/check_run_read.py` when it finds the docs repo (`$DOCS_ROOT` or `~/dev/docs`).
+
+**How to run it.** `python -m eval.cli judge --lane o320_o1280 --run <label>=<dir> --reference <label>=<dir> --output-dir <dir>`; `--skip` leaves out evaluators, `--opt` passes lane keys (for example `--opt shape.stats_file=...` off Atos).
+
 ### 3.1.13 `config`
 
 **Question it answers.** What configuration will a lane actually use, after its chain of `base:` files is merged?
@@ -1173,6 +1181,8 @@ python -m eval.cli evaluate --lane o320_o1280 --host atos_ac \
 ![shape example figure](figures/shape.png)
 Figure caption: No figure exists, so the image only says so. The evaluator measures the shape of fine-scale 10 m wind structures and writes a JSON file; the repository has no plotting code for it and no saved result was found on scratch. It needs only CPUs, but the certified-runtime check that the project's preflight checklist requires before any evaluation could not be run in this session, so the evaluator was not run; the code is in `/home/ecm5702/dev/downscaling-tools/eval/evaluators/shape/`.
 
+**Any box (added 2026-10-12, gap G1 of the run-judging protocol).** `box` in the lane block (or `--opt shape.box=...`) takes `tc_atlantic` (the default and the probe-file path above, unchanged), `north_atlantic` (35-55 N, 45-20 W, inside Europe-box and global files), `e2`, or `[lat_min, lat_max, lon_min, lon_max]`. Off the default box the points are cut out of each file by its own coordinates, the geometry and mask caches get one file per box and grid under `cache_dir` (default `<EVAL_ROOT>/_cache/shape`), a new box's open-ocean mask is built once from the Atos global forcings (`knn_file`, `forcings`, `inter_mat_dir` override them), all dates pool into one window `all`, and files whose members share one input are read member by member. Numbers from two boxes are never compared.
+
 ### 3.4.15 `tc_structure`
 
 **Question it answers.** Does the model's tropical cyclone have the truth's structure: centre, central pressure, wind profile, radius of maximum wind, wind radii, vorticity and asymmetry?
@@ -1294,6 +1304,14 @@ Each question is a decision that the review needs. My recommendation is in secti
 24. `shape` [3.4.14]: keep it, and if so, move its cache and probe files from `agent-work` and scratch into a stable place? Or is the shape question closed?
 25. `tc_structure` [3.4.15]: keep it and run it once on the current best arms to see whether its numbers separate them?
 26. Cross-cutting: who corrects the fifteen documentation items of section 5, and should the correction be part of the `list` and `describe` refactor that is running now?
+
+### 3.4.16 `box_spectra` (added 2026-10-12)
+
+**Question it answers.** Per wavelength bin on a box, how does the amplitude of the model's residual, of its full field and of the input compare with the truth's, and how much of it is aligned with the truth?
+
+**Method.** Port of docs `plot_sampler_texture.py --spectra-method linear` (the per-bin tool of standing rule 14): each field is sampled barycentrically on a regular 0.07-degree grid 1 degree inside the box, Hann-windowed, Fourier-transformed and averaged azimuthally in 40 log-spaced bins (empty bins dropped). Ratios per bin: residual (`y_pred - x_interp` over `y - x_interp`), full field (`y_pred` over `y`), input (`x_interp` over `y`), coherence with the truth and the aligned part (coherence x full-field ratio). Powers are averaged over draws before the square root; rows are pooled and per date. Box: `box` key, default the file's bounds for a regional file and the E2 box for a global file. No band average and no distance are computed.
+
+**Outputs.** `bins.csv`, `bins.md`, `box_spectra_ladder.png` (the ratios against the six ladder lines), `run_meta.json`.
 
 ## 7. Other scripts that sit next to the framework
 

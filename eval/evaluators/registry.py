@@ -190,6 +190,12 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "elongation, aspect ratio and orientation relative to the flow?",
     ),
     Evaluator(
+        "box_spectra", DIAGNOSTIC, False,
+        "Per wavelength bin on a box, how does the amplitude of the model's residual, of its "
+        "full field and of the input compare with the truth's, and how much of it is aligned "
+        "with the truth?",
+    ),
+    Evaluator(
         "tc_structure", DIAGNOSTIC, False,
         "Does the model's tropical cyclone have the truth's structure: centre, central "
         "pressure, wind profile, radius of maximum wind, wind radii, vorticity and "

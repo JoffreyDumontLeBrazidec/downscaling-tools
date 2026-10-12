@@ -1,7 +1,10 @@
 """Centralized plotting configuration for region plotting scripts."""
 from __future__ import annotations
 
+from eval.shared.regions import ALPS
+
 KNOWN_REGION_BOXES: dict[str, list[float]] = {
+    "alps": list(ALPS),   # the run-judging protocol's Alps (eval/shared/regions.py)
     "alps_innsbruck": [46.0, 49.0, 10.0, 14.0],
     "amazon_forest": [-15.0, 5.0, -75.0, -45.0],
     "amazon_forest_central": [-5.0, 5.0, -75.0, -65.0],
