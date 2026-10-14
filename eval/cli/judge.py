@@ -135,7 +135,18 @@ def sampler_line(facts: dict) -> str:
         cfg = json.loads(raw)
     except ValueError:
         return raw[:200]
-    keys = ("num_steps", "steps", "S_churn", "churn", "S_noise", "sigma_max", "sigma_min", "rho", "sampler")
+    keys = (
+        "num_steps",
+        "steps",
+        "S_churn",
+        "churn",
+        "S_noise",
+        "sigma_max",
+        "sigma_min",
+        "rho",
+        "sampler",
+        "correction_steps",  # corrector passes per denoiser call (edm correction checkpoints)
+    )
     picked = {k: cfg[k] for k in keys if k in cfg}
     return json.dumps(picked or cfg, sort_keys=True)[:300]
 
