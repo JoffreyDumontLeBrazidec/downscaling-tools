@@ -48,6 +48,7 @@ STATIC_ROOT = "/home/ecm5702/hpcperm/data"
 
 EUROPE_VIEW = [33, 70, -15, 40]      # lane's Europe view, 33-70 N, 15 W-40 E
 SET_A_STEP = 60
+CLIP = ["tp", "cp"]   # rule 7: negative precipitation clipped before every rain metric
 
 PROB_STATES = ["10u", "10v", "10ff", "2t", "msl", "tp", "t_850", "z_500"]
 PROB_DOMAINS = ["global", "n.hem", "tropics", "s.hem", "europe"]
@@ -78,13 +79,15 @@ def plan(set_name: str, *, eval_root: Path, static_root: str, dates: list[str],
         st = [SET_A_STEP]
         tasks = [
             Task("probabilistic", "", {"weather_states": PROB_STATES, "domains": PROB_DOMAINS,
-                                       "steps": st}),
+                                       "steps": st, "clip_nonnegative": CLIP}),
             Task("box_spectra", "", {"box": EUROPE_VIEW, "steps": st, "variables": SPEC_VARS,
-                                     "res_deg": 0.125}),
+                                     "res_deg": 0.125, "clip_nonnegative": CLIP}),
             Task("box_spectra", "natl", {"box": "north_atlantic", "steps": st,
-                                         "variables": SPEC_VARS, "res_deg": 0.125}),
+                                         "variables": SPEC_VARS, "res_deg": 0.125,
+                                         "clip_nonnegative": CLIP}),
             Task("spectra_coherence", "", {"nside": "auto", "steps": st,
-                                           "weather_states": GLOBAL_SPEC_STATES, "per_date": True}),
+                                           "weather_states": GLOBAL_SPEC_STATES, "per_date": True,
+                                           "clip_nonnegative": CLIP}),
             Task("shape", "", {"box": "north_atlantic", "steps": st, "kernel_scale": 4,
                                "regrid_deg": 0.36, "window_deg": 8,
                                "cache_dir": str(cache / "shape"),

@@ -201,8 +201,13 @@ def compute_probabilistic_scores(
     steps: Iterable[int] | str | None = None,
     dates: Iterable[str] | str | None = None,
     spread_ddof: int = 1,
+    clip_nonnegative: Iterable[str] | str | None = None,
 ) -> dict[str, Any]:
-    """Compute local probabilistic scores and write CSV/JSON artifacts."""
+    """Compute local probabilistic scores and write CSV/JSON artifacts.
+
+    ``clip_nonnegative`` names fields (e.g. ``tp``) whose members and truth are clipped at 0
+    before scoring (standing rule: negative precipitation is clipped before every rain metric).
+    """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +216,7 @@ def compute_probabilistic_scores(
     domain_names = _as_list(domains, cast=str) or list(DEFAULT_DOMAINS)
     step_filter = set(_as_list(steps, cast=int)) if steps else None
     date_filter = set(_as_list(dates, cast=str)) if dates else None
+    clip_fields = set(_as_list(clip_nonnegative, cast=str)) if clip_nonnegative else set()
 
     pred_files = find_predictions(predictions_dir)
     if step_filter is not None:
@@ -254,6 +260,9 @@ def compute_probabilistic_scores(
                     truth_point = truth_values[0]
                 else:
                     truth_point = np.asarray(truth_values).reshape(-1)
+                if field in clip_fields:
+                    pred_values = np.maximum(pred_values, 0.0)
+                    truth_point = np.maximum(truth_point, 0.0)
                 components = crps_ensemble_components(
                     pred_values,
                     truth_point,

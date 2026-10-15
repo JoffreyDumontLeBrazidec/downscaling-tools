@@ -167,9 +167,9 @@ def section(ctx: Context) -> SectionResult:
                                      fmt(r["fcrps"][2], 0) if r.get("fcrps") else "n/a"])
         note = ""
         if recompute:
-            note = (f"Values of {', '.join(sorted(recompute))} in this table are probabilistic's own (it "
-                    "does not clip tp at 0); the paired test below recomputes them from the prediction "
-                    "files with tp clipped at 0 in members and truth.\n\n")
+            note = (f"Values of {', '.join(sorted(recompute))} in this table come from probabilistic, run "
+                    "with clip_nonnegative (tp clipped at 0 in members and truth, rule 7); the paired "
+                    "test below recomputes them from the prediction files with the same clipping.\n\n")
         return "## 4a. Scores per variable and domain\n\n" + note + table(ctx, "scores_by_variable_domain", header, rows)
 
     def paired_table() -> str:

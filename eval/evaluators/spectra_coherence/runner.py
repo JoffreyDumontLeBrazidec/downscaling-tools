@@ -231,6 +231,7 @@ def run(
     nside = None if str(nside_cfg).lower() == "auto" else int(nside_cfg)
     lmax_cfg = eval_config.get("lmax")
     per_date = bool(eval_config.get("per_date", False))
+    clip_fields = set(eval_config.get("clip_nonnegative") or ())
     steps = eval_config.get("steps", spectra_cfg.get("steps"))
     max_members = eval_config.get("max_members")
 
@@ -300,6 +301,13 @@ def run(
                     si = idx_of.get(state)
                     if si is None:
                         continue
+                    if state in clip_fields:   # rule 7: negative precipitation clipped
+                        pred, truth = pred.copy(), truth.copy()
+                        pred[:, si] = np.maximum(pred[:, si], 0.0)
+                        truth[:, si] = np.maximum(truth[:, si], 0.0)
+                        if interp is not None:
+                            interp = interp.copy()
+                            interp[:, si] = np.maximum(interp[:, si], 0.0)
 
                     m_t = _healpix_map(truth[:, si], pix, counts, valid, npix)
                     m_p = _healpix_map(pred[:, si], pix, counts, valid, npix)

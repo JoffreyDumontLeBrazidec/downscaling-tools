@@ -135,7 +135,7 @@ def _contiguous(lon: np.ndarray, west: float) -> np.ndarray:
     return west + np.mod(lon - west, 360.0)
 
 
-def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec):
+def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec, clip_nonnegative=()):
     """Sum of the powers per (scope, variable) over draws; returns (spectrum, sums, counts, meta)."""
     sums: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     counts: dict[tuple[str, str], int] = {}
@@ -176,6 +176,8 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                     def grid(name, _m=m, _v=var):
                         full = np.zeros(f.lat.size)
                         full[idx] = f.field(name, _m, _v, idx)
+                        if _v in clip_nonnegative:   # rule 7: negative precipitation clipped
+                            full[idx] = np.maximum(full[idx], 0.0)
                         return smp(full)
                     y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
                     Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
@@ -272,8 +274,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
              if p.step in steps and (not dates or p.date in dates)]
     if not files:
         raise FileNotFoundError(f"box_spectra: no prediction files for steps {steps} under {predictions_dir}")
+    clip = tuple(eval_config.get("clip_nonnegative") or ())
     spec, sums, counts, meta = accumulate(files, variables, members, method, res_deg, margin_deg,
-                                          eval_config.get("box"))
+                                          eval_config.get("box"), clip_nonnegative=clip)
+    meta["clip_nonnegative"] = list(clip)
     if not sums:
         raise ValueError(f"box_spectra: none of {variables} is in the files of {predictions_dir}")
     rows = bin_rows(spec, sums, counts)

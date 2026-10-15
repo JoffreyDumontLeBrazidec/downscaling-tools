@@ -42,6 +42,7 @@ def run(
     steps = eval_config.get("steps")
     dates = eval_config.get("dates")
     spread_ddof = int(eval_config.get("spread_ddof", 1))
+    clip_nonnegative = eval_config.get("clip_nonnegative")
 
     payload = compute_probabilistic_scores(
         predictions_dir,
@@ -51,6 +52,7 @@ def run(
         steps=steps,
         dates=dates,
         spread_ddof=spread_ddof,
+        clip_nonnegative=clip_nonnegative,
     )
     LOG.info(
         "Probabilistic scores written to %s (%s rows)",
