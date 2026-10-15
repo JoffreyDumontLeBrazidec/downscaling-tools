@@ -61,7 +61,7 @@ def _field(state: str, lat, lon, *, phase: float, fine: np.ndarray | None) -> np
     if state in ("tp", "cp"):
         v = np.maximum(v - 0.5 * _AMP[state], 0.0)
         if fine is not None:
-            v = v - 1e-5 * (fine < -2.5)    # a few small negative raw values, as raw tp has
+            v = v - 1e-5 * (fine < -1.2)    # a few small negative raw values, as raw tp has
     return v.astype(np.float32)
 
 

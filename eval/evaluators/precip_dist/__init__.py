@@ -14,6 +14,8 @@ EVALUATOR_SPEC = {
     "requires": ["predictions"],
     "outputs": [
         "tp_histograms.pdf: one page per lead time, truth against prediction.",
+        "tail_stats.csv (with tail_stats: true): wet fraction, p99, p99.9, p99.99, maximum and "
+        "share of negative raw values of tp over every member, pooled and per date.",
     ],
 }
 
