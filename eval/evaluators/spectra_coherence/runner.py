@@ -32,6 +32,22 @@ number this evaluator exists to produce.
 The same quantities are computed for the interpolated low-resolution driver
 (`x_interp`), which is the honest baseline: it tells us at which scales the model
 is actually adding skill over simply interpolating its own input.
+
+Residual (rule 14 of the run-judging protocol): with the interpolated input present, the
+amplitude ratio of the residual is also written per degree,
+
+    R_resid(l) = sqrt( sum_m |a_lm(y_pred) - a_lm(x_interp)|^2 / sum_m |a_lm(y) - a_lm(x_interp)|^2 )
+
+(the transform is linear, so this is the spectrum of y_pred - x_interp over that of
+y - x_interp), next to the input over truth R_interp(l) and the aligned part C(l) x R(l).
+``curves.csv`` holds every per-degree quantity in long form (one row per scope, state and
+degree; scope ``all`` pools every file and member, scope ``YYYYMMDD`` one date) with the
+wavelength 2 pi a / sqrt(l (l + 1)) in km. Per-date rows are written with ``per_date: true``.
+
+Support: the HEALPix map must be filled by the grid (no empty pixels; see the note on nside
+below). ``nside: auto`` takes the largest power of two whose map the file's points fill to
+99.9 % (512 on O1280, 128 on O320, so lmax 256 there). A coverage below 99 % is logged as a
+warning, because the empty pixels manufacture coherence.
 """
 from __future__ import annotations
 
@@ -104,6 +120,68 @@ def _auto_cross(alm_a, alm_b, lmax):
     return hp.alm2cl(alm_a, alm_b, lmax=lmax)
 
 
+EARTH_RADIUS_KM = 6371.0088
+CURVE_COLS = ["scope", "state", "ell", "wavelength_km", "n_samples",
+              "amplitude_ratio", "coherence", "aligned", "residual_amplitude_ratio",
+              "residual_coherence", "interp_amplitude_ratio", "interp_coherence",
+              "P_true", "P_pred", "P_interp", "P_resid_pred", "P_resid_true"]
+
+
+def auto_nside(lat, lon, *, min_coverage: float = 0.999, largest: int = 1024) -> int:
+    """The largest power-of-two nside whose HEALPix map the points fill to ``min_coverage``."""
+    nside = largest
+    while nside > 8:
+        if _healpix_binner(lat, lon, nside)[4] >= min_coverage:
+            return nside
+        nside //= 2
+    return nside
+
+
+def _ratio_coh_pair(p_a, p_b, x_ab):
+    """Amplitude ratio sqrt(P_a / P_b), coherence X / sqrt(P_a P_b), E and the floor."""
+    eps = 1e-300
+    R = np.sqrt(np.maximum(p_a, 0.0) / np.maximum(p_b, eps))
+    C = np.clip(x_ab / np.sqrt(np.maximum(p_a * p_b, eps)), -1.0, 1.0)
+    return R, C, 1.0 + R**2 - 2.0 * R * C, 1.0 - C**2
+
+
+def curve_rows_of(scope: str, state: str, entry: dict, n: int) -> list[dict]:
+    """Per-degree rows (long form) of one accumulated entry."""
+    n = max(int(n), 1)
+    mean = {k: v / n for k, v in entry.items()}
+    ell = np.arange(mean["P_true"].shape[0], dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        wl = 2.0 * np.pi * EARTH_RADIUS_KM / np.sqrt(ell * (ell + 1.0))
+    R, C, _, _ = _ratio_coh_pair(mean["P_pred"], mean["P_true"], mean["X_pred_true"])
+    cols = {"amplitude_ratio": R, "coherence": C, "aligned": C * R,
+            "P_true": mean["P_true"], "P_pred": mean["P_pred"]}
+    if "P_interp" in mean:
+        Ri, Ci, _, _ = _ratio_coh_pair(mean["P_interp"], mean["P_true"], mean["X_interp_true"])
+        cols.update(interp_amplitude_ratio=Ri, interp_coherence=Ci, P_interp=mean["P_interp"])
+    if "P_resid_pred" in mean:
+        Rr, Cr, _, _ = _ratio_coh_pair(mean["P_resid_pred"], mean["P_resid_true"], mean["X_resid"])
+        cols.update(residual_amplitude_ratio=Rr, residual_coherence=Cr,
+                    P_resid_pred=mean["P_resid_pred"], P_resid_true=mean["P_resid_true"])
+    rows = []
+    for i in range(1, ell.size):
+        row = {"scope": scope, "state": state, "ell": int(ell[i]), "wavelength_km": float(wl[i]),
+               "n_samples": n}
+        for k, v in cols.items():
+            row[k] = float(v[i])
+        rows.append(row)
+    return rows
+
+
+def write_curves_csv(rows: list[dict], path: Path) -> None:
+    import csv
+
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=CURVE_COLS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()})
+
+
 def _select_member(da: xr.DataArray, member_idx: int) -> np.ndarray:
     d = da.isel(sample=0) if "sample" in da.dims else da
     if "ensemble_member" in d.dims:
@@ -124,7 +202,7 @@ def run(
     run_label: str = "",
     **kwargs,
 ) -> Path:
-    from eval.discovery.predictions import valid_prediction_files
+    from eval.discovery.predictions import PREDICTION_RE, valid_prediction_files
 
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "spectra_coherence"
@@ -149,8 +227,10 @@ def run(
     # nside=512 (0.01% empty) the same baseline correctly collapses to C=0.04-0.08.
     # nside=512 caps us at l<=1024 against the O1280 truncation of 1279, which is
     # the honest trade: 80% of the resolved range, measured on a gap-free map.
-    nside = int(eval_config.get("nside", 512))
-    lmax = int(eval_config.get("lmax", 2 * nside))
+    nside_cfg = eval_config.get("nside", 512)
+    nside = None if str(nside_cfg).lower() == "auto" else int(nside_cfg)
+    lmax_cfg = eval_config.get("lmax")
+    per_date = bool(eval_config.get("per_date", False))
     steps = eval_config.get("steps", spectra_cfg.get("steps"))
     max_members = eval_config.get("max_members")
 
@@ -158,15 +238,26 @@ def run(
     if not files:
         raise RuntimeError(f"No prediction files under {predictions_dir} (steps={steps})")
 
+    if nside is None:
+        with xr.open_dataset(files[0]) as ds0:
+            lat0 = np.asarray(ds0["lat_hres"].values).reshape(-1)
+            lon0 = np.asarray(ds0["lon_hres"].values).reshape(-1)
+        nside = auto_nside(lat0, lon0)
+    lmax = int(lmax_cfg) if lmax_cfg is not None else 2 * nside
+
     LOG.info(
         "spectra_coherence: %d file(s), states=%s nside=%d lmax=%d max_members=%s",
         len(files), states, nside, lmax, max_members,
     )
 
-    # Accumulators: sum of spectra over every (file, member) sample, per state.
+    # Accumulators: sum of spectra over every (file, member) sample, per state, and the same
+    # per date (scope) for curves.csv.
     acc: dict[str, dict[str, np.ndarray]] = {}
+    acc_date: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     n_samples: dict[str, int] = {s: 0 for s in states}
+    n_date: dict[tuple[str, str], int] = {}
     have_interp = False
+    coverage = None
 
     for file_path in files:
         with xr.open_dataset(file_path) as ds:
@@ -183,6 +274,15 @@ def run(
                 lon = lon[0]
 
             pix, counts, valid, npix, cov = _healpix_binner(lat, lon, nside)
+            if coverage is None:
+                coverage = cov
+                if cov < 0.99:
+                    LOG.warning(
+                        "spectra_coherence: the grid fills only %.1f %% of the nside=%d map; empty "
+                        "pixels manufacture coherence at high degree. Use a smaller nside "
+                        "(nside: auto).", 100.0 * cov, nside)
+            m_date = PREDICTION_RE.search(file_path.name)
+            date_scope = m_date.group(1) if m_date else file_path.name
 
             file_has_interp = "x_interp" in ds
             have_interp = have_interp or file_has_interp
@@ -210,16 +310,27 @@ def run(
                     p_pred = _auto_cross(a_p, a_p, lmax) / max(cov, 1e-6)
                     x_pt = _auto_cross(a_p, a_t, lmax) / max(cov, 1e-6)
 
-                    entry = acc.setdefault(state, {})
-                    for key, arr in (("P_true", p_true), ("P_pred", p_pred), ("X_pred_true", x_pt)):
-                        entry[key] = arr if key not in entry else entry[key] + arr
+                    terms = [("P_true", p_true), ("P_pred", p_pred), ("X_pred_true", x_pt)]
 
                     if interp is not None:
                         m_i = _healpix_map(interp[:, si], pix, counts, valid, npix)
                         a_i = _alm(m_i, lmax)
                         p_int = _auto_cross(a_i, a_i, lmax) / max(cov, 1e-6)
                         x_it = _auto_cross(a_i, a_t, lmax) / max(cov, 1e-6)
-                        for key, arr in (("P_interp", p_int), ("X_interp_true", x_it)):
+                        d_p, d_t = a_p - a_i, a_t - a_i
+                        p_rp = _auto_cross(d_p, d_p, lmax) / max(cov, 1e-6)
+                        p_rt = _auto_cross(d_t, d_t, lmax) / max(cov, 1e-6)
+                        x_r = _auto_cross(d_p, d_t, lmax) / max(cov, 1e-6)
+                        terms += [("P_interp", p_int), ("X_interp_true", x_it),
+                                  ("P_resid_pred", p_rp), ("P_resid_true", p_rt),
+                                  ("X_resid", x_r)]
+
+                    targets = [acc.setdefault(state, {})]
+                    if per_date:
+                        targets.append(acc_date.setdefault((date_scope, state), {}))
+                        n_date[(date_scope, state)] = n_date.get((date_scope, state), 0) + 1
+                    for entry in targets:
+                        for key, arr in terms:
                             entry[key] = arr if key not in entry else entry[key] + arr
 
                     n_samples[state] += 1
@@ -269,6 +380,14 @@ def run(
             npz_payload[f"{state}__P_interp"] = mean["P_interp"]
             npz_payload[f"{state}__Ri"] = Ri
             npz_payload[f"{state}__Ci"] = Ci
+        if "P_resid_pred" in mean:
+            Rr, Cr, _, _ = _ratio_coh_pair(mean["P_resid_pred"], mean["P_resid_true"], mean["X_resid"])
+            state_out.update({
+                "residual_amplitude_ratio": Rr.tolist(),
+                "residual_coherence": Cr.tolist(),
+                "aligned": (C * R).tolist(),
+            })
+            npz_payload[f"{state}__Rresid"] = Rr
 
         curves[state] = state_out
 
@@ -320,9 +439,16 @@ def run(
                 })
             band_rows.append(row)
 
+    curve_rows = [row for state in acc for row in curve_rows_of("all", state, acc[state], n_samples[state])]
+    for (scope, state), entry in sorted(acc_date.items()):
+        curve_rows += curve_rows_of(scope, state, entry, n_date[(scope, state)])
+    write_curves_csv(curve_rows, output_dir / "curves.csv")
+
     payload = {
         "run_label": run_label or predictions_dir.name,
         "predictions_dir": str(predictions_dir),
+        "healpix_coverage": coverage,
+        "per_date": per_date,
         "nside": nside,
         "lmax": lmax,
         "steps": steps,
