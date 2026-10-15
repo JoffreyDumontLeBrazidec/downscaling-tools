@@ -27,7 +27,7 @@ set -euo pipefail
 N=/leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261002-flowmap-o96o320
 W=/leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261015-fewstep-bigeval
 DT=${DT:-$W/downscaling-tools}          # checkout of downscaling-tools claude/project-thread-72mhur (slim script)
-IDX_A=313,403,475,547,619,691,763,835,58,154,250,346,428,40,88,136,184,232,280,328,716,414,450,486,522,558,594,630,666,702,738,774,810,25,121,217
+IDX_A=716,313,403,475,547,619,691,763,835,58,154,250,346,428,40,88,136,184,232,280,328,414,450,486,522,558,594,630,666,702,738,774,810,25,121,217
 
 set +u
 # shellcheck disable=SC1091
