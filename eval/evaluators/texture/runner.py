@@ -80,6 +80,19 @@ mean and standard deviation of each statistic. The standard deviation of the
 model - truth correlation differences is the null scatter that later arms are
 judged against.
 
+Other grids (o96->o320). Every grid-specific input is a key of ``paths``: ``up_matrix`` and
+``down_matrix`` (the coarse<->output linear pair that defines the fine part; on o96->o320,
+O96->O320 and O320->O96), ``residual_stats`` (o320_dict_0_72.npy), ``knn_cache`` (a new file:
+the cache holds one grid and is checked against it) and the static fields, as
+``forcings_zarr``, ``static_grib`` or ``forcings_npz`` (a flat npz with ``lsm`` and ``z``
+in the prediction files' point order, as /home/ecm5702/hpcperm/data/o320-forcings.npz; its
+coordinates come from ``latitudes``/``longitudes`` or sin/cos_latitude/longitude keys when
+present, else from the first prediction file, with a warning). ``input_source: x_interp``
+takes the interpolated input from the file instead of ``up @ x``, so the residual is measured
+against the input the model was actually given. Terrain roughness uses the 32 nearest
+neighbours, about 100 km on O320 against 25 km on O1280, so terrain classes are not
+comparable across lanes.
+
 Static data (built once per run, cached on disk where expensive):
   * the 32-nearest-neighbour table of the O1280 grid, cached as an .npz;
   * the zonal-successor index (cyclic along each latitude row);
@@ -323,8 +336,43 @@ def _read_precip_truth(path: str, step: int, lat_ref: np.ndarray, lon_ref: np.nd
     raise RuntimeError(f"no {var!r} message for step {step} in {path}")
 
 
+def _read_forcings_npz(path: str, fallback_latlon=None):
+    """lat, lon, lsm, orography (m) from a flat npz of constant forcings (keys lsm, z).
+
+    Coordinates: ``latitudes``/``longitudes`` (or ``lat``/``lon``) keys, else the angles of
+    the sin/cos_latitude/longitude keys, else ``fallback_latlon`` (the prediction file's own
+    points; the npz must then be in the same point order, which cannot be checked)."""
+    with np.load(path) as z:
+        keys = set(z.files)
+        missing = [k for k in ("lsm", "z") if k not in keys]
+        if missing:
+            raise RuntimeError(f"forcings npz {path} lacks {missing} (has {sorted(keys)})")
+        lsm = np.asarray(z["lsm"], dtype=np.float32).reshape(-1)
+        oro_m = np.asarray(z["z"], dtype=np.float32).reshape(-1) / GRAVITY
+        lat = lon = None
+        for la, lo in (("latitudes", "longitudes"), ("lat", "lon")):
+            if la in keys and lo in keys:
+                lat = np.asarray(z[la], dtype=np.float64).reshape(-1)
+                lon = np.asarray(z[lo], dtype=np.float64).reshape(-1)
+                break
+        if lat is None and {"sin_latitude", "cos_latitude", "sin_longitude", "cos_longitude"} <= keys:
+            lat = np.degrees(np.arctan2(np.asarray(z["sin_latitude"], dtype=np.float64).reshape(-1),
+                                        np.asarray(z["cos_latitude"], dtype=np.float64).reshape(-1)))
+            lon = np.degrees(np.arctan2(np.asarray(z["sin_longitude"], dtype=np.float64).reshape(-1),
+                                        np.asarray(z["cos_longitude"], dtype=np.float64).reshape(-1)))
+    if lat is None:
+        if fallback_latlon is None:
+            raise RuntimeError(f"forcings npz {path} holds no coordinates and no fallback was given")
+        LOG.warning("texture: %s holds no coordinates; using the prediction file's points "
+                    "(the npz must be in the same point order)", path)
+        lat, lon = (np.asarray(a, dtype=np.float64).reshape(-1) for a in fallback_latlon)
+    if lat.size != lsm.size:
+        raise RuntimeError(f"forcings npz {path}: {lsm.size} values but {lat.size} coordinates")
+    return lat, lon, lsm, oro_m
+
+
 def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
-                  up=None, down=None) -> dict[str, Any]:
+                  up=None, down=None, fallback_latlon=None) -> dict[str, Any]:
     """Grid structures and strata. ``up``/``down`` are the O320<->O1280 linear
     interpolation matrices; they define the coarse-smoothed land-sea mask that
     splits ``ocean`` into ``open_ocean`` and ``coastal``."""
@@ -333,6 +381,10 @@ def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
         lat, lon, lsm, oro_m = _read_static_grib(paths["static_grib"])
         n = lat.size
         LOG.info("texture: static GRIB read (%d points) in %.1fs", n, time.time() - t0)
+    elif paths.get("forcings_npz"):
+        lat, lon, lsm, oro_m = _read_forcings_npz(paths["forcings_npz"], fallback_latlon)
+        n = lat.size
+        LOG.info("texture: forcings npz read (%d points) in %.1fs", n, time.time() - t0)
     else:
         import zarr
 
@@ -754,6 +806,9 @@ def run(
     frac = float(eval_config.get("top_fraction", TOP_FRACTION))
     output_only = set(_as_list(eval_config.get("output_only_states")) or [])
     precip_truth_tpl = paths.get("precip_truth_tpl")
+    input_source = str(eval_config.get("input_source", "up_matrix"))
+    if input_source not in ("up_matrix", "x_interp"):
+        raise ValueError(f"texture.input_source must be up_matrix or x_interp, got {input_source!r}")
 
     files = valid_prediction_files(predictions_dir, steps=steps)
     if dates:
@@ -782,7 +837,13 @@ def run(
     stdev = {s: float(stdev_all[s]) for s in states}
     LOG.info("texture: matrices up=%s down=%s loaded in %.1fs", up.shape, down.shape, time.time() - t0)
 
-    static = _build_static(paths, regions, terrain, nn_count, up=up, down=down)
+    fallback_latlon = None
+    if paths.get("forcings_npz") and not paths.get("static_grib"):
+        with netCDF4.Dataset(files[0]) as ds0:
+            fallback_latlon = (np.asarray(ds0.variables["lat_hres"][:]).reshape(-1),
+                               np.asarray(ds0.variables["lon_hres"][:]).reshape(-1))
+    static = _build_static(paths, regions, terrain, nn_count, up=up, down=down,
+                           fallback_latlon=fallback_latlon)
     n_points = static["grid"]["n_points"]
     if up.shape[0] != n_points or down.shape[1] != n_points:
         raise RuntimeError(
@@ -810,7 +871,8 @@ def run(
         t_file = time.time()
         with netCDF4.Dataset(file_path) as ds:
             ds.set_auto_mask(False)
-            for required in ("x", "y", "y_pred"):
+            needed_input = "x" if input_source == "up_matrix" else "x_interp"
+            for required in (needed_input, "y", "y_pred"):
                 if required not in ds.variables:
                     raise RuntimeError(f"{file_path} is missing {required!r}")
             ws = [str(v) for v in np.asarray(ds.variables["weather_state"][:]).reshape(-1)]
@@ -831,7 +893,7 @@ def run(
                 t_mem = time.time()
                 yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)
                 yt = np.asarray(_read_member(ds.variables["y"], member_index))
-                xx = np.asarray(_read_member(ds.variables["x"], member_index))
+                xx = np.asarray(_read_member(ds.variables[needed_input], member_index))
                 t_read = time.time() - t_mem
                 for state in states:
                     si = idx_of.get(state)
@@ -849,7 +911,9 @@ def run(
                         else:
                             y_state = np.asarray(yt[:, si], dtype=np.float64)
                     else:
-                        x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
+                        x_interp = (up @ np.asarray(xx[:, si], dtype=np.float64)
+                                    if input_source == "up_matrix"
+                                    else np.asarray(xx[:, si], dtype=np.float64))
                         y_state = np.asarray(yt[:, si], dtype=np.float64)
                     r_t = (y_state - x_interp) / sd
                     r_m = (yp[:, si] - x_interp) / sd
@@ -907,6 +971,7 @@ def run(
             "regions": regions, "terrain": terrain, "paths": paths,
             "knn_k": KNN_K, "nn_count": nn_count, "top_fraction": frac,
             "stdev": stdev, "output_only_states": sorted(output_only),
+            "input_source": input_source,
         },
         "statistics": STAT_NAMES,
         "ratio_statistics": RATIO_STATS,
