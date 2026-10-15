@@ -106,14 +106,22 @@ def select_box(path, box: Box):
     lat = glat[sel]
     lon = contiguous_lon(glon[sel], box.lon_min)
     # a box that the file only partly covers would give a truncated box with a different
-    # interior, silently; refuse it
-    tol = 0.2
+    # interior, silently; refuse it. The tolerance is 0.2 degrees or one grid row, whichever
+    # is larger: on O320 the rows are 0.28 degrees apart, so the first row inside a box edge
+    # can sit 0.27 degrees in (35.27 N for the north_atlantic box) on a box the file holds.
+    tol = max(0.2, _row_spacing_deg(glat))
     if (lat.min() > box.lat_min + tol or lat.max() < box.lat_max - tol
             or lon.min() > box.lon_min + tol or lon.max() < box.lon_min + _width(box) - tol):
         raise ValueError(f"shape box {box.tag} {box.as_list()} is not fully inside {path}: "
                          f"the file covers lat {lat.min():.2f}..{lat.max():.2f}, "
                          f"lon {lon.min():.2f}..{lon.max():.2f} of it")
     return sel, lat, lon, f"box {box.tag} {box.as_list()}: {sel.size} of {glat.size} points"
+
+
+def _row_spacing_deg(glat) -> float:
+    """Median spacing of the distinct latitudes of a grid (0.07 on O1280, 0.28 on O320)."""
+    rows = np.unique(np.round(np.asarray(glat, dtype=np.float64), 6))
+    return float(np.median(np.diff(rows))) if rows.size > 1 else 0.0
 
 
 def _width(box: Box) -> float:
