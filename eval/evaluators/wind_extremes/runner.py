@@ -26,7 +26,15 @@ wind-speed fields are built from the 10 m wind components::
     W_input = hypot(up @ x[10u], up @ x[10v])
 
 ``up`` is the linear O320 -> O1280 interpolation matrix the lane itself uses, so
-``W_input`` is the driver seen on the output grid.
+``W_input`` is the driver seen on the output grid. With ``input_source: x_interp`` the
+interpolated input stored in the prediction file is used instead and no matrix is read; this
+is how a lane other than o320->o1280 (o96->o320: the default matrix has the O1280 point
+count and is refused) gets its input curve. ``paths: {up_matrix: ...}`` still works.
+
+Grid scale: the default radii (10-100 km) and adjacency (15 km) are set for O1280 (9 km
+spacing). On O320 (32 km to the nearest neighbour, 39 km at most) a disk below 32 km holds
+the point alone and a 15 km adjacency connects nothing, so that lane passes radii of 50 km
+and more and an adjacency of about 40 km.
 
 For each field and each averaging radius R (kilometres) the evaluator forms the
 disk average ``S_R``, the mean of the field over every grid point within R km,
@@ -417,6 +425,9 @@ def run(
     members = _as_list(eval_config.get("members"), int)
     max_members = eval_config.get("max_members")
     paths = {**_default_paths(), **(eval_config.get("paths") or {})}
+    input_source = str(eval_config.get("input_source", "up_matrix"))
+    if input_source not in ("up_matrix", "x_interp"):
+        raise ValueError(f"wind_extremes.input_source must be up_matrix or x_interp, got {input_source!r}")
 
     files = valid_prediction_files(predictions_dir, steps=steps)
     if dates:
@@ -431,7 +442,7 @@ def run(
              len(files), list(boxes), radii_km, members)
 
     t0 = time.time()
-    up = sps.load_npz(paths["up_matrix"]).tocsr()
+    up = sps.load_npz(paths["up_matrix"]).tocsr() if input_source == "up_matrix" else None
 
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
@@ -443,7 +454,8 @@ def run(
         date, step = (m.group(1), int(m.group(2))) if m else ("", -1)
         with netCDF4.Dataset(file_path) as ds:
             ds.set_auto_mask(False)
-            for required in ("x", "y", "y_pred", "lat_hres", "lon_hres"):
+            needed_input = "x" if input_source == "up_matrix" else "x_interp"
+            for required in (needed_input, "y", "y_pred", "lat_hres", "lon_hres"):
                 if required not in ds.variables:
                     raise RuntimeError(f"{file_path} is missing {required!r}")
             ws = [str(v) for v in np.asarray(ds.variables["weather_state"][:]).reshape(-1)]
@@ -455,19 +467,20 @@ def run(
             lon = np.asarray(ds.variables["lon_hres"][:]).reshape(-1).astype(np.float64)
             lon180 = np.where(np.mod(lon, 360.0) > 180.0, np.mod(lon, 360.0) - 360.0,
                               np.mod(lon, 360.0))
+            if up is not None and up.shape[0] != lat.size:
+                raise RuntimeError(
+                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
             if point_area_km2 is None:
                 point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
             if not box_static:
                 for name, box in boxes.items():
                     t_box = time.time()
                     box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
-                    up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
+                    if up is not None:
+                        up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
                     LOG.info("wind_extremes: box %s built in %.1fs (%d core, %d padded points)",
                              name, time.time() - t_box, box_static[name]["n_core"],
                              box_static[name]["n_padded"])
-            if up.shape[0] != lat.size:
-                raise RuntimeError(
-                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
@@ -477,8 +490,8 @@ def run(
                 yp_v = _read_component(ds.variables["y_pred"], member_index, cv)
                 yt_u = _read_component(ds.variables["y"], member_index, cu)
                 yt_v = _read_component(ds.variables["y"], member_index, cv)
-                xx_u = _read_component(ds.variables["x"], member_index, cu)
-                xx_v = _read_component(ds.variables["x"], member_index, cv)
+                xx_u = _read_component(ds.variables[needed_input], member_index, cu)
+                xx_v = _read_component(ds.variables[needed_input], member_index, cv)
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
@@ -486,7 +499,8 @@ def run(
                     fields_padded = {
                         "model": np.hypot(yp_u[padded], yp_v[padded]),
                         "truth": np.hypot(yt_u[padded], yt_v[padded]),
-                        "input": np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v),
+                        "input": (np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v)
+                                  if up is not None else np.hypot(xx_u[padded], xx_v[padded])),
                     }
                     entry: dict[str, Any] = {
                         "file": file_path.name, "date": date, "step": int(lead),
@@ -524,7 +538,8 @@ def run(
         "config": {
             "radii_km": radii_km, "adjacency_km": adj_km, "boxes": boxes,
             "components": list(components), "steps": steps, "dates": dates,
-            "members": members, "max_members": max_members, "paths": paths,
+            "members": members, "max_members": max_members,
+            "paths": paths if input_source == "up_matrix" else {}, "input_source": input_source,
             "point_area_km2": point_area_km2,
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],
