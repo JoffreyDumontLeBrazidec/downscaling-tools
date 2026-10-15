@@ -1,0 +1,46 @@
+# Rows of the few-step big eval, global o96->o320 (pre-registered note
+# docs/epics/fast-generative-downscaling/in-progress/20261015_fewstep_big_eval_global_o96_o320.md, section 3).
+#
+# Read by score_row.py / score_row.sbatch / submit_all.sh / maps.sh and by aggregate.py.
+# Fields:
+#   label    row label (the pre-registered one; the EVAL_ROOT sub-directory)
+#   arm      arm directory under the prediction root (<PRED_ROOT>/<set dir>/<arm>/step_NNNNNN/...)
+#   step     checkpoint step (directory step_NNNNNN)
+#   sampler  sampler spec of predict_members.py; its directory is the spec with every character
+#            outside [A-Za-z0-9_.-] replaced by "_" (edm_piecewise30@S_churn=0 -> edm_piecewise30_S_churn_0)
+#   calls    network calls per member
+#   sets     case sets the row is scored on (A = validation-36, B = Idalia-25)
+#   group    figure group of maps.sh (call count)
+#   predictions (optional) {A: dir, B: dir}: an explicit predictions/ directory, which wins over the tree.
+#
+# VERIFY before submitting: the arm directory names (fm, meanflow, imeanflow, soflow, drift*) and
+# the steps are not recorded yet (section 7 of the note records them at launch). Only the EDM path
+# (edm/step_150000/edm_piecewise30_S_churn_0) and the improved MeanFlow step (step_200000) are
+# stated in the note; the drifting arms predict with the jumps sampler at one step (drifting note,
+# section 8c). `submit_all.sh` lists every row whose predictions directory is missing.
+rows:
+  - {label: edm_pw30c0, arm: edm,       step: 150000, sampler: "edm_piecewise30@S_churn=0", calls: 59, sets: [A, B], group: 59, reference: true}
+
+  - {label: fm_heun30,  arm: fm,        step: 150000, sampler: vel_heun30, calls: 59, sets: [A, B], group: 59}  # VERIFY arm, step
+  - {label: fm_euler1,  arm: fm,        step: 150000, sampler: vel_euler1, calls: 1,  sets: [A, B], group: 1}   # VERIFY arm, step
+
+  - {label: mf_j1,      arm: meanflow,  step: 150000, sampler: jumps1,     calls: 1,  sets: [A, B], group: 1}   # VERIFY arm
+  - {label: mf_j2,      arm: meanflow,  step: 150000, sampler: jumps2,     calls: 2,  sets: [A, B], group: 2}   # VERIFY arm
+  - {label: mf_j4,      arm: meanflow,  step: 150000, sampler: jumps4,     calls: 4,  sets: [A, B], group: 4}   # VERIFY arm
+  - {label: mf_heun30,  arm: meanflow,  step: 150000, sampler: vel_heun30, calls: 59, sets: [A, B], group: 59}  # VERIFY arm
+
+  - {label: imf_j1,     arm: imeanflow, step: 200000, sampler: jumps1,     calls: 1,  sets: [A, B], group: 1}   # VERIFY arm
+  - {label: imf_j2,     arm: imeanflow, step: 200000, sampler: jumps2,     calls: 2,  sets: [A, B], group: 2}   # VERIFY arm
+  - {label: imf_j4,     arm: imeanflow, step: 200000, sampler: jumps4,     calls: 4,  sets: [A, B], group: 4}   # VERIFY arm
+  - {label: imf_heun30, arm: imeanflow, step: 200000, sampler: vel_heun30, calls: 59, sets: [A, B], group: 59}  # VERIFY arm
+
+  - {label: sf_j1,      arm: soflow,    step: 150000, sampler: jumps1,     calls: 1,  sets: [A, B], group: 1}   # VERIFY arm, step
+  - {label: sf_j2,      arm: soflow,    step: 150000, sampler: jumps2,     calls: 2,  sets: [A, B], group: 2}   # VERIFY arm, step
+  - {label: sf_j4,      arm: soflow,    step: 150000, sampler: jumps4,     calls: 4,  sets: [A, B], group: 4}   # VERIFY arm, step
+  - {label: sf_heun30,  arm: soflow,    step: 150000, sampler: vel_heun30, calls: 59, sets: [A, B], group: 59}  # VERIFY arm, step
+  - {label: sf_rn2,     arm: soflow,    step: 150000, sampler: renoise2,   calls: 2,  sets: [A, B], group: 2}   # VERIFY arm, step
+  - {label: sf_rn4,     arm: soflow,    step: 150000, sampler: renoise4,   calls: 4,  sets: [A, B], group: 4}   # VERIFY arm, step
+
+  - {label: drift,        arm: drift,        step: 50000, sampler: jumps1, calls: 1, sets: [A, B], group: 1}  # VERIFY arm
+  - {label: drift_energy, arm: drift_energy, step: 50000, sampler: jumps1, calls: 1, sets: [A, B], group: 1}  # VERIFY arm
+  - {label: drift_anneal, arm: drift_anneal, step: 50000, sampler: jumps1, calls: 1, sets: [A, B], group: 1}  # VERIFY arm
