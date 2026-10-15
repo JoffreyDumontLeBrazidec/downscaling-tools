@@ -11,7 +11,8 @@ The aggregator (`aggregate.py`) then writes the read.
 
 | file | role |
 |---|---|
-| `rows.yaml` | The 20 rows: label, arm, step, sampler, calls, sets and figure group. **VERIFY** the arm directories before submitting. |
+| `rows.yaml` | The 20 rows: label, arm, step, sampler, calls, sets and figure group. Arm directories verified on Leonardo (15 Oct). |
+| `predict_leonardo.sbatch` | Leonardo: predicts one arm on one set with `predict_members.py` from the prediction worktree, then slims it. |
 | `slim_predictions.py` | Copies the prediction trees, keeping only the weather states the eval reads. |
 | `score_row.py` / `score_row.sbatch` | Runs one row on one set: one `eval.cli evaluate --only <evaluator>` per evaluator. Evaluators that already have `.complete` are skipped. |
 | `submit_all.sh` | Submits all rows on both sets. Dry run by default. The reference row goes first, and the other rows of a set wait for it (`afterany`). |
@@ -40,6 +41,8 @@ The jobs use the environment that `eval/config/hosts/atos_ac.yaml` declares:
 Make the log directory once: `mkdir -p /home/ecm5702/scratch/eval/_slurm`.
 
 ## 1. Slim the predictions (mandatory: scratch has about 3.6 TB free)
+
+In this campaign the slim runs on Leonardo at the end of each prediction job (`predict_leonardo.sbatch`), and only the slim tree `W/slim/set{A,B}/` is copied to Atos `$B/pred/set{A,B}/`. The commands below are the stand-alone form.
 
 ```bash
 B=/home/ecm5702/scratch/agent-work/20261015-fewstep-bigeval
