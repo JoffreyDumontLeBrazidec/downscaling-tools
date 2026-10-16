@@ -6,7 +6,9 @@ into the feature axis: the encoder's first linear layer sees
 ``[in_lres (K x n1) | in_hres (K x n2) | noised target (K x n3) | node attributes (n4)]``
 columns in that order, time-major inside each block (slot 0's variables, then slot 1's),
 and the decoder's last linear layer writes ``K x n3`` rows (slot 0's variables, then
-slot 1's). Every other tensor has the same shape for any K.
+slot 1's). Every other tensor has the same shape for any K, except any other layer that reads the same
+assembled input vector: on the branch tip that is the decoder's destination-node embedding
+(``decoder.0.emb_nodes_dst``), which is tiled exactly like the encoder's input embedding.
 
 This script takes a single-slot state dict (K = 1; for the E2 lane that is the donor
 `12dcefea` transplanted into Vera's network with the 2026-09-18 name map, 68 -> 70
@@ -120,11 +122,24 @@ def main() -> int:
     dec_w_s = _find_unique(single, "node_data_extractor.1.weight", lambda t: t.shape[0] == n_out)
     dec_b_s = dec_w_s[: -len("weight")] + "bias"
 
+    # Every other 2-D weight that reads the same assembled input vector is tiled the same way. On the
+    # branch tip (6587cc679) that is the decoder's destination-node embedding (decoder.0.emb_nodes_dst,
+    # target_node_features: [encoded_data]), which sees the encoder's un-embedded source features.
+    k_width = k * n_in_single + n_attr
+    input_keys = {enc_key_c: enc_key_s}
+    for key, tensor in container.items():
+        if key in input_keys or key not in single:
+            continue
+        s_t = single[key]
+        if (tensor.ndim == 2 and s_t.ndim == 2 and tensor.shape[0] == s_t.shape[0]
+                and s_t.shape[1] == n_in_single + n_attr and tensor.shape[1] == k_width):
+            input_keys[key] = key
+
     out = {}
     changed, copied, skipped = [], [], []
     for key, tensor in container.items():
-        if key == enc_key_c:
-            out[key] = tile_input_columns(single[enc_key_s], widths, k, n_attr, args.mode)
+        if key in input_keys:
+            out[key] = tile_input_columns(single[input_keys[key]], widths, k, n_attr, args.mode)
             changed.append(key)
         elif key == dec_w_c:
             out[key] = tile_output_rows(single[dec_w_s], n_out, k)
