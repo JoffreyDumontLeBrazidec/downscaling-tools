@@ -47,7 +47,8 @@ def make_input(grid: int, out: str, seed: int, sigma: float) -> None:
     print(f"wrote {out}: grid {grid}, seed {seed}, sigma {sigma}")
 
 
-def run(side: str, iface_path: str, input_path: str, out: str, device: str, backend: str | None) -> None:
+def run(side: str, iface_path: str, input_path: str, out: str, device: str, backend: str | None,
+        shard_strategy: str | None = None) -> None:
     import torch
 
     torch.set_float32_matmul_precision("highest")
@@ -65,6 +66,24 @@ def run(side: str, iface_path: str, input_path: str, out: str, device: str, back
                     setattr(m, attr, backend)
                     n += 1
         print(f"[{side}] graph attention backend set to {backend} on {n} attributes")
+    if shard_strategy:
+        # Compute-only switch: with one process the "heads" and "edges" strategies compute the same function;
+        # only "edges" splits the mapper's edges into chunks (ANEMOI_INFERENCE_NUM_CHUNKS[_MAPPER]) at inference,
+        # which keeps the E2 grid within the login node's memory.
+        n = 0
+        for m in net.modules():
+            if isinstance(getattr(m, "shard_strategy", None), str) and m.shard_strategy != shard_strategy:
+                m.shard_strategy = shard_strategy
+                n += 1
+        print(f"[{side}] shard strategy set to {shard_strategy} on {n} modules")
+    if shard_strategy and not torch.distributed.is_initialized():
+        # The "edges" mapper path builds its graph partition through torch.distributed collectives, which
+        # need a process group even for one process: a single-rank gloo group (no communication happens).
+        import os
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", str(29500 + os.getpid() % 1000))
+        torch.distributed.init_process_group("gloo", rank=0, world_size=1)
+        print(f"[{side}] single-rank gloo process group initialised")
     net = net.to(dev).to(torch.float32).eval()
     inp = torch.load(input_path, map_location="cpu", weights_only=False)
     sig = torch.full((1, 1, 1, 1, 1), float(inp["sigma"]), dtype=torch.float32, device=dev)
@@ -128,6 +147,7 @@ def main() -> int:
     s.add_argument("--out", required=True)
     s.add_argument("--device", default="cuda")
     s.add_argument("--backend", default=None, help="override the graph attention backend (pyg on CPU)")
+    s.add_argument("--shard-strategy", default=None, help="override the mappers' shard strategy (edges = chunked)")
     s = sub.add_parser("compare")
     s.add_argument("--ref", required=True)
     s.add_argument("--other", action="append", required=True)
@@ -136,7 +156,7 @@ def main() -> int:
     if a.cmd == "make-input":
         make_input(a.grid, a.out, a.seed, a.sigma)
     elif a.cmd == "run":
-        run(a.side, a.interface, a.input, a.out, a.device, a.backend)
+        run(a.side, a.interface, a.input, a.out, a.device, a.backend, a.shard_strategy)
     else:
         compare(a.ref, a.other, a.json)
     return 0
