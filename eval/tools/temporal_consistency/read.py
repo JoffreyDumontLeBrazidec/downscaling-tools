@@ -122,19 +122,50 @@ def read_run(pred_dir: Path, *, variables, members, dates, steps, box_spec, res_
             idx = smp.src_idx
             mems = [m for m in f0.members if not members or m in members]
 
-            def grid_of(f, name, m, var):
+            # One netCDF read per (file, variable name, member): the (grid, state) block of that member,
+            # then every weather state is picked from memory. Reading one state at a time through
+            # ``_File.field`` decompresses the member's whole block once per state and per field, which
+            # made the first E2 read take about two minutes per member and step (16 Oct 2026).
+            blocks: dict[tuple[int, str, int], np.ndarray] = {}
+
+            def block_of(f, st, name, m):
+                key = (st, name, m)
+                if key not in blocks:
+                    v = f.ds[name]
+                    sel = []
+                    for d in v.dimensions:
+                        if d == "sample":
+                            sel.append(0)
+                        elif d == "ensemble_member":
+                            sel.append(f.members.index(m))
+                        else:
+                            sel.append(slice(None))
+                    arr = np.asarray(v[tuple(sel)], dtype=np.float32)
+                    if v.dimensions.index("weather_state") < v.dimensions.index("grid_point_hres"):
+                        arr = arr.T
+                    blocks[key] = arr          # (grid, state)
+                return blocks[key]
+
+            def grid_of(f, st, name, m, var):
+                blk = block_of(f, st, name, m)
+                if var in COMPOSITES:
+                    u, w = (blk[idx, f.states.index(c)] for c in COMPOSITES[var])
+                    vals = np.hypot(u, w)
+                else:
+                    vals = blk[idx, f.states.index(var)]
                 full = np.zeros(f.lat.size)
-                full[idx] = f.field(name, m, var, idx)
+                full[idx] = vals
                 return smp(full)
 
-            for var in variables:
-                if not f0.has(var):
-                    continue
-                for m in mems:
+            for m in mems:
+                blocks.clear()
+                for var in variables:
+                    if not f0.has(var):
+                        continue
                     bands_prev = None
                     for st in step_list:
                         f = opened[st]
-                        bands_now = {fld: bp(grid_of(f, name, m, var)) for fld, name in FIELDS.items()}
+                        bands_now = {fld: bp(grid_of(f, st, name, m, var)) for fld, name in FIELDS.items()}
                         for fld in FIELDS:
                             for band, g in bands_now[fld].items():
                                 amp_acc[(var, band, fld)].append(float(np.sqrt(_wmean(g[inner] ** 2, w))))
