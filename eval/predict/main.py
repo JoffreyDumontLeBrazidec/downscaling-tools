@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -18,7 +19,9 @@ from .distributed_io import Rank0FileWriter, _destroy_process_group, _distribute
 from .inference_engine import predict_ensemble_members
 from .local_scope import apply_local_output_scope
 from .model_loader import load_inference_model
+from .noise_across_steps import MODES as NOISE_MODES, NoiseAcrossSteps
 from .output_writer import prediction_output_path, write_predictions_file
+from .seeding import derive_rank_seed, resolve_base_seed
 from .types import BundleKey, PredictionConfig
 
 
@@ -110,6 +113,23 @@ def create_parser() -> argparse.ArgumentParser:
         "--allow-missing-target",
         action="store_true",
         help="Deprecated in new stack: y truth is required for predictions output.",
+    )
+    parser.add_argument(
+        "--noise-across-steps",
+        choices=list(NOISE_MODES),
+        default="independent",
+        help=(
+            "How the initial diffusion noise of one member relates across its steps (TD-228): "
+            "independent (today's behaviour), shared (one field per date and member, reused at "
+            "every step), ou (Ornstein-Uhlenbeck chain along the steps with --noise-rho). "
+            "See eval/predict/noise_across_steps.py."
+        ),
+    )
+    parser.add_argument(
+        "--noise-rho",
+        type=float,
+        default=None,
+        help="Lead-to-lead noise correlation in [0, 1] for --noise-across-steps ou.",
     )
     parser.add_argument(
         "--allow-missing-target-unsafe",
@@ -261,6 +281,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             global_rank=global_rank,
             timeout_seconds=config.rank0_write_wait_seconds,
         )
+        noise_policy = NoiseAcrossSteps(
+            args.noise_across_steps,
+            args.noise_rho,
+            derive_rank_seed(resolve_base_seed(), global_rank),
+        )
+        if noise_policy.requires_sorted_steps():
+            date_step_pairs = sorted(date_step_pairs, key=lambda pair: (pair[0], int(pair[1])))
+        if global_rank == 0 and noise_policy.mode != "independent":
+            print(f"noise across steps: {noise_policy.describe()}")
         for date, step in date_step_pairs:
             out_path = prediction_output_path(config.output_dir, date, step)
             try:
@@ -279,6 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_weather_state_mode=config.output_weather_state_mode,
                     output_weather_states=config.output_weather_states,
                     keep_outputs=(global_rank == 0),
+                    member_context=noise_policy.member_context,
                 )
                 if config.local_scope_json:
                     ensemble = apply_local_output_scope(ensemble, config.local_scope_json)
@@ -298,6 +328,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest_path = config.manifest_path or (config.output_dir / "predictions_manifest.csv")
         if global_rank == 0:
             _write_manifest(manifest_path, manifest_rows)
+            if noise_policy.mode != "independent":
+                record = dict(noise_policy.describe())
+                record["draw_counts"] = [
+                    {"date": d, "step": st, "member": m, "randn_calls": n}
+                    for (d, st, m), n in sorted(noise_policy.draw_counts.items())
+                ]
+                (config.output_dir / "noise_across_steps.json").write_text(json.dumps(record, indent=2))
             print(f"Wrote manifest: {manifest_path}")
     finally:
         _destroy_process_group()

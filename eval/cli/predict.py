@@ -124,6 +124,15 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     if sampler_cfg:
         cmd += ["--extra-args-json", json.dumps(sampler_cfg)]
 
+    # TD-228: how the initial noise of one member relates across its steps
+    # (lane keys predict.noise_across_steps and predict.noise_rho; set with --opt).
+    noise_mode = predict_cfg.get("noise_across_steps")
+    if noise_mode:
+        cmd += ["--noise-across-steps", str(noise_mode)]
+        noise_rho = predict_cfg.get("noise_rho")
+        if noise_rho is not None:
+            cmd += ["--noise-rho", str(float(noise_rho))]
+
     local_scope_cfg = predict_cfg.get("local_scope")
     if local_scope_cfg:
         cmd += ["--local-scope-json", json.dumps(local_scope_cfg)]

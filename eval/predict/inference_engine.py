@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import gc
 from pathlib import Path
 from typing import Sequence
@@ -91,8 +93,14 @@ def predict_ensemble_members(
     output_weather_state_mode: str = "surface-plus-core-pl",
     output_weather_states: Sequence[str] | None = None,
     keep_outputs: bool = True,
+    member_context=None,
 ) -> EnsemblePrediction:
-    """Predict all requested members for one date/step pair."""
+    """Predict all requested members for one date/step pair.
+
+    ``member_context(date, step, member)`` (optional) returns a context manager entered around
+    each member's prediction; ``noise_across_steps.NoiseAcrossSteps.member_context`` uses it to
+    tie the initial noise of one member across its steps (TD-228).
+    """
 
     x_members: list[np.ndarray] = []
     y_members: list[np.ndarray | None] = []
@@ -104,17 +112,19 @@ def predict_ensemble_members(
 
     for member in members:
         bundle_path = bundle_map[BundleKey(date, step, int(member))]
-        result = predict_single_bundle(
-            inference_model,
-            datamodule,
-            device,
-            bundle_path,
-            extra_args=extra_args,
-            precision=precision,
-            model_comm_group=model_comm_group,
-            output_weather_state_mode=output_weather_state_mode,
-            output_weather_states=output_weather_states,
-        )
+        ctx = member_context(date, step, int(member)) if member_context is not None else contextlib.nullcontext()
+        with ctx:
+            result = predict_single_bundle(
+                inference_model,
+                datamodule,
+                device,
+                bundle_path,
+                extra_args=extra_args,
+                precision=precision,
+                model_comm_group=model_comm_group,
+                output_weather_state_mode=output_weather_state_mode,
+                output_weather_states=output_weather_states,
+            )
         lon_lres = result.lon_lres
         lat_lres = result.lat_lres
         lon_hres = result.lon_hres
