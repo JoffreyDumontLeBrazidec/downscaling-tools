@@ -174,8 +174,8 @@ def main(argv=None) -> int:
     if args.set:
         config = OmegaConf.merge(config, OmegaConf.from_dotlist(args.set))
     config.dataloader.batch_size[args.split] = int(args.batch_size)
-    if "num_workers" in config.dataloader:
-        config.dataloader.num_workers[args.split] = 0
+    # the config's own num_workers stay: anemoi's DataLoader passes prefetch_factor and persistent_workers=True,
+    # which both need workers (first smoke on Jupiter, jobs 2398089 and 2398213, 18 Oct 2026)
 
     ckpt = _resolve_inference_path(args.base_checkpoint)
     print(f"[b2l-stats] loading base {ckpt}", file=sys.stderr, flush=True)
@@ -190,8 +190,15 @@ def main(argv=None) -> int:
 
     datamodule = get_datamodule(config, base.graph_data)
     loader = datamodule.train_dataloader() if args.split == "training" else datamodule.val_dataloader()
-    print(f"[b2l-stats] {args.split} pool: {len(loader.dataset) if hasattr(loader, 'dataset') else '?'} samples, "
-          f"batch {args.batch_size}, device {device}, sigma {args.base_sigma:g}, noise seed {seed}", file=sys.stderr, flush=True)
+    dataset = loader.dataset
+    # MultiDataset is an iterable dataset: no len(); and it slices each sample by the reader shard sizes that the
+    # DDP strategy sets in training (set_comm_group_info). One process, one reader, one model group: the whole
+    # grid of every dataset, as get_balanced_partition_sizes(grid, 1) gives it (Jupiter smoke 2398301).
+    shard_sizes = {name: [int(base.graph_data[name]["data"].num_nodes)] for name in dataset.datasets}
+    dataset.set_comm_group_info(0, 0, 0, 1, 0, 1, shard_sizes)
+    n_pool = len(dataset.valid_date_indices) if hasattr(dataset, "valid_date_indices") else "?"
+    print(f"[b2l-stats] {args.split} pool: {n_pool} samples, batch {args.batch_size}, device {device}, "
+          f"sigma {args.base_sigma:g}, noise seed {seed}, grid {shard_sizes}", file=sys.stderr, flush=True)
 
     acc = ResidualStatsAccumulator(names)
     n_batches = 0
