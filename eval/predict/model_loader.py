@@ -275,6 +275,72 @@ def _activate_denoiser_trace(inference_model, config: PredictionConfig) -> dict 
     return {"denoiser_trace": out_path}
 
 
+
+def _activate_regression_base(inference_model, extra_args: dict, config: PredictionConfig,
+                              device) -> dict | None:
+    """B2L two-checkpoint inference: attach the frozen deterministic base (B1L) to the
+    diffusion model so predict_step samples the residual TO THE BASE and adds the base's
+    full prediction back (anemoi-core AnemoiD2ModelEncProcDec.attach_regression_base,
+    B1 note section 10, 2026-10-18).
+
+    Reads (and REMOVES) these extra_args keys so they never reach predict_step:
+      base_checkpoint: path to the base's checkpoint, base or inference- format (as autoguide)
+      base_sigma:      the base's training sigma (default 5e5, training_approach deterministic)
+      base_noise_seed: seed of the unit noise fed to the base (default 0; null = fresh noise)
+
+    Absent base_checkpoint -> exact current behaviour. The base and the diffusion model must
+    share the lane's variables (checked by name inside attach_regression_base). The sampler,
+    autoguidance and sigma-switch hooks act on the diffusion denoiser only; the base is one
+    no-gradient forward per predict_step, before sampling."""
+    ckpt = extra_args.pop("base_checkpoint", None)
+    sigma = extra_args.pop("base_sigma", 500000.0)
+    seed = extra_args.pop("base_noise_seed", 0)
+    if not ckpt:
+        return None
+    inner = getattr(inference_model, "model", inference_model)
+    if not hasattr(inner, "attach_regression_base"):
+        raise SystemExit("base_checkpoint set but this checkpoint's model class has no "
+                         "attach_regression_base (anemoi-core before the B2L plumbing of 2026-10-18)")
+    ckpt_p = _Path(str(ckpt)).expanduser()
+    inference_path = None
+    if ckpt_p.name.startswith("inference-"):
+        inference_path = ckpt_p
+    else:
+        companion = ckpt_p.with_name("inference-" + ckpt_p.name)
+        if companion.exists():
+            inference_path = companion
+    if inference_path is None or not inference_path.exists():
+        raise SystemExit("base_checkpoint: no inference checkpoint found for %s (need the "
+                         "inference-<name>.ckpt the training wrote next to the Lightning one)" % ckpt_p)
+    print("[regression-base] loading base %s (sigma=%.3g, noise seed=%s)"
+          % ("/".join(inference_path.parts[-2:]), float(sigma), seed), file=_sys.stderr, flush=True)
+    base = torch.load(str(inference_path), map_location=device, weights_only=False)
+    try:
+        base = base.to(device)
+    except Exception:  # noqa: BLE001 - a stub without .to (tests) stays where it is
+        LOG.debug("regression base: .to(%s) not applicable", device)
+    # Model-parallel: the serialized base pickles rank-0 halo/partition caches; reusing them
+    # per-rank OOBs halo_exchange (same invalidation as load_objects and autoguidance).
+    for _mod in base.modules():
+        if hasattr(_mod, "_cached_halo_info"):
+            _mod._cached_halo_info = None
+        if hasattr(_mod, "_cached_partition"):
+            _mod._cached_partition = None
+    if config.local_scope_json:
+        activate_local_graph_cut(base, config.local_scope_json)
+    inner.attach_regression_base(base, sigma=float(sigma),
+                                 noise_seed=None if seed is None else int(seed),
+                                 source=str(inference_path))
+    n_base = sum(p.numel() for p in base.parameters())
+    info = {"base_checkpoint": str(inference_path), "base_sigma": float(sigma),
+            "base_noise_seed": seed, "base_parameters": int(n_base),
+            "base_class": type(getattr(base, "model", base)).__name__}
+    inference_model._regression_base_info = info
+    print("[regression-base] REGRESSION BASE ACTIVE: %s (%.1f M parameters); predictions are "
+          "base(x) + sampled residual" % (info["base_class"], n_base / 1e6),
+          file=_sys.stderr, flush=True)
+    return info
+
 def _activate_sigma_switch(inference_model, extra_args: dict, config: PredictionConfig,
                            device, autoguide_active: bool = False) -> dict | None:
     """Sigma-switched dual denoiser: use an ALTERNATE checkpoint inside given sigma bands.
@@ -466,6 +532,9 @@ def load_inference_model(
                                      autoguide_active=bool(ag_info))
     if sw_info:
         LOG.info("sigma-switch ACTIVE: %s", sw_info)
+    rb_info = _activate_regression_base(inference_model, extra_args, config, device)
+    if rb_info:
+        LOG.info("regression base ACTIVE: %s", rb_info)
     tr_info = _activate_denoiser_trace(inference_model, config)
     if tr_info:
         LOG.info("denoiser trace ACTIVE: %s", tr_info)
