@@ -67,7 +67,7 @@ for st in 1 2; do
   for d in $DATES; do
     { gpu_header "mt2read_s${st}_$d" $hours 1 16 120G
       echo "# mt2_e2_20k step 20,000 EMA-2000, $d leads 12-72 h, 10 members, stride $st (1 = averaged windows, 2 = isolated)."
-      echo "export $common MT_OUT=$W/runs/mt2_s$st MT_HDATE=$d MT_STRIDE=$st MT_MEMBERS=10 MT_CONVERT=yes MT_LABEL=mt2_e2_20k_s$st"
+      echo "export $common MT_OUT=$W/runs/mt2_s$st MT_HDATE=$d MT_STRIDE=$st MT_MEMBERS=10 MT_CONVERT=yes MT_LABEL=mt2_e2_20k_s$st MT_GATE=$W/smoke/SMOKE_OK"
       echo "exec bash $DTB/mt2_read_body.sh"; } > "$G/mt2read_s${st}_$d.sbatch"
   done
 done

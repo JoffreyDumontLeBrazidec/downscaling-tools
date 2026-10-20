@@ -5,7 +5,8 @@
 #   2. predict_sequence.py --config MT_CONFIG --hdate MT_HDATE --stride MT_STRIDE (lane 30-step piecewise sampler,
 #      churn off, fp32, member seeds MT_SEED + id - 1) -> MT_OUT/npz/<hdate>/mt2_<hdate>_m<id>.npz (+ _truth.npz);
 #   3. npz_to_evalcli.py with the kit template folder MT_TEMPLATE -> MT_OUT/predictions/predictions_<hdate>_stepSSS.nc
-#      (MT_CONVERT=check: read-only checks against the template, nothing written; MT_CONVERT=no: skipped).
+#      (MT_CONVERT=check: read-only checks against the template, nothing written, and on success the smoke's pass marker
+#      <dirname MT_OUT>/SMOKE_OK; MT_CONVERT=no: skipped). MT_GATE: a file that must exist before anything runs.
 # Variables come from the generated job file (Atos sets SBATCH_EXPORT=NONE). Docs: epics/fine-scale-o320-o1280/
 # in-progress/20261016_multi_time_downscaler_e2_and_window_sampler.md (reads A and B, section 6).
 set -eo pipefail
@@ -25,6 +26,9 @@ echo "[mt2read] start label=$MT_LABEL hdate=$MT_HDATE stride=$MT_STRIDE members=
      "downscaling-tools=$(git -C $DT rev-parse --short HEAD) anemoi-datasets=$(git -C $ADS rev-parse --short HEAD)" \
      "ads-diff-md5=$(git -C $ADS diff | md5sum | cut -c1-8) $(date -u +%FT%TZ)"
 t0=$(date +%s)
+if [[ -n ${MT_GATE:-} && ! -f $MT_GATE ]]; then
+  echo "[mt2read] GATE MISSING: $MT_GATE (the smoke did not pass); nothing run" >&2; exit 3
+fi
 if [[ ! -f $MT_CKPT ]]; then
   : "${MT_TRAIN_CKPT:?MT_CKPT missing and no MT_TRAIN_CKPT to build it from}"
   mkdir -p "$(dirname "$MT_CKPT")"
@@ -42,7 +46,8 @@ case "$MT_CONVERT" in
              --template-dir "$MT_TEMPLATE" --out-dir "$MT_OUT/predictions" --label "$MT_LABEL" --members "$MT_MEMBERS" ;;
   check) $PY $DT/tools/multitime/npz_to_evalcli.py --npz-prefix "$NPZ/mt2_$MT_HDATE" --hdate "$MT_HDATE" \
              --template-dir "$MT_TEMPLATE" --out-dir "$MT_OUT/predictions" --label "$MT_LABEL" --members "$MT_MEMBERS" \
-             --check-only ;;
+             --check-only
+         touch "$(dirname "$MT_OUT")/SMOKE_OK"; echo "[mt2read] smoke checks passed: wrote $(dirname "$MT_OUT")/SMOKE_OK" ;;
   no)    echo "[mt2read] conversion skipped" ;;
 esac
 echo "[mt2read] done label=$MT_LABEL hdate=$MT_HDATE stride=$MT_STRIDE seconds=$(( $(date +%s) - t0 )) $(date -u +%FT%TZ)"

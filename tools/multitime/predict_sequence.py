@@ -42,7 +42,8 @@ Output: ``<out>_m<member>.npz`` per member with ``pred`` (L, grid, n_out) float3
 ``variables``, ``leads_h``, ``lat``, ``lon``, ``hdate``, ``refdate``, ``fake_dates``, sampler
 record; the truth (L, grid, n_out) is written once as ``<out>_truth.npz`` and each member file
 names it in ``truth_file`` (``--truth-in-members`` puts it in every member file instead).
-Members whose file exists are skipped (resume).
+Members whose file exists are skipped (resume). A member with a non-finite lead, or with 10u, 10v, 2t
+or msl outside a std ratio of 0.5-1.5 or a correlation below 0.5 with the truth, stops the job (SANITY FAILED).
 
 Example (Atos AC, one GPU, sandbox venv):
   python3 predict_sequence.py --ckpt <work>/checkpoints/inference-ema2000-...-step_020000.ckpt \
@@ -350,10 +351,16 @@ def main() -> int:
         tmp.rename(path)
         finite = [bool(np.isfinite(y[t]).all()) for t in range(len(rows))]
         print(f"member {member} seed {seed}: {time.time() - t0:.1f} s, wrote {path}, finite per lead {finite}")
+        bad = []
         for v, j in idx.items():
-            ratios = " ".join(f"{float(y[t, :, j].std() / (truth[t, :, j].std() + 1e-30)):.3f}" for t in range(len(rows)))
-            corr = " ".join(f"{float(np.corrcoef(y[t, :, j], truth[t, :, j])[0, 1]):.3f}" for t in range(len(rows)))
-            print(f"  {v}: std pred/truth per lead {ratios}; corr {corr}")
+            r = [float(y[t, :, j].std() / (truth[t, :, j].std() + 1e-30)) for t in range(len(rows))]
+            c = [float(np.corrcoef(y[t, :, j], truth[t, :, j])[0, 1]) for t in range(len(rows))]
+            print(f"  {v}: std pred/truth per lead {' '.join(f'{x:.3f}' for x in r)}; corr {' '.join(f'{x:.3f}' for x in c)}")
+            if v in ("10u", "10v", "2t", "msl") and (min(r) < 0.5 or max(r) > 1.5 or min(c) < 0.5):
+                bad.append(v)
+        if not all(finite) or bad:
+            raise SystemExit(f"SANITY FAILED member {member}: finite per lead {finite}, out-of-range variables {bad} "
+                             "(std ratio outside 0.5-1.5 or correlation below 0.5)")
     return 0
 
 
