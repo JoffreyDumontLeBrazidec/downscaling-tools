@@ -99,9 +99,12 @@ def main() -> int:
             ws = [str(v) for v in ds.variables["weather_state"][:]]
             if ws != variables:
                 raise SystemExit(f"{name}: template weather states differ from the npz variables")
-            for key, zkey in (("lat_hres", "lat"), ("lon_hres", "lon")):
-                if not np.allclose(np.asarray(ds.variables[key][:]), z0[zkey], rtol=0, atol=1e-6):
-                    raise SystemExit(f"{name}: template {key} differs from the npz grid")
+            # The kit writes longitudes in -180..180, the store in 0..360: compare the points modulo 360.
+            if not np.allclose(np.asarray(ds.variables["lat_hres"][:]), z0["lat"], rtol=0, atol=1e-6):
+                raise SystemExit(f"{name}: template lat_hres differs from the npz grid")
+            dlon = (np.asarray(ds.variables["lon_hres"][:]) - z0["lon"] + 180.0) % 360.0 - 180.0
+            if np.abs(dlon).max() > 1e-6:
+                raise SystemExit(f"{name}: template lon_hres differs from the npz grid (modulo 360)")
             tseeds = [int(v) for v in ds.variables["sampler_seed"][:]]
             n_mem = ds.dimensions["ensemble_member"].size
             if args.check_only:
