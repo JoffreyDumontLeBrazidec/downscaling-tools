@@ -19,6 +19,9 @@ Optionally a second prediction set (``--control``) is read with the same instrum
 stride-1 (averaged) and a stride-K (isolated windows) run of the same model, or the single-time
 reference lane's files, sit in one table.
 
+Files are read one at a time (2026-10-20); a member file may carry its truth or name the block's
+shared ``<prefix>_truth.npz`` in ``truth_file``.
+
 Output: a Markdown table and a JSON file. Variables read by default: 10u, 10v, 2t, msl, tp.
 """
 
@@ -107,17 +110,34 @@ def trajectory_stats(arr, regrid, variables, wanted):
     return stats
 
 
-def load_set(paths):
-    """Average the statistics over files (members, blocks). Each file: pred, truth, variables, lat, lon."""
-    preds, truths, regrid, variables = [], [], None, None
+def _truth_of(z):
+    """The truth of one npz: its own array, or the shared ``<prefix>_truth.npz`` it names (predict_sequence.py)."""
+    if "truth" in z.files:
+        return z["truth"]
+    return np.load(str(z["truth_file"]), allow_pickle=False)["truth"]
+
+
+def stats_of_set(paths, wanted, regrid=None, with_truth=True):
+    """Statistics of every file, computed one file at a time (a member file is about 1.4 GB).
+
+    Returns (pred stats per file, truth stats per distinct truth, regrid, variables). The truth of a
+    block is read once even when its members share one truth file.
+    """
+    pred_stats, truth_stats, variables, seen = [], [], None, {}
     for p in paths:
-        z = np.load(p, allow_pickle=True)
+        z = np.load(p, allow_pickle=False)
         if regrid is None:
             regrid = BoxRegrid(z["lat"], z["lon"])
+        if variables is None:
             variables = [str(v) for v in z["variables"]]
-        preds.append(z["pred"])
-        truths.append(z["truth"])
-    return preds, truths, regrid, variables
+        pred_stats.append(trajectory_stats(z["pred"], regrid, variables, wanted))
+        if with_truth:
+            key = str(z["truth_file"]) if "truth_file" in z.files else str(p)
+            if key not in seen:
+                seen[key] = trajectory_stats(_truth_of(z), regrid, variables, wanted)
+            truth_stats.append(seen[key])  # weighted like the predictions: one entry per trajectory
+        del z
+    return pred_stats, truth_stats, regrid, variables
 
 
 def average_stats(list_of_stats):
@@ -140,13 +160,13 @@ def main() -> int:
     args = parser.parse_args()
     wanted = args.vars.split(",")
 
-    preds, truths, regrid, variables = load_set(args.files)
-    pred_stats = average_stats([trajectory_stats(p, regrid, variables, wanted) for p in preds])
-    truth_stats = average_stats([trajectory_stats(t, regrid, variables, wanted) for t in truths])
+    p_list, t_list, regrid, variables = stats_of_set(args.files, wanted)
+    pred_stats = average_stats(p_list)
+    truth_stats = average_stats(t_list)
     ctrl_stats = None
     if args.control:
-        cpreds, _, _, _ = load_set(args.control)
-        ctrl_stats = average_stats([trajectory_stats(p, regrid, variables, wanted) for p in cpreds])
+        c_list, _, _, _ = stats_of_set(args.control, wanted, regrid=regrid, with_truth=False)
+        ctrl_stats = average_stats(c_list)
 
     lines = ["| variable | band | tdiff truth | tdiff pred | ratio pred/truth | lag1 truth | lag1 pred |"
              + (" tdiff control | ratio control/truth | lag1 control |" if ctrl_stats else ""),
@@ -161,7 +181,7 @@ def main() -> int:
                 row += f" {c['tdiff']:.4g} | {c['tdiff'] / (t['tdiff'] + 1e-30):.3f} | {c['lag1']:.3f} |"
             lines.append(row)
     table = "\n".join(lines)
-    print(f"{len(preds)} trajectories, {preds[0].shape[0]} leads, regrid {len(regrid.glat)} x {len(regrid.glon)} at 0.09 deg")
+    print(f"{len(p_list)} trajectories ({len(c_list) if args.control else 0} control), regrid {len(regrid.glat)} x {len(regrid.glon)} at 0.09 deg")
     print(table)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
