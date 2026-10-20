@@ -342,6 +342,13 @@ def main() -> int:
             )
         y = pred["out_hres"]  # (1, L, 1, grid, n_out) or (1, L, grid, n_out)
         y = y.reshape(len(rows), y.shape[-2], y.shape[-1]).float().cpu().numpy()
+        # Free the member's GPU output before the next one: one member peaks at about 36 GiB on a 40 GB A100,
+        # and the leftover output of the previous member made member 2 run out of memory (20 Oct 2026).
+        del pred
+        peak_gib = torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else 0.0
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
         if y.shape != truth.shape:
             raise SystemExit(f"prediction shape {y.shape} differs from truth {truth.shape}")
         extra = {"truth": truth} if args.truth_in_members else {"truth_file": str(truth_path)}
@@ -350,7 +357,8 @@ def main() -> int:
                  member=member, sampling_json=record, **common, **extra)
         tmp.rename(path)
         finite = [bool(np.isfinite(y[t]).all()) for t in range(len(rows))]
-        print(f"member {member} seed {seed}: {time.time() - t0:.1f} s, wrote {path}, finite per lead {finite}")
+        print(f"member {member} seed {seed}: {time.time() - t0:.1f} s, peak GPU memory {peak_gib:.2f} GiB, wrote {path}, "
+              f"finite per lead {finite}", flush=True)
         bad = []
         for v, j in idx.items():
             r = [float(y[t, :, j].std() / (truth[t, :, j].std() + 1e-30)) for t in range(len(rows))]
