@@ -190,6 +190,12 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "elongation, aspect ratio and orientation relative to the flow?",
     ),
     Evaluator(
+        "precip_read", DIAGNOSTIC, False,
+        "How does the model's precipitation compare with the truth and the interpolated input, "
+        "as distributions per region, as bias, normalised RMSE, correlation and fair CRPS per lead "
+        "time, as heavy-rain area per lead time, and as maps of chosen cases?",
+    ),
+    Evaluator(
         "box_spectra", DIAGNOSTIC, False,
         "Per wavelength bin on a box, how does the amplitude of the model's residual, of its "
         "full field and of the input compare with the truth's, and how much of it is aligned "
