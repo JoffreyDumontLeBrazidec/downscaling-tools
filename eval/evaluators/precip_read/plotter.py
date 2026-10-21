@@ -102,7 +102,8 @@ def plot_pdfs(results_dir, step, *, run_label, acc, n_boot=2000, regions=PDF_REG
                 b.plot(x[ok], mc[ok], **role_style("model"))
                 b.plot(x[ok], mi[ok], **role_style("input"))
                 xmax = x[ok].max()
-                b.axvspan(xmax * 10 ** 0.05, 800, color="#e4e3df", alpha=0.6, lw=0)
+                for ax in (a, b):
+                    ax.axvspan(xmax * 10 ** 0.05, 800, color="#e4e3df", alpha=0.6, lw=0, zorder=0)
                 b.text(min(xmax * 1.15, 400), 2.6, "truth < 10 points\nper bin", fontsize=8.5, color="#52514e", va="center")
             b.set_yscale("log"); b.set_ylim(0.1, 4)
             b.set_yticks([0.1, 0.25, 0.5, 1, 2, 4]); b.set_yticklabels(["0.1", "0.25", "0.5", "1", "2", "4"])
@@ -111,12 +112,13 @@ def plot_pdfs(results_dir, step, *, run_label, acc, n_boot=2000, regions=PDF_REG
             if p % 2 == 0:
                 b.set_ylabel("Ratio to truth")
             if p >= len(regions) - 2:
-                b.set_xlabel(f"tp (mm / {acc} h)")
-        fig.suptitle(f"tp distribution at +{step} h: truth, input and {run_label}", fontweight="bold", y=0.995)
-        _footer(fig, f"tp in mm per {acc} h, clipped at 0. n = {len(dates)} dates; {run_label} {nmem} members per date "
+                b.set_xlabel(f"tp at one grid point (mm per {acc} h)")
+        fig.subplots_adjust(top=0.93, bottom=0.11)
+        fig.suptitle(f"tp distribution at +{step} h: truth, input and {run_label}", fontweight="bold", y=0.975)
+        _footer(fig, f"tp in mm per {acc} h at one O1280 point, window ending at the lead time, clipped at 0. n = {len(dates)} dates; {run_label} {nmem} members per date "
                 f"({len(dates) * nmem} fields), truth and input 1 field per date. Bins 0.1 dex.\n"
-                f"Ratio strip: {run_label} band = 5-95 % bootstrap over dates, drawn where the truth has ≥ 10 points in the bin. "
-                f"Heavy tail carried by few dates: truth ≥ 100 mm on {heavy_dates} of {len(dates)} dates.", y=0.07)
+                f"Ratio strip: {run_label} band = 5-95 % bootstrap over dates, drawn where the truth has ≥ 10 points in the bin; grey beyond = anecdote. "
+                f"Heavy tail carried by few dates: truth ≥ 100 mm on {heavy_dates} of {len(dates)} dates.", y=0.045)
         return save_figure(fig, Path(results_dir) / f"tp_pdf_step{step:03d}", close=True)
 
 
@@ -195,14 +197,15 @@ def plot_scores_by_lead(results_dir, *, run_label, acc, n_boot=2000, regions=SCO
                 if i == len(metrics) - 1:
                     ax.set_xticks(leads); ax.set_xticklabels([f"+{int(l)}" for l in leads]); ax.set_xlabel("Lead time (h)")
             if j == 0:
-                axes[0, 0].legend(loc="best", fontsize=9)
-                axes[-1, 0].legend(loc="best", fontsize=9)
+                h1, l1 = axes[0, 0].get_legend_handles_labels()
+                h2, l2 = axes[-1, 0].get_legend_handles_labels()
+                fig.legend(h1 + h2, l1 + l2, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 0.965), fontsize=9.5)
         fig.suptitle(f"tp scores against the truth by lead time: {run_label} and its input", fontweight="bold")
         _footer(fig, f"Pooled over points and dates (points unweighted). Bias = mean forecast − mean truth; RMSE of the ensemble mean "
                 f"over the truth's standard deviation; Pearson correlation of the ensemble mean; fair CRPS of the {run_label} members "
                 f"(input: absolute error).\nBands: 5-95 % bootstrap over dates. Lower is better for |bias|, RMSE and CRPS; higher for "
                 f"correlation. Ensemble-mean RMSE and correlation favour smooth forecasts: read CRPS for the ensemble.", y=0.0)
-        fig.tight_layout(rect=(0, 0.03, 1, 0.97))
+        fig.tight_layout(rect=(0, 0.03, 1, 0.94))
         return save_figure(fig, Path(results_dir) / "tp_scores_by_lead", close=True)
 
 
@@ -238,6 +241,69 @@ def plot_heavy_area_by_lead(results_dir, *, run_label, acc, threshold=100, regio
         return save_figure(fig, Path(results_dir) / "tp_heavy_area_by_lead", close=True)
 
 
+# --------------------------------------------------------------------------- station scores
+STATION_FORECASTS = (("model", "model"), ("input", "input"), ("truth", "truth"))
+
+
+def plot_station_scores(results_dir, *, run_label, acc, regions=("all", "europe"), ref="obs"):
+    """Scores against station observations by lead: mean over dates of the per-date scores, ±1 SE."""
+    import matplotlib.pyplot as plt
+    from eval.plotting import eval_style, role_style, save_figure
+
+    path = Path(results_dir) / "station_scores_per_date.csv"
+    if not path.exists():
+        return []
+    with open(path) as f:
+        rows = [r for r in csv.DictReader(f) if r["ref"] == ref]
+    for r in rows:
+        r["forecast"] = "model" if r["forecast"] not in ("input", "truth") else r["forecast"]
+    regions = [g for g in regions if any(r["region"] == g for r in rows)]
+    leads = sorted({int(r["lead"]) for r in rows})
+    metrics = [("bias", f"Bias (mm / {acc} h)", 0.0), ("nrmse", "RMSE / obs SD", None),
+               ("corr", "Correlation", None), ("crps", f"CRPS (mm / {acc} h)", None)]
+    label = {"model": f"{run_label} (ensemble mean; fair CRPS of members)", "input": "Input (interpolated)",
+             "truth": "Truth (o1280 forecast)"}
+    offs = {"model": -1.2, "input": 0.0, "truth": 1.2}
+    with eval_style():
+        fig, axes = plt.subplots(len(metrics), len(regions), figsize=(5.2 * len(regions), 2.7 * len(metrics)),
+                                 sharex=True, squeeze=False)
+        for j, reg in enumerate(regions):
+            sub = [r for r in rows if r["region"] == reg]
+            for i, (key, ylabel, refl) in enumerate(metrics):
+                ax = axes[i, j]
+                for fc, role in STATION_FORECASTS:
+                    m, se = [], []
+                    for lead in leads:
+                        v = np.array([float(r[key]) for r in sub if r["forecast"] == fc and int(r["lead"]) == lead], float)
+                        v = v[np.isfinite(v)]
+                        m.append(v.mean() if v.size else np.nan)
+                        se.append(v.std(ddof=1) / np.sqrt(v.size) if v.size > 1 else np.nan)
+                    st = role_style(role, marker="o", markersize=7)
+                    st["linestyle"] = "none"
+                    ax.errorbar(np.array(leads) + offs[fc], m, yerr=se, capsize=4, elinewidth=2, label=label[fc], **st)
+                if refl is not None:
+                    ax.axhline(refl, color="#0b0b0b", lw=1, ls="--")
+                if i == 0:
+                    nd = len({r["date"] for r in sub})
+                    ns = np.mean([float(r["n"]) for r in sub if r["forecast"] == "model"])
+                    ax.set_title(f"{REGION_TITLE.get(reg, reg)}\n{nd} dates, ~{ns:,.0f} stations per date", fontsize=11)
+                if j == 0:
+                    ax.set_ylabel(ylabel)
+                if i == len(metrics) - 1:
+                    ax.set_xticks(leads); ax.set_xticklabels([f"+{l}" for l in leads]); ax.set_xlabel("Lead time (h)")
+                    ax.set_xlim(min(leads) - 12, max(leads) + 12)
+        h, l = axes[0, 0].get_legend_handles_labels()
+        fig.legend(h, l, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.955), fontsize=10)
+        fig.suptitle(f"tp against station observations ({acc} h accumulations): {run_label}, its input and the truth",
+                     fontweight="bold")
+        _footer(fig, f"Stations: STVL {acc} h tp (mostly SYNOP; the observations quaver uses), nearest grid point, values outside "
+                f"[0, 300] mm dropped. Mean over dates of per-date scores; bars ±1 SE over dates.\nCRPS of a single field = mean "
+                f"absolute error, so the ensemble's lower CRPS is partly by construction; compare RMSE and correlation of the "
+                f"ensemble mean for like with like. Point scores penalise realistic but misplaced detail.", y=0.0)
+        fig.tight_layout(rect=(0, 0.04, 1, 0.93))
+        return save_figure(fig, Path(results_dir) / "tp_station_scores", close=True)
+
+
 # --------------------------------------------------------------------------- maps
 def _map_cmap():
     import matplotlib.pyplot as plt
@@ -265,19 +331,25 @@ def plot_case_maps(results_dir, group, case_names, *, run_label, acc, members=(0
     proj = ccrs.PlateCarree()
     ncol = 2 + len(members)
     data = [np.load(f) for f in files]
-    asp = [(z["box"][1] - z["box"][0]) / ((z["box"][3] - z["box"][2]) * np.cos(np.deg2rad(z["box"][:2].mean()))) for z in data]
+    asp = [(z["box"][1] - z["box"][0]) / (z["box"][3] - z["box"][2]) for z in data]  # PlateCarree: degrees as drawn
+    W = 3.2
+    top_in, bot_in = 0.95, 1.25
+    H = sum(W * a for a in asp) * 1.08 + top_in + bot_in
     with eval_style():
-        fig = plt.figure(figsize=(3.2 * ncol, sum(3.2 * a + 0.35 for a in asp) + 1.3))
-        gs = fig.add_gridspec(len(data), ncol, height_ratios=asp, hspace=0.12, wspace=0.04)
+        fig = plt.figure(figsize=(W * ncol + 0.9, H))
+        gs = fig.add_gridspec(len(data), ncol, height_ratios=asp, hspace=0.08, wspace=0.04,
+                              top=1 - top_in / H, bottom=bot_in / H, left=0.9 / (W * ncol + 0.9), right=0.995)
         im = None
         for r, z in enumerate(data):
             box = z["box"]
             tri = mtri.Triangulation(z["lon"], z["lat"])
             xy = np.c_[z["lon"], z["lat"]][tri.triangles]
             tri.set_mask(np.ptp(xy[..., 0], 1) + np.ptp(xy[..., 1], 1) > 0.5)
-            mem = [m for m in members if m < z["model"].shape[0]]
+            stored = [int(m) for m in z["members"]] if "members" in z else list(range(z["model"].shape[0]))
+            mem = [m for m in members if m in stored]
             fields = [("Truth", z["truth"]), ("Input (interpolated)", z["input"])] + \
-                     [(f"{run_label} member {m + 1}", z["model"][m]) for m in mem]
+                     [(f"{run_label} member {m + 1}", z["model"][stored.index(m)]) for m in mem]
+            fields = [(n, np.asarray(f, np.float32)) for n, f in fields]
             for c, (name, f) in enumerate(fields):
                 ax = fig.add_subplot(gs[r, c], projection=proj)
                 ax.set_extent([box[2], box[3], box[0], box[1]], crs=proj)
@@ -293,14 +365,15 @@ def plot_case_maps(results_dir, group, case_names, *, run_label, acc, members=(0
                     lab = str(z["label"]) + f"\n{str(z['date'])} +{int(z['step'])} h"
                     ax.text(-0.05, 0.5, lab, transform=ax.transAxes, rotation=90, ha="right", va="center", fontsize=11,
                             fontweight="bold")
-        cax = fig.add_axes([0.25, 0.035, 0.5, 0.014])
+        cax = fig.add_axes([0.25, 0.62 / H, 0.5, 0.16 / H])
         cb = fig.colorbar(im, cax=cax, orientation="horizontal", extend="max", ticks=MAP_LEVELS)
+        cb.ax.set_xticklabels([f"{v:g}" for v in MAP_LEVELS])
         cb.set_label(f"tp (mm / {acc} h)")
-        fig.suptitle(title or f"tp maps: {group}", fontweight="bold", y=0.995)
+        fig.suptitle(title or f"tp maps: {group.replace('_', ' ')}", fontweight="bold", y=1 - 0.25 / H)
         mem_txt = ", ".join(str(m + 1) for m in members)
         _footer(fig, f"One date per row (n = 1 field each: illustration, not statistics). Members {mem_txt} are the first members "
                 f"in the file, not chosen. Panel corner: field maximum in the box (mm / {acc} h). White: < {MAP_LEVELS[0]} mm.",
-                y=0.012)
+                y=0.1 / H)
         return save_figure(fig, Path(results_dir) / f"tp_maps_{group}", close=True)
 
 
@@ -315,6 +388,9 @@ def plot(results_dir, lane_config, eval_config, *, output_dir=None, **kwargs):
     if len(meta["steps"]) > 1:
         plot_scores_by_lead(results_dir, run_label=run_label, acc=acc, n_boot=n_boot)
         plot_heavy_area_by_lead(results_dir, run_label=run_label, acc=acc, n_boot=n_boot)
+    plot_station_scores(results_dir, run_label=run_label, acc=acc)
     members = tuple(int(m) for m in eval_config.get("map_members", (0, 1, 2)))
     for group, names in (eval_config.get("map_groups") or {}).items():
-        plot_case_maps(results_dir, group, list(names), run_label=run_label, acc=acc, members=members)
+        titles = eval_config.get("map_titles") or {}
+        plot_case_maps(results_dir, group, list(names), run_label=run_label, acc=acc, members=members,
+                       title=titles.get(group))

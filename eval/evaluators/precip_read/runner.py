@@ -67,6 +67,15 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     only_dates = {str(d) for d in eval_config.get("dates", [])} or None
     only_steps = {int(s) for s in eval_config.get("steps", [])} or None
     cases = list(eval_config.get("cases", []))
+    map_members = [int(m) for m in eval_config.get("map_members", (0, 1, 2))]
+    obs_cfg = dict(eval_config.get("obs") or {})
+    obs = matcher = None
+    if obs_cfg.get("csv"):
+        from eval.evaluators.precip_read.core.obs import load_obs
+        obs, n_bad = load_obs(obs_cfg["csv"], float(obs_cfg.get("obs_max", 300.0)))
+        LOG.info("precip_read: %d station values, %d dropped outside [0, %s] mm", len(obs), n_bad,
+                 obs_cfg.get("obs_max", 300.0))
+    station, station_log = [], []
 
     preds = [p for p in find_predictions(predictions_dir)
              if (only_dates is None or p.date in only_dates) and (only_steps is None or p.step in only_steps)]
@@ -92,12 +101,25 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                 if m.any():
                     rows.append({"lead": step, "date": p.date, "region": name,
                                  **score_sums(yp[:, m], xi[m], y[m], thresholds)})
+            if obs is not None:
+                from eval.evaluators.precip_read.core.obs import StationMatcher, station_rows
+                if matcher is None or matcher.lat.size != lat.size or not np.array_equal(matcher.lat, lat):
+                    matcher = StationMatcher(lat, lon)
+                srows, nst = station_rows(obs, matcher, date=p.date, step=step, truth=y, inp=xi, ens=yp,
+                                          regions=regions, max_km=float(obs_cfg.get("max_km", 15.0)),
+                                          min_stations=int(obs_cfg.get("min_stations", 30)))
+                station += srows
+                station_log.append(f"{p.date} +{step} h: {nst} stations")
             for c in cases:
                 if str(c["date"]) == p.date and int(c["step"]) == step:
                     b = c["box"]
                     m = (lat >= b[0]) & (lat <= b[1]) & (lon >= b[2]) & (lon <= b[3])
-                    np.savez_compressed(output_dir / "cases" / f"{c['name']}.npz", lat=lat[m], lon=lon[m], truth=y[m],
-                                        input=xi[m], model=yp[:, m], box=np.asarray(b, float), date=p.date, step=step,
+                    mm = [j for j in map_members if j < yp.shape[0]]
+                    # Only the members the maps draw, in float16: the files stay small enough to keep with a note.
+                    np.savez_compressed(output_dir / "cases" / f"{c['name']}.npz", lat=lat[m], lon=lon[m],
+                                        truth=y[m].astype(np.float16), input=xi[m].astype(np.float16),
+                                        model=yp[mm][:, m].astype(np.float16), members=np.array(mm),
+                                        box=np.asarray(b, float), date=p.date, step=step,
                                         label=str(c.get("label", c["name"])), source=str(p.path))
             dates.append(p.date)
             files.append(str(p.path))
@@ -112,10 +134,16 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
+    if station:
+        with open(output_dir / "station_scores_per_date.csv", "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(station[0]))
+            w.writeheader()
+            w.writerows(station)
     missing = [c["name"] for c in cases if not (output_dir / "cases" / f"{c['name']}.npz").exists()]
     meta = {"predictions_dir": str(predictions_dir), "var": var, "unit": "mm per accumulation window, clipped at 0",
             "accum_hours": eval_config.get("accum_hours", 6), "members": sorted(members), "regions": regions,
             "thresholds": list(thresholds), "steps": sorted(by_step), "files": files, "cases_missing": missing,
+            "obs": {**obs_cfg, "per_file": station_log} if obs_cfg else None,
             "run_label": str(eval_config.get("run_label") or kwargs.get("run_label") or "")}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
     if missing:

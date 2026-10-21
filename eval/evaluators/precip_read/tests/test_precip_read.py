@@ -75,7 +75,19 @@ def test_run_then_plot(tmp_path, truth_members):
         for step in (24, 48):
             _write(pred / f"predictions_{date}_step{step:03d}.nc", mode="noise", seed=10 * i + step,
                    truth_members=truth_members)
+    import pandas as pd
+    rng = np.random.default_rng(5)
+    obs_rows = []
+    for date in ["20230101", "20230111", "20230122"]:
+        for step in (24, 48):
+            valid = (pd.Timestamp(date) + pd.Timedelta(hours=step)).strftime("%Y%m%d%H")
+            for k in range(60):
+                obs_rows.append({"valid": valid, "lat": rng.uniform(36, 59), "lon": rng.uniform(-11, 19), "stnid": k,
+                                 "elevation": 0.0, "obs": rng.gamma(0.5, 2.0)})
+    obs_rows.append({"valid": "2023010200", "lat": 45.0, "lon": 5.0, "stnid": 999, "elevation": 0.0, "obs": 703.0})
+    pd.DataFrame(obs_rows).to_csv(tmp_path / "obs.csv", index=False)
     cfg = {"accum_hours": 12, "bootstrap": 50, "run_label": "test",
+           "obs": {"csv": str(tmp_path / "obs.csv"), "min_stations": 20, "max_km": 100.0},
            "cases": [{"name": "c1", "label": "Case 1", "date": "20230111", "step": 24, "box": [40, 50, 0, 15]}],
            "map_groups": {"demo": ["c1"]}}
     out = precip_read.run(pred, {}, cfg, output_dir=tmp_path / "out")
@@ -86,6 +98,9 @@ def test_run_then_plot(tmp_path, truth_members):
     # every point of every field lands in exactly one bin
     assert (z["truth"].sum(-1)[:, 0] == z["npts"][0]).all()
     precip_read.plot(out, {}, cfg)
-    for name in ("tp_pdf_step024.png", "tp_pdf_step048.png", "tp_scores_by_lead.png", "tp_heavy_area_by_lead.png",
+    st = pd.read_csv(out / "station_scores_per_date.csv")
+    assert set(st.forecast) == {"model", "input", "truth"} and set(st.lead) == {24, 48}
+    assert (st[st.region == "all"].n == 60).all()  # the 703 mm report is dropped
+    for name in ("tp_station_scores.png", "tp_pdf_step024.png", "tp_pdf_step048.png", "tp_scores_by_lead.png", "tp_heavy_area_by_lead.png",
                  "tp_maps_demo.png"):
         assert (out / name).exists(), name

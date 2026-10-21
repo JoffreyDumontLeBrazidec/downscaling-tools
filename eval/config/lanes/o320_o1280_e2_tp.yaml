@@ -38,5 +38,9 @@ precip_read:
     storms: [franklin_20230829_s024, lee_20230909_s024, nigel_20230919_s024, tammy_20231021_s024]
     alps: [alps_20231021_s024, alps_20230226_s024]
     europe_fronts: [europe_20231021_s024, europe_20230516_s024, europe_20230226_s024]
+  map_titles:
+    storms: "tp in tropical cyclones, +24 h: truth, input and CA300"
+    alps: "tp over the Alps, +24 h: truth, input and CA300"
+    europe_fronts: "European frontal rain, +24 h: truth, input and CA300"
   map_members: [0, 1, 2]
   bootstrap: 2000
