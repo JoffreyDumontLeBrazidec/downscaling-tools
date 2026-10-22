@@ -306,12 +306,13 @@ def plot_station_scores(results_dir, *, run_label, acc, regions=("all", "europe"
 
 # --------------------------------------------------------------------------- maps
 def _map_cmap():
-    import matplotlib.pyplot as plt
     from matplotlib.colors import BoundaryNorm, ListedColormap
 
-    base = plt.get_cmap("YlGnBu")(np.linspace(0.12, 1.0, len(MAP_LEVELS) - 1))
-    extra = np.array([[0.42, 0.18, 0.55, 1], [0.62, 0.10, 0.45, 1]])
-    cmap = ListedColormap(np.vstack([base[:-1], extra[:1]])).with_extremes(under="white", over=extra[1])
+    from eval.plotting.variables import precip_cmap
+
+    rain = precip_cmap()  # house colour map for precipitation: cmocean rain
+    base = rain(np.linspace(0.1, 0.92, len(MAP_LEVELS) - 1))
+    cmap = ListedColormap(base).with_extremes(under="white", over=rain(1.0))
     return cmap, BoundaryNorm(MAP_LEVELS, cmap.N)
 
 

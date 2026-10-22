@@ -77,6 +77,24 @@ def test_no_forbidden_colormaps_in_table():
     assert all(s.err_cmap in {"RdBu_r", "BrBG"} for s in P.VARIABLES.values())
 
 
+def test_precipitation_uses_cmocean_rain():
+    from eval.plotting._cmocean_rain import RAIN_RGB
+    from eval.plotting.variables import precip_cmap
+
+    assert len(RAIN_RGB) == 256
+    for key in ("tp", "cp", "precip"):
+        cmap = P.variable_spec(key).field_cmap()
+        assert np.allclose(cmap(np.linspace(0, 1, 256))[:, :3], RAIN_RGB, atol=1e-5), key
+    assert np.allclose(precip_cmap()(1.0)[:3], RAIN_RGB[-1], atol=1e-5)
+
+
+def test_embedded_rain_matches_cmocean():
+    cmo = pytest.importorskip("cmocean.cm")
+    from eval.plotting._cmocean_rain import RAIN_RGB
+
+    assert np.allclose(cmo.rain(np.linspace(0, 1, 256))[:, :3], RAIN_RGB, atol=1e-5)
+
+
 def test_readable_labels():
     assert P.readable_label("od_enfo_0001") == "truth (ENFO O1280)"
     assert P.readable_label("od_enfo_0001", P.LabelContext(truth="ENFO O320")) == "truth (ENFO O320)"

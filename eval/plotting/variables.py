@@ -19,7 +19,9 @@ Colour maps: fields use perceptually uniform sequential maps (never jet, rainbow
 signed fields (u and v wind components) use a colour-blind-safe diverging map centred on zero;
 errors (prediction minus truth) always use ``RdBu_r`` centred on zero with symmetric limits
 that are shared by the panels being compared (precipitation errors use ``BrBG`` so that
-wetter-than-truth is blue-green and drier is brown).
+wetter-than-truth is blue-green and drier is brown). Precipitation fields (tp, cp) use cmocean
+``rain`` (house rule since 22 Oct 2026); ``precip_cmap()`` returns it, and an embedded copy is
+used when cmocean is not installed.
 
 Use ``variable_spec("10u_sfc")`` to look a variable up by any of its spellings, ``convert``
 to change native values to display units, ``axis_label`` for a label with the unit in
@@ -64,8 +66,31 @@ _UNIT_ALIASES = {
 }
 
 
+def precip_cmap():
+    """cmocean ``rain``, the house colour map for precipitation (embedded if cmocean is missing)."""
+    try:
+        import cmocean.cm as cmo
+
+        return cmo.rain
+    except Exception:
+        from matplotlib.colors import ListedColormap
+
+        from ._cmocean_rain import RAIN_RGB
+
+        return ListedColormap(RAIN_RGB, name="rain")
+
+
 def _cmap(name: str, fallback: str):
-    """A Matplotlib colour map by name; ``cmcrameri`` names are tried first when prefixed."""
+    """A Matplotlib colour map by name; ``cmc.`` (cmcrameri) and ``cmo.`` (cmocean) prefixes."""
+    if name == "cmo.rain":
+        return precip_cmap()
+    if name.startswith("cmo."):
+        try:
+            import cmocean.cm as cmo
+
+            return getattr(cmo, name[4:])
+        except Exception:  # cmocean missing or name unknown
+            return fallback
     if name.startswith("cmc."):
         try:
             import cmcrameri.cm as cmc
@@ -132,9 +157,9 @@ VARIABLES: dict[str, VariableSpec] = {
     "sp": _v("sp", "Surface pressure", "hPa", "Pa", "cividis", short="sp"),
     "tcw": _v("tcw", "Total column water", "kg m⁻²", "kg m-2", "cmc.davos_r", short="tcw",
               default_range=(0.0, 70.0), extend="max"),
-    "tp": _v("tp", "Total precipitation", "mm", "m", "cmc.lapaz_r", err_cmap="BrBG",
+    "tp": _v("tp", "Total precipitation", "mm", "m", "cmo.rain", err_cmap="BrBG",
              accumulated=True, short="tp", extend="max"),
-    "cp": _v("cp", "Convective precipitation", "mm", "m", "cmc.lapaz_r", err_cmap="BrBG",
+    "cp": _v("cp", "Convective precipitation", "mm", "m", "cmo.rain", err_cmap="BrBG",
              accumulated=True, short="cp", extend="max"),
     "lsm": _v("lsm", "Land-sea mask", "", "", "Greys", short="lsm", extend="neither"),
 }
