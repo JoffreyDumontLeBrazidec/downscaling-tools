@@ -121,9 +121,10 @@ VARIABLES: dict[str, dict] = {
         "token": "2t",
         # The bulk of the field over these regions sits between about 260 and
         # 305 K (-13 to +32 degC); the ends saturate over ice sheets and desert,
-        # which is why extend is "both". Same range as the former -20..35 degC.
-        "vmin": 253.15,
-        "vmax": 308.15,
+        # which is why extend is "both". Symmetric about 273.15 K (-30..+30 degC)
+        # so that the white middle of the house map (vik) sits at 0 degC.
+        "vmin": 243.15,
+        "vmax": 303.15,
         "extend": "both",
         "fine_vmax": 3.0,
     },

@@ -85,8 +85,9 @@ def test_2t_variable_resolves_its_own_scale_and_token():
          "--variable", "2t"]
     )
     spec, vmin, vmax = resolve_scale(args)
-    # Temperatures are shown in K (house rule); same physical range as the former -20..35 degC.
-    assert (spec["token"], vmin, vmax) == ("2t", 253.15, 308.15)
+    # Temperatures are shown in K (house rule), symmetric about 273.15 K so vik's white is 0 degC.
+    assert (spec["token"], vmin, vmax) == ("2t", 243.15, 303.15)
+    assert spec["cmap"] == "cmc.vik"
     assert spec["states"] == ("2t",)
 
 

@@ -308,7 +308,7 @@ def plot_x_y(
                     cmap = spec.field_cmap()
                     label = spec.label
                 else:
-                    norm = shared_norm(*arrays, q=(0.5, 99.5))
+                    norm = shared_norm(*arrays, q=(0.5, 99.5), center=spec.center)
                     cmap = spec.field_cmap()
                     label = spec.label
                 mesh = None

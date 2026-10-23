@@ -147,7 +147,7 @@ def _draw_member_page(fields, *, bbox, plot_config, exp_config, member_idx, memb
             # full range: the storm extremes are what these maps are for
             norm = shared_norm(*arrays, vmin=0.0, q=(0.0, 100.0))
         else:
-            norm = shared_norm(*arrays, q=(0.0, 100.0))
+            norm = shared_norm(*arrays, q=(0.0, 100.0), center=spec.center)
         row_extend[row_i] = extend_for(norm, *arrays)
         cmap = spec.field_cmap()
 

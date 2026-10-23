@@ -30,11 +30,13 @@ try:
     import cmcrameri.cm  # noqa: F401
     SEQ_CMAP = "cmc.batlow"   # sequential (permutation importance, etc.)
     SEQ_CMAP2 = "cmc.lipari"  # second sequential (per-block activation norms)
-    PRECIP_CMAP = "cmc.devon_r"  # white->blue, for observed precip context maps
 except Exception:  # pragma: no cover — fall back to matplotlib built-ins
     SEQ_CMAP = "viridis"
     SEQ_CMAP2 = "magma"
-    PRECIP_CMAP = "Blues"
+
+from eval.plotting.variables import precip_cmap
+
+PRECIP_CMAP = precip_cmap()  # house precipitation colour map: cmocean rain
 
 
 def fig_grid(n_panels: int, cols: int, panel_w: float = 6.0, panel_h: float = 4.5):

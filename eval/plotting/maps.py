@@ -151,11 +151,12 @@ def symmetric_norm(*arrays, q: float = 99.0, limit: float | None = None):
 
 
 def shared_norm(*arrays, q: tuple[float, float] = (1.0, 99.0), vmin: float | None = None,
-                vmax: float | None = None, centered: bool = False):
+                vmax: float | None = None, centered: bool = False, center: float | None = None):
     """One ``Normalize`` for every panel in a row or comparison.
 
     ``vmin``/``vmax`` take precedence over the percentile range ``q``. With
-    ``centered=True`` the scale is symmetric about zero (use for signed fields and errors).
+    ``centered=True`` the scale is symmetric about zero (use for signed fields and errors);
+    ``center`` makes it symmetric about that value instead (2t: 273.15 K, ``VariableSpec.center``).
     """
     from matplotlib.colors import Normalize
 
@@ -166,6 +167,9 @@ def shared_norm(*arrays, q: tuple[float, float] = (1.0, 99.0), vmin: float | Non
     v = finite_values(*arrays)
     lo = vmin if vmin is not None else (float(np.percentile(v, q[0])) if v.size else 0.0)
     hi = vmax if vmax is not None else (float(np.percentile(v, q[1])) if v.size else 1.0)
+    if center is not None:
+        half = max(center - lo, hi - center)
+        lo, hi = center - half, center + half
     if hi <= lo:
         hi = lo + 1e-12
     return Normalize(vmin=lo, vmax=hi)

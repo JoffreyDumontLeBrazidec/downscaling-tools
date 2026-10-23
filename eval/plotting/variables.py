@@ -18,8 +18,12 @@ tcw                kg m⁻²                       kg m⁻²
 Colour maps: fields use perceptually uniform sequential maps (never jet, rainbow or turbo);
 signed fields (u and v wind components) use a colour-blind-safe diverging map centred on zero;
 errors (prediction minus truth) always use ``RdBu_r`` centred on zero with symmetric limits
-that are shared by the panels being compared (precipitation errors use ``BrBG`` so that
-wetter-than-truth is blue-green and drier is brown).
+that are shared by the panels being compared (precipitation errors use Crameri ``broc_r`` so that
+wetter-than-truth is blue and drier is olive). Precipitation fields (tp, cp) use cmocean
+``rain`` (house rule since 22 Oct 2026); ``precip_cmap()`` returns it, and an embedded copy is
+used when cmocean is not installed. The other house maps were chosen by the owner on 23 Oct 2026:
+2t and skt Crameri ``vik`` in K with its white at 273.15 K (``center``), 2d ``batlow``, sst
+``navia``, msl and sp ``lipari``, 10u and 10v ``vik``, 10 m wind speed ``viridis``.
 
 Use ``variable_spec("10u_sfc")`` to look a variable up by any of its spellings, ``convert``
 to change native values to display units, ``axis_label`` for a label with the unit in
@@ -64,8 +68,31 @@ _UNIT_ALIASES = {
 }
 
 
+def precip_cmap():
+    """cmocean ``rain``, the house colour map for precipitation (embedded if cmocean is missing)."""
+    try:
+        import cmocean.cm as cmo
+
+        return cmo.rain
+    except Exception:
+        from matplotlib.colors import ListedColormap
+
+        from ._cmocean_rain import RAIN_RGB
+
+        return ListedColormap(RAIN_RGB, name="rain")
+
+
 def _cmap(name: str, fallback: str):
-    """A Matplotlib colour map by name; ``cmcrameri`` names are tried first when prefixed."""
+    """A Matplotlib colour map by name; ``cmc.`` (cmcrameri) and ``cmo.`` (cmocean) prefixes."""
+    if name == "cmo.rain":
+        return precip_cmap()
+    if name.startswith("cmo."):
+        try:
+            import cmocean.cm as cmo
+
+            return getattr(cmo, name[4:])
+        except Exception:  # cmocean missing or name unknown
+            return fallback
     if name.startswith("cmc."):
         try:
             import cmcrameri.cm as cmc
@@ -91,6 +118,14 @@ class VariableSpec:
     short: str = ""      # short axis name, e.g. "MSLP"
     default_range: tuple[float, float] | None = None  # sensible fixed field range, display units
     extend: str = "both"
+    center: float | None = None  # display value at the middle of the colour map (2t: 273.15 K)
+
+    def centred_range(self, lo: float, hi: float) -> tuple[float, float]:
+        """``(lo, hi)`` widened to be symmetric about ``center``; unchanged when it has none."""
+        if self.center is None:
+            return lo, hi
+        half = max(self.center - lo, hi - self.center)
+        return self.center - half, self.center + half
 
     @property
     def scale_offset(self) -> tuple[float, float]:
@@ -119,22 +154,23 @@ def _v(key, name, unit, native, cmap, **kw) -> VariableSpec:
 _WIND_MS = "m s⁻¹"
 
 VARIABLES: dict[str, VariableSpec] = {
-    "10u": _v("10u", "10 m zonal wind", _WIND_MS, "m s-1", "PuOr_r", signed=True, short="10u"),
-    "10v": _v("10v", "10 m meridional wind", _WIND_MS, "m s-1", "PuOr_r", signed=True, short="10v"),
+    "10u": _v("10u", "10 m zonal wind", _WIND_MS, "m s-1", "cmc.vik", signed=True, short="10u"),
+    "10v": _v("10v", "10 m meridional wind", _WIND_MS, "m s-1", "cmc.vik", signed=True, short="10v"),
     "10ff": _v("10ff", "10 m wind speed", _WIND_MS, "m s-1", "viridis", short="10 m wind",
                default_range=(0.0, 25.0), extend="max"),
-    "2t": _v("2t", "2 m temperature", "K", "K", "magma", short="2t", default_range=(250.0, 310.0)),
-    "2d": _v("2d", "2 m dew point temperature", "K", "K", "magma", short="2d"),
-    "skt": _v("skt", "Skin temperature", "K", "K", "magma", short="skt"),
-    "sst": _v("sst", "Sea surface temperature", "K", "K", "magma", short="sst"),
-    "msl": _v("msl", "Mean sea level pressure", "hPa", "Pa", "cividis", short="MSLP",
+    "2t": _v("2t", "2 m temperature", "K", "K", "cmc.vik", short="2t", center=273.15,
+              default_range=(243.15, 303.15)),
+    "2d": _v("2d", "2 m dew point temperature", "K", "K", "cmc.batlow", short="2d"),
+    "skt": _v("skt", "Skin temperature", "K", "K", "cmc.vik", short="skt", center=273.15),
+    "sst": _v("sst", "Sea surface temperature", "K", "K", "cmc.navia", short="sst"),
+    "msl": _v("msl", "Mean sea level pressure", "hPa", "Pa", "cmc.lipari", short="MSLP",
               default_range=(960.0, 1040.0)),
-    "sp": _v("sp", "Surface pressure", "hPa", "Pa", "cividis", short="sp"),
+    "sp": _v("sp", "Surface pressure", "hPa", "Pa", "cmc.lipari", short="sp"),
     "tcw": _v("tcw", "Total column water", "kg m⁻²", "kg m-2", "cmc.davos_r", short="tcw",
               default_range=(0.0, 70.0), extend="max"),
-    "tp": _v("tp", "Total precipitation", "mm", "m", "cmc.lapaz_r", err_cmap="BrBG",
+    "tp": _v("tp", "Total precipitation", "mm", "m", "cmo.rain", err_cmap="cmc.broc_r",
              accumulated=True, short="tp", extend="max"),
-    "cp": _v("cp", "Convective precipitation", "mm", "m", "cmc.lapaz_r", err_cmap="BrBG",
+    "cp": _v("cp", "Convective precipitation", "mm", "m", "cmo.rain", err_cmap="cmc.broc_r",
              accumulated=True, short="cp", extend="max"),
     "lsm": _v("lsm", "Land-sea mask", "", "", "Greys", short="lsm", extend="neither"),
 }
