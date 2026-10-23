@@ -1,0 +1,46 @@
+base: o320_o1280
+
+# The total-precipitation read of an E2-box run (10-70 N, 80 W-40 E), 12 h accumulations.
+# Added 2026-10-21 for the CA300 tp read: 30 dates of 2023 (00 UTC), leads +12..+72 h.
+# Run: python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only precip_read \
+#        --predictions-dir <dir of predictions_<date>_step<NNN>.nc> --run-label CA300
+# Replot from the saved files: the same command with --plot-only.
+# Per-bin tp spectra: box_spectra on the same directory.
+
+allowed_hosts:
+  evaluate: [jupiter, atos_ac, atos_ag]
+
+precip_read:
+  var: tp
+  accum_hours: 12
+  thresholds: [20, 50, 100, 150, 200]
+  regions:
+    all: null
+    10-25N: [10.0, 25.0, -180.0, 180.0]
+    25-40N: [25.0, 40.0, -180.0, 180.0]
+    40-70N: [40.0, 70.01, -180.0, 180.0]
+    europe: [35.0, 70.01, -12.0, 40.0]
+  # Storm boxes are centred on the truth msl minimum of the 20 Oct six-lead case list
+  # (docs epics/misc/support/20261021_fleet_reads/ca300_leads/storms/case_list.md).
+  # Idalia (2023-08-29) sits on the box edge and has no case here.
+  cases:
+    - {name: franklin_20230829_s024, label: "Franklin", date: "20230829", step: 24, box: [25.0, 39.0, -77.0, -63.0]}
+    - {name: lee_20230909_s024, label: "Lee", date: "20230909", step: 24, box: [14.0, 28.0, -66.0, -52.0]}
+    - {name: nigel_20230919_s024, label: "Nigel", date: "20230919", step: 24, box: [25.5, 39.5, -62.0, -48.0]}
+    - {name: tammy_20231021_s024, label: "Tammy", date: "20231021", step: 24, box: [10.0, 24.0, -69.0, -55.0]}
+    - {name: franklin_20230829_s072, label: "Franklin", date: "20230829", step: 72, box: [28.0, 42.0, -67.0, -53.0]}
+    - {name: alps_20231021_s024, label: "Alps", date: "20231021", step: 24, box: [43.0, 49.5, 3.0, 17.0]}
+    - {name: alps_20230226_s024, label: "Alps", date: "20230226", step: 24, box: [43.0, 49.5, 3.0, 17.0]}
+    - {name: europe_20231021_s024, label: "Europe", date: "20231021", step: 24, box: [40.0, 62.0, -25.0, 20.0]}
+    - {name: europe_20230516_s024, label: "Europe", date: "20230516", step: 24, box: [40.0, 62.0, -25.0, 20.0]}
+    - {name: europe_20230226_s024, label: "Europe", date: "20230226", step: 24, box: [40.0, 62.0, -25.0, 20.0]}
+  map_groups:
+    storms: [franklin_20230829_s024, lee_20230909_s024, nigel_20230919_s024, tammy_20231021_s024]
+    alps: [alps_20231021_s024, alps_20230226_s024]
+    europe_fronts: [europe_20231021_s024, europe_20230516_s024, europe_20230226_s024]
+  map_titles:
+    storms: "tp in tropical cyclones, +24 h: truth, input and CA300"
+    alps: "tp over the Alps, +24 h: truth, input and CA300"
+    europe_fronts: "European frontal rain, +24 h: truth, input and CA300"
+  map_members: [0, 1, 2]
+  bootstrap: 2000
