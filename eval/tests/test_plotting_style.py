@@ -74,7 +74,28 @@ def test_variable_lookup_spellings():
 def test_no_forbidden_colormaps_in_table():
     for spec in P.VARIABLES.values():
         assert spec.cmap.lower() not in {"jet", "rainbow", "turbo", "hsv", "gist_rainbow"}
-    assert all(s.err_cmap in {"RdBu_r", "BrBG"} for s in P.VARIABLES.values())
+    assert all(s.err_cmap in {"RdBu_r", "cmc.broc_r"} for s in P.VARIABLES.values())
+
+
+def test_owner_colour_maps_23_oct():
+    expected = {"2t": "cmc.vik", "skt": "cmc.vik", "2d": "cmc.batlow", "sst": "cmc.navia",
+                "msl": "cmc.lipari", "sp": "cmc.lipari", "10u": "cmc.vik", "10v": "cmc.vik",
+                "10ff": "viridis"}
+    for key, cmap in expected.items():
+        assert P.variable_spec(key).cmap == cmap, key
+    assert P.variable_spec("tp").err_cmap == "cmc.broc_r"
+    assert P.variable_spec("2t").error_cmap() == "RdBu_r"
+
+
+def test_2t_scale_is_centred_on_0_degC():
+    spec = P.variable_spec("2t")
+    assert spec.unit == "K" and spec.center == 273.15
+    lo, hi = spec.default_range
+    assert lo + hi == pytest.approx(2 * 273.15)
+    assert spec.centred_range(250.0, 310.0) == pytest.approx((236.3, 310.0))
+    norm = P.shared_norm(np.array([255.0, 300.0]), q=(0.0, 100.0), center=spec.center)
+    assert (norm.vmin + norm.vmax) / 2 == pytest.approx(273.15)
+    assert P.variable_spec("msl").centred_range(960.0, 1040.0) == (960.0, 1040.0)
 
 
 def test_precipitation_uses_cmocean_rain():
