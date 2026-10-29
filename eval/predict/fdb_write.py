@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import glob
 import logging
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -130,13 +129,13 @@ def build_grib(
 
 def archive_to_fdb(grib_paths: list[Path], expver: str, stream: str = "enfo", type_: str = "pf") -> None:
     """Archive GRIB files to FDB via grib2fdb (the grib2fdb5 wrapper)."""
-    for g in grib_paths:
-        cmd = (
-            f"module load fdb 2>/dev/null; "
-            f"grib2fdb -c rd -e {expver} -s {stream} -T {type_} -f {g}"
-        )
-        LOG.info("fdb_write: archiving %s -> class=rd,expver=%s", g, expver)
-        subprocess.run(["bash", "-lc", cmd], check=True)
+    # Standing rule 30 (owner, 2026-10-29): only prepml (user mlx) writes to FDB.
+    # grib2fdb as ecm5702 lands in the production FDB roots (default fdb config,
+    # world-writable root). Building GRIB files (build_grib*) stays allowed.
+    raise RuntimeError(
+        "FDB writes outside prepml are forbidden (docs standing rule 30, 2026-10-29). "
+        f"GRIB files were built ({len(grib_paths)}) but not archived; use --dry-run."
+    )
 
 
 def write_predictions_to_fdb(
