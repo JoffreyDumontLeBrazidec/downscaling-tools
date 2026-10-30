@@ -135,9 +135,12 @@ def _module_params(obj, prefix=""):
 _BUFFER_SUFFIXES = (".frequencies", ".pi", ".muzero", ".norm_min_val", ".perm", ".edge_attr", ".edge_index_base")
 
 
+_BUFFER_PARTS = (".latlons_", "pre_processors", "post_processors")  # normalizer _norm_mul/_norm_add etc.
+
+
 def _never_a_parameter(key: str) -> bool:
     """Float buffers that sit in the state dict between parameters (never in an optimizer group)."""
-    return ".latlons_" in key or key.endswith(_BUFFER_SUFFIXES)
+    return any(p in key for p in _BUFFER_PARTS) or key.endswith(_BUFFER_SUFFIXES) or key.endswith(("_norm_mul", "_norm_add"))
 
 
 @dataclass

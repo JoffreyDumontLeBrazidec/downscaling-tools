@@ -86,10 +86,20 @@ class Interface(nn.Module):  # model.model.<...> like AnemoiModelInterface insid
         self.model = Wrap()
 
 
+class Normalizer(nn.Module):  # anemoi's pre/post processors hold float buffers in the state dict
+    def __init__(self, n):
+        super().__init__()
+        self.register_buffer("_norm_mul", torch.ones(n))
+        self.register_buffer("_norm_add", torch.zeros(n))
+
+
 class Lit(nn.Module):
     def __init__(self):
         super().__init__()
         self.model = Interface()
+        # same width as the biases (C): must never be taken for a parameter by the optimizer mapping
+        self.model.pre_processors = nn.Module()
+        self.model.pre_processors.normalizer = Normalizer(C)
 
 
 def _graph(seed=0):
