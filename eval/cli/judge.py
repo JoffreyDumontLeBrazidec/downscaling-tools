@@ -12,10 +12,21 @@ read in the owner's order 1) physical structure 2) spectra 3) extremes 4) scores
    box (12 degrees around the truth's msl minimum) on the storm case, the run and the reference
    side by side, wind10m and 2t, value and fine part;
 3. writes ``read.md``, a ``## Run read:`` section with the header (reference, instrument,
-   sampler read from the files) and the four parts filled with the numbers above, or
+   sampler and seeds read from the files) and the four parts filled with the numbers above, or
    "Not available: <reason>" where an evaluator could not run. The verdict lines are left for
-   the reader (marked TODO). When the docs repo is found (``$DOCS_ROOT`` or ``~/dev/docs``),
-   ``scripts/check_run_read.py`` is run on it.
+   the reader (marked TODO), except that part 4 labels every (variable, band) with the
+   owner's rule on the scores (``eval.evaluators.probabilistic.core.verdict``: "better model"
+   only when fair CRPS and ensemble-mean RMSE both improve and the corrected spread/RMSE is
+   within 0.05 of 1, otherwise "better centre, worse calibration"; CRPS losses are "worse
+   CRPS"; a difference within two paired standard errors over dates is a "tie", a harness
+   label). The probabilistic evaluator runs with the scale split on (full field, large and
+   fine part at 400 km) unless ``--no-scale-split``. When the docs repo is found
+   (``$DOCS_ROOT`` or ``~/dev/docs``), ``scripts/check_run_read.py`` is run on it.
+
+Seeds (standing rule 31): the files of the new predictor carry ``seeds``, ``seed_rule``,
+``seed_base`` and ``seed_formula``. The read warns loudly when either arm lacks them (old
+seeding, not comparable with seed-locked arms) or when the two arms' seeds differ on a date;
+it never fails on it.
 
 It predicts nothing: both directories must already hold ``predictions_<date>_step<NNN>.nc``.
 """
@@ -43,6 +54,8 @@ MAP_VARIABLES = ["wind10m", "2t"]
 MAP_FIELDS = ["value", "fine"]
 SPECTRA_TABLE_VARS = ["10u", "2t"]
 SCORE_VARS = ["10u", "10v", "10ff", "2t", "msl", "tp"]
+SCORE_BANDS = ["full", "large", "fine"]
+SEED_ATTRS = ("seeds", "seed_rule", "seed_base", "seed_formula")
 STORM_HALF_DEG = 6.0
 
 
@@ -71,6 +84,8 @@ def register(subparsers) -> argparse.ArgumentParser:
                    help="Comma-separated evaluators (or 'zoom_maps') not to run; the read says so.")
     p.add_argument("--weights", default=None,
                    help="Weights of the two runs, e.g. 'EMA-10000 / raw' (not recorded in the files).")
+    p.add_argument("--no-scale-split", action="store_true", default=False,
+                   help="Score the full field only (no large/fine split at 400 km in part 4).")
     p.add_argument("--overwrite", action="store_true", default=False,
                    help="Re-run evaluators that already finished.")
     p.add_argument("--opt", action="append", default=None, metavar="BLOCK.KEY=VALUE",
@@ -95,7 +110,7 @@ def file_facts(pred_dir: Path, step: int) -> dict:
     from eval.evaluators.box_spectra.runner import _decode_states
 
     files = [p for p in find_predictions(pred_dir) if p.step == step]
-    facts = {"dates": sorted({p.date for p in files}), "n_files": len(files)}
+    facts = {"dates": sorted({p.date for p in files}), "n_files": len(files), "seeds_by_date": {}}
     if not files:
         return facts
     with netCDF4.Dataset(str(files[0].path)) as d:
@@ -109,7 +124,52 @@ def file_facts(pred_dir: Path, step: int) -> dict:
         for key in ("checkpoint_id", "sampling_config_json", "member_ids"):
             if key in d.ncattrs():
                 facts[key] = str(d.getncattr(key))
+    # rule 31: the per-draw seeds of every date (attributes only, so every file is cheap to open);
+    # absent on files of the old predictor, and never a reason to stop
+    for f in files:
+        try:
+            with netCDF4.Dataset(str(f.path)) as d:
+                attrs = {k: d.getncattr(k) for k in SEED_ATTRS if k in d.ncattrs()}
+        except Exception as exc:  # noqa: BLE001 - reported in the read
+            LOG.warning("judge: could not read the seed attributes of %s: %s", f.path, exc)
+            continue
+        if "seeds" in attrs:
+            facts["seeds_by_date"][f.date] = str(attrs["seeds"])
+        for key in ("seed_rule", "seed_base", "seed_formula"):
+            if key in attrs and key not in facts:
+                facts[key] = str(attrs[key])
     return facts
+
+
+def seed_line(facts: dict) -> str:
+    """How one arm was seeded, from its file attributes (rule 31)."""
+    if not facts.get("seeds_by_date"):
+        return "no per-draw seeds in the files (old seeding)"
+    return (f"seed_rule {facts.get('seed_rule', '?')}, base {facts.get('seed_base', '?')}, "
+            f"seeds recorded on {len(facts['seeds_by_date'])} date(s)")
+
+
+def seed_warnings(run_facts: dict, ref_facts: dict, run_label: str, ref_label: str) -> list[str]:
+    """Rule 31 warnings for the header: missing seeds on either arm, or seeds that differ by date."""
+    out = []
+    lacking = [lab for lab, f in ((run_label, run_facts), (ref_label, ref_facts)) if not f.get("seeds_by_date")]
+    if lacking:
+        out.append(f"RULE 31, SEEDS: {' and '.join(lacking)} carr{'y' if len(lacking) > 1 else 'ies'} no per-draw "
+                   "seeds in the files (old seeding: not comparable with seed-locked arms; member k of the two "
+                   "arms is not drawn from the same noise)")
+        return out
+    for key in ("seed_rule", "seed_formula"):
+        if run_facts.get(key) != ref_facts.get(key):
+            out.append(f"RULE 31, SEEDS: the two arms were seeded under different rules ({key}: "
+                       f"{run_facts.get(key)!r} against {ref_facts.get(key)!r})")
+    a, b = run_facts["seeds_by_date"], ref_facts["seeds_by_date"]
+    differ = sorted(d for d in set(a) & set(b) if a[d] != b[d])
+    if differ:
+        shown = ", ".join(differ[:5]) + (" ..." if len(differ) > 5 else "")
+        out.append(f"RULE 31, SEEDS: the two arms' seeds differ on {len(differ)} date(s) at this lead ({shown}): "
+                   "the arm differences are not paired by common random numbers (bases "
+                   f"{run_facts.get('seed_base')} / {ref_facts.get('seed_base')})")
+    return out
 
 
 def choose_shape_box(spec: str, facts: dict) -> str:
@@ -184,7 +244,7 @@ def storm_centre(pred_dir: Path, date: str, step: int, member: int, event: str):
 # --------------------------------------------------------------------------- running
 
 def lane_for_arm(lane_config: dict, *, step: int, dates: list[str], shape_box: str,
-                 states: list[str]) -> dict:
+                 states: list[str], scale_split: bool = True) -> dict:
     """The lane configuration with the protocol's settings in the evaluator blocks."""
     cfg = copy.deepcopy(lane_config)
 
@@ -205,6 +265,9 @@ def lane_for_arm(lane_config: dict, *, step: int, dates: list[str], shape_box: s
     if "europe" not in domains:
         domains.append("europe")
     probabilistic["domains"] = domains
+    # the read wants the bands (off by default in the evaluator, see its docstring)
+    probabilistic.setdefault("scale_split", bool(scale_split))
+    probabilistic.setdefault("rank_histogram", True)
     return cfg
 
 
@@ -416,27 +479,141 @@ def _scores(results: Path, step: int, domain: str) -> dict:
                 if int(r["step"]) == step and r["domain"] == domain}
 
 
+def _calibration(results: Path, step: int, domain: str) -> dict:
+    """{(var, band): row} of calibration_by_lead.csv (the owner's calibration read)."""
+    import csv
+
+    path = results / "calibration_by_lead.csv"
+    if not path.exists():
+        return {}
+    with open(path) as fh:
+        return {(r["weather_state"], r.get("band", "full")): r for r in csv.DictReader(fh)
+                if int(r["step"]) == step and r["domain"] == domain}
+
+
+def _fcrps_by_date(results: Path, step: int, domain: str) -> dict:
+    """{(var, band): {date: fair CRPS}} from band_scores_by_lead.csv, for the paired standard error."""
+    import csv
+
+    path = results / "band_scores_by_lead.csv"
+    out: dict = {}
+    if not path.exists():
+        return out
+    with open(path) as fh:
+        for r in csv.DictReader(fh):
+            if int(r["step"]) == step and r["domain"] == domain and r["metric"] == "fcrps":
+                try:
+                    out.setdefault((r["weather_state"], r.get("band", "full")), {})[r["date"]] = float(r["value"])
+                except ValueError:
+                    continue
+    return out
+
+
+def _rank_rows(results: Path, step: int, domain: str) -> dict:
+    import csv
+
+    path = results / "rank_histograms.csv"
+    if not path.exists():
+        return {}
+    with open(path) as fh:
+        return {r["weather_state"]: r for r in csv.DictReader(fh) if int(r["step"]) == step and r["domain"] == domain}
+
+
+def score_labels(a: dict, b: dict, pa: dict, pb: dict) -> dict:
+    """{(var, band): (label, diff mean, diff se, n)} with the owner's rule; see core.verdict."""
+    from eval.evaluators.probabilistic.core.verdict import paired_difference, verdict_label
+
+    out = {}
+    for key in sorted(set(a) & set(b)):
+        ra, rb = a[key], b[key]
+        mean, se, n = paired_difference(pa.get(key, {}), pb.get(key, {}))
+        label = verdict_label(ra.get("fcrps_mean"), rb.get("fcrps_mean"), ra.get("rmse_ens_mean"),
+                              rb.get("rmse_ens_mean"), ra.get("spread_skill_ratio_corrected"),
+                              crps_diff_se=se if n > 1 else None)
+        out[key] = (label, mean, se, n)
+    return out
+
+
 def part_scores(arms: dict, step: int, domain: str) -> list[str]:
+    from eval.evaluators.probabilistic.core.verdict import RATIO_TOLERANCE, TIE_SE_MULTIPLE, count_labels
+
     run, ref = arms["run"], arms["reference"]
-    a = _scores(run["eval"] / "probabilistic", step, domain)
-    b = _scores(ref["eval"] / "probabilistic", step, domain)
+    ra, rb = run["eval"] / "probabilistic", ref["eval"] / "probabilistic"
     lines = ["### 4. Scores"]
+    a, b = _calibration(ra, step, domain), _calibration(rb, step, domain)
     if not (a and b):
-        return lines + [f"- Fair CRPS, spread, ensemble-mean RMSE: Not available: "
-                        f"{run['status'].get('probabilistic', 'not run')} / {ref['status'].get('probabilistic', 'not run')}"
-                        f" (domain {domain})"]
-    lines += [f"Domain {domain}, +{step} h; spread = member standard deviation (ddof 1); change = run against "
-              "reference (negative CRPS and RMSE changes are better):", "",
-              f"| var | metric | {run['label']} | {ref['label']} | change |", "|---|---|---|---|---|"]
-    names = {"fcrps": "fair CRPS", "spread": "spread", "rmse_ens_mean": "ensemble-mean RMSE"}
-    for var in sorted({v for v, _ in a}):
-        for m, name in names.items():
-            if (var, m) not in a or (var, m) not in b:
+        # an older evaluator output has only summary_by_lead.csv: the old table, no labels
+        sa, sb = _scores(ra, step, domain), _scores(rb, step, domain)
+        if not (sa and sb):
+            return lines + [f"- Fair CRPS, spread, ensemble-mean RMSE: Not available: "
+                            f"{run['status'].get('probabilistic', 'not run')} / {ref['status'].get('probabilistic', 'not run')}"
+                            f" (domain {domain})"]
+        lines += [f"Domain {domain}, +{step} h; spread = member standard deviation (ddof 1); change = run against "
+                  "reference (negative CRPS and RMSE changes are better). Labels of the owner's rule not available: "
+                  "the evaluator output predates calibration_by_lead.csv.", "",
+                  f"| var | metric | {run['label']} | {ref['label']} | change |", "|---|---|---|---|---|"]
+        names = {"fcrps": "fair CRPS", "spread": "spread", "rmse_ens_mean": "ensemble-mean RMSE"}
+        for var in sorted({v for v, _ in sa}):
+            for m, name in names.items():
+                if (var, m) not in sa or (var, m) not in sb:
+                    continue
+                x, y = float(sa[(var, m)]), float(sb[(var, m)])
+                ch = f"{100 * (x - y) / y:+.1f} %" if y else "n/a"
+                lines.append(f"| {var} | {name} | {_fmt(x, 4)} | {_fmt(y, 4)} | {ch} |")
+        lines += ["", "- Verdict on scores (never outranks a loss in parts 1 or 2): TODO"]
+        return lines
+
+    labels = score_labels(a, b, _fcrps_by_date(ra, step, domain), _fcrps_by_date(rb, step, domain))
+    m = next(iter(a.values())).get("n_members", "?")
+    bands = [bd for bd in SCORE_BANDS if any(k[1] == bd for k in a)]
+    band_text = {"full": "full field", "large": "large part, above the cut (P_L of the field)",
+                 "fine": "fine part, below the cut (field minus P_L)"}
+    lines += [f"Domain {domain}, +{step} h, {m} members. Owner's rule: a CRPS win is a 'better model' only if the "
+              f"ensemble-mean RMSE also improves and the corrected spread/RMSE (spread/RMSE x sqrt((m+1)/m), roots of "
+              f"pooled mean squares over points and dates) stays within {RATIO_TOLERANCE:.2f} of 1; otherwise 'better "
+              "centre, worse calibration'; a CRPS loss is 'worse CRPS'. 'tie' (harness label, not the owner's rule): "
+              f"CRPS difference within {TIE_SE_MULTIPLE:g} paired standard errors over the n dates. Change = run against "
+              "reference (negative is better) with the paired standard error in brackets."]
+    for band in bands:
+        lines += ["", f"{band_text.get(band, band)}:", "",
+                  f"| var | fair CRPS {run['label']} | {ref['label']} | change (se, n) | RMSE {run['label']} | "
+                  f"{ref['label']} | corrected spread/RMSE {run['label']} | {ref['label']} | label |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for var in sorted({v for v, bd in a if bd == band}):
+            key = (var, band)
+            if key not in b:
                 continue
-            x, y = float(a[(var, m)]), float(b[(var, m)])
-            ch = f"{100 * (x - y) / y:+.1f} %" if y else "n/a"
-            lines.append(f"| {var} | {name} | {_fmt(x, 4)} | {_fmt(y, 4)} | {ch} |")
-    lines += ["", "- Verdict on scores (never outranks a loss in parts 1 or 2): TODO"]
+            x, y = a[key], b[key]
+            label, mean, se, n = labels.get(key, ("n/a", float("nan"), float("nan"), 0))
+            fy = float(y.get("fcrps_mean") or "nan")
+            ch = f"{100 * mean / fy:+.1f} % ({_fmt(se, 4)}, n = {n})" if fy and mean == mean else "n/a"
+            lines.append(f"| {var} | {_fmt(x.get('fcrps_mean'), 4)} | {_fmt(fy, 4)} | {ch} | "
+                         f"{_fmt(x.get('rmse_ens_mean'), 4)} | {_fmt(y.get('rmse_ens_mean'), 4)} | "
+                         f"{_fmt(x.get('spread_skill_ratio_corrected'), 3)} | "
+                         f"{_fmt(y.get('spread_skill_ratio_corrected'), 3)} | {label} |")
+    # the input members' large-scale spread, when the files carry them
+    shares = [(var, a[(var, "large")].get("spread_input_share"), b.get((var, "large"), {}).get("spread_input_share"))
+              for var in sorted({v for v, bd in a if bd == "large"})
+              if _fmt(a[(var, "large")].get("spread_input_share")) != "n/a"]
+    if shares:
+        lines += ["", "Large-scale spread of the input members over the model's (1 = the model's large-scale spread "
+                  "is the input's): " + "; ".join(f"{v} {_fmt(s, 2)} / {_fmt(t, 2)}" for v, s, t in shares)
+                  + f" ({run['label']} / {ref['label']})."]
+    elif any(bd == "large" for _, bd in a):
+        lines += ["", "Input members' spread: not available (the files carry one input member or no x_interp)."]
+    ha, hb = _rank_rows(ra, step, domain), _rank_rows(rb, step, domain)
+    if ha and hb:
+        cells = [f"{var} {_fmt(ha[var].get('outer_two_fraction'), 3)} ({ha[var].get('shape', '')}) / "
+                 f"{_fmt(hb[var].get('outer_two_fraction'), 3)} ({hb[var].get('shape', '')})"
+                 for var in sorted(set(ha) & set(hb))]
+        flat = _fmt(next(iter(ha.values())).get("outer_two_expected"), 3)
+        lines += ["", f"Rank histograms ({int(m) + 1 if str(m).isdigit() else '?'} bins, ties at random), fraction in the "
+                  f"two outer bins (flat {flat}; above: under-dispersed or biased, below: over-dispersed), "
+                  f"{run['label']} / {ref['label']}: " + "; ".join(cells) + f". Figures: `{ra / 'plots' / 'rank_histograms.pdf'}`."]
+    counts = count_labels(label for label, *_ in labels.values())
+    lines += ["", "- Labels: " + (", ".join(f"{n} {name}" for name, n in counts.items()) or "none")
+              + ". Realism and spectra (parts 1-2) come first, as usual.",
+              "- Verdict on scores (never outranks a loss in parts 1 or 2): TODO"]
     return lines
 
 
@@ -452,8 +629,9 @@ def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, map
             f"(reference {ff.get('n_members', '?')}), {fr.get('n_points', '?')} points per file "
             f"(reference {ff.get('n_points', '?')}). Run: `{run['dir']}`.",
             f"Sampler from the files: run {sampler_line(fr)}; reference {sampler_line(ff)}. "
-            f"Weights: {weights or 'TODO: state EMA or raw for both (not recorded in the files)'}."]
-    warnings = []
+            f"Weights: {weights or 'TODO: state EMA or raw for both (not recorded in the files)'}.",
+            f"Seeds (rule 31): run {seed_line(fr)}; reference {seed_line(ff)}."]
+    warnings = seed_warnings(fr, ff, run["label"], ref["label"])
     if fr.get("n_points") != ff.get("n_points"):
         warnings.append("the two runs have different point sets (for example global against Europe box): "
                         "evaluators that pool over the whole file are not on one instrument")
@@ -517,7 +695,7 @@ def run(args: argparse.Namespace, session) -> None:
     arms = {"member": args.member}
     for role, lab, d in (("run", run_label, run_dir), ("reference", ref_label, ref_dir)):
         lane = lane_for_arm(session.lane_config, step=step, dates=dates, shape_box=shape_box,
-                            states=facts[lab].get("states", []))
+                            states=facts[lab].get("states", []), scale_split=not args.no_scale_split)
         arm_out = out_dir / lab
         status = run_evaluators(d, lane, names, arm_out, lab, args.overwrite)
         for n in skip & set(PROTOCOL_EVALUATORS):
