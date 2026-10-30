@@ -34,7 +34,12 @@ def plan(audit: dict, what=("grad", "zero"), unproven: bool = False) -> tuple[di
     GPU audit's cases). Without that evidence it is skipped unless `unproven` is set. Gradient-dead HEADS are never
     revived here (no saturation argument exists for them); zero-weight heads and units always qualify."""
     blocks = {b["role"]: b for b in audit["blocks"]}
-    never = audit["checks"].get("c4_preact", {}).get("indices", {})
+    never = {}
+    for cid in ("c4_preact", "c3b_saturation_bound"):  # GPU observation, or the CPU bound when it fires
+        for role, d in (audit["checks"].get(cid, {}).get("indices") or {}).items():
+            for k, v in d.items():
+                if k.endswith("never_fires_units"):
+                    never.setdefault(role, {}).setdefault(k, set()).update(v)
     warnings = []
     out = {}
     sources = []

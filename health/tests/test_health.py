@@ -190,9 +190,12 @@ def test_revive_roundtrip(ckpt, tmp_path):
 
     p, _ = ckpt
     main(["audit", str(p), "--out", str(tmp_path / "a"), "--id", "toy"])
-    # without check-4 evidence the gradient-dead units are skipped (their output is not proven zero)
+    # without check-4 / 3b evidence the gradient-dead units are skipped (their output is not proven zero)
+    audit = json.loads((tmp_path / "a" / "audit.json").read_text())
+    audit["checks"].pop("c3b_saturation_bound")
+    (tmp_path / "no_evidence.json").write_text(json.dumps(audit))
     safe = tmp_path / "safe.ckpt"
-    assert main(["revive", str(p), str(safe), "--audit", str(tmp_path / "a" / "audit.json")]) == 0
+    assert main(["revive", str(p), str(safe), "--audit", str(tmp_path / "no_evidence.json")]) == 0
     w2 = torch.load(safe, weights_only=False)["state_dict"]["model.model.processor.proc.1.node_dst_mlp.2.weight"]
     assert torch.all(w2[:, ZERO_UNITS] == 0) and torch.all(w2[:, GRAD_DEAD] != 0)
     dst = tmp_path / "revived.ckpt"
@@ -418,3 +421,21 @@ def test_soap_uses_gg_diagonals(tmp_path):
     assert o["optimizer"] == "soap"
     assert o["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] == GRAD_DEAD
     assert set(o["agreement"]["processor.1"]["node_dst_mlp"]) == {"bias", "w1_row", "w2_col", "all"}
+
+
+def test_saturation_bound_proves_planted_units(ckpt, tmp_path):
+    """Bias -100 with |W1 row| ~ 0.2 and plain LayerNorm gains ~1: UB = -100 + sqrt(C) |W1 row| << -14."""
+    from health.cli import main
+    from health.static_checks import run_static
+
+    p, _ = ckpt
+    _, _, checks = run_static(str(p))
+    sb = checks["c3b_saturation_bound"]
+    assert set(GRAD_DEAD) <= set(sb["indices"]["processor.1"]["node_dst_mlp.never_fires_units"])
+    assert sb["indices"]["processor.0"]["node_dst_mlp.never_fires_units"] == []
+    # with that CPU evidence, revive takes the gradient-dead units without --unproven
+    main(["audit", str(p), "--out", str(tmp_path / "a"), "--id", "toy"])
+    dst = tmp_path / "r.ckpt"
+    assert main(["revive", str(p), str(dst), "--audit", str(tmp_path / "a" / "audit.json")]) == 0
+    w2 = torch.load(dst, weights_only=False)["state_dict"]["model.model.processor.proc.1.node_dst_mlp.2.weight"]
+    assert torch.all(w2[:, GRAD_DEAD + ZERO_UNITS] == 0)

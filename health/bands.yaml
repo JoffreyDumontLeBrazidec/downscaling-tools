@@ -26,6 +26,13 @@ rules:
     warn_above: 0.01
   - match: "c3_optimizer_dead.*.zero_moment_coord_frac"
     warn_above: 0.01
+  # --- check 3b: saturation upper bound (adversarial; fires rarely) -------------------------------------------
+  - match: "c3b_saturation_bound.*.ub_no_grad_frac"
+    fail_above: 0
+  - match: "c3b_saturation_bound.*.ub_never_fires_frac"
+    fail_above: 0
+  - match: "c3b_saturation_bound.*.ub_max_below_zero_frac"
+    warn_above: 0
   # --- check 6: scale ladders ---------------------------------------------------------------------------------------
   - match: "c6_scale.*.edge_logit_scale.max"   # s11 ladder: healthy < 0.2, growing > 0.5, trap > 80
     warn_above: 0.5

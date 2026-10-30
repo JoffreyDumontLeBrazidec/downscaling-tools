@@ -113,15 +113,20 @@ def _window(v_ref: float | None, beta: float | None) -> int | None:
     return int(math.log(v_ref / FP32_TINY) / -math.log(beta))
 
 
-def _beta2(view, key_state) -> float | None:
+def _beta2(view, soap_gg: bool = False) -> float | None:
+    """The decay of the moment read: AdamW/Muon-aux exp_avg_sq -> betas[1]; SOAP's GG -> shampoo_beta (default -1,
+    meaning betas[1], as in soap.py)."""
     for g in view.groups:
         b = g.get("betas")
         if isinstance(b, (list, tuple)) and len(b) == 2:
+            sb = g.get("shampoo_beta")
+            if soap_gg and sb is not None and float(sb) >= 0:
+                return float(sb)
             return float(b[1])
     return None
 
 
-def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
+def optimizer_dead(r: Reader, blocks: list[Block], zero: dict, trainable: list | None = None) -> dict:
     """Units and heads whose parameters got no gradient recently, from the optimizer moments.
 
     Criterion per MLP unit, by optimizer:
@@ -133,7 +138,7 @@ def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
     A zero moment means "no gradient for at least the window" (`dead_window_steps`, from the group's beta2 and the
     block's median live moment), not "for the whole run". Zero-content units (check 1) are not counted again.
     """
-    view = r.optimizer()
+    view = r.optimizer(trainable)
     out = {
         "optimizer": view.kind,
         "states": view.n_states,
@@ -152,7 +157,8 @@ def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
     if not view.n_states:
         out["skipped"] = "no optimizer state in this file (inference file or weights-only save)"
         return out
-    beta2 = _beta2(view, None)
+    beta2 = _beta2(view)
+    beta_gg = _beta2(view, soap_gg=True)
 
     def st(key):
         return view.by_name.get(key)
@@ -197,8 +203,7 @@ def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
             m[f"{name}.grad_dead_unit_frac"] = len(grad_dead) / hidden
             idx[f"{name}.grad_dead_units"] = grad_dead
             live = vb[vb > 0]
-            win = _window(float(np.median(live)) if live.size else None,
-                          0.95 if view.kind == "soap" else beta2)  # SOAP's GG decays with shampoo_beta (0.95)
+            win = _window(float(np.median(live)) if live.size else None, beta_gg if view.kind == "soap" else beta2)
             if win is not None:
                 out["window_steps"][f"{b.role}.{name}"] = win
             mb = leaf(kb, "exp_avg")
@@ -234,6 +239,70 @@ def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
     w = list(out["window_steps"].values())
     out["window_min_steps"] = min(w) if w else None
     return out
+
+
+# ------------------------------------------------------------------------------------------------ check 3b
+def _silu(x):
+    return x / (1.0 + np.exp(-x))
+
+
+def _cond_curve(r: Reader, cs: np.ndarray):
+    """cond(c) for c = c_noise = log(sigma)/4 from noise_embedder.frequencies and noise_cond_mlp; None if absent."""
+    fk = next((k for k in r.state if k.endswith("noise_embedder.frequencies")), None)
+    l1 = next((k for k in r.state if k.endswith("noise_cond_mlp.linear1_no_gradscaling.weight")), None)
+    if fk is None or l1 is None:
+        return None
+    base = l1[: -len("linear1_no_gradscaling.weight")]
+    f = r.get(fk)
+    W1, b1 = r.get(base + "linear1_no_gradscaling.weight"), r.get(base + "linear1_no_gradscaling.bias")
+    W2, b2 = r.get(base + "linear2_no_gradscaling.weight"), r.get(base + "linear2_no_gradscaling.bias")
+    out = cs[:, None] * f[None, :]
+    emb = np.concatenate([np.sin(out), np.cos(out)], axis=-1)
+    return _silu(emb @ W1.T + b1) @ W2.T + b2
+
+
+def saturation_bound(r: Reader, blocks: list[Block], cmin: float = -1.0, cmax: float = 1.0, n: int = 201) -> dict:
+    """Check 3b (docs kit audit_saturated_units.py): a rigorous upper bound of each MLP unit's GELU input over every
+    LayerNorm output and every noise level c_noise in [cmin, cmax] (default -1..1 = sigma 0.02..55, the training
+    range). UB < -5.55: the unit can never fire (output exactly 0, so revival keeps the function); UB < -14: it can
+    never get a gradient. The bound is adversarial, so a unit dead for data reasons usually has UB > 0: this is
+    CPU evidence when it fires, never a count of all dead units."""
+    cs = np.linspace(cmin, cmax, n)
+    cond = _cond_curve(r, cs)
+    per_role, indices = {}, {}
+    for b in blocks:
+        m, idx = {}, {}
+        for name, hidden in b.mlps.items():
+            W1, b1 = r.get(b.key(f"{name}.0.weight")), r.get(b.key(f"{name}.0.bias"))
+            if b1 is None:
+                b1 = np.zeros(W1.shape[0])
+            C = W1.shape[1]
+            ln = b.key("layer_norm_mlp_dst" if name == "node_dst_mlp" else "layer_norm_mlp_src")
+            sw = r.get(f"{ln}.scale.weight")
+            if sw is not None:
+                sb, bw, bb = r.get(f"{ln}.scale.bias"), r.get(f"{ln}.bias.weight"), r.get(f"{ln}.bias.bias")
+                if cond is None:
+                    G, B = (1.0 + sb)[None, :], bb[None, :]
+                else:
+                    G, B = 1.0 + cond @ sw.T + sb[None, :], cond @ bw.T + bb[None, :]
+            elif r.get(f"{ln}.weight") is not None:
+                G = r.get(f"{ln}.weight")[None, :]
+                lb = r.get(f"{ln}.bias")
+                B = (lb if lb is not None else np.zeros(C))[None, :]
+            else:
+                G, B = np.ones((1, C)), np.zeros((1, C))
+            ub = np.full(W1.shape[0], -np.inf)
+            for i in range(G.shape[0]):
+                A = W1 * G[i][None, :]
+                A = A - A.mean(axis=1, keepdims=True)
+                ub = np.maximum(ub, b1 + W1 @ B[i] + math.sqrt(C) * np.sqrt((A * A).sum(axis=1)))
+            m[f"{name}.ub_never_fires_frac"] = float((ub < -5.55).mean())
+            m[f"{name}.ub_no_grad_frac"] = float((ub < -14).mean())
+            m[f"{name}.ub_max_below_zero_frac"] = float((ub < 0).mean())
+            idx[f"{name}.never_fires_units"] = np.where(ub < -5.55)[0].tolist()
+        per_role[b.role] = m
+        indices[b.role] = idx
+    return {"per_role": per_role, "indices": indices, "noise_cond_curve": cond is not None, "c_noise_range": [cmin, cmax]}
 
 
 # ------------------------------------------------------------------------------------------------ check 6
@@ -311,17 +380,20 @@ def scale_ladders(r: Reader, blocks: list[Block]) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ all CPU checks
-def run_static(path: str, skip_nonfinite: bool = False) -> tuple[Reader, list[Block], dict]:
+def run_static(path: str, skip_nonfinite: bool = False, trainable: list | None = None) -> tuple[Reader, list[Block], dict]:
     r = Reader(path)
     blocks = find_blocks(r.state, r.config)
     z = zero_content(r, blocks)
     nf = None if skip_nonfinite else nonfinite_and_aliases(r)
-    od = optimizer_dead(r, blocks, z)
+    od = optimizer_dead(r, blocks, z, trainable)
+    od["mapping_source"] = "loaded model (named_parameters, requires_grad)" if trainable is not None else "file (shapes, config)"
+    sb = saturation_bound(r, blocks)
     sl = scale_ladders(r, blocks)
     z["blocks_without_heads"] = [b.role for b in blocks if not b.heads]
     checks = {
         "c1_zero_content": z | ({"nonfinite": nf["nonfinite"], "alias_mismatch": nf["alias_mismatch"]} if nf else {}),
         "c3_optimizer_dead": od,
+        "c3b_saturation_bound": sb,
         "c6_scale": sl,
     }
     return r, blocks, checks

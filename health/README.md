@@ -20,7 +20,7 @@ The design and the literature behind it are in the docs repo: `epics/training-di
 
 ```bash
 cd ~/dev/downscaling-tools
-# CPU checks 1, 3, 6 (numpy + yaml, no torch; any login node or a small job; ~1 min per 2 GB file)
+# CPU checks 1, 3, 3b, 6 (numpy + yaml, no torch; any login node or a small job; ~1 min per 2 GB file)
 python -m health audit CKPT [--lane o320_o1280_box] [--prev PREV/audit.json] [--out DIR] [--id NAME]
 # + GPU checks 2, 4, 7, 9 and the graph audit 8 (torch + the model code + one GPU; 2 bundles x 4 sigmas = 8 cases)
 python -m health audit CKPT --gpu --bundles B1_input_bundle.nc B2_input_bundle.nc [--local-scope-json BOX.json]
@@ -47,6 +47,7 @@ so models of different widths read on the same bands.
 |---|---|---|---|
 | 1 | zero-content heads and units; NaN/Inf; EMA `*_dest` alias mismatch | file | head dead = q, k, v, self, edge rows and projection columns all exactly 0; unit dead = W1 row and W2 column 0 |
 | 3 | gradient-dead from the optimizer state | training file (by_step) | unit dead = second moment exactly 0 on its bias, and on its W1 row and W2 column (AdamW: `exp_avg_sq`; SOAP: the diagonals of `GG`, since its `exp_avg_sq` is in a rotated basis; Muon: bias only). A zero moment means no gradient for at least the WINDOW printed in the summary (the moment underflows: ~1.5k steps at beta2 0.95, ~70k at 0.999), not "for the whole run". Head = q, k, v bias moments 0. Zero-content units are not counted twice |
+| 3b | saturation upper bound | file | per MLP unit, a rigorous upper bound of its GELU input over every LayerNorm output and noise level in the training range (docs kit `audit_saturated_units.py`): UB < -5.55 never fires, < -14 never gets a gradient. Adversarial, so it fires rarely (DB300: UB < 0 for 0 of 36,864); when it does it is CPU proof for revival |
 | 6 | scale ladders | file | weight RMS over nn.Linear init RMS; QK gains; edge-logit scale per head (s11 ladder: healthy < 0.2, growing > 0.5); LayerNorm gains (exact 0 = dead channel); low-norm units (row norm < 0.2 x median) |
 | 2 | gradient-dead on K batches (GraMa) | GPU | per unit / head mean abs gradient per case; dead = exactly 0 on all K, dormant = 0 or < 1e-3 of the layer mean on >= 3/4 of the cases |
 | 4 | pre-activation saturation | GPU | per unit over all nodes: max < -5.55 (GELU output exactly 0), max < -14 (gradient exactly 0), min > 0 (linear) |
@@ -77,7 +78,7 @@ smoke tier S, the in-training callback tier T (deferred by the owner: no chain r
 - Revival is by hand: `python -m health revive` redraws the input side (W1 row, head input rows) from nn.Linear's
   init and zeroes the output side, then warm start from the new file. The function is unchanged only where the unit's
   output was exactly 0: always for zero-weight units and heads; for gradient-dead units only with check-4 evidence
-  (`never_fires`, from an audit with `--gpu`), else they are skipped unless `--unproven`. Gradient-dead heads are not
+  (`never_fires` from an audit with `--gpu`) or the check-3b bound, else they are skipped unless `--unproven`. Gradient-dead heads are not
   revived. It refuses when the optimizer mapping is not exact. Never revive inside a running chain.
 
 ## Origin

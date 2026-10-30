@@ -18,6 +18,7 @@ CHECK_TITLES = {
     "c1_zero_content": "1 zero-content heads/units, NaN, EMA aliases",
     "c2_grad_dead": "2 gradient-dead units/heads on K batches",
     "c3_optimizer_dead": "3 gradient-dead from optimizer state",
+    "c3b_saturation_bound": "3b saturation upper bound (CPU)",
     "c4_preact": "4 pre-activation saturation",
     "c6_scale": "6 scale ladders",
     "c7_stream": "7 residual-stream budget",

@@ -259,7 +259,7 @@ class Reader:
                 return True
         return False
 
-    def optimizer(self) -> OptimizerView:
+    def optimizer(self, trainable: list | None = None) -> OptimizerView:
         """Map the first optimizer's per-index state to state-dict names.
 
         Lightning keeps the state by integer index, in param-group order. Each group's indices are matched in
@@ -291,8 +291,14 @@ class Reader:
             view.kind = "other"
         for g in groups:
             if isinstance(g, dict):
-                view.groups.append({k: g.get(k) for k in ("lr", "weight_decay", "betas", "use_muon")} | {"n": len(g.get("params", []))})
-        entries = [(k, t) for k, t in self.state.items() if t.is_float and not _never_a_parameter(k)]
+                view.groups.append({k: g.get(k) for k in ("lr", "weight_decay", "betas", "use_muon", "shampoo_beta")} | {"n": len(g.get("params", []))})
+        if trainable is not None:
+            # exact candidate list from the loaded model: named_parameters() order, aliases dropped, buffers absent,
+            # requires_grad as the loader left it (state-dict names carry the Lightning 'model.' prefix)
+            keyed = {k: t for k, t in self.state.items()}
+            entries = [(k, keyed[k]) for k in trainable if k in keyed]
+        else:
+            entries = [(k, t) for k, t in self.state.items() if t.is_float and not _never_a_parameter(k)]
         seen_storage = set()
         dedup = []
         for k, t in entries:  # aliased tensors (layer_norm_attention_dest = layer_norm_attention) share a storage

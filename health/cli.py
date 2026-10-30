@@ -59,14 +59,22 @@ def revive_commands(path: str, audit_json: str, audit: dict) -> list[str]:
         cmds.append(f"python -m anemoi.training.utils.dead_units {path} {dst}")
     if grad or zero:
         cmds.append(f"# {grad} gradient-dead + {zero} zero-weight units/heads: input side redrawn, output side zeroed;")
-        cmds.append("# gradient-dead units are revived only with check-4 evidence (audit with --gpu) that their output is 0")
+        cmds.append("# gradient-dead units are revived only with evidence that their output is 0 (check 3b bound, or check 4 with --gpu)")
         cmds.append(f"python -m health revive {path} {dst} --audit {audit_json} --what grad,zero")
     return cmds
 
 
 def cmd_audit(a) -> int:
     t0 = time.time()
-    r, blocks, checks = run_static(a.ckpt, skip_nonfinite=a.skip_nonfinite)
+    be = trainable = None
+    if a.gpu:
+        from .backends import BundlesBackend
+
+        be = BundlesBackend(a.ckpt, a.bundles, device=a.device, precision=a.precision, local_scope_json=a.local_scope_json)
+        # the training config's freezing is not applied by the inference loader, so requires_grad is only exact when
+        # the loader keeps it; the config exclusion below still runs on top
+        trainable = ["model." + n for n, p in be.root.named_parameters() if p.requires_grad]
+    r, blocks, checks = run_static(a.ckpt, skip_nonfinite=a.skip_nonfinite, trainable=trainable)
     cid = a.id or ckpt_id(a.ckpt, r.run_id, r.global_step)
     out_dir = Path(a.out or os.path.join(DEFAULT_ROOT, cid))
     meta = {
@@ -81,17 +89,15 @@ def cmd_audit(a) -> int:
         "written": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "host": os.uname().nodename,
     }
-    if a.gpu:
+    if be is not None:
         import torch
 
-        from .backends import FLOW_SIGMAS, BundlesBackend
+        from .backends import FLOW_SIGMAS
         from .forward_checks import graph_audit, run_flow, run_grad_pass
 
-        be = BundlesBackend(a.ckpt, a.bundles, device=a.device, precision=a.precision, local_scope_json=a.local_scope_json)
         sig = tuple(float(s) for s in a.sigmas.split(",")) if a.sigmas else None
         checks |= run_grad_pass(be.root, be.cases(sig) if sig else be.cases(), a.device)
-        flow_cases = [c for c in be.cases(FLOW_SIGMAS)][: len(FLOW_SIGMAS)]
-        checks |= run_flow(be.root, flow_cases)
+        checks |= run_flow(be.root, be.cases(FLOW_SIGMAS)[: len(FLOW_SIGMAS)])
         if be.graph is not None:
             checks |= graph_audit(be.graph)
         meta["gpu"] = {"device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else a.device,
