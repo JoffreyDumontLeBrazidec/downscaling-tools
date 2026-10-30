@@ -1,14 +1,19 @@
 """Plot local probabilistic scores through the shared probabilistic figure.
 
-The figure itself (layout, role styles, units, wording) lives in
-``eval.plotting.probabilistic`` and is shared with the ``quaver`` evaluator; this module only
-turns the local evaluator's CSV files into the tidy table that function expects.
+The lead-time figure itself (layout, role styles, units, wording) lives in
+``eval.plotting.probabilistic`` and is shared with the ``quaver`` evaluator; this module
+turns the local evaluator's CSV files into the tidy table that function expects, for the
+historical metrics (``plot_probabilistic_summary``) and for the per-band calibration read
+(``plot_band_scores``). The rank histograms have their own small figure here
+(``plot_rank_histograms``).
 """
 from __future__ import annotations
 
 import csv
 import re
 from pathlib import Path
+
+import numpy as np
 
 from eval.plotting.probabilistic import plot_probabilistic_scores, source_local
 
@@ -149,3 +154,131 @@ def plot_probabilistic_summary(
         band_label=BAND_LABEL,
     )
     return output_pdf
+
+
+# ------------------------------------------------------------------ rank histograms
+
+_RANK_DOMAIN_ORDER = ("n.hem", "tropics", "s.hem", "europe", "global")
+
+
+def plot_rank_histograms(hist_csv: str | Path, output_pdf: str | Path, *, title: str | None = None) -> Path | None:
+    """One page per variable: rank histograms (rows = leads, columns = regions) from ``rank_histograms.csv``.
+
+    Bars are bin frequencies, the grey line the flat expectation ``1/(m+1)``; each panel's
+    title carries the outer-two-bin fraction against ``2/(m+1)`` and the shape word.
+    Returns ``None`` when the CSV has no rows (rank histograms were off or no member set).
+    """
+    import matplotlib.pyplot as plt
+
+    from eval.plotting.roles import MODEL_COLOR, NEUTRAL_COLOR
+    from eval.plotting.style import FigureBook, eval_style
+    from eval.plotting.variables import variable_spec
+
+    hist_csv = Path(hist_csv)
+    rows = _read_csv(hist_csv) if hist_csv.exists() else []
+    if not rows:
+        return None
+    output_pdf = Path(output_pdf)
+    variables = list(dict.fromkeys(r["weather_state"] for r in rows))
+    with eval_style():
+        with FigureBook(output_pdf, png=True) as book:
+            for var in variables:
+                sub = [r for r in rows if r["weather_state"] == var]
+                leads = sorted({int(r["step"]) for r in sub})
+                present = {r["domain"] for r in sub}
+                domains = [d for d in _RANK_DOMAIN_ORDER if d in present] + sorted(present - set(_RANK_DOMAIN_ORDER))
+                fig, axes = plt.subplots(len(leads), len(domains), squeeze=False,
+                                         figsize=(3.2 * len(domains) + 0.6, 2.3 * len(leads) + 1.4))
+                for i, lead in enumerate(leads):
+                    for j, dom in enumerate(domains):
+                        ax = axes[i, j]
+                        r = next((x for x in sub if int(x["step"]) == lead and x["domain"] == dom), None)
+                        if r is None:
+                            ax.set_axis_off()
+                            continue
+                        n_bins = int(r["n_bins"])
+                        counts = np.array([_float(r, f"bin_{k}", 0.0) for k in range(n_bins)])
+                        freq = counts / counts.sum() if counts.sum() else counts
+                        ax.bar(np.arange(n_bins), freq, color=MODEL_COLOR, width=0.85)
+                        ax.axhline(1.0 / n_bins, color=NEUTRAL_COLOR, linewidth=1.2, zorder=3)
+                        ax.set_title(f"{dom}, +{lead} h: outer {_float(r, 'outer_two_fraction'):.3f} "
+                                     f"(flat {_float(r, 'outer_two_expected'):.3f}), {r.get('shape', '')}", fontsize=8)
+                        ax.set_xticks([0, n_bins - 1])
+                        ax.set_xticklabels(["below all", "above all"], fontsize=8)
+                        if j == 0:
+                            ax.set_ylabel("frequency")
+                        if i == len(leads) - 1:
+                            ax.set_xlabel(f"rank of the truth among {n_bins - 1} members")
+                head = variable_spec(var).name if variable_spec(var).unit else str(var)
+                m = int(sub[0]["n_members"])
+                fig.suptitle(f"{head}: rank histograms, {m + 1} bins, ties broken at random "
+                             f"(n = {sub[0]['n_dates']} dates)" + (f"\n{title}" if title else ""), fontsize=11)
+                fig.tight_layout(rect=(0, 0, 1, 0.95))
+                book.add(fig, name=str(var))
+    return output_pdf
+
+
+# -------------------------------------------------------------------- band scores
+
+BAND_LABELS = {"full": "full field", "large": "large part (above the cut)", "fine": "fine part (below the cut)"}
+_BAND_METRICS = {"fcrps_mean": "fcrps", "spread_rms": "spread_rms", "rmse_ens_mean": "rmse_ens_mean",
+                 "spread_skill_ratio_corrected": "ssr"}
+
+
+def calibration_to_curves(rows: list[dict[str, str]], *, cut_km: float | None = None) -> list[dict]:
+    """Tidy rows for the shared figure from ``calibration_by_lead.csv``: one model series per band.
+
+    Fair CRPS carries its 95 percent band over dates; ``ssr`` is the CORRECTED spread/RMSE
+    (``ratio * sqrt((m+1)/m)``, pooled); the input members' spread is an "input" series.
+    """
+    curves: list[dict] = []
+    for r in rows:
+        band = r.get("band", "full")
+        label = BAND_LABELS.get(band, band)
+        if cut_km and band != "full":
+            label = label.replace("the cut", f"{cut_km:.0f} km")
+        for column, metric in _BAND_METRICS.items():
+            value = _float(r, column, float("nan"))
+            if not np.isfinite(value):
+                continue
+            se = _float(r, "fcrps_stderr") if column == "fcrps_mean" else 0.0
+            curves.append({
+                "metric": metric, "variable": r["weather_state"], "domain": r["domain"],
+                "lead_h": _float(r, "step"), "series_role": "model", "series_label": label,
+                "value": value,
+                "ci_low": value - 1.96 * se if se > 0.0 else None,
+                "ci_high": value + 1.96 * se if se > 0.0 else None,
+                "n": _float(r, "n_dates", float("nan")),
+            })
+        inp = _float(r, "spread_input_rms", float("nan"))
+        if np.isfinite(inp):
+            curves.append({
+                "metric": "spread_rms", "variable": r["weather_state"], "domain": r["domain"],
+                "lead_h": _float(r, "step"), "series_role": "input",
+                "series_label": f"input members, {label}", "value": inp,
+                "ci_low": None, "ci_high": None, "n": float("nan"),
+            })
+    return curves
+
+
+def plot_band_scores(calibration_csv: str | Path, output_pdf: str | Path, *, lane_config: dict | None = None,
+                     title: str | None = None, cut_km: float | None = None) -> Path | None:
+    """Fair CRPS, pooled spread, pooled RMSE and corrected spread/RMSE by band and lead.
+
+    Returns ``None`` when the calibration CSV holds only the full band (no scale split ran).
+    """
+    calibration_csv = Path(calibration_csv)
+    rows = _read_csv(calibration_csv) if calibration_csv.exists() else []
+    if len({r.get("band", "full") for r in rows}) < 2:
+        return None
+    curves = calibration_to_curves(rows, cut_km=cut_km)
+    plot_probabilistic_scores(
+        curves,
+        source_local(truth_from_lane(lane_config)),
+        Path(output_pdf),
+        title=title,
+        n_noun="dates",
+        band_label="shaded band: 95 % confidence interval of the fair CRPS mean over dates",
+        footnote="spread_rms and RMSE: roots of pooled mean squares; ssr: spread/RMSE x sqrt((m+1)/m), 1 = calibrated",
+    )
+    return Path(output_pdf)
