@@ -5,7 +5,12 @@ import logging
 from pathlib import Path
 
 from eval.evaluators.probabilistic.core import compute_probabilistic_scores
-from eval.evaluators.probabilistic.core.calibration import RANK_TIE_SEED
+from eval.evaluators.probabilistic.core.calibration import (
+    DEFAULT_RANK_DRY_THRESHOLD_MM,
+    RANK_TIE_SEED,
+    RATIO_BOOTSTRAP_RESAMPLES,
+    RATIO_BOOTSTRAP_SEED,
+)
 from eval.evaluators.probabilistic.core.scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM
 from eval.evaluators.probabilistic.core.scoring import (
     DEFAULT_BOX_EDGE_DEG,
@@ -36,8 +41,12 @@ def run(
     ``scale_split`` (bool, default off: costs about three times the full-field scoring),
     ``scale_cut_km`` (400), ``scale_grid_km`` (25), ``scale_edge_margin_km`` (default the
     cut), ``box_edge_deg`` (1: strip left out of every band on a regional box);
-    ``rank_histogram`` (bool, default on), ``rank_tie_seed``; ``include_input`` (bool,
-    default on: the input members' spread when the files carry ``x_interp`` members).
+    ``rank_histogram`` (bool, default on), ``rank_tie_seed``, ``rank_dry_threshold_mm`` (0.1:
+    tp/cp members and truth below it are set to 0 before ranking, and it defines the
+    false-drizzle and missed-rain rates; the files hold metres, the conversion is made here);
+    ``ratio_bootstrap_resamples`` (2000) and ``ratio_bootstrap_seed`` (the 95 % interval of
+    the corrected spread/RMSE over dates); ``include_input`` (bool, default on: the input
+    members' spread when the files carry ``x_interp`` members).
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "probabilistic"
@@ -60,6 +69,9 @@ def run(
     box_edge_deg = float(_or(eval_config.get("box_edge_deg"), DEFAULT_BOX_EDGE_DEG))
     rank_histogram = bool(_or(eval_config.get("rank_histogram"), True))
     rank_tie_seed = int(_or(eval_config.get("rank_tie_seed"), RANK_TIE_SEED))
+    rank_dry_threshold_mm = float(_or(eval_config.get("rank_dry_threshold_mm"), DEFAULT_RANK_DRY_THRESHOLD_MM))
+    ratio_bootstrap_resamples = int(_or(eval_config.get("ratio_bootstrap_resamples"), RATIO_BOOTSTRAP_RESAMPLES))
+    ratio_bootstrap_seed = int(_or(eval_config.get("ratio_bootstrap_seed"), RATIO_BOOTSTRAP_SEED))
     include_input = bool(_or(eval_config.get("include_input"), True))
 
     payload = compute_probabilistic_scores(
@@ -77,6 +89,9 @@ def run(
         box_edge_deg=box_edge_deg,
         rank_histogram=rank_histogram,
         rank_tie_seed=rank_tie_seed,
+        rank_dry_threshold_mm=rank_dry_threshold_mm,
+        ratio_bootstrap_resamples=ratio_bootstrap_resamples,
+        ratio_bootstrap_seed=ratio_bootstrap_seed,
         include_input=include_input,
     )
     LOG.info(

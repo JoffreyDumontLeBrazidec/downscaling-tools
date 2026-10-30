@@ -15,11 +15,18 @@ read in the owner's order 1) physical structure 2) spectra 3) extremes 4) scores
    sampler and seeds read from the files) and the four parts filled with the numbers above, or
    "Not available: <reason>" where an evaluator could not run. The verdict lines are left for
    the reader (marked TODO), except that part 4 labels every (variable, band) with the
-   owner's rule on the scores (``eval.evaluators.probabilistic.core.verdict``: "better model"
-   only when fair CRPS and ensemble-mean RMSE both improve and the corrected spread/RMSE is
-   within 0.05 of 1, otherwise "better centre, worse calibration"; CRPS losses are "worse
-   CRPS"; a difference within two paired standard errors over dates is a "tie", a harness
-   label). The probabilistic evaluator runs with the scale split on (full field, large and
+   owner's rule 32 v2 on the scores (``eval.evaluators.probabilistic.core.verdict``): a CRPS
+   win is tested on the centre (ensemble-mean RMSE better) and on the calibration (the 95 %
+   bootstrap interval of the corrected spread/RMSE fully inside [0.95, 1.05]; fully outside
+   is "outside", crossing an edge is "undecided"); "better model" needs both, the other
+   outcomes are named ("better centre, calibration outside 0.05 (closer to / further from 1
+   than reference)", "better centre, calibration undecided", "better calibration, not
+   better centre", "CRPS win, neither centre nor calibration", "CRPS win, calibration
+   undecided"); CRPS losses are "worse CRPS"; a difference within two paired standard errors
+   over dates is a "tie", a harness label. The labels are given on the full field, the full
+   field on the inner points (``full_inner``) and the fine part; the large part is reported,
+   not judged (its scales come from the input). The bands are not additive (P_L is a
+   taper). The probabilistic evaluator runs with the scale split on (full field, large and
    fine part at 400 km) unless ``--no-scale-split``. When the docs repo is found
    (``$DOCS_ROOT`` or ``~/dev/docs``), ``scripts/check_run_read.py`` is run on it.
 
@@ -54,7 +61,7 @@ MAP_VARIABLES = ["wind10m", "2t"]
 MAP_FIELDS = ["value", "fine"]
 SPECTRA_TABLE_VARS = ["10u", "2t"]
 SCORE_VARS = ["10u", "10v", "10ff", "2t", "msl", "tp"]
-SCORE_BANDS = ["full", "large", "fine"]
+SCORE_BANDS = ["full", "full_inner", "large", "fine"]
 SEED_ATTRS = ("seeds", "seed_rule", "seed_base", "seed_formula")
 STORM_HALF_DEG = 6.0
 
@@ -520,22 +527,42 @@ def _rank_rows(results: Path, step: int, domain: str) -> dict:
 
 
 def score_labels(a: dict, b: dict, pa: dict, pb: dict) -> dict:
-    """{(var, band): (label, diff mean, diff se, n)} with the owner's rule; see core.verdict."""
-    from eval.evaluators.probabilistic.core.verdict import paired_difference, verdict_label
+    """{(var, band): (label, diff mean, diff se, n)} with the owner's rule; see core.verdict.
+
+    The large band gets ``NOT_JUDGED`` instead of a label: its scales come from the input.
+    """
+    from eval.evaluators.probabilistic.core.verdict import (
+        JUDGED_BANDS, NOT_JUDGED, paired_difference, verdict_label,
+    )
 
     out = {}
     for key in sorted(set(a) & set(b)):
         ra, rb = a[key], b[key]
         mean, se, n = paired_difference(pa.get(key, {}), pb.get(key, {}))
+        if key[1] not in JUDGED_BANDS:
+            out[key] = (NOT_JUDGED, mean, se, n)
+            continue
         label = verdict_label(ra.get("fcrps_mean"), rb.get("fcrps_mean"), ra.get("rmse_ens_mean"),
                               rb.get("rmse_ens_mean"), ra.get("spread_skill_ratio_corrected"),
+                              ref_ratio_corrected=rb.get("spread_skill_ratio_corrected"),
+                              run_ratio_lo=ra.get("spread_skill_ratio_corrected_lo95"),
+                              run_ratio_hi=ra.get("spread_skill_ratio_corrected_hi95"),
                               crps_diff_se=se if n > 1 else None)
         out[key] = (label, mean, se, n)
     return out
 
 
+def _ratio_cell(row: dict) -> str:
+    """Corrected spread/RMSE with its bootstrap interval over dates, when the CSV has one."""
+    value = _fmt(row.get("spread_skill_ratio_corrected"), 3)
+    lo, hi = _fmt(row.get("spread_skill_ratio_corrected_lo95"), 2), _fmt(row.get("spread_skill_ratio_corrected_hi95"), 2)
+    return value if "n/a" in (lo, hi) else f"{value} [{lo}, {hi}]"
+
+
 def part_scores(arms: dict, step: int, domain: str) -> list[str]:
-    from eval.evaluators.probabilistic.core.verdict import RATIO_TOLERANCE, TIE_SE_MULTIPLE, count_labels
+    from eval.evaluators.probabilistic.core.verdict import (
+        JUDGED_BANDS, RATIO_TOLERANCE, TIE_SE_MULTIPLE, count_labels,
+    )
 
     run, ref = arms["run"], arms["reference"]
     ra, rb = run["eval"] / "probabilistic", ref["eval"] / "probabilistic"
@@ -566,18 +593,31 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
     labels = score_labels(a, b, _fcrps_by_date(ra, step, domain), _fcrps_by_date(rb, step, domain))
     m = next(iter(a.values())).get("n_members", "?")
     bands = [bd for bd in SCORE_BANDS if any(k[1] == bd for k in a)]
-    band_text = {"full": "full field", "large": "large part, above the cut (P_L of the field)",
+    band_text = {"full": "full field (every point of the domain minus the box-edge strip)",
+                 "full_inner": "full field on the inner points (the points the large and fine parts are scored on)",
+                 "large": "large part, above the cut (P_L of the field): reported, not judged",
                  "fine": "fine part, below the cut (field minus P_L)"}
-    lines += [f"Domain {domain}, +{step} h, {m} members. Owner's rule: a CRPS win is a 'better model' only if the "
-              f"ensemble-mean RMSE also improves and the corrected spread/RMSE (spread/RMSE x sqrt((m+1)/m), roots of "
-              f"pooled mean squares over points and dates) stays within {RATIO_TOLERANCE:.2f} of 1; otherwise 'better "
-              "centre, worse calibration'; a CRPS loss is 'worse CRPS'. 'tie' (harness label, not the owner's rule): "
-              f"CRPS difference within {TIE_SE_MULTIPLE:g} paired standard errors over the n dates. Change = run against "
-              "reference (negative is better) with the paired standard error in brackets."]
+    lines += [f"Domain {domain}, +{step} h, {m} members. Owner's rule 32 v2: a CRPS win is tested on the centre "
+              f"(ensemble-mean RMSE better than the reference's) and on the calibration (the corrected spread/RMSE, "
+              f"spread/RMSE x sqrt((m+1)/m) from roots of pooled mean squares over points and dates, within "
+              f"{RATIO_TOLERANCE:.2f} of 1: 'inside' when its 95 % bootstrap interval over dates lies within "
+              f"[{1 - RATIO_TOLERANCE:.2f}, {1 + RATIO_TOLERANCE:.2f}], 'outside' when the whole interval is out, "
+              "'undecided' when it crosses an edge). 'better model' needs both; otherwise the label names what "
+              "held: 'better centre, calibration outside 0.05' (with whether the ratio is closer to 1 than the "
+              "reference's or further), 'better centre, calibration undecided', 'better calibration, not better "
+              "centre', 'CRPS win, neither centre nor calibration', 'CRPS win, calibration undecided'. A CRPS loss "
+              f"is 'worse CRPS'. 'tie' (harness label, not the owner's rule): CRPS difference within {TIE_SE_MULTIPLE:g} "
+              "paired standard errors over the n dates. Change = run against reference (negative is better) with the "
+              "paired standard error in brackets; the ratio carries its bootstrap interval in square brackets. The "
+              "bands are NOT additive (P_L is a taper): do not add large and fine to get the full field."]
+    if "large" in bands:
+        lines.append("The large part is reported, not judged: its scales are the input's (what the o320 members "
+                     "already carry), so a win or a loss there is not the model's; labels and counts use the full "
+                     "field, the full field on the inner points and the fine part.")
     for band in bands:
         lines += ["", f"{band_text.get(band, band)}:", "",
                   f"| var | fair CRPS {run['label']} | {ref['label']} | change (se, n) | RMSE {run['label']} | "
-                  f"{ref['label']} | corrected spread/RMSE {run['label']} | {ref['label']} | label |",
+                  f"{ref['label']} | corrected spread/RMSE [95 % CI] {run['label']} | {ref['label']} | label |",
                   "|---|---|---|---|---|---|---|---|---|"]
         for var in sorted({v for v, bd in a if bd == band}):
             key = (var, band)
@@ -589,8 +629,7 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
             ch = f"{100 * mean / fy:+.1f} % ({_fmt(se, 4)}, n = {n})" if fy and mean == mean else "n/a"
             lines.append(f"| {var} | {_fmt(x.get('fcrps_mean'), 4)} | {_fmt(fy, 4)} | {ch} | "
                          f"{_fmt(x.get('rmse_ens_mean'), 4)} | {_fmt(y.get('rmse_ens_mean'), 4)} | "
-                         f"{_fmt(x.get('spread_skill_ratio_corrected'), 3)} | "
-                         f"{_fmt(y.get('spread_skill_ratio_corrected'), 3)} | {label} |")
+                         f"{_ratio_cell(x)} | {_ratio_cell(y)} | {label} |")
     # the input members' large-scale spread, when the files carry them
     shares = [(var, a[(var, "large")].get("spread_input_share"), b.get((var, "large"), {}).get("spread_input_share"))
               for var in sorted({v for v, bd in a if bd == "large"})
@@ -603,14 +642,29 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
         lines += ["", "Input members' spread: not available (the files carry one input member or no x_interp)."]
     ha, hb = _rank_rows(ra, step, domain), _rank_rows(rb, step, domain)
     if ha and hb:
-        cells = [f"{var} {_fmt(ha[var].get('outer_two_fraction'), 3)} ({ha[var].get('shape', '')}) / "
-                 f"{_fmt(hb[var].get('outer_two_fraction'), 3)} ({hb[var].get('shape', '')})"
-                 for var in sorted(set(ha) & set(hb))]
-        flat = _fmt(next(iter(ha.values())).get("outer_two_expected"), 3)
-        lines += ["", f"Rank histograms ({int(m) + 1 if str(m).isdigit() else '?'} bins, ties at random), fraction in the "
-                  f"two outer bins (flat {flat}; above: under-dispersed or biased, below: over-dispersed), "
-                  f"{run['label']} / {ref['label']}: " + "; ".join(cells) + f". Figures: `{ra / 'plots' / 'rank_histograms.pdf'}`."]
-    counts = count_labels(label for label, *_ in labels.values())
+        def outer(r):
+            b0, bm = _fmt(r.get("bin_0_fraction"), 3), _fmt(r.get("bin_m_fraction"), 3)
+            pair = f"{b0} / {bm}" if "n/a" not in (b0, bm) else f"outer {_fmt(r.get('outer_two_fraction'), 3)}"
+            return f"{pair} ({r.get('shape', '')})"
+        cells = [f"{var} {outer(ha[var])} against {outer(hb[var])}" for var in sorted(set(ha) & set(hb))]
+        first = next(iter(ha.values()))
+        flat = _fmt(first.get("bin_expected") or (float(first.get("outer_two_expected") or "nan") / 2.0), 3)
+        lines += ["", f"Rank histograms ({int(m) + 1 if str(m).isdigit() else '?'} bins, ties at random), fraction in "
+                  f"bin 0 (truth below every member) / bin m (truth above every member), flat {flat} each; a U needs "
+                  f"both high, one high is a one-sided bias; {run['label']} against {ref['label']}: " + "; ".join(cells)
+                  + f". Figures: `{ra / 'plots' / 'rank_histograms.pdf'}`."]
+        drizzle = [(var, ha[var], hb[var]) for var in sorted(set(ha) & set(hb))
+                   if _fmt(ha[var].get("false_drizzle_rate")) != "n/a"]
+        if drizzle:
+            thr = _fmt(drizzle[0][1].get("dry_threshold_mm"), 2)
+            lines.append(f"Precipitation dry floor {thr} mm before ranking (members and truth below it are 0, so trace "
+                         "rain over a dry truth is a tie). False-drizzle rate (truth dry, every member wet) and "
+                         f"missed-rain rate (truth wet, every member dry), {run['label']} against {ref['label']}: "
+                         + "; ".join(f"{var} drizzle {_fmt(x.get('false_drizzle_rate'), 3)} against "
+                                     f"{_fmt(y.get('false_drizzle_rate'), 3)}, missed {_fmt(x.get('missed_rain_rate'), 3)} "
+                                     f"against {_fmt(y.get('missed_rain_rate'), 3)}" for var, x, y in drizzle) + ".")
+    # the counts: judged bands only (the large part is reported, not judged)
+    counts = count_labels(label for (_, band), (label, *_) in labels.items() if band in JUDGED_BANDS)
     lines += ["", "- Labels: " + (", ".join(f"{n} {name}" for name, n in counts.items()) or "none")
               + ". Realism and spectra (parts 1-2) come first, as usual.",
               "- Verdict on scores (never outranks a loss in parts 1 or 2): TODO"]

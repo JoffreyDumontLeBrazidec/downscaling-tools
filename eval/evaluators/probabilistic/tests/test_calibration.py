@@ -7,8 +7,11 @@ import numpy as np
 import pytest
 
 from eval.evaluators.probabilistic.core.calibration import (
+    RATIO_BOOTSTRAP_SEED,
     PooledMoments,
     correction_factor,
+    dry_floor,
+    dry_wet_disagreement,
     histogram_shape,
     rank_counts,
     spread_skill_ratio,
@@ -113,3 +116,109 @@ def test_invalid_points_are_not_counted_and_masks_apply():
     mask[50:] = True
     assert rank_counts(ranks, M, mask).sum() == 50
     assert rank_counts(ranks, M).sum() == 80
+
+
+# ------------------------------------------------------------ rule 32 v2: ratio interval, dry floor, shape
+
+def _pooled_dates(n_dates: int, seed: int = 0, member_std: float = 1.0, points: int = 2000) -> PooledMoments:
+    """``n_dates`` calibrated (or not) dates of ``points`` points each, pooled."""
+    rng = np.random.default_rng(seed)
+    pooled = PooledMoments()
+    for _ in range(n_dates):
+        truth = rng.standard_normal(points)
+        members = rng.standard_normal((M, points)) * member_std
+        pooled.add_date(mean_variance=float(np.var(members, axis=0, ddof=1).mean()),
+                        mean_sq_error=float(np.mean((members.mean(axis=0) - truth) ** 2)),
+                        n_points=points, n_members=M, fcrps=1.0, crps=1.1)
+    return pooled
+
+
+def test_bootstrap_interval_contains_the_point_and_shrinks_with_more_dates():
+    widths = []
+    for n_dates in (5, 30, 120):
+        s = _pooled_dates(n_dates).summary()
+        lo, hi, se = (s["spread_skill_ratio_corrected_lo95"], s["spread_skill_ratio_corrected_hi95"],
+                      s["spread_skill_ratio_corrected_se"])
+        assert lo <= s["spread_skill_ratio_corrected"] <= hi
+        assert 0.0 < se < hi - lo
+        widths.append(hi - lo)
+    assert widths[0] > widths[1] > widths[2]
+    # about 1/sqrt(n): 24 times the dates, about a fifth of the width (loose: the dates are few)
+    assert widths[2] < widths[0] / 2.5
+    # a calibrated ensemble: the interval covers 1 (sampling noise of 120 dates is far below 0.05)
+    assert widths[2] < 0.05
+
+
+def test_bootstrap_is_fixed_by_its_seed_and_needs_two_dates():
+    pooled = _pooled_dates(8)
+    a = pooled.bootstrap_ratio()
+    b = pooled.bootstrap_ratio()
+    c = pooled.bootstrap_ratio(seed=RATIO_BOOTSTRAP_SEED + 1)
+    assert a == b and a != c
+    assert pooled.bootstrap_ratio(n_resamples=200)["lo"] != a["lo"]
+    one = _pooled_dates(1)
+    s = one.summary()
+    assert math.isnan(s["spread_skill_ratio_corrected_lo95"]) and math.isnan(s["spread_skill_ratio_corrected_se"])
+    assert math.isfinite(s["spread_skill_ratio_corrected"])
+    # an under-dispersed ensemble: the whole interval is below 0.95
+    s = _pooled_dates(30, member_std=0.5).summary()
+    assert s["spread_skill_ratio_corrected_hi95"] < 0.95
+
+
+def test_dry_floor_makes_trace_members_over_a_dry_truth_a_tie():
+    thr = 0.1 / 1000.0                                   # 0.1 mm in the metres of the files
+    truth = np.zeros(N)
+    trace = np.full((M, N), 0.00003)                     # 0.03 mm: drizzle under the threshold
+    # without the floor every member is above the truth: the whole histogram sits in bin 0
+    raw = rank_counts(truth_ranks(trace, truth, tie_rng("20230101", 24, "tp")), M)
+    assert raw[0] == N
+    # with the floor the members are exact zeros: a full tie, broken at random over all bins
+    floored = rank_counts(truth_ranks(dry_floor(trace, thr), dry_floor(truth, thr), tie_rng("20230101", 24, "tp")), M)
+    assert np.all(np.abs(floored / N - 1 / 11) < 0.01)
+    # amounts at or above the threshold are untouched; NaN stays NaN; a zero threshold is the identity
+    x = np.array([0.0, 0.00005, 0.0001, 0.002, np.nan])
+    np.testing.assert_array_equal(dry_floor(x, thr)[:4], [0.0, 0.0, 0.0001, 0.002])
+    assert np.isnan(dry_floor(x, thr)[4])
+    np.testing.assert_array_equal(dry_floor(x, 0.0)[:4], x[:4])
+
+
+def test_false_drizzle_and_missed_rain_rates_on_a_hand_built_case():
+    thr = 1e-4
+    # 10 points: 0-3 truth dry; members all wet at 0-1 (false drizzle), one dry member at 2, all dry at 3;
+    # 4-7 truth wet: all members dry at 4-5 (missed rain), one wet member at 6, all wet at 7;
+    # 8 NaN truth (not valid), 9 one NaN member (not valid)
+    truth = np.array([0.0, 0.00005, 0.0, 0.0, 0.001, 0.0002, 0.003, 0.001, np.nan, 0.0])
+    members = np.full((3, 10), 0.0005)
+    members[:, 2] = [0.0005, 0.0, 0.0005]
+    members[:, 3] = 0.0
+    members[:, 4:6] = 0.00009
+    members[:, 6] = [0.0, 0.0, 0.002]
+    members[0, 9] = np.nan
+    d = dry_wet_disagreement(members, truth, thr)
+    assert d["valid"].sum() == 8
+    np.testing.assert_array_equal(np.flatnonzero(d["false_drizzle"]), [0, 1])
+    np.testing.assert_array_equal(np.flatnonzero(d["missed_rain"]), [4, 5])
+    # the rates the evaluator writes: counts over the valid points
+    assert d["false_drizzle"].sum() / d["valid"].sum() == 0.25
+    assert d["missed_rain"].sum() / d["valid"].sum() == 0.25
+
+
+def test_one_sided_pile_is_biased_not_u_shaped():
+    flat = np.full(M + 1, 1000)
+    both = flat.copy()
+    both[0] = both[-1] = 3000
+    low_pile = flat.copy()
+    low_pile[0] = 5000                 # truth below every member too often: the members sit too high
+    high_pile = flat.copy()
+    high_pile[-1] = 5000               # truth above every member too often: the members sit too low
+    assert histogram_shape(summarize_histogram(both)) == "U-shaped (under-dispersed)"
+    assert histogram_shape(summarize_histogram(low_pile)).startswith("biased high")
+    assert histogram_shape(summarize_histogram(high_pile)).startswith("biased low")
+    assert "U-shaped" not in histogram_shape(summarize_histogram(low_pile))
+    assert histogram_shape(summarize_histogram(flat)) == "flat"
+    s = summarize_histogram(low_pile)
+    assert s["bin_0_fraction"] == pytest.approx(5000 / 15000) and s["bin_m_fraction"] == pytest.approx(1000 / 15000)
+    assert s["bin_expected"] == pytest.approx(1 / 11) and s["outer_two_fraction"] == pytest.approx(6000 / 15000)
+    # an older summary without the separate fractions still gets a word
+    assert histogram_shape({"outer_two_fraction": 0.4, "outer_two_expected": 2 / 11, "rank_mean_norm": 0.0}) \
+        == "U-shaped (under-dispersed)"
