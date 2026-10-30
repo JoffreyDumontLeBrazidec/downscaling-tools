@@ -205,9 +205,11 @@ def test_cli_audit_and_diff(ckpt, tmp_path, capsys):
     assert "grad_dead_units: 2 kept, 1 new, 1 gone, 0.50 new per 1k steps" in out and "new  [9]" in out and "gone [5]" in out
     assert main(["units", str(p), "--role", "processor.1", "--from-audit", str(tmp_path / "a" / "audit.json"), "--units", "0"]) == 0
     out = capsys.readouterr().out
-    rows = {int(l.split()[0]): [float(x) for x in l.split()[1:]] for l in out.splitlines()[2:]}
+    rows = {int(l.split()[0]): [float(x) for x in l.split()[1:]] for l in out.splitlines()[3:]}
     assert set(rows) == {0, *GRAD_DEAD}
     assert all(v == 0 for u in GRAD_DEAD for v in rows[u]) and rows[0][1] > 0  # dead: m and v 0; live unit 0: v > 0
+    assert main(["units", str(p), "--role", "processor.1", "--bottom", str(len(GRAD_DEAD) + len(ZERO_UNITS))]) == 0
+    assert f"indices {sorted(GRAD_DEAD + ZERO_UNITS)}" in capsys.readouterr().out
 
 
 def test_revive_roundtrip(ckpt, tmp_path):

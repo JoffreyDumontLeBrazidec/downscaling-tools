@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 from . import registry as reg
 from . import report
 from .static_checks import capacity_summary, run_static
@@ -158,13 +160,21 @@ def cmd_units(a) -> int:
         idx = json.load(open(a.from_audit))["checks"]["c3_optimizer_dead"]["indices"].get(a.role, {})
         units += idx.get(f"{a.mlp}.grad_dead_units", [])
     skip = {int(u) for u in a.exclude.split(",")} if a.exclude else set()
-    units = sorted(set(units) - skip)
     view = r.optimizer()
-    print(f"{a.ckpt}: {view.kind}, mapping {view.status}; {a.role}.{a.mlp}, {len(units)} units")
     leaves = {}
     for part, leaf in (("bias", "0.bias"), ("w1_row", "0.weight"), ("w2_col", "2.weight")):
         s = view.by_name.get(block.key(f"{a.mlp}.{leaf}")) or {}
         leaves[part] = {n: r.array(s[n]) for n in ("exp_avg", "exp_avg_sq") if hasattr(s.get(n), "is_float")}
+    if a.bottom:
+        # rank every unit by its largest second moment over the three leaves (Muon: bias only)
+        axis = {"bias": None, "w1_row": 1, "w2_col": 0}
+        vs = [mv["exp_avg_sq"] if axis[p] is None else mv["exp_avg_sq"].max(axis=axis[p])
+              for p, mv in leaves.items() if "exp_avg_sq" in mv]
+        vmax = np.maximum.reduce(vs)
+        units += [int(i) for i in np.argsort(vmax, kind="stable")[: a.bottom]]
+    units = sorted(set(units) - skip)
+    print(f"{a.ckpt}: {view.kind}, mapping {view.status}; {a.role}.{a.mlp}, {len(units)} units")
+    print(f"  indices {units}")
     print("  unit   " + "  ".join(f"{p}: max|m| max v".ljust(28) for p in leaves))
     for u in units:
         cells = []
@@ -219,6 +229,7 @@ def main(argv=None) -> int:
     p.add_argument("--units", help="comma list of unit indices")
     p.add_argument("--from-audit", help="add the gradient-dead units of --role from this audit.json")
     p.add_argument("--exclude", help="comma list of indices to leave out (e.g. a known set)")
+    p.add_argument("--bottom", type=int, help="add the N units with the smallest second moment (max over bias, W1 row, W2 column)")
     p.set_defaults(func=cmd_units)
     p = sub.add_parser("registry", help="the reference checkpoint of each lane")
     p.add_argument("--lane")
