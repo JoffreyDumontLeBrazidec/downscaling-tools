@@ -8,6 +8,7 @@ import xarray as xr
 
 from .dataset_builder import build_prediction_dataset, validate_predictions_dataset
 from .distributed_io import Rank0FileWriter
+from .seeding import SEED_FORMULA
 from .types import EnsemblePrediction, PredictionConfig, PredictionMetadata
 
 
@@ -91,6 +92,12 @@ def write_predictions_file(
             metadata=metadata,
             source_bundle_paths=ensemble.source_bundle_paths,
         )
+        if ensemble.draw_seeds is not None:
+            # Rule 31: the file says which noise each member was drawn from.
+            dataset.attrs["seeds"] = ",".join(str(int(seed)) for seed in ensemble.draw_seeds)
+            dataset.attrs["seed_rule"] = "per_draw"
+            dataset.attrs["seed_base"] = int(ensemble.seed_base if ensemble.seed_base is not None else -1)
+            dataset.attrs["seed_formula"] = SEED_FORMULA
         errors = validate_predictions_dataset(dataset)
         if errors:
             raise ValueError("Invalid predictions dataset before write: " + "; ".join(errors))

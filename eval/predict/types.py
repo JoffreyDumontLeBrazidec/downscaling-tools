@@ -143,6 +143,9 @@ class EnsemblePrediction:
     y_pred_stack: np.ndarray | None = None
     x_interp_stack: np.ndarray | None = None
     used_missing_target_unsafe: bool = False
+    # Rule 31 (2026-10-30): one sampler seed per (base, date, lead, member).
+    draw_seeds: list[int] | None = None
+    seed_base: int | None = None
 
     @property
     def target_members_with_data(self) -> int:
