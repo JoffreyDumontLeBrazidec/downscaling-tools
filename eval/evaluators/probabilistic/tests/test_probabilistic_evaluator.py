@@ -80,7 +80,9 @@ def test_probabilistic_evaluator_writes_outputs(tmp_path: Path) -> None:
     _write_prediction(pred_dir / "predictions_20230817_step024.nc", date="20230817", step=24)
 
     out_dir = tmp_path / "evaluators" / "probabilistic"
-    eval_config = {"weather_states": ["2t", "10ff"], "domains": ["global", "n.hem"], "steps": [24]}
+    # four toy points form a "regional box": keep them all (no edge strip)
+    eval_config = {"weather_states": ["2t", "10ff"], "domains": ["global", "n.hem"], "steps": [24],
+                   "box_edge_deg": 0}
     run(pred_dir, {}, eval_config, output_dir=out_dir, overwrite=True)
     records = score(out_dir, {}, eval_config)
     plot(out_dir, {}, eval_config)
@@ -197,11 +199,13 @@ def test_scale_split_tp_clipping_and_input_spread(tmp_path: Path) -> None:
     with (out_dir / "rank_histograms.csv").open(newline="") as f:
         hist = {r["weather_state"]: r for r in csv.DictReader(f)}
     counts = np.array([int(hist["tp"][f"bin_{i}"]) for i in range(11)])
-    assert counts.sum() == 2 * facts["n_points"] and counts[0] / counts.sum() < 0.3
+    # the 1-degree box-edge strip is left out of every band, the full field included
+    assert 0 < counts.sum() < 2 * facts["n_points"] and counts[0] / counts.sum() < 0.3
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
     assert payload["scale_split"]["enabled"] and payload["scale_split"]["cut_km"] == 400.0
     assert payload["scale_split"]["sigma_km"] == round(53.0, 0) or abs(payload["scale_split"]["sigma_km"] - 53.0) < 0.1
     assert payload["precip_clipped_at_zero"] == ["tp"]
+    assert payload["box_edge_deg"] == 1.0
     assert payload["input_members"]["n_members"] == 10
     assert (out_dir / "plots" / "band_scores.pdf").exists()
     assert (out_dir / "plots" / "rank_histograms.pdf").exists()
