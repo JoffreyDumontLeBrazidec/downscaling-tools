@@ -84,9 +84,12 @@ def _pct(x):
 def headline(audit: dict) -> str:
     """'x % of processor capacity is dead or unread; y; z' (review note s8), plus the counts behind it."""
     cap = audit["capacity"]["processor"]
+    o = audit["checks"]["c3_optimizer_dead"]
+    win = o.get("window_min_steps")
+    when = f"no gradient for >= ~{win:,} steps" if win else "no gradient (window unknown)"
     parts = []
     if cap["units"]:
-        how = f"{cap['units_dead_zero']} zero-weight + {cap['units_dead_grad']} gradient-dead"
+        how = f"{cap['units_dead_zero']} zero-weight + {cap['units_dead_grad']} gradient-dead ({when})"
         if not cap["optimizer_state"]:
             how = f"{cap['units_dead_zero']} zero-weight; gradient-dead not read (no optimizer state)"
         parts.append(f"processor MLP units dead {_pct(cap['unit_dead_frac'])} ({how} of {cap['units']})")
@@ -95,6 +98,13 @@ def headline(audit: dict) -> str:
             f"heads dead {cap['heads_dead_zero'] + cap['heads_dead_grad']}/{cap['heads']} "
             f"({cap['heads_dead_zero']} zero-weight, {cap['heads_dead_grad']} gradient-dead)"
         )
+    for g in ("encoder", "decoder"):
+        c = audit["capacity"].get(g) or {}
+        if c.get("units"):
+            parts.append(f"{g} units dead {c['units_dead_zero'] + c['units_dead_grad']}/{c['units']}, "
+                         f"heads {c['heads_dead_zero'] + c['heads_dead_grad']}/{c['heads']}")
+    if o.get("mapping") not in (None, "exact", "none"):
+        parts.append(f"optimizer mapping {o['mapping']}: gradient-dead counts unproven")
     c2 = audit["checks"].get("c2_grad_dead")
     if c2 and c2.get("totals"):
         t = c2["totals"]
@@ -137,8 +147,14 @@ def summary_text(audit: dict) -> str:
     o = audit["checks"]["c3_optimizer_dead"]
     if o.get("states"):
         lines.append(
-            f"  optimizer map: {o['mapped']}/{o['states']} states named ({'complete' if o['mapping_complete'] else 'INCOMPLETE: names may be shifted'})"
+            f"  optimizer map: {o['mapped']}/{o['states']} states named, {o.get('entries')} candidate tensors: {o.get('mapping')}"
+            + ("" if o.get("mapping") == "exact" else " (names after an unassigned same-shape tensor may be shifted; see 'unmapped')")
         )
+        if o.get("window_min_steps"):
+            lines.append(f"  gradient-dead window: a zero moment = no gradient for at least ~{o['window_min_steps']:,} steps (beta2 and the block's live moments)")
+    nh = c1.get("blocks_without_heads") or []
+    if nh:
+        lines.append(f"  head checks skipped (head count not inferable: no q_norm, no config): {nh}")
     if audit.get("revive"):
         lines.append("  revival (by hand, never automatic):")
         lines += [f"    {c}" for c in audit["revive"]]

@@ -3,8 +3,8 @@
 1  zero-content heads and MLP units (exactly zero weights on both sides: the 512 -> 1,024 widening saddle); EMA
    ``*_dest`` alias mismatches; NaN/Inf in the model, the EMA shadows and the optimizer state.
 3  gradient-dead units and heads from the checkpoint's OWN optimizer state: second moment exactly 0 on a unit's bias
-   (and, where the optimizer keeps it per coordinate, on its W1 row and W2 column) = no gradient over the whole
-   optimizer history (fresh warm start: since its step 1). First moment exactly 0 = none in the last ~1k steps.
+   (AdamW: also its whole W1 row and W2 column; SOAP: the GG diagonals) = no gradient for at least the WINDOW
+   (~1.5k steps at beta2 0.95, ~70k at 0.999; reported per block), not necessarily for the whole run.
 6  scale ladders: QK-norm gains, edge-logit scale per head (s11 ladder), weight RMS over its nn.Linear init RMS,
    LayerNorm gains (an exactly zero gain is a dead channel), low-norm MLP units.
 
@@ -100,73 +100,127 @@ def nonfinite_and_aliases(r: Reader) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ check 3
+FP32_TINY = 1.4e-45  # smallest fp32 subnormal: a decaying moment below it is exactly 0
+
+
+def _window(v_ref: float | None, beta: float | None) -> int | None:
+    """Steps without gradient after which a moment of size v_ref underflows to exactly 0 under decay `beta`.
+
+    So "moment == 0" means "no gradient for at least ~this many steps" (not "since the state was created"): with
+    beta2 0.95 and v ~ 1e-12 that is ~1.5k steps; with beta2 0.999, ~70k."""
+    if not v_ref or not beta or not (0 < beta < 1):
+        return None
+    return int(math.log(v_ref / FP32_TINY) / -math.log(beta))
+
+
+def _beta2(view, key_state) -> float | None:
+    for g in view.groups:
+        b = g.get("betas")
+        if isinstance(b, (list, tuple)) and len(b) == 2:
+            return float(b[1])
+    return None
+
+
 def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
-    """Units and heads whose parameters got no gradient, from the optimizer moments. Zero-content units excluded."""
+    """Units and heads whose parameters got no gradient recently, from the optimizer moments.
+
+    Criterion per MLP unit, by optimizer:
+      AdamW  exp_avg_sq == 0 on the bias AND the whole W1 row AND the whole W2 column (the three must agree);
+      SOAP   diag(GG[0]) == 0 for the W1 row and diag(GG[1]) == 0 for the W2 column (GG is kept in the original
+             basis; exp_avg_sq of a matrix is in the rotated eigenbasis and says nothing per unit), and the bias'
+             exp_avg_sq (unrotated unless precondition_1d);
+      Muon   the bias' exp_avg_sq (aux AdamW group); the matrices' momentum is not a per-unit record.
+    A zero moment means "no gradient for at least the window" (`dead_window_steps`, from the group's beta2 and the
+    block's median live moment), not "for the whole run". Zero-content units (check 1) are not counted again.
+    """
     view = r.optimizer()
     out = {
         "optimizer": view.kind,
         "states": view.n_states,
         "mapped": view.n_mapped,
+        "entries": view.n_entries,
+        "mapping": view.status,
         "mapping_complete": view.complete,
         "groups": view.groups,
+        "excluded_frozen": view.excluded_frozen[:40],
+        "unmapped": [[k, list(sh)] for k, sh in view.skipped[:60]],
         "per_role": {},
         "indices": {},
         "agreement": {},
+        "window_steps": {},
     }
     if not view.n_states:
         out["skipped"] = "no optimizer state in this file (inference file or weights-only save)"
         return out
+    beta2 = _beta2(view, None)
 
-    def hist(key):
-        s = view.by_name.get(key)
-        return (None, None) if s is None else r.moment(s, "history")
+    def st(key):
+        return view.by_name.get(key)
 
-    def recent(key):
-        s = view.by_name.get(key)
-        return (None, None) if s is None else r.moment(s, "recent")
+    def leaf(key, name):
+        s = st(key)
+        t = s.get(name) if isinstance(s, dict) else None
+        return r.array(t) if t is not None and hasattr(t, "is_float") else None
+
+    def gg_diag(key, i):
+        s = st(key)
+        gg = s.get("GG") if isinstance(s, dict) else None
+        if isinstance(gg, (list, tuple)) and len(gg) > i and hasattr(gg[i], "is_float"):
+            return np.diagonal(r.array(gg[i])).copy()
+        return None
 
     for b in blocks:
         m, idx, agree = {}, {}, {}
         zidx = zero["indices"].get(b.role, {})
         for name, hidden in b.mlps.items():
             zero_u = set(zidx.get(f"{name}.zero_units", []))
-            _, vb = hist(b.key(f"{name}.0.bias"))
-            _, mb = recent(b.key(f"{name}.0.bias"))
+            kb, k1, k2 = (b.key(f"{name}.{x}") for x in ("0.bias", "0.weight", "2.weight"))
+            vb = gg_diag(kb, 0) if view.kind == "soap" else None
+            if vb is None:
+                vb = leaf(kb, "exp_avg_sq")
             if vb is None:
                 continue
-            dead = vb == 0
-            # per-coordinate moments on the matrices (AdamW; not SOAP's rotated basis, not Muon's momentum alone)
-            n1, v1 = hist(b.key(f"{name}.0.weight"))
-            n2, v2 = hist(b.key(f"{name}.2.weight"))
-            if view.kind == "adamw" and v1 is not None and v2 is not None:
-                w1_dead, w2_dead = ~np.any(v1 != 0, axis=1), ~np.any(v2 != 0, axis=0)
-                agree[name] = {
-                    "bias": int(dead.sum()),
-                    "w1_row": int(w1_dead.sum()),
-                    "w2_col": int(w2_dead.sum()),
-                    "all3": int((dead & w1_dead & w2_dead).sum()),
-                }
-                dead = dead & w1_dead & w2_dead
+            crit = {"bias": vb == 0}
+            if view.kind == "adamw":
+                v1, v2 = leaf(k1, "exp_avg_sq"), leaf(k2, "exp_avg_sq")
+                if v1 is not None and v2 is not None:
+                    crit["w1_row"], crit["w2_col"] = ~np.any(v1 != 0, axis=1), ~np.any(v2 != 0, axis=0)
+            elif view.kind == "soap":
+                d1, d2 = gg_diag(k1, 0), gg_diag(k2, 1)
+                if d1 is not None and d1.shape[0] == hidden:
+                    crit["w1_row"] = d1 == 0
+                if d2 is not None and d2.shape[0] == hidden:
+                    crit["w2_col"] = d2 == 0
+            dead = np.logical_and.reduce(list(crit.values()))
+            agree[name] = {k: int(v.sum()) for k, v in crit.items()} | {"all": int(dead.sum())}
             grad_dead = [int(i) for i in np.where(dead)[0] if int(i) not in zero_u]
             m[f"{name}.grad_dead_unit_frac"] = len(grad_dead) / hidden
             idx[f"{name}.grad_dead_units"] = grad_dead
-            if mb is not None:
+            live = vb[vb > 0]
+            win = _window(float(np.median(live)) if live.size else None,
+                          0.95 if view.kind == "soap" else beta2)  # SOAP's GG decays with shampoo_beta (0.95)
+            if win is not None:
+                out["window_steps"][f"{b.role}.{name}"] = win
+            mb = leaf(kb, "exp_avg")
+            if mb is not None and view.kind != "soap":
                 recent_dead = [int(i) for i in np.where(mb == 0)[0] if int(i) not in zero_u]
                 m[f"{name}.recent_dead_unit_frac"] = len(recent_dead) / hidden
         if b.heads:
             d = b.head_dim
             zero_h = set(zidx.get("zero_heads", []))
-            vs = [hist(b.key(f"{n}.bias"))[1] for n in ("lin_query", "lin_key", "lin_value")]
+            vs = []
+            for n in ("lin_query", "lin_key", "lin_value"):
+                v = gg_diag(b.key(f"{n}.bias"), 0) if view.kind == "soap" else None
+                vs.append(v if v is not None else leaf(b.key(f"{n}.bias"), "exp_avg_sq"))
             vs = [v for v in vs if v is not None]
             if vs:
                 dead_h = [h for h in range(b.heads) if h not in zero_h and all(not np.any(v[h * d : (h + 1) * d]) for v in vs)]
                 m["grad_dead_head_frac"] = len(dead_h) / b.heads
                 idx["grad_dead_heads"] = dead_h
-        # dead-parameter fraction of the block: coordinates whose history moment is exactly zero (1-D tensors and,
-        # for AdamW, matrices too)
+        # coordinates whose second moment is exactly 0, as a fraction of the block (1-D tensors; AdamW matrices too)
         tot = zero_coords = 0
         for k in [k for k in view.by_name if k.startswith(b.prefix + ".")]:
-            _, v = hist(k)
+            v = leaf(k, "exp_avg_sq")
             if v is None or (view.kind != "adamw" and v.ndim > 1):
                 continue
             tot += v.size
@@ -177,9 +231,8 @@ def optimizer_dead(r: Reader, blocks: list[Block], zero: dict) -> dict:
         out["indices"][b.role] = idx
         if agree:
             out["agreement"][b.role] = agree
-    # parameters the optimizer never saw (frozen or never reached by a gradient)
-    out["unmapped_float_tensors"] = len(view.skipped)
-    out["unmapped_examples"] = view.skipped[:40]
+    w = list(out["window_steps"].values())
+    out["window_min_steps"] = min(w) if w else None
     return out
 
 
@@ -190,17 +243,17 @@ def _init_rms(fan_in: int) -> float:
 
 
 def _ln_gain(r: Reader, prefix: str):
-    """Per-channel gain of a LayerNorm (weight) or ConditionalLayerNorm (1 + scale.bias, scale.weight)."""
+    """(per-channel gain, mask of channels whose gain is fixed) of a LayerNorm (weight) or a ConditionalLayerNorm
+    (gain 1 + scale(cond): fixed only where the conditioning row scale.weight is zero; elsewhere it varies with
+    the condition and is never read as zero or low)."""
     w = r.get(f"{prefix}.weight")
     if w is not None and w.ndim == 1:
-        return w, "plain"
+        return w, np.ones(w.shape, bool)
     sb = r.get(f"{prefix}.scale.bias")
     if sb is not None:
         sw = r.get(f"{prefix}.scale.weight")
-        g = 1.0 + sb
-        if sw is not None:  # a channel is dead for every condition only if its conditioning row is zero too
-            g = np.where(np.any(sw != 0, axis=1), np.maximum(np.abs(g), 1e-30), g)
-        return g, "conditional"
+        fixed = ~np.any(sw != 0, axis=1) if sw is not None else np.ones(sb.shape, bool)
+        return 1.0 + sb, fixed
     return None, None
 
 
@@ -243,13 +296,13 @@ def scale_ladders(r: Reader, blocks: list[Block]) -> dict:
             m["W_e.sn.max"] = float(max(wsn))
             det["edge_logit_scale"] = [round(x, 4) for x in geo]
         for ln in ("layer_norm_attention", "layer_norm_mlp_dst", "layer_norm_attention_src", "layer_norm_mlp_src"):
-            g, kind = _ln_gain(r, b.key(ln))
+            g, fixed = _ln_gain(r, b.key(ln))
             if g is None:
                 continue
             a = np.abs(g)
             med = float(np.median(a))
-            m[f"{ln}.zero_gain_frac"] = float((a == 0).sum() / a.size)
-            m[f"{ln}.low_gain_frac"] = float((a < 0.01 * med).sum() / a.size) if med else 1.0
+            m[f"{ln}.zero_gain_frac"] = float(((a == 0) & fixed).sum() / a.size)
+            m[f"{ln}.low_gain_frac"] = float(((a < 0.01 * med) & fixed).sum() / a.size) if med else 0.0
             m[f"{ln}.gain_mean_abs"] = float(a.mean())
         per_role[b.role] = m
         if det:
@@ -265,6 +318,7 @@ def run_static(path: str, skip_nonfinite: bool = False) -> tuple[Reader, list[Bl
     nf = None if skip_nonfinite else nonfinite_and_aliases(r)
     od = optimizer_dead(r, blocks, z)
     sl = scale_ladders(r, blocks)
+    z["blocks_without_heads"] = [b.role for b in blocks if not b.heads]
     checks = {
         "c1_zero_content": z | ({"nonfinite": nf["nonfinite"], "alias_mismatch": nf["alias_mismatch"]} if nf else {}),
         "c3_optimizer_dead": od,

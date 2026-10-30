@@ -122,12 +122,13 @@ class _StreamStats:
                 row["attn_ratio"] = (xm - xi).norm().item() / max(n_in, 1e-30)
                 row["mlp_ratio"] = (xo - xm).norm().item() / max(n_in, 1e-30)
             a = xo.abs().reshape(-1)
-            sub = a[torch.randint(0, a.numel(), (min(a.numel(), 1_000_000),), device=a.device)]
+            gen = torch.Generator(device=a.device).manual_seed(0)  # fixed subsample: same reading on every run
+            sub = a if a.numel() <= 1_000_000 else a[torch.randint(0, a.numel(), (1_000_000,), device=a.device, generator=gen)]
             row["massive_ratio"] = a.max().item() / max(sub.median().item(), 1e-30)
             ei = self.edge_index
             x2 = xo.reshape(-1, xo.shape[-1])
             if ei is not None and ei.dim() == 2 and ei.shape[0] == 2 and int(ei.max()) < x2.shape[0]:
-                sel = ei[:, torch.randint(0, ei.shape[1], (min(ei.shape[1], max_edges),), device=ei.device)]
+                sel = ei if ei.shape[1] <= max_edges else ei[:, torch.randint(0, ei.shape[1], (max_edges,), device=ei.device, generator=torch.Generator(device=ei.device).manual_seed(0))]
                 de = (x2[sel[0]] - x2[sel[1]]).pow(2).sum(-1).mean().item()
                 row["dirichlet"] = de / max(x2.pow(2).sum(-1).mean().item(), 1e-30)
             self.rows.append(row)
@@ -163,6 +164,10 @@ class Probe:
         self.units, self.heads, self.streams = {}, {}, {}
         self.handles = []
         self.capture_grads = True
+        # gradient checkpointing (on by default in anemoi) runs each block's forward twice (original + recompute);
+        # forward statistics count the first call per module per case, gradient hooks are registered on every call
+        # that has a graph (only one of them is backpropagated through)
+        self._seen = set()
         for b in self.blocks:
             mod = modules.get(b.prefix)
             if mod is None:
@@ -185,9 +190,16 @@ class Probe:
                 if ln is not None:
                     self.handles.append(ln.register_forward_pre_hook(self._mid_hook(ss)))
 
+    def _first(self, key) -> bool:
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        return True
+
     def _unit_hook(self, st):
         def hook(_m, _inp, out):
-            st.observe(out)
+            if self._first(("unit", id(st))):
+                st.observe(out)
             if self.capture_grads and out.requires_grad:
                 out.register_hook(lambda g: st.observe_grad(g))
         return hook
@@ -198,9 +210,10 @@ class Probe:
                 out.register_hook(lambda g: hs.observe_grad(g))
         return hook
 
-    @staticmethod
-    def _pre_hook(ss):
+    def _pre_hook(self, ss):
         def hook(_m, args, kwargs):
+            if not self._first(("pre", id(ss))):
+                return
             x = _first_tensor(args) if args else _first_tensor(list(kwargs.values()))
             ss.x_in = None if x is None else x.detach()
             ei = _find_edge_index(args, kwargs)
@@ -208,22 +221,25 @@ class Probe:
                 ss.edge_index = ei
         return hook
 
-    @staticmethod
-    def _mid_hook(ss):
+    def _mid_hook(self, ss):
         def hook(_m, args):
+            if not self._first(("mid", id(ss))):
+                return
             x = _first_tensor(args)
             ss.x_mid = None if x is None else x.detach()
         return hook
 
-    @staticmethod
-    def _post_hook(ss):
+    def _post_hook(self, ss):
         def hook(_m, _inp, out):
+            if not self._first(("post", id(ss))):
+                return
             x = _first_tensor(out)
             if x is not None:
                 ss.record(x)
         return hook
 
     def close_case(self):
+        self._seen.clear()
         for st in self.units.values():
             st.close_case()
         for hs in self.heads.values():
@@ -278,6 +294,7 @@ def run_grad_pass(root: torch.nn.Module, cases: list[Case], device) -> dict:
             var = np.maximum((st.sumsq / st.count).cpu().numpy() - mean ** 2, 0)
             m4 = c4["per_role"].setdefault(role, {})
             m4[f"{name}.never_fires_frac"] = float((mx < GELU_ZERO_OUT).mean())
+            c4.setdefault("indices", {}).setdefault(role, {})[f"{name}.never_fires_units"] = np.where(mx < GELU_ZERO_OUT)[0].tolist()
             m4[f"{name}.no_grad_frac"] = float((mx < GELU_ZERO_GRAD).mean())
             m4[f"{name}.linearised_frac"] = float((mn > 0).mean())
             m4[f"{name}.preact_mean.median"] = float(np.median(mean))

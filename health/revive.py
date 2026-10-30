@@ -5,7 +5,8 @@ Same rule as anemoi-core's ``revive_dead_units`` (fork 18a5415af), extended to t
 gradient-dead with nonzero weights: the INPUT side (W1 row and bias; lin_query/key/value/self/edge rows of a head) is
 redrawn from nn.Linear's default init U(-1/sqrt(fan_in), 1/sqrt(fan_in)) with bias 0, the OUTPUT side (W2 column;
 projection input columns) is set to zero. A dead unit's output is exactly zero (GELU(x) = 0 for x <= -5.55, the
-DB300 case) or its weights are zero, so the step-0 function is unchanged up to that exact zero. The EMA shadows get
+DB300 case) or its weights are zero, so the step-0 function is unchanged up to that exact zero; a gradient-dead unit is revived only with
+check-4 evidence that it never fires (`--unproven` overrides, and says so). The EMA shadows get
 the same values. The optimizer state is dropped (a weights-only warm start rebuilds it).
 
     python -m health revive SRC.ckpt DST.ckpt --audit AUDIT.json [--what grad,zero] [--seed 20261030]
@@ -25,9 +26,16 @@ def _uniform_(t: torch.Tensor, fan_in: int, gen: torch.Generator):
     t.copy_((torch.rand(t.shape, generator=gen, dtype=torch.float64) * 2 - 1).mul_(bound).to(t.dtype))
 
 
-def plan(audit: dict, what=("grad", "zero")) -> dict:
-    """{block prefix: {"units": {mlp: [idx]}, "heads": [idx], "head_dim": d}} from an audit JSON."""
+def plan(audit: dict, what=("grad", "zero"), unproven: bool = False) -> tuple[dict, list]:
+    """({block prefix: {"units": {mlp: [idx]}, "heads": [idx], "head_dim": d}}, warnings) from an audit JSON.
+
+    A gradient-dead unit (nonzero weights) is revived only with evidence that its output is exactly zero, so that
+    zeroing its W2 column keeps the function: check 4 `never_fires` (max pre-activation < -5.55 on every node of the
+    GPU audit's cases). Without that evidence it is skipped unless `unproven` is set. Gradient-dead HEADS are never
+    revived here (no saturation argument exists for them); zero-weight heads and units always qualify."""
     blocks = {b["role"]: b for b in audit["blocks"]}
+    never = audit["checks"].get("c4_preact", {}).get("indices", {})
+    warnings = []
     out = {}
     sources = []
     if "zero" in what:
@@ -42,10 +50,20 @@ def plan(audit: dict, what=("grad", "zero")) -> dict:
             p = out.setdefault(b["prefix"], {"units": {}, "heads": set(), "head_dim": b.get("head_dim")})
             for k, v in idx.items():
                 if k.endswith(f".{tag}_units"):
-                    p["units"].setdefault(k.split(".")[0], set()).update(v)
-                if k == f"{tag}_heads":
+                    mlp = k.split(".")[0]
+                    v = set(v)
+                    if tag == "grad_dead" and not unproven:
+                        proven = set(never.get(role, {}).get(f"{mlp}.never_fires_units", []))
+                        if v - proven:
+                            warnings.append(f"{role}.{mlp}: {len(v - proven)} gradient-dead units skipped: no check-4 "
+                                            "evidence that their output is exactly 0 (run the audit with --gpu, or pass --unproven)")
+                        v &= proven
+                    p["units"].setdefault(mlp, set()).update(v)
+                if k == "zero_heads" and tag == "zero":
                     p["heads"].update(v)
-    return out
+                if k == "grad_dead_heads" and v:
+                    warnings.append(f"{role}: {len(v)} gradient-dead heads not revived (no function-preserving rule)")
+    return out, warnings
 
 
 def apply(state: dict, shadows: list, todo: dict, seed: int) -> int:
@@ -91,11 +109,17 @@ def main(argv=None) -> int:
     ap.add_argument("--audit", required=True, help="audit.json of SRC (python -m health audit SRC)")
     ap.add_argument("--what", default="grad,zero", help="grad (optimizer-state dead), zero (zero weights), or both")
     ap.add_argument("--seed", type=int, default=20261030)
+    ap.add_argument("--unproven", action="store_true",
+                    help="also revive gradient-dead units without check-4 saturation evidence (may change the function)")
     a = ap.parse_args(argv)
     if a.src == a.dst:
         raise SystemExit("refusing to overwrite the source checkpoint")
     audit = json.load(open(a.audit))
-    todo = plan(audit, tuple(a.what.split(",")))
+    if audit["checks"].get("c3_optimizer_dead", {}).get("mapping") not in ("exact", None) and "grad" in a.what:
+        raise SystemExit("optimizer mapping of this audit is not exact: gradient-dead indices may be shifted; refusing")
+    todo, warnings = plan(audit, tuple(a.what.split(",")), a.unproven)
+    for w in warnings:
+        print("WARNING", w)
     ck = torch.load(a.src, map_location="cpu", weights_only=False)
     shadows = []
     for cb in (ck.get("callbacks") or {}).values():

@@ -148,12 +148,15 @@ class OptimizerView:
     kind: str = "none"  # adamw | muon | soap | other | none
     n_states: int = 0
     n_mapped: int = 0
-    skipped: list = field(default_factory=list)
+    n_entries: int = 0  # float state-dict tensors that could hold a state (buffers, aliases, config-frozen removed)
+    skipped: list = field(default_factory=list)  # [(name, shape)] float tensors left without a state
+    excluded_frozen: list = field(default_factory=list)  # names removed because the config freezes them
+    status: str = "none"  # exact | AMBIGUOUS | incomplete | none
     groups: list = field(default_factory=list)  # [{"n": params, "lr": .., "weight_decay": .., "betas": .., "use_muon": ..}]
 
     @property
     def complete(self) -> bool:
-        return self.n_states > 0 and self.n_mapped == self.n_states
+        return self.status == "exact"
 
 
 class Reader:
@@ -236,13 +239,35 @@ class Reader:
         return out
 
     # ---- optimizer ----------------------------------------------------------------------------------------
+    def frozen_patterns(self) -> list:
+        """Name fragments the training config freezes (no optimizer state): submodules_to_freeze, freeze_qk_gains."""
+        c = self.config
+        pats = [f".{m}." for m in ((c.get("training", {}) or {}).get("submodules_to_freeze") or [])]
+        for sec in ("encoder", "processor", "decoder"):
+            if ((c.get("model", {}) or {}).get(sec) or {}).get("freeze_qk_gains"):
+                pats += [f".{sec}.@q_norm.weight", f".{sec}.@k_norm.weight"]
+        return pats
+
+    @staticmethod
+    def _frozen(key: str, pats: list) -> bool:
+        for p in pats:
+            if "@" in p:
+                sec, leaf = p.split("@")
+                if sec in key and key.endswith(leaf):
+                    return True
+            elif p in key:
+                return True
+        return False
+
     def optimizer(self) -> OptimizerView:
         """Map the first optimizer's per-index state to state-dict names.
 
         Lightning keeps the state by integer index, in param-group order. Each group's indices are matched in
-        order against the state-dict entries by shape (buffers and frozen parameters have no index and are
-        skipped). ``n_mapped == n_states`` must hold; the MLP leaves (W1 row, bias, W2 column) agreeing on one
-        unit set is the independent check that the labels are right.
+        order against the state-dict entries by shape; buffers, aliases and the tensors the config freezes are
+        removed first. The mapping is EXACT when every remaining float tensor got a state (a bijection in order),
+        or when no tensor left without a state shares its shape with any state (it cannot have shifted the
+        alignment). Otherwise it is AMBIGUOUS: a frozen or never-updated tensor may have taken a same-shape
+        neighbour's state, and every name after it may be shifted (a whole frozen block would shift by a block).
         """
         view = OptimizerView()
         opts = self.obj.get("optimizer_states") if isinstance(self.obj, dict) else None
@@ -276,6 +301,10 @@ class Reader:
                 seen_storage.add(sig)
                 dedup.append((k, t))
         entries = dedup
+        pats = self.frozen_patterns()
+        view.excluded_frozen = [k for k, _ in entries if self._frozen(k, pats)]
+        entries = [(k, t) for k, t in entries if not self._frozen(k, pats)]
+        view.n_entries = len(entries)
         order = [int(i) for g in groups for i in g.get("params", [])] if groups else [int(k) for k in keys0]
         for gi, g in enumerate(groups or [{"params": order}]):
             pos = 0
@@ -300,7 +329,19 @@ class Reader:
                 view.by_name[name] = s
                 pos += 1
         view.n_mapped = len(view.by_name)
-        view.skipped = [k for k, _ in entries if k not in view.by_name]
+        view.skipped = [(k, t.shape) for k, t in entries if k not in view.by_name]
+        state_shapes = set()
+        for s in st.values():
+            if isinstance(s, dict):
+                ref = next((s[n] for n in ("exp_avg_sq", "exp_avg", "momentum_buffer") if isinstance(s.get(n), LazyTensor)), None)
+                if ref is not None:
+                    state_shapes.add(tuple(ref.shape))
+        if view.n_mapped != view.n_states:
+            view.status = "incomplete"
+        elif not view.skipped or not any(tuple(sh) in state_shapes for _, sh in view.skipped):
+            view.status = "exact"
+        else:
+            view.status = "AMBIGUOUS"
         return view
 
     def moment(self, opt_state: dict, which: str):

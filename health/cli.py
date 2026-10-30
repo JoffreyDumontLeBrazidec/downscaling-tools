@@ -58,7 +58,8 @@ def revive_commands(path: str, audit_json: str, audit: dict) -> list[str]:
         cmds.append(f"# {zero} zero-weight units/heads (widening saddle): anemoi-core fork tool, or the health one below")
         cmds.append(f"python -m anemoi.training.utils.dead_units {path} {dst}")
     if grad or zero:
-        cmds.append(f"# {grad} gradient-dead + {zero} zero-weight units/heads: input side redrawn, output side zeroed")
+        cmds.append(f"# {grad} gradient-dead + {zero} zero-weight units/heads: input side redrawn, output side zeroed;")
+        cmds.append("# gradient-dead units are revived only with check-4 evidence (audit with --gpu) that their output is 0")
         cmds.append(f"python -m health revive {path} {dst} --audit {audit_json} --what grad,zero")
     return cmds
 

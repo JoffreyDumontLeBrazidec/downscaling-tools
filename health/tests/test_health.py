@@ -60,6 +60,8 @@ class Proc(nn.Module):
 
 
 class Wrap(nn.Module):
+    use_checkpoint = False
+
     def __init__(self):
         super().__init__()
         self.encoder = nn.Module()
@@ -71,7 +73,10 @@ class Wrap(nn.Module):
     def forward(self, x, ea, ei):
         x, _ = self.encoder.proc(x, ea, ei)
         for b in self.processor.proc:
-            x, _ = b(x, ea, ei)
+            if self.use_checkpoint:
+                x, _ = torch.utils.checkpoint.checkpoint(b, x, ea, ei, use_reentrant=False)
+            else:
+                x, _ = b(x, ea, ei)
         return self.decoder.proc(x, ea, ei)[0]
 
 
@@ -151,7 +156,7 @@ def test_static_counts(ckpt):
     assert o["optimizer"] == "adamw" and o["mapping_complete"], o
     assert o["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] == GRAD_DEAD
     assert o["indices"]["processor.0"]["node_dst_mlp.grad_dead_units"] == []
-    assert o["agreement"]["processor.1"]["node_dst_mlp"]["all3"] == len(GRAD_DEAD) + len(ZERO_UNITS)
+    assert o["agreement"]["processor.1"]["node_dst_mlp"]["all"] == len(GRAD_DEAD) + len(ZERO_UNITS)
     s = checks["c6_scale"]["per_role"]["processor.1"]
     assert s["layer_norm_mlp_dst.zero_gain_frac"] == pytest.approx(1 / C)
     assert s["edge_logit_scale.max"] > 0
@@ -185,8 +190,13 @@ def test_revive_roundtrip(ckpt, tmp_path):
 
     p, _ = ckpt
     main(["audit", str(p), "--out", str(tmp_path / "a"), "--id", "toy"])
+    # without check-4 evidence the gradient-dead units are skipped (their output is not proven zero)
+    safe = tmp_path / "safe.ckpt"
+    assert main(["revive", str(p), str(safe), "--audit", str(tmp_path / "a" / "audit.json")]) == 0
+    w2 = torch.load(safe, weights_only=False)["state_dict"]["model.model.processor.proc.1.node_dst_mlp.2.weight"]
+    assert torch.all(w2[:, ZERO_UNITS] == 0) and torch.all(w2[:, GRAD_DEAD] != 0)
     dst = tmp_path / "revived.ckpt"
-    assert main(["revive", str(p), str(dst), "--audit", str(tmp_path / "a" / "audit.json")]) == 0
+    assert main(["revive", str(p), str(dst), "--audit", str(tmp_path / "a" / "audit.json"), "--unproven"]) == 0
     _, _, checks = run_static(str(dst))
     z = checks["c1_zero_content"]["indices"]["processor.1"]
     assert z["zero_heads"] == [] and z["node_dst_mlp.zero_units"] == []
@@ -197,6 +207,42 @@ def test_revive_roundtrip(ckpt, tmp_path):
     assert "optimizer_states" not in ck
     shadow = ck["callbacks"]["EMA"]["shadows"][10000]
     assert torch.equal(shadow["model.processor.proc.1.node_dst_mlp.0.weight"], sd["model.model.processor.proc.1.node_dst_mlp.0.weight"])
+
+
+def _toy_cases(root):
+    from health.forward_checks import Case, CaseResult
+
+    cases = []
+    for seed in range(4):
+        x0, ea, ei = _graph(seed)
+
+        def run(input_grad, perturb, seed, x0=x0, ea=ea, ei=ei):
+            x = x0.clone() + (perturb * torch.randn_like(x0) if perturb else 0)
+            x.requires_grad_(input_grad)
+            y = root.model(x, ea, ei)
+            return CaseResult(loss=y.pow(2).mean(), output=y, inputs={"x": x}, output_vars=[f"v{i}" for i in range(C)])
+
+        cases.append(Case(label=f"toy{seed}", sigma=1.0, run=run))
+    return cases
+
+
+def test_forward_identical_with_gradient_checkpointing(ckpt):
+    """anemoi checkpoints its blocks by default: hooks fire twice per forward. Results must not change."""
+    from health.forward_checks import run_grad_pass
+
+    _, lit = ckpt
+    root = lit.model
+    plain = run_grad_pass(root, _toy_cases(root), "cpu")
+    Wrap.use_checkpoint = True
+    try:
+        ck = run_grad_pass(root, _toy_cases(root), "cpu")
+    finally:
+        Wrap.use_checkpoint = False
+    assert ck["c2_grad_dead"]["indices"] == plain["c2_grad_dead"]["indices"]
+    for cid in ("c4_preact", "c7_stream"):
+        for role, m in plain[cid]["per_role"].items():
+            for k, v in m.items():
+                assert ck[cid]["per_role"][role][k] == pytest.approx(v, rel=1e-6), (cid, role, k)
 
 
 def test_forward_engine(ckpt):
@@ -293,5 +339,82 @@ def test_optimizer_map_two_groups_and_frozen(tmp_path):
     o = checks["c3_optimizer_dead"]
     assert o["mapping_complete"], o
     assert o["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] == GRAD_DEAD
-    assert o["agreement"]["processor.1"]["node_dst_mlp"]["all3"] == len(GRAD_DEAD) + len(ZERO_UNITS)
-    assert all(k.endswith(("q_norm.weight", "k_norm.weight", "_dest.weight", "_dest.bias")) for k in o["unmapped_examples"])
+    assert o["agreement"]["processor.1"]["node_dst_mlp"]["all"] == len(GRAD_DEAD) + len(ZERO_UNITS)
+    assert o["mapping"] == "exact"
+    assert all(k.endswith(("q_norm.weight", "k_norm.weight")) for k, _ in o["unmapped"])
+
+
+def _add_metadata(path, config):
+    """Append anemoi-metadata/anemoi.json to a torch zip, as anemoi does."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as zf:
+        root = zf.namelist()[0].split("/")[0]
+    with zipfile.ZipFile(path, "a") as zf:
+        zf.writestr(f"{root}/anemoi-metadata/anemoi.json", json.dumps({"config": config}))
+
+
+def _train(lit, groups, steps=2):
+    opt = torch.optim.AdamW(groups, lr=1e-3, weight_decay=0, betas=(0.9, 0.95))
+    x, ea, ei = _graph()
+    for _ in range(steps):
+        opt.zero_grad()
+        lit.model.model(x, ea, ei).pow(2).mean().backward()
+        opt.step()
+    return opt
+
+
+def test_frozen_block_is_ambiguous_without_config_and_exact_with_it(tmp_path):
+    """A frozen processor block shares every shape with the next block: without the config the mapping must say
+    AMBIGUOUS; with training.submodules_to_freeze naming it, the block is excluded and the mapping is exact."""
+    from health.static_checks import run_static
+
+    torch.manual_seed(2)
+    lit = Lit()
+    _plant(lit)
+    for prm in lit.model.model.processor.proc[0].parameters():
+        prm.requires_grad_(False)
+    opt = _train(lit, [p for p in lit.parameters() if p.requires_grad])
+    p = tmp_path / "frozen_block.ckpt"
+    torch.save({"global_step": 2, "state_dict": lit.state_dict(), "optimizer_states": [opt.state_dict()]}, p)
+    _, _, checks = run_static(str(p))
+    assert checks["c3_optimizer_dead"]["mapping"] == "AMBIGUOUS"
+    _add_metadata(p, {"training": {"submodules_to_freeze": ["proc.0"]}})
+    _, _, checks = run_static(str(p))
+    o = checks["c3_optimizer_dead"]
+    assert o["mapping"] == "exact", o["unmapped"]
+    assert o["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] == GRAD_DEAD
+    assert o["window_min_steps"] and 1000 < o["window_min_steps"] < 3000  # beta2 0.95: ~1.5k steps
+
+
+def test_soap_uses_gg_diagonals(tmp_path):
+    """SOAP: exp_avg_sq of matrices lives in a rotated basis; the per-unit record is diag(GG). Rotate exp_avg_sq to
+    make it useless per unit and check the dead units still come out of GG."""
+    from health.static_checks import run_static
+
+    torch.manual_seed(3)
+    lit = Lit()
+    _plant(lit)
+    opt = _train(lit, list(lit.parameters()), steps=1)
+    x, ea, ei = _graph()
+    opt.zero_grad()
+    lit.model.model(x, ea, ei).pow(2).mean().backward()
+    sd = opt.state_dict()
+    params = list(lit.parameters())
+    for i, prm in enumerate(params):
+        s = sd["state"][i]
+        g = prm.grad.detach()
+        if g.dim() == 2:
+            s["GG"] = [g @ g.T, g.T @ g]
+            q, _ = torch.linalg.qr(torch.randn(g.shape[0], g.shape[0]))
+            s["exp_avg_sq"] = (q @ s["exp_avg_sq"]).abs() + 1e-9  # rotated: no zero rows left
+        else:
+            s["GG"] = [[]]
+        s["Q"] = None
+    p = tmp_path / "soap.ckpt"
+    torch.save({"global_step": 2, "state_dict": lit.state_dict(), "optimizer_states": [sd]}, p)
+    _, _, checks = run_static(str(p))
+    o = checks["c3_optimizer_dead"]
+    assert o["optimizer"] == "soap"
+    assert o["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] == GRAD_DEAD
+    assert set(o["agreement"]["processor.1"]["node_dst_mlp"]) == {"bias", "w1_row", "w2_col", "all"}

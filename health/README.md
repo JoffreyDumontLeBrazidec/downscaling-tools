@@ -46,7 +46,7 @@ so models of different widths read on the same bands.
 | # | Check | Needs | Reads |
 |---|---|---|---|
 | 1 | zero-content heads and units; NaN/Inf; EMA `*_dest` alias mismatch | file | head dead = q, k, v, self, edge rows and projection columns all exactly 0; unit dead = W1 row and W2 column 0 |
-| 3 | gradient-dead from the optimizer state | training file (by_step) | unit dead = second moment exactly 0 on its bias (AdamW: also on W1 row and W2 column, which must agree) = no gradient since the optimizer state was created; head = q, k, v bias moments 0. Zero-content units are not counted twice. Muon and SOAP: the bias criterion only |
+| 3 | gradient-dead from the optimizer state | training file (by_step) | unit dead = second moment exactly 0 on its bias, and on its W1 row and W2 column (AdamW: `exp_avg_sq`; SOAP: the diagonals of `GG`, since its `exp_avg_sq` is in a rotated basis; Muon: bias only). A zero moment means no gradient for at least the WINDOW printed in the summary (the moment underflows: ~1.5k steps at beta2 0.95, ~70k at 0.999), not "for the whole run". Head = q, k, v bias moments 0. Zero-content units are not counted twice |
 | 6 | scale ladders | file | weight RMS over nn.Linear init RMS; QK gains; edge-logit scale per head (s11 ladder: healthy < 0.2, growing > 0.5); LayerNorm gains (exact 0 = dead channel); low-norm units (row norm < 0.2 x median) |
 | 2 | gradient-dead on K batches (GraMa) | GPU | per unit / head mean abs gradient per case; dead = exactly 0 on all K, dormant = 0 or < 1e-3 of the layer mean on >= 3/4 of the cases |
 | 4 | pre-activation saturation | GPU | per unit over all nodes: max < -5.55 (GELU output exactly 0), max < -14 (gradient exactly 0), min > 0 (linear) |
@@ -68,12 +68,17 @@ smoke tier S, the in-training callback tier T (deferred by the owner: no chain r
 
 - `grad_dead_unit_frac` needs the optimizer state: inference and EMA files carry none, so audit the by_step file.
   "0 zero-weight units" does not mean no dead units (DB300: 0 zero-weight, 125 gradient-dead in processor block 2).
-- The optimizer state is matched to names by position and shape. `optimizer map: N/N states named (complete)` and,
-  for AdamW, the bias / W1-row / W2-column counts agreeing (`agreement` in the JSON) are the proof the labels are right.
+- The optimizer state is matched to names by position and shape, after removing buffers, aliases and what the config
+  freezes (`submodules_to_freeze`, `freeze_qk_gains`). `optimizer map: ... exact` is the proof the labels are right;
+  `AMBIGUOUS` means a tensor without a state shares a shape with a state (a frozen block the config does not name), so
+  every name after it may be shifted: do not quote gradient-dead indices from such a file. The bias / W1-row /
+  W2-column counts agreeing (`agreement` in the JSON) is a second check.
 - A dead unit costs nothing in the forward (its output is exactly 0) but is capacity paid for and unused.
 - Revival is by hand: `python -m health revive` redraws the input side (W1 row, head input rows) from nn.Linear's
-  init and zeroes the output side, so the step-0 function is unchanged; then warm start from the new file. Never
-  revive inside a running chain.
+  init and zeroes the output side, then warm start from the new file. The function is unchanged only where the unit's
+  output was exactly 0: always for zero-weight units and heads; for gradient-dead units only with check-4 evidence
+  (`never_fires`, from an audit with `--gpu`), else they are skipped unless `--unproven`. Gradient-dead heads are not
+  revived. It refuses when the optimizer mapping is not exact. Never revive inside a running chain.
 
 ## Origin
 
