@@ -114,7 +114,7 @@ def test_probabilistic_evaluator_writes_outputs(tmp_path: Path) -> None:
     assert (out_dir / "plots" / "rank_histograms.pdf").exists()
     assert not (out_dir / "plots" / "band_scores.pdf").exists()
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
-    assert payload["schema_version"] == "1.2" and payload["scale_split"]["enabled"] is False
+    assert payload["schema_version"] == "1.3" and payload["scale_split"]["enabled"] is False
     assert payload["bands"] == ["full"]
     # no interval from two dates of a degenerate (error 0) ensemble; the columns are there
     assert "spread_skill_ratio_corrected_lo95" in r and "spread_skill_ratio_corrected_se" in r
@@ -315,3 +315,73 @@ def test_probabilistic_reference_compare_writes_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.csv").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.json").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_overlay.pdf").exists()
+
+
+def _write_residual_prediction(path: Path, *, seed: int, n_members: int = 6, paired_input: bool = False) -> None:
+    """Truth = input + a 2,000 km change + unit noise; members = input + HALF that change + their own noise."""
+    rng = np.random.default_rng(seed)
+    lat1 = np.arange(20.0, 60.0, 0.5)
+    lon1 = np.arange(-50.0, 10.0, 0.6)
+    lon_g, lat_g = np.meshgrid(lon1, lat1)
+    lat, lon = lat_g.ravel().astype(np.float32), lon_g.ravel().astype(np.float32)
+    n = lat.size
+    x_km = (lon - lon.mean()) * 111.2 * np.cos(np.deg2rad(lat))
+    change = 3.0 * np.sin(2 * np.pi * x_km / 2000.0 + seed)
+    inp = 280.0 + 10.0 * np.cos(2 * np.pi * x_km / 3000.0)
+    truth = inp + change + rng.standard_normal(n)
+    members = np.stack([inp + 0.5 * change + rng.standard_normal(n) for _ in range(n_members)])
+    x_interp = np.broadcast_to(inp, (n_members if paired_input else 1, n))
+    ds = xr.Dataset({
+        "y_pred": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), members[None, ..., None]),
+        "y": (("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+              np.broadcast_to(truth, (1, n_members, n))[..., None].copy()),
+        "x_interp": (("sample", "input_member", "grid_point_hres", "weather_state"), x_interp[None, ..., None].copy()),
+        "lat_hres": (("grid_point_hres",), lat),
+        "lon_hres": (("grid_point_hres",), lon),
+    }, coords={"sample": [0], "ensemble_member": np.arange(1, n_members + 1), "grid_point_hres": np.arange(n),
+               "weather_state": np.array(["2t"], dtype=object)})
+    ds.to_netcdf(path)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("paired_input", [False, True])
+def test_residual_bands_separate_large_scale_correction_from_fine_detail(tmp_path: Path, paired_input: bool) -> None:
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    for k, date in enumerate(("20230816", "20230817", "20230818")):
+        _write_residual_prediction(pred_dir / f"predictions_{date}_step048.nc", seed=k, paired_input=paired_input)
+    out_dir = tmp_path / "evaluators" / "probabilistic"
+    run(pred_dir, {}, {"weather_states": ["2t"], "domains": ["global"], "scale_split": True}, output_dir=out_dir)
+    with (out_dir / "residual_bands_by_lead.csv").open(newline="") as f:
+        rows = {r["band"]: r for r in csv.DictReader(f)}
+    assert set(rows) == {"full_inner", "large", "fine"}
+    large, fine = rows["large"], rows["fine"]
+    # an input copied once per member is read as one input
+    assert large["n_dates"] == "3" and large["n_input_members"] == "1"
+    # the model's large-scale change goes towards the truth's, at half its amplitude
+    assert float(large["residual_corr"]) > 0.95
+    assert abs(float(large["ens_mean_amplitude_ratio"]) - 0.5) < 0.05
+    # so its large-scale error is half the input's: a correction, not drift
+    assert abs(float(large["error_over_input"]) - 0.5) < 0.06
+    # the fine detail is independent noise: no correlation, member amplitude like the truth's
+    assert abs(float(fine["residual_corr"])) < 0.15
+    assert abs(float(fine["amplitude_ratio"]) - 1.0) < 0.05
+    # the 2,000 km change dominates the truth's residual (variance 4.5 against about 0.9 of fine noise)
+    assert float(large["share_of_truth_residual"]) > 0.75 and float(fine["share_of_truth_residual"]) < 0.25
+    payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
+    assert payload["residual_bands_csv"].endswith("residual_bands_by_lead.csv")
+    plot(out_dir, {}, {})
+    assert (out_dir / "plots" / "residual_bands.pdf").exists()
+
+
+def test_no_residual_bands_without_scale_split(tmp_path: Path) -> None:
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    _write_residual_prediction(pred_dir / "predictions_20230816_step048.nc", seed=0)
+    out_dir = tmp_path / "evaluators" / "probabilistic"
+    run(pred_dir, {}, {"weather_states": ["2t"], "domains": ["global"]}, output_dir=out_dir)
+    assert not (out_dir / "residual_bands_by_lead.csv").exists()
+    payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
+    assert payload["residual_bands_csv"] is None and "scale_split off" in payload["residual_bands_note"]

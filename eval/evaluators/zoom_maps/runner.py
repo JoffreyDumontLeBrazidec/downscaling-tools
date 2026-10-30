@@ -10,7 +10,11 @@ Given one predictions directory it renders, for every region in the lane's own
 configuration and every variable asked for, the driving O320 input, the embedded
 same-index ENFO member as truth, and this run's prediction. It does that twice:
 once as the field itself and once as `--field fine`, the high-pass view that
-shows only the detail the O320 driver could not carry.
+shows only the detail the O320 driver could not carry. Then, once per region, date,
+step and member, the `layouts` (default `scales` and `fronts`, core/scale_maps.py):
+the residuals against the input split at `scale_cut_km` (400 km) into the large-scale
+change and the fine detail, truth and model side by side, and the trough and front view
+(wind with arrows, temperature, its gradient, msl isobars). `layouts: []` turns them off.
 
 The lane block is `zoom_maps:`. A lane that still holds the older `membermaps:`
 block and no `zoom_maps:` block has that block read instead (`eval.cli evaluate`
@@ -33,6 +37,10 @@ LOG = logging.getLogger(__name__)
 
 DEFAULT_VARIABLES = ["wind10m", "msl", "2t"]
 DEFAULT_FIELDS = ["value", "fine"]
+# Multi-variable figures drawn once per region, date, step and member besides the per-variable
+# panels: the large/fine split of the residuals against the input, and the trough and front view
+# (core/scale_maps.py). A read only; the outputs are never filtered (ablation note s15.10).
+DEFAULT_LAYOUTS = ["scales", "fronts"]
 # A ceiling on one invocation, so a careless config cannot quietly ask for
 # thousands of panels. Each combination opens a multi-gigabyte prediction file.
 MAX_COMBINATIONS = 120
@@ -100,14 +108,16 @@ def run(
     fine_cut_deg = float(eval_config.get("fine_cut_deg", 0.6))
     arm = str(eval_config.get("arm_label") or run_label or "model")
     regions = _regions(lane_config, eval_config)
+    layouts = [str(v) for v in (eval_config.get("layouts") if eval_config.get("layouts") is not None else DEFAULT_LAYOUTS)]
+    scale_cut_km = float(eval_config.get("scale_cut_km", 400.0))
     model_word = "Model" if arm.lower() == "model" else f"Model, {arm}"
 
-    combos = len(dates) * len(steps) * len(members) * len(variables) * len(fields) * len(regions)
+    combos = len(dates) * len(steps) * len(members) * (len(variables) * len(fields) + len(layouts)) * len(regions)
     if combos > MAX_COMBINATIONS:
         raise ValueError(
             f"zoom_maps was asked for {combos} renders "
             f"({len(dates)} dates x {len(steps)} steps x {len(members)} members x "
-            f"{len(variables)} variables x {len(fields)} fields x {len(regions)} regions), "
+            f"({len(variables)} variables x {len(fields)} fields + {len(layouts)} layouts) x {len(regions)} regions), "
             f"above the {MAX_COMBINATIONS} ceiling. Narrow the zoom_maps block (or the older membermaps block) in the lane "
             f"config, or raise the ceiling deliberately."
         )
@@ -149,6 +159,21 @@ def run(
                             LOG.info("zoom_maps: %s", " ".join(argv))
                             zoom_maps_run(build_arg_parser().parse_args(argv))
                             written += 1
+                    for layout in layouts:
+                        argv = [
+                            "--layout", layout,
+                            "--run", f"{arm}={predictions_dir}",
+                            "--title", f"{arm}={model_word} (O1280)",
+                            "--scale-cut-km", str(scale_cut_km),
+                            "--date", date,
+                            "--step", str(step),
+                            "--member", str(member),
+                            "--region-tag", region_name,
+                            "--output-dir", str(region_dir),
+                        ] + _extent_args(box)
+                        LOG.info("zoom_maps: %s", " ".join(argv))
+                        zoom_maps_run(build_arg_parser().parse_args(argv))
+                        written += 1
 
     LOG.info("zoom_maps: %d renders over %d region(s) into %s",
              written, len(regions), output_dir)

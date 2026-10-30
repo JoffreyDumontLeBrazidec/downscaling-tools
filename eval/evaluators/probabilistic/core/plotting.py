@@ -292,3 +292,72 @@ def plot_band_scores(calibration_csv: str | Path, output_pdf: str | Path, *, lan
                  "bands are not additive (P_L is a taper): full field on inner points is not large + fine",
     )
     return Path(output_pdf)
+
+
+# ----------------------------------------------------------------- residual bands
+
+_RESIDUAL_BAND_STYLE = {"large": "-", "fine": "--"}
+
+
+def plot_residual_bands(residual_csv: str | Path, output_pdf: str | Path, *, title: str | None = None,
+                        cut_km: float | None = None) -> Path | None:
+    """One page per variable: the residuals against the input by band and lead (``residual_bands_by_lead.csv``).
+
+    Columns: how far truth and model are from the input (rms), whether the model's change goes
+    towards the truth's (uncentred correlation of the ensemble-mean residual with the truth's),
+    and the ensemble-mean error over the input's error (below 1: the model beats the input in
+    that band). Rows: regions. Solid lines the large part, dashed the fine part. A read only;
+    the model outputs are never filtered. Returns ``None`` when the CSV is absent.
+    """
+    import matplotlib.pyplot as plt
+
+    from eval.plotting.roles import INPUT_COLOR, MODEL_COLOR, NEUTRAL_COLOR, TRUTH_COLOR
+    from eval.plotting.style import FigureBook, eval_style
+    from eval.plotting.variables import variable_spec
+
+    residual_csv = Path(residual_csv)
+    rows = _read_csv(residual_csv) if residual_csv.exists() else []
+    if not rows:
+        return None
+    cut = f"{cut_km:.0f} km" if cut_km else "the cut"
+    output_pdf = Path(output_pdf)
+    with eval_style():
+        with FigureBook(output_pdf, png=True) as book:
+            for var in dict.fromkeys(r["weather_state"] for r in rows):
+                sub = [r for r in rows if r["weather_state"] == var]
+                domains = list(dict.fromkeys(r["domain"] for r in sub))
+                fig, axes = plt.subplots(len(domains), 3, squeeze=False, figsize=(13.0, 3.0 * len(domains) + 1.4))
+                spec = variable_spec(var)
+                for i, dom in enumerate(domains):
+                    for band, ls in _RESIDUAL_BAND_STYLE.items():
+                        rs = sorted((r for r in sub if r["domain"] == dom and r["band"] == band), key=lambda r: int(r["step"]))
+                        if not rs:
+                            continue
+                        lead = [int(r["step"]) for r in rs]
+                        word = f"above {cut}" if band == "large" else f"below {cut}"
+                        col = lambda key: [_float(r, key, float("nan")) for r in rs]  # noqa: E731
+                        axes[i, 0].plot(lead, col("truth_minus_input_rms"), ls, color=TRUTH_COLOR, marker="o",
+                                        label=f"truth - input, {word}")
+                        axes[i, 0].plot(lead, col("ens_mean_minus_input_rms"), ls, color=MODEL_COLOR, marker="o",
+                                        label=f"ensemble mean - input, {word}")
+                        axes[i, 1].plot(lead, col("residual_corr"), ls, color=MODEL_COLOR, marker="o", label=word)
+                        axes[i, 2].plot(lead, col("error_over_input"), ls, color=MODEL_COLOR, marker="o", label=word)
+                    axes[i, 1].axhline(0.0, color=NEUTRAL_COLOR, linewidth=1.0)
+                    axes[i, 2].axhline(1.0, color=INPUT_COLOR, linewidth=1.0, label="input (no change)")
+                    axes[i, 0].set_ylabel(f"{dom}\nrms ({spec.unit})" if spec.unit else f"{dom}\nrms")
+                    axes[i, 1].set_ylabel("correlation")
+                    axes[i, 2].set_ylabel("ens-mean error / input error")
+                    for ax in axes[i]:
+                        ax.set_xlabel("lead time (h)")
+                axes[0, 0].set_title("distance from the input\n(rms)", fontsize=10)
+                axes[0, 1].set_title("model change vs truth change\n(1 = correction, 0 = drift of its own)", fontsize=10)
+                axes[0, 2].set_title("error over the input's error\n(below 1 = better than the input)", fontsize=10)
+                for ax in axes[0]:
+                    ax.legend(fontsize=7)
+                head = spec.name if spec.unit else str(var)
+                fig.suptitle(f"{head}: residuals against the input, large and fine parts "
+                             f"(n = {sub[0]['n_dates']} dates; read only, outputs are never filtered)"
+                             + (f"\n{title}" if title else ""), fontsize=11)
+                fig.tight_layout(rect=(0, 0, 1, 0.95))
+                book.add(fig, name=str(var))
+    return output_pdf

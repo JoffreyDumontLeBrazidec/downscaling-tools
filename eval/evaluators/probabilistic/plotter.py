@@ -8,6 +8,7 @@ from pathlib import Path
 from eval.evaluators.probabilistic.core import (
     plot_band_scores,
     plot_probabilistic_summary,
+    plot_residual_bands,
     plot_rank_histograms,
 )
 
@@ -22,7 +23,7 @@ def plot(
     output_dir: str | Path | None = None,
     **kwargs,
 ) -> Path:
-    """Render the lead-time curves, the rank histograms and, after a scale split, the band curves."""
+    """Render the lead-time curves, the rank histograms and, after a scale split, the band and residual-band curves."""
     results_dir = Path(results_dir)
     output_dir = Path(output_dir) if output_dir else results_dir
     plots_dir = output_dir / "plots"
@@ -58,4 +59,8 @@ def plot(
                                 cut_km=cut_km)
     if band_pdf is not None:
         LOG.info("Band scores written to %s", band_pdf)
+    residual_pdf = plot_residual_bands(results_dir / "residual_bands_by_lead.csv", plots_dir / "residual_bands.pdf",
+                                       title=None if title == "Probabilistic scores" else title, cut_km=cut_km)
+    if residual_pdf is not None:
+        LOG.info("Residual bands written to %s", residual_pdf)
     return out_pdf
