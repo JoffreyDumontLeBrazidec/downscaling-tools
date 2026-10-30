@@ -21,6 +21,7 @@ EVALUATOR_SPEC = {
     "requires": ["predictions"],
     "outputs": [
         "<region>/: one sub-directory per lane region holding the rendered maps (file names come from eval/evaluators/zoom_maps/core/plot_member_wind_maps.py).",
+        "<region>/<arm>_scales-full_*.png, <arm>_scales-resid-<var>_*.png, <arm>_fronts_*.png: the large/fine split of the residuals against the input and the trough and front view (eval/evaluators/zoom_maps/core/scale_maps.py; lane key layouts, default [scales, fronts]). Analysis only, outputs never filtered.",
     ],
 }
 

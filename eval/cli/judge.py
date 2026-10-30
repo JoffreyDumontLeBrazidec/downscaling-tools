@@ -10,7 +10,9 @@ read in the owner's order 1) physical structure 2) spectra 3) extremes 4) scores
    ``box_spectra``, ``probabilistic``, and ``precip_dist`` when the run predicts ``tp``;
 2. draws the fixed ``zoom_maps``: the Alps box (43-49 N, 4-16 E) on the Alps case and the storm
    box (12 degrees around the truth's msl minimum) on the storm case, the run and the reference
-   side by side, wind10m and 2t, value and fine part;
+   side by side, wind10m and 2t, value and fine part, then the ``scales`` layout (residuals
+   against the input split at 400 km into large-scale change and fine detail, truth and each
+   arm) and the ``fronts`` layout (wind, temperature, its gradient, isobars); analysis only;
 3. writes ``read.md``, a ``## Run read:`` section with the header (reference, instrument,
    sampler and seeds read from the files) and the four parts filled with the numbers above, or
    "Not available: <reason>" where an evaluator could not run. The verdict lines are left for
@@ -59,6 +61,7 @@ PROTOCOL_EVALUATORS = ["shape", "tc_structure", "texture", "wind_extremes", "box
                        "probabilistic"]
 MAP_VARIABLES = ["wind10m", "2t"]
 MAP_FIELDS = ["value", "fine"]
+MAP_LAYOUTS = ["scales", "fronts"]
 SPECTRA_TABLE_VARS = ["10u", "2t"]
 SCORE_VARS = ["10u", "10v", "10ff", "2t", "msl", "tp"]
 SCORE_BANDS = ["full", "full_inner", "large", "fine"]
@@ -317,6 +320,14 @@ def draw_maps(runs: dict[str, Path], out_dir: Path, *, date: str, step: int, mem
                          "--region-tag", tag, "--variable", var, "--field", field,
                          "--output-dir", str(box_dir)]
                 zm_run(build_arg_parser().parse_args(argv))
+        # the large/fine split of the residuals against the input, and the trough and front view
+        # (analysis only, the outputs are never filtered; ablation note s15.10)
+        for layout in MAP_LAYOUTS:
+            argv = [a for lab, d in runs.items() for a in ("--run", f"{lab}={d}")]
+            argv += ["--layout", layout, "--date", date, "--step", str(step), "--member", str(member),
+                     "--extent", str(lon_min), str(lon_max), str(lat_min), str(lat_max),
+                     "--region-tag", tag, "--output-dir", str(box_dir)]
+            zm_run(build_arg_parser().parse_args(argv))
     except Exception as exc:  # noqa: BLE001 - reported in the read
         return [], f"zoom_maps failed: {exc}"
     pngs = sorted(set(box_dir.glob("*.png")) - before) or sorted(box_dir.glob("*.png"))
@@ -355,7 +366,8 @@ def part_structure(arms: dict, maps: dict, shape_box: str, step: int) -> list[st
             folder = Path(pngs[0]).parent
             lines.append(f"- zoom_maps {tag}: `{folder}`, {len(pngs)} panels (input, truth, {run['label']}, "
                          f"{ref['label']}; wind10m and 2t; value and fine part; member {arms['member']}; one "
-                         "colour scale per variable and field). By eye: TODO")
+                         "colour scale per variable and field; plus the scales layout, residuals against the "
+                         "input split at 400 km for truth and each arm, and the fronts layout). By eye: TODO")
     a, b = _shape_rows(run["eval"] / "shape", step), _shape_rows(ref["eval"] / "shape", step)
     if a and b:
         lines += [f"- Shape, elongation of the residual's features (box {shape_box}, 40-109 km band, date-clustered "

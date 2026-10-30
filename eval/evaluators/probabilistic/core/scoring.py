@@ -29,6 +29,20 @@ What is computed, per prediction file (one date and lead), variable and region:
   comparable. The bands are NOT additive: ``P_L`` is a taper, so a score of ``full_inner`` is
   not the sum of ``large`` and ``fine``, and the band labels are never added up.
 
+* when ``scale_split`` is on and the files carry the input on the output grid (``x_interp``, one
+  member or one per prediction member), the residuals against the input split the same way
+  (``residual_bands_by_lead.csv``, bands ``full_inner`` / ``large`` / ``fine``): how far the
+  truth is from the input in each band (``truth_minus_input_rms``: in the large band the
+  synoptic drift between the two forecasts, ablation note section 15), how far the model moves
+  from it (``model_minus_input_rms`` per member, ``ens_mean_minus_input_rms`` for the ensemble
+  mean), the ratio of the two, the uncentred correlation of the ensemble-mean residual with the
+  truth's (``residual_corr``: near 1 the model's change goes towards the truth, a correction;
+  near 0 it is drift of its own), the band's share of the truth's residual, and the
+  ensemble-mean error over the input's error (``error_over_input``, below 1 the model beats
+  the input in that band). It separates the two jobs the model does at once, large-scale
+  correction and fine-scale detail; it is a read only, the outputs are never filtered
+  (owner's ruling, 30 Oct 2026, ablation note section 15.10).
+
 House conventions. Precipitation (``tp``, ``cp``) is clipped at zero in members and truth
 before any score: a sampler can write small negative rain, and the scores are defined on
 the physical field (``PRECIP_FIELDS``). The files hold tp and cp in METRES of accumulated
@@ -94,6 +108,11 @@ BANDS = ("full", "full_inner", "large", "fine")
 INNER_BANDS = ("full_inner", "large", "fine")
 BAND_METRICS = ("fcrps", "crps", "spread_rms", "rmse_ens_mean", "ms_spread", "ms_err")
 INPUT_VARIABLE = "x_interp"
+RESIDUAL_BANDS = INNER_BANDS
+RESIDUAL_COLUMNS = ("step", "weather_state", "domain", "band", "n_members", "n_input_members", "n_dates",
+                    "n_points_total", "truth_minus_input_rms", "model_minus_input_rms", "ens_mean_minus_input_rms",
+                    "amplitude_ratio", "ens_mean_amplitude_ratio", "residual_corr", "share_of_truth_residual",
+                    "rmse_ens_mean", "error_over_input")
 
 
 def _as_list(value: Any, *, cast=str) -> list[Any]:
@@ -386,6 +405,99 @@ def _input_members(ds: xr.Dataset, include_input: bool) -> tuple[xr.DataArray | 
                 "note": "inter-member spread of the input members per band (spread_input_rms)"}
 
 
+def _input_reference(ds: xr.Dataset, n_pred: int) -> tuple[xr.DataArray | None, str]:
+    """The input on the output grid for the residuals: one member, or one per prediction member."""
+    if INPUT_VARIABLE not in ds:
+        return None, f"files carry no {INPUT_VARIABLE}: no residual bands"
+    da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
+    n = int(da.sizes["member"])
+    if n not in (1, n_pred):
+        return None, f"{INPUT_VARIABLE} has {n} members for {n_pred} prediction members: no residual bands"
+    return da, ("one input for every member" if n == 1 else "input member k paired with prediction member k")
+
+
+class PooledResiduals:
+    """Area-weighted mean squares of the residuals against the input, pooled over dates (each date once)."""
+
+    _KEYS = ("truth", "model", "ens_mean", "truth_mean", "cross", "error")
+
+    def __init__(self) -> None:
+        self.sums = dict.fromkeys(self._KEYS, 0.0)
+        self.n_dates = 0
+        self.n_points_total = 0
+        self.n_members = 0
+        self.n_input_members = 0
+
+    def add_date(self, values: dict[str, float], *, n_points: int, n_members: int, n_input_members: int) -> None:
+        if not all(math.isfinite(values[k]) for k in self._KEYS):
+            return
+        for k in self._KEYS:
+            self.sums[k] += float(values[k])
+        self.n_dates += 1
+        self.n_points_total += int(n_points)
+        self.n_members, self.n_input_members = int(n_members), int(n_input_members)
+
+    def summary(self, full_truth_ms: float | None) -> dict[str, Any]:
+        m = {k: v / self.n_dates for k, v in self.sums.items()} if self.n_dates else dict.fromkeys(self._KEYS, math.nan)
+
+        def ratio(a: float, b: float) -> float:
+            return a / b if b > 0 and math.isfinite(a) else math.nan
+
+        den = math.sqrt(m["ens_mean"] * m["truth_mean"]) if m["ens_mean"] >= 0 and m["truth_mean"] >= 0 else math.nan
+        return {
+            "n_members": self.n_members, "n_input_members": self.n_input_members,
+            "n_dates": self.n_dates, "n_points_total": self.n_points_total,
+            "truth_minus_input_rms": math.sqrt(m["truth"]),
+            "model_minus_input_rms": math.sqrt(m["model"]),
+            "ens_mean_minus_input_rms": math.sqrt(m["ens_mean"]),
+            "amplitude_ratio": ratio(math.sqrt(m["model"]), math.sqrt(m["truth"])),
+            "ens_mean_amplitude_ratio": ratio(math.sqrt(m["ens_mean"]), math.sqrt(m["truth_mean"])),
+            "residual_corr": ratio(m["cross"], den),
+            "share_of_truth_residual": ratio(m["truth"], full_truth_ms) if full_truth_ms is not None else math.nan,
+            "rmse_ens_mean": math.sqrt(m["error"]),
+            "error_over_input": ratio(math.sqrt(m["error"]), math.sqrt(m["truth_mean"])),
+        }
+
+    @property
+    def mean_truth(self) -> float:
+        return self.sums["truth"] / self.n_dates if self.n_dates else math.nan
+
+
+def _residual_band_values(
+    pred_values: np.ndarray,
+    truth_point: np.ndarray,
+    ref_values: np.ndarray,
+    operator: LowPassOperator,
+    large_pred: np.ndarray,
+    large_truth: np.ndarray,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """``{band: (model residuals (m, n), truth residuals (k, n))}`` against the input, per inner band.
+
+    ``ref_values`` holds one input (k = 1, used for every member) or one per member (k = m).
+    The large part of a residual is ``P_L(pred) - P_L(input)``: ``P_L`` is linear, so the
+    members' large parts already computed for the band scores are reused.
+    """
+    large_ref = np.stack([operator.apply(r) for r in ref_values])
+    full_m, full_t = pred_values - ref_values, truth_point[None] - ref_values
+    large_m, large_t = large_pred - large_ref, large_truth[None] - large_ref
+    return {"full_inner": (full_m, full_t), "large": (large_m, large_t),
+            "fine": (full_m - large_m, full_t - large_t)}
+
+
+def _residual_moments(model_res: np.ndarray, truth_res: np.ndarray, w: np.ndarray) -> dict[str, float]:
+    """Area-weighted mean squares of one date (``w`` zero outside the mask)."""
+    ens = model_res.mean(axis=0)
+    tru = truth_res.mean(axis=0)
+    return {
+        "truth": float(np.mean([_weighted_mean(np.square(t), w) for t in truth_res])),
+        "model": float(np.mean([_weighted_mean(np.square(r), w) for r in model_res])),
+        "ens_mean": _weighted_mean(np.square(ens), w),
+        "truth_mean": _weighted_mean(np.square(tru), w),
+        "cross": _weighted_mean(ens * tru, w),
+        "error": _weighted_mean(np.square(ens - tru), w),
+    }
+
+
 # ---------------------------------------------------------------------- main entry
 
 def compute_probabilistic_scores(
@@ -459,6 +571,8 @@ def compute_probabilistic_scores(
     operator: LowPassOperator | None = None
     operator_key: tuple | None = None
     n_members_seen: set[int] = set()
+    residuals: dict[tuple[int, str, str, str], PooledResiduals] = defaultdict(PooledResiduals)
+    residual_note = "scale_split off: no residual bands"
 
     for pred in pred_files:
         with xr.open_dataset(pred.path, cache=False, decode_timedelta=False) as ds:
@@ -471,6 +585,9 @@ def compute_probabilistic_scores(
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
             x_in, note = _input_members(ds, include_input)
             input_note = input_note or note
+            x_ref = None
+            if scale_split:
+                x_ref, residual_note = _input_reference(ds, int(y_pred.sizes["member"]))
             ws_index = _weather_state_index(ds)
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
@@ -514,6 +631,22 @@ def compute_probabilistic_scores(
                 n_members_seen.add(n_members)
 
                 bands = _band_fields(pred_values, truth_point, input_values, operator)
+                ref_values = _clip_precip(field, _select_field(x_ref, ws_index, field)) if x_ref is not None else None
+                if ref_values is not None and ref_values.shape[0] > 1 and np.array_equal(ref_values, np.broadcast_to(ref_values[:1], ref_values.shape), equal_nan=True):
+                    ref_values = ref_values[:1]      # one input copied per member (conv/ files): low-pass it once
+                if ref_values is not None and operator is not None:
+                    res_bands = _residual_band_values(pred_values, truth_point, ref_values, operator,
+                                                      bands["large"][0], bands["large"][1])
+                    for band, (model_res, truth_res) in res_bands.items():
+                        for domain_name, mask in band_masks.items():
+                            valid = mask & np.all(np.isfinite(model_res), axis=0) & np.all(np.isfinite(truth_res), axis=0)
+                            if not np.any(valid):
+                                continue
+                            residuals[(int(pred.step), field, domain_name, band)].add_date(
+                                _residual_moments(model_res, truth_res, np.where(valid, weights, 0.0)),
+                                n_points=int(valid.sum()), n_members=int(pred_values.shape[0]),
+                                n_input_members=int(ref_values.shape[0]))
+                    del res_bands
                 pieces: dict[str, Any] = {}
                 for band, (members, truth, input_members) in bands.items():
                     masks = domain_masks if band == "full" else band_masks
@@ -590,6 +723,11 @@ def compute_probabilistic_scores(
         for (step, ws, domain, band), moments in sorted(pooled.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], BANDS.index(kv[0][3])))
         if moments.n_dates
     ]
+    residual_rows = []
+    for (step, ws, domain, band), pooled_res in sorted(residuals.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], RESIDUAL_BANDS.index(kv[0][3]))):
+        whole = residuals.get((step, ws, domain, "full_inner"))
+        residual_rows.append({"step": step, "weather_state": ws, "domain": domain, "band": band,
+                              **pooled_res.summary(whole.mean_truth if whole is not None else None)})
     n_bins_max = max((c.size for c in hist_counts.values()), default=0)
     hist_rows = []
     for (step, ws, domain), counts in sorted(hist_counts.items()):
@@ -612,6 +750,7 @@ def compute_probabilistic_scores(
     band_csv = output_dir / "band_scores_by_lead.csv"
     calibration_csv = output_dir / "calibration_by_lead.csv"
     hist_csv = output_dir / "rank_histograms.csv"
+    residual_csv = output_dir / "residual_bands_by_lead.csv"
     skipped_json = output_dir / "skipped.json"
     summary_json = output_dir / "probabilistic_summary.json"
 
@@ -648,16 +787,20 @@ def compute_probabilistic_scores(
          "dry_threshold_mm", "false_drizzle_rate", "missed_rain_rate",
          *[f"bin_{i}" for i in range(n_bins_max)]],
     )
+    if residual_rows:
+        _write_csv(residual_csv, residual_rows, list(RESIDUAL_COLUMNS))
     skipped_json.write_text(json.dumps(skipped, indent=2) + "\n")
     n_members = max(n_members_seen) if n_members_seen else 0
     payload = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "predictions_dir": str(predictions_dir),
         "score_csv": str(score_csv),
         "summary_csv": str(summary_csv),
         "band_scores_csv": str(band_csv),
         "calibration_csv": str(calibration_csv),
         "rank_histograms_csv": str(hist_csv),
+        "residual_bands_csv": str(residual_csv) if residual_rows else None,
+        "residual_bands_note": residual_note,
         "n_files": len(pred_files),
         "n_rows": len(rows),
         "n_summary_rows": len(summary_rows),
