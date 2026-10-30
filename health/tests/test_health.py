@@ -449,3 +449,17 @@ def test_saturation_bound_proves_planted_units(ckpt, tmp_path):
     assert main(["revive", str(p), str(dst), "--audit", str(tmp_path / "a" / "audit.json")]) == 0
     w2 = torch.load(dst, weights_only=False)["state_dict"]["model.model.processor.proc.1.node_dst_mlp.2.weight"]
     assert torch.all(w2[:, GRAD_DEAD + ZERO_UNITS] == 0)
+
+
+def test_plain_unwraps_omegaconf_stubs():
+    from health.ckpt import Stub, plain
+
+    def node(v):
+        n = Stub()
+        n.__setstate__({"_val": v, "_metadata": None})
+        return n
+
+    lc = Stub()
+    lc.__setstate__({"_content": [node(0.9), node(0.95)], "_metadata": None})
+    assert plain(lc) == [0.9, 0.95]
+    assert plain({"betas": lc, "lr": 1e-4}) == {"betas": [0.9, 0.95], "lr": 1e-4}

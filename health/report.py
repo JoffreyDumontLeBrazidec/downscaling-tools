@@ -144,7 +144,10 @@ def summary_text(audit: dict) -> str:
     nf = c1.get("nonfinite") or {}
     bad = {k: v["values"] for k, v in nf.items() if v.get("values")}
     al = {k: v["mismatched"] for k, v in (c1.get("alias_mismatch") or {}).items() if v.get("mismatched")}
-    lines.append(f"  non-finite values: {bad or 'none'}; EMA alias mismatches: {al or 'none'}")
+    if not nf:
+        lines.append("  non-finite values and EMA alias mismatches: NOT READ (--skip-nonfinite)")
+    else:
+        lines.append(f"  non-finite values: {bad or 'none'}; EMA alias mismatches: {al or 'none'}")
     o = audit["checks"]["c3_optimizer_dead"]
     if o.get("states"):
         lines.append(

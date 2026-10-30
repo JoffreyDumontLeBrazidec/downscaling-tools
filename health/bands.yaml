@@ -34,8 +34,17 @@ rules:
   - match: "c3b_saturation_bound.*.ub_max_below_zero_frac"
     warn_above: 0
   # --- check 6: scale ladders ---------------------------------------------------------------------------------------
-  - match: "c6_scale.*.edge_logit_scale.max"   # s11 ladder: healthy < 0.2, growing > 0.5, trap > 80
-    warn_above: 0.5
+  # edge-logit scale (s11 ladder: trap > 80). First sweep 30 Oct (note s9): every DB-line block reads encoder 0.51-0.55,
+  # processor 0.50-0.85, decoder 1.73-1.96; inherited traps read encoder 6,878-17,090, decoder 4,371-13,480, processor
+  # blocks 0-1 3.1-127. The old 0.5 band fired on every healthy file.
+  - match: "c6_scale.encoder.edge_logit_scale.max"
+    warn_above: 1.0
+  - match: "c6_scale.processor.edge_logit_scale.max"
+    warn_above: 1.0
+  - match: "c6_scale.decoder.edge_logit_scale.max"
+    warn_above: 2.5
+  - match: "c6_scale.*.edge_logit_scale.max"
+    warn_above: 1.0
   - match: "c6_scale.*.zero_gain_frac"
     fail_above: 0
   - match: "c6_scale.*.low_gain_frac"

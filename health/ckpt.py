@@ -90,6 +90,25 @@ class LazyTensor:
         return _DTYPES.get(self.storage[0], "") in ("<f4", "<f8", "<f2", "bf16")
 
 
+def plain(o, depth: int = 0):
+    """Unwrap pickled OmegaConf containers (ListConfig/DictConfig/ValueNode stubs: state['_content'] or ['_val'])
+    into lists, dicts and scalars; anything else is returned as it is."""
+    if depth > 20:
+        return o
+    if isinstance(o, Stub):
+        st = o.state if isinstance(o.state, dict) else {}
+        if "_content" in st:
+            return plain(st["_content"], depth + 1)
+        if "_val" in st:
+            return plain(st["_val"], depth + 1)
+        return o
+    if isinstance(o, (list, tuple)):
+        return type(o)(plain(x, depth + 1) for x in o)
+    if isinstance(o, dict):
+        return {k: plain(v, depth + 1) for k, v in o.items()}
+    return o
+
+
 def _rebuild_tensor_v2(storage, storage_offset, size, stride, *rest, **kw):
     return LazyTensor(storage, storage_offset, size, stride)
 
@@ -294,7 +313,7 @@ class Reader:
             view.kind = "other"
         for g in groups:
             if isinstance(g, dict):
-                view.groups.append({k: g.get(k) for k in ("lr", "weight_decay", "betas", "use_muon", "shampoo_beta")} | {"n": len(g.get("params", []))})
+                view.groups.append({k: plain(g.get(k)) for k in ("lr", "weight_decay", "betas", "use_muon", "shampoo_beta")} | {"n": len(g.get("params", []))})
         if trainable is not None:
             # exact candidate list from the loaded model: named_parameters() order, aliases dropped, buffers absent,
             # requires_grad as the loader left it (state-dict names carry the Lightning 'model.' prefix)
