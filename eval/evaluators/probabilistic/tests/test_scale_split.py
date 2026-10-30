@@ -7,6 +7,7 @@ import pytest
 from eval.evaluators.probabilistic.core.scale_split import (
     KM_PER_DEG,
     LowPassOperator,
+    box_edge_mask,
     gaussian_power_transfer,
     inner_mask,
     is_global,
@@ -100,6 +101,18 @@ def test_inner_mask_flags_a_margin_only_on_regional_boxes():
     assert is_global(glat, glon) and inner_mask(glat, glon, 400.0).all()
     assert inner_mask(lat, lon, 0.0).all()
 
+
+
+def test_box_edge_mask_drops_a_one_degree_strip():
+    lat, lon = _box_points()
+    keep = box_edge_mask(lat, lon, 1.0)
+    assert keep[np.argmin(np.hypot(lat - 45.0, lon + 10.0))]
+    assert not keep[lat < lat.min() + 1.0].any() and not keep[lon > lon.max() - 1.0].any()
+    assert keep[(lat > lat.min() + 1.01) & (lat < lat.max() - 1.01)
+                & (lon > lon.min() + 1.01) & (lon < lon.max() - 1.01)].all()
+    glat = np.linspace(-89.9, 89.9, 400)
+    glon = np.linspace(-180.0, 179.0, 400)
+    assert box_edge_mask(glat, glon, 1.0).all() and box_edge_mask(lat, lon, 0.0).all()
 
 def test_global_coarse_set_handles_poles_and_dateline():
     # a coarse global reduced-grid-like set (about 110 km): empty 25 km cells everywhere,

@@ -7,7 +7,11 @@ from pathlib import Path
 from eval.evaluators.probabilistic.core import compute_probabilistic_scores
 from eval.evaluators.probabilistic.core.calibration import RANK_TIE_SEED
 from eval.evaluators.probabilistic.core.scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM
-from eval.evaluators.probabilistic.core.scoring import DEFAULT_DOMAINS, DEFAULT_WEATHER_STATES
+from eval.evaluators.probabilistic.core.scoring import (
+    DEFAULT_BOX_EDGE_DEG,
+    DEFAULT_DOMAINS,
+    DEFAULT_WEATHER_STATES,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -31,7 +35,8 @@ def run(
     Lane keys: ``weather_states``, ``domains``, ``steps``, ``dates``, ``spread_ddof``;
     ``scale_split`` (bool, default off: costs about three times the full-field scoring),
     ``scale_cut_km`` (400), ``scale_grid_km`` (25), ``scale_edge_margin_km`` (default the
-    cut); ``rank_histogram`` (bool, default on), ``rank_tie_seed``; ``include_input`` (bool,
+    cut), ``box_edge_deg`` (1: strip left out of every band on a regional box);
+    ``rank_histogram`` (bool, default on), ``rank_tie_seed``; ``include_input`` (bool,
     default on: the input members' spread when the files carry ``x_interp`` members).
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
@@ -52,6 +57,7 @@ def run(
     scale_cut_km = float(_or(eval_config.get("scale_cut_km"), DEFAULT_CUT_KM))
     scale_grid_km = float(_or(eval_config.get("scale_grid_km"), DEFAULT_GRID_KM))
     scale_edge_margin_km = eval_config.get("scale_edge_margin_km")
+    box_edge_deg = float(_or(eval_config.get("box_edge_deg"), DEFAULT_BOX_EDGE_DEG))
     rank_histogram = bool(_or(eval_config.get("rank_histogram"), True))
     rank_tie_seed = int(_or(eval_config.get("rank_tie_seed"), RANK_TIE_SEED))
     include_input = bool(_or(eval_config.get("include_input"), True))
@@ -68,6 +74,7 @@ def run(
         scale_cut_km=scale_cut_km,
         scale_grid_km=scale_grid_km,
         scale_edge_margin_km=None if scale_edge_margin_km is None else float(scale_edge_margin_km),
+        box_edge_deg=box_edge_deg,
         rank_histogram=rank_histogram,
         rank_tie_seed=rank_tie_seed,
         include_input=include_input,

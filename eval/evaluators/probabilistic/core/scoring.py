@@ -56,7 +56,10 @@ from .calibration import (
     tie_rng,
     truth_ranks,
 )
-from .scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM, LowPassOperator, inner_mask
+from .scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM, LowPassOperator, box_edge_mask, inner_mask
+
+# Strip dropped at a regional box edge in every band, as in the wide box kits (degrees).
+DEFAULT_BOX_EDGE_DEG = 1.0
 
 LOG = logging.getLogger(__name__)
 
@@ -361,6 +364,7 @@ def compute_probabilistic_scores(
     scale_cut_km: float = DEFAULT_CUT_KM,
     scale_grid_km: float = DEFAULT_GRID_KM,
     scale_edge_margin_km: float | None = None,
+    box_edge_deg: float = DEFAULT_BOX_EDGE_DEG,
     rank_histogram: bool = True,
     rank_tie_seed: int = RANK_TIE_SEED,
     include_input: bool = True,
@@ -370,7 +374,9 @@ def compute_probabilistic_scores(
     ``scale_split`` adds the large/fine band scores (``P_L`` with half-power wavelength
     ``scale_cut_km``, built on a ``scale_grid_km`` grid; points within
     ``scale_edge_margin_km`` of a regional box edge, default the cut, are left out of the
-    band scores). It costs about three times the full-field scoring (eleven low-pass
+    band scores). On a regional box every band, the full field included, also leaves out a
+    ``box_edge_deg`` strip at the box edge (default 1 degree, as the wide box kits do; the
+    edge is where the models differ most, so keeping it inflates gaps). It costs about three times the full-field scoring (eleven low-pass
     applications and two more CRPS passes per variable), so it is off unless asked for.
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
@@ -419,7 +425,8 @@ def compute_probabilistic_scores(
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
             lat, lon = _lat_lon(ds, n_points)
-            domain_masks = {name: _domain_mask(name, lat, lon) for name in domain_names}
+            edge = box_edge_mask(lat, lon, float(box_edge_deg))
+            domain_masks = {name: _domain_mask(name, lat, lon) & edge for name in domain_names}
 
             inner = np.ones(n_points, dtype=bool)
             if scale_split:
@@ -592,6 +599,7 @@ def compute_probabilistic_scores(
         "n_members": n_members,
         "spread_ddof": int(spread_ddof),
         "correction_factor": math.sqrt((n_members + 1.0) / n_members) if n_members else None,
+        "box_edge_deg": float(box_edge_deg),
         "scale_split": {
             "enabled": bool(scale_split),
             "edge_margin_km": edge_margin_km if scale_split else None,

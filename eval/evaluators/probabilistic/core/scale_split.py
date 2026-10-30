@@ -118,6 +118,22 @@ def inner_mask(lat: np.ndarray, lon: np.ndarray, margin_km: float) -> np.ndarray
             & (lon - lon.min() >= margin_deg_lon) & (lon.max() - lon >= margin_deg_lon))
 
 
+def box_edge_mask(lat: np.ndarray, lon: np.ndarray, edge_deg: float) -> np.ndarray:
+    """Points at least ``edge_deg`` degrees (latitude and longitude) inside a regional box.
+
+    The wide box kits drop a 1-degree strip at the E2 box edge before scoring; this is the
+    same strip, applied to every band. Every point of a global set is kept.
+    """
+    lat = np.asarray(lat, dtype=np.float64)
+    if is_global(lat, lon) or edge_deg <= 0.0:
+        return np.ones(lat.shape, dtype=bool)
+    lon180 = ((np.asarray(lon, dtype=np.float64) + 180.0) % 360.0) - 180.0
+    lon360 = lon180 % 360.0
+    lon = lon180 if np.ptp(lon180) <= np.ptp(lon360) else lon360
+    return ((lat - lat.min() >= edge_deg) & (lat.max() - lat >= edge_deg)
+            & (lon - lon.min() >= edge_deg) & (lon.max() - lon >= edge_deg))
+
+
 def _pole_pad(grid: np.ndarray, rows: int) -> np.ndarray:
     """Continue a (lat, lon) grid across both poles: mirrored rows shifted by 180 degrees."""
     n_lon = grid.shape[1]
