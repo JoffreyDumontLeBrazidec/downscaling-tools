@@ -114,7 +114,13 @@ def test_probabilistic_evaluator_writes_outputs(tmp_path: Path) -> None:
     assert (out_dir / "plots" / "rank_histograms.pdf").exists()
     assert not (out_dir / "plots" / "band_scores.pdf").exists()
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
-    assert payload["schema_version"] == "1.1" and payload["scale_split"]["enabled"] is False
+    assert payload["schema_version"] == "1.2" and payload["scale_split"]["enabled"] is False
+    assert payload["bands"] == ["full"]
+    # no interval from two dates of a degenerate (error 0) ensemble; the columns are there
+    assert "spread_skill_ratio_corrected_lo95" in r and "spread_skill_ratio_corrected_se" in r
+    assert payload["ratio_bootstrap"]["resamples"] == 2000 and payload["ratio_bootstrap"]["seed"] == 32
+    assert payload["rank_histogram"]["dry_threshold_mm"] == 0.1 and payload["rank_histogram"]["dry_threshold_native"] == 1e-4
+    assert h["false_drizzle_rate"] == "" and h["bin_0_fraction"] == "0.0" and h["bin_expected"] == "0.25"
     assert payload["input_members"]["n_members"] == 0           # x on the coarse grid only, no x_interp
     assert payload["rank_histogram"]["n_bins"] == 4
 
@@ -169,14 +175,23 @@ def test_scale_split_tp_clipping_and_input_spread(tmp_path: Path) -> None:
 
     with (out_dir / "calibration_by_lead.csv").open(newline="") as f:
         cal = {(r["weather_state"], r["band"]): r for r in csv.DictReader(f)}
-    assert {b for _, b in cal} == {"full", "large", "fine"}
-    full, large, fine = cal[("2t", "full")], cal[("2t", "large")], cal[("2t", "fine")]
+    assert {b for _, b in cal} == {"full", "full_inner", "large", "fine"}
+    full, inner, large, fine = cal[("2t", "full")], cal[("2t", "full_inner")], cal[("2t", "large")], cal[("2t", "fine")]
     # truth and members = base + independent N(0,1): calibrated, so the corrected ratio reads about 1 in
     # every band (the large band has few independent 400 km blobs in the box, hence the wider tolerance)
-    for r, tol in ((full, 0.1), (large, 0.3), (fine, 0.1)):
+    for r, tol in ((full, 0.1), (inner, 0.1), (large, 0.3), (fine, 0.1)):
         assert abs(float(r["spread_skill_ratio_corrected"]) - 1.0) < tol, r
         assert abs(float(r["spread_skill_ratio"]) * 1.0488 - float(r["spread_skill_ratio_corrected"])) < 1e-3
         assert r["n_members"] == "10" and r["n_dates"] == "2"
+        # the bootstrap interval over the two dates holds the point estimate
+        lo, hi = float(r["spread_skill_ratio_corrected_lo95"]), float(r["spread_skill_ratio_corrected_hi95"])
+        assert lo <= float(r["spread_skill_ratio_corrected"]) <= hi and float(r["spread_skill_ratio_corrected_se"]) >= 0
+    # full_inner is the full field on the points of the large and fine bands, so the three are comparable
+    assert inner["n_points_total"] == large["n_points_total"] == fine["n_points_total"]
+    assert int(inner["n_points_total"]) < int(full["n_points_total"])
+    assert inner["fcrps_mean"] != full["fcrps_mean"]
+    # not additive: P_L is a taper, so the inner full field is not large + fine (spread adds in quadrature at best)
+    assert abs(float(inner["spread_rms"]) - (float(large["spread_rms"]) + float(fine["spread_rms"]))) > 0.05
     # the band split of white noise on a 60 km lattice: the 53 km Gaussian keeps about d^2/(4 pi sigma^2) = 10 %
     # of the noise variance (rms 0.32), the rest is fine
     assert 0.25 < float(large["spread_rms"]) < 0.40 and float(fine["spread_rms"]) > 2 * float(large["spread_rms"])
@@ -201,14 +216,71 @@ def test_scale_split_tp_clipping_and_input_spread(tmp_path: Path) -> None:
     counts = np.array([int(hist["tp"][f"bin_{i}"]) for i in range(11)])
     # the 1-degree box-edge strip is left out of every band, the full field included
     assert 0 < counts.sum() < 2 * facts["n_points"] and counts[0] / counts.sum() < 0.3
+    # tp: the dry threshold and the two disagreement rates are written (fractions of the valid points); 2t has none
+    assert hist["tp"]["dry_threshold_mm"] == "0.1"
+    assert 0.0 <= float(hist["tp"]["false_drizzle_rate"]) <= 1.0 and 0.0 <= float(hist["tp"]["missed_rain_rate"]) <= 1.0
+    assert hist["2t"]["false_drizzle_rate"] == "" and hist["2t"]["dry_threshold_mm"] == ""
+    assert abs(float(hist["2t"]["bin_0_fraction"]) + float(hist["2t"]["bin_m_fraction"])
+               - float(hist["2t"]["outer_two_fraction"])) < 1e-9
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
     assert payload["scale_split"]["enabled"] and payload["scale_split"]["cut_km"] == 400.0
     assert payload["scale_split"]["sigma_km"] == round(53.0, 0) or abs(payload["scale_split"]["sigma_km"] - 53.0) < 0.1
     assert payload["precip_clipped_at_zero"] == ["tp"]
     assert payload["box_edge_deg"] == 1.0
     assert payload["input_members"]["n_members"] == 10
+    assert payload["bands"] == ["full", "full_inner", "large", "fine"] and "NOT additive" in payload["bands_note"]
     assert (out_dir / "plots" / "band_scores.pdf").exists()
     assert (out_dir / "plots" / "rank_histograms.pdf").exists()
+
+
+def _write_global_prediction(path: Path, *, date: str, step: int, n_members: int = 4, seed: int = 0) -> None:
+    """A coarse global lattice (4 degrees) with 2t and tp: no box edges, so every point is inner."""
+    rng = np.random.default_rng(seed)
+    lat1 = np.arange(-88.0, 88.1, 4.0)
+    lon1 = np.arange(-180.0, 180.0, 4.0)
+    lon_g, lat_g = np.meshgrid(lon1, lat1)
+    lat, lon = lat_g.ravel().astype(np.float32), lon_g.ravel().astype(np.float32)
+    n = lat.size
+    large = np.cos(3 * np.deg2rad(lon)) * np.cos(np.deg2rad(lat))
+    base = np.stack([280.0 + 5 * large, 0.002 * np.maximum(large, 0.0)], axis=-1)
+    truth = base + np.stack([rng.standard_normal(n), 0.0005 * rng.standard_normal(n)], axis=-1)
+    truth[:, 1] = np.maximum(truth[:, 1], 0.0)
+    members = np.stack([base + np.stack([rng.standard_normal(n), 0.0005 * rng.standard_normal(n)], axis=-1)
+                        for _ in range(n_members)])
+    ds = xr.Dataset({
+        "y_pred": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), members[None].astype(np.float32)),
+        "y": (("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+              np.broadcast_to(truth, (1, n_members, n, 2)).astype(np.float32)),
+        "lat_hres": (("grid_point_hres",), lat),
+        "lon_hres": (("grid_point_hres",), lon),
+    }, coords={"sample": [0], "ensemble_member": np.arange(1, n_members + 1), "grid_point_hres": np.arange(n),
+               "weather_state": np.array(["2t", "tp"], dtype=object)},
+        attrs={"init_date": date, "lead_step_hours": step})
+    ds.to_netcdf(path)
+
+
+def test_full_inner_equals_full_on_a_global_set(tmp_path: Path) -> None:
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    _write_global_prediction(pred_dir / "predictions_20230816_step024.nc", date="20230816", step=24)
+    _write_global_prediction(pred_dir / "predictions_20230817_step024.nc", date="20230817", step=24, seed=1)
+    out_dir = tmp_path / "evaluators" / "probabilistic"
+    run(pred_dir, {}, {"weather_states": ["2t", "tp"], "domains": ["global", "n.hem"], "steps": [24],
+                       "scale_split": True}, output_dir=out_dir, overwrite=True)
+    with (out_dir / "calibration_by_lead.csv").open(newline="") as f:
+        cal = {(r["weather_state"], r["domain"], r["band"]): r for r in csv.DictReader(f)}
+    for var in ("2t", "tp"):
+        for domain in ("global", "n.hem"):
+            full, inner = cal[(var, domain, "full")], cal[(var, domain, "full_inner")]
+            # a global set has no edges: the inner points are all the points, so the two rows are identical
+            assert {k: v for k, v in full.items() if k != "band"} == {k: v for k, v in inner.items() if k != "band"}
+    with (out_dir / "band_scores_by_lead.csv").open(newline="") as f:
+        band_rows = list(csv.DictReader(f))
+    by_band = {b: sorted((r["date"], r["weather_state"], r["domain"], r["metric"], r["value"]) for r in band_rows if r["band"] == b)
+               for b in ("full", "full_inner")}
+    assert by_band["full"] == by_band["full_inner"] and by_band["full"]
+    payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
+    assert payload["scale_split"]["global_coverage"] is True
 
 
 def test_single_input_member_is_reported_not_scored(tmp_path: Path) -> None:

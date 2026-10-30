@@ -201,8 +201,10 @@ def plot_rank_histograms(hist_csv: str | Path, output_pdf: str | Path, *, title:
                         freq = counts / counts.sum() if counts.sum() else counts
                         ax.bar(np.arange(n_bins), freq, color=MODEL_COLOR, width=0.85)
                         ax.axhline(1.0 / n_bins, color=NEUTRAL_COLOR, linewidth=1.2, zorder=3)
-                        ax.set_title(f"{dom}, +{lead} h: outer {_float(r, 'outer_two_fraction'):.3f} "
-                                     f"(flat {_float(r, 'outer_two_expected'):.3f}), {r.get('shape', '')}", fontsize=8)
+                        b0, bm = _float(r, "bin_0_fraction", float("nan")), _float(r, "bin_m_fraction", float("nan"))
+                        outer = (f"bins 0/m {b0:.3f}/{bm:.3f} (flat {1.0 / n_bins:.3f} each)" if np.isfinite(b0)
+                                 else f"outer {_float(r, 'outer_two_fraction'):.3f} (flat {_float(r, 'outer_two_expected'):.3f})")
+                        ax.set_title(f"{dom}, +{lead} h: {outer}, {r.get('shape', '')}", fontsize=8)
                         ax.set_xticks([0, n_bins - 1])
                         ax.set_xticklabels(["below all", "above all"], fontsize=8)
                         if j == 0:
@@ -220,7 +222,8 @@ def plot_rank_histograms(hist_csv: str | Path, output_pdf: str | Path, *, title:
 
 # -------------------------------------------------------------------- band scores
 
-BAND_LABELS = {"full": "full field", "large": "large part (above the cut)", "fine": "fine part (below the cut)"}
+BAND_LABELS = {"full": "full field", "full_inner": "full field, inner points",
+               "large": "large part (above the cut)", "fine": "fine part (below the cut)"}
 _BAND_METRICS = {"fcrps_mean": "fcrps", "spread_rms": "spread_rms", "rmse_ens_mean": "rmse_ens_mean",
                  "spread_skill_ratio_corrected": "ssr"}
 
@@ -229,7 +232,8 @@ def calibration_to_curves(rows: list[dict[str, str]], *, cut_km: float | None = 
     """Tidy rows for the shared figure from ``calibration_by_lead.csv``: one model series per band.
 
     Fair CRPS carries its 95 percent band over dates; ``ssr`` is the CORRECTED spread/RMSE
-    (``ratio * sqrt((m+1)/m)``, pooled); the input members' spread is an "input" series.
+    (``ratio * sqrt((m+1)/m)``, pooled) with its bootstrap interval over dates when the CSV
+    has it; the input members' spread is an "input" series.
     """
     curves: list[dict] = []
     for r in rows:
@@ -242,12 +246,17 @@ def calibration_to_curves(rows: list[dict[str, str]], *, cut_km: float | None = 
             if not np.isfinite(value):
                 continue
             se = _float(r, "fcrps_stderr") if column == "fcrps_mean" else 0.0
+            lo, hi = value - 1.96 * se if se > 0.0 else None, value + 1.96 * se if se > 0.0 else None
+            if column == "spread_skill_ratio_corrected":
+                b_lo, b_hi = _float(r, f"{column}_lo95", float("nan")), _float(r, f"{column}_hi95", float("nan"))
+                if np.isfinite(b_lo) and np.isfinite(b_hi):
+                    lo, hi = b_lo, b_hi
             curves.append({
                 "metric": metric, "variable": r["weather_state"], "domain": r["domain"],
                 "lead_h": _float(r, "step"), "series_role": "model", "series_label": label,
                 "value": value,
-                "ci_low": value - 1.96 * se if se > 0.0 else None,
-                "ci_high": value + 1.96 * se if se > 0.0 else None,
+                "ci_low": lo,
+                "ci_high": hi,
                 "n": _float(r, "n_dates", float("nan")),
             })
         inp = _float(r, "spread_input_rms", float("nan"))
@@ -278,7 +287,8 @@ def plot_band_scores(calibration_csv: str | Path, output_pdf: str | Path, *, lan
         Path(output_pdf),
         title=title,
         n_noun="dates",
-        band_label="shaded band: 95 % confidence interval of the fair CRPS mean over dates",
-        footnote="spread_rms and RMSE: roots of pooled mean squares; ssr: spread/RMSE x sqrt((m+1)/m), 1 = calibrated",
+        band_label="shaded band: 95 % confidence interval of the fair CRPS mean over dates, and of ssr (bootstrap over dates)",
+        footnote="spread_rms and RMSE: roots of pooled mean squares; ssr: spread/RMSE x sqrt((m+1)/m), 1 = calibrated; "
+                 "bands are not additive (P_L is a taper): full field on inner points is not large + fine",
     )
     return Path(output_pdf)

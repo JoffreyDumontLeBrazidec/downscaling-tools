@@ -9,19 +9,32 @@ What is computed, per prediction file (one date and lead), variable and region:
 * the calibration read of the owner's rule (``calibration_by_lead.csv``, see
   ``calibration.py``): spread as the root of the pooled mean ensemble variance, RMSE as the
   root of the pooled mean squared error, their ratio and the ratio times ``sqrt((m+1)/m)``,
-  pooled over points (area-weighted) and dates, with ``m``, ``n_dates`` and ``n_points``;
+  pooled over points (area-weighted) and dates, with ``m``, ``n_dates`` and ``n_points``, and
+  the 95 % bootstrap interval of the corrected ratio over dates (``_lo95``, ``_hi95``, ``_se``;
+  fixed seed, 2000 resamples by default);
 * rank histograms with ``m+1`` bins, ties broken at random with a fixed seed
-  (``rank_histograms.csv``);
+  (``rank_histograms.csv``), the two outer-bin fractions reported separately; precipitation
+  gets a dry floor first (members and truth below ``rank_dry_threshold_mm``, default 0.1 mm,
+  set to exactly 0, so trace amounts over a dry truth are ties), and its false-drizzle rate
+  (truth dry, every member wet) and missed-rain rate (truth wet, every member dry) are
+  written with the histogram;
 * when ``scale_split`` is on, the same scores for the large part ``L = P_L(field)`` and the
   fine part ``F = field - L`` of members and truth (``band_scores_by_lead.csv``, band column
-  ``full`` / ``large`` / ``fine``; ``scale_split.py`` describes ``P_L``), and the inter-member
-  spread of the low-resolution input in each band when the files carry the input members
-  (``x_interp`` with two or more members), so the read can say how much of the large-scale
-  spread comes from the input.
+  ``full`` / ``full_inner`` / ``large`` / ``fine``; ``scale_split.py`` describes ``P_L``), and
+  the inter-member spread of the low-resolution input in each band when the files carry the
+  input members (``x_interp`` with two or more members), so the read can say how much of the
+  large-scale spread comes from the input. ``full`` is the full field on every point of the
+  region (minus the box-edge strip); ``full_inner`` is the full field on the SAME points the
+  ``large`` and ``fine`` bands use (inside the edge margin of ``P_L``), so the three are
+  comparable. The bands are NOT additive: ``P_L`` is a taper, so a score of ``full_inner`` is
+  not the sum of ``large`` and ``fine``, and the band labels are never added up.
 
 House conventions. Precipitation (``tp``, ``cp``) is clipped at zero in members and truth
 before any score: a sampler can write small negative rain, and the scores are defined on
-the physical field (``PRECIP_FIELDS``). The low-pass of rain is a band split of the SCORES
+the physical field (``PRECIP_FIELDS``). The files hold tp and cp in METRES of accumulated
+water (the native unit, ``eval/plotting/variables.py``), so the dry threshold given in mm is
+divided by ``DRY_THRESHOLD_MM_TO_NATIVE`` (1000) before use; the floor applies to the rank
+histograms and the drizzle rates only, never to the CRPS, spread or RMSE. The low-pass of rain is a band split of the SCORES
 only (the L part is the synoptic-scale rain mass, the F part its placement and intensity);
 no filtered field is written back, so the negative values a Gaussian of rain makes in the F
 part are harmless and nothing is clipped after the split. ``10ff`` is derived from ``10u``
@@ -48,8 +61,13 @@ from eval.evaluators.surface.core.compute import (
 from eval.discovery.predictions import find_predictions
 
 from .calibration import (
+    DEFAULT_RANK_DRY_THRESHOLD_MM,
     RANK_TIE_SEED,
+    RATIO_BOOTSTRAP_RESAMPLES,
+    RATIO_BOOTSTRAP_SEED,
     PooledMoments,
+    dry_floor,
+    dry_wet_disagreement,
     histogram_shape,
     rank_counts,
     summarize_histogram,
@@ -69,7 +87,11 @@ DEFAULT_DOMAINS = ["n.hem", "tropics", "s.hem", "europe"]
 METRICS = ("crps", "fcrps", "spread", "rmse_ens_mean")
 # clipped at zero before scoring (house convention, see module docstring)
 PRECIP_FIELDS = ("tp", "cp")
-BANDS = ("full", "large", "fine")
+# tp/cp are stored in metres; the dry threshold is given in mm (see module docstring)
+DRY_THRESHOLD_MM_TO_NATIVE = 1000.0
+# full: every point of the region; full_inner: the points of the large/fine bands (not additive, see docstring)
+BANDS = ("full", "full_inner", "large", "fine")
+INNER_BANDS = ("full_inner", "large", "fine")
 BAND_METRICS = ("fcrps", "crps", "spread_rms", "rmse_ens_mean", "ms_spread", "ms_err")
 INPUT_VARIABLE = "x_interp"
 
@@ -277,10 +299,15 @@ def _band_fields(
     input_values: np.ndarray | None,
     operator: LowPassOperator | None,
 ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]]:
-    """``{band: (members, truth, input members or None)}``; only ``full`` without an operator."""
+    """``{band: (members, truth, input members or None)}``; only ``full`` without an operator.
+
+    ``full_inner`` holds the same arrays as ``full``: it differs only in the points scored
+    (the inner mask of the large and fine bands), so its CRPS components are reused.
+    """
     bands = {"full": (pred_values, truth_point, input_values)}
     if operator is None:
         return bands
+    bands["full_inner"] = bands["full"]
     large_pred = np.stack([operator.apply(member) for member in pred_values])
     large_truth = operator.apply(truth_point)
     large_input = None
@@ -292,20 +319,30 @@ def _band_fields(
     return bands
 
 
-def _score_band(
+def _band_components(
     members: np.ndarray,
     truth: np.ndarray,
     input_members: np.ndarray | None,
     *,
-    weights: np.ndarray,
-    masks: dict[str, np.ndarray],
     spread_ddof: int,
-) -> dict[str, dict[str, Any]]:
-    """Per domain: the band metrics and the pooled moments of one date (``_weighted_mean`` of each)."""
+) -> dict[str, Any]:
+    """The pointwise pieces of one band (computed once, scored on any set of masks)."""
     components = crps_ensemble_components(members, truth, spread_ddof=spread_ddof)
     variance = np.square(components["spread"]) if int(spread_ddof) == 1 else _pointwise_variance(members)
     input_variance = _pointwise_variance(input_members) if input_members is not None else None
     valid = np.isfinite(truth) & np.all(np.isfinite(members), axis=0)
+    return {"components": components, "variance": variance, "input_variance": input_variance, "valid": valid}
+
+
+def _score_band(
+    pieces: dict[str, Any],
+    *,
+    weights: np.ndarray,
+    masks: dict[str, np.ndarray],
+) -> dict[str, dict[str, Any]]:
+    """Per domain: the band metrics and the pooled moments of one date (``_weighted_mean`` of each)."""
+    components, variance = pieces["components"], pieces["variance"]
+    input_variance, valid = pieces["input_variance"], pieces["valid"]
     out: dict[str, dict[str, Any]] = {}
     for domain_name, domain_mask in masks.items():
         mask = valid & domain_mask
@@ -367,6 +404,9 @@ def compute_probabilistic_scores(
     box_edge_deg: float = DEFAULT_BOX_EDGE_DEG,
     rank_histogram: bool = True,
     rank_tie_seed: int = RANK_TIE_SEED,
+    rank_dry_threshold_mm: float = DEFAULT_RANK_DRY_THRESHOLD_MM,
+    ratio_bootstrap_resamples: int = RATIO_BOOTSTRAP_RESAMPLES,
+    ratio_bootstrap_seed: int = RATIO_BOOTSTRAP_SEED,
     include_input: bool = True,
 ) -> dict[str, Any]:
     """Compute local probabilistic scores and write CSV/JSON artifacts.
@@ -374,10 +414,17 @@ def compute_probabilistic_scores(
     ``scale_split`` adds the large/fine band scores (``P_L`` with half-power wavelength
     ``scale_cut_km``, built on a ``scale_grid_km`` grid; points within
     ``scale_edge_margin_km`` of a regional box edge, default the cut, are left out of the
-    band scores). On a regional box every band, the full field included, also leaves out a
-    ``box_edge_deg`` strip at the box edge (default 1 degree, as the wide box kits do; the
-    edge is where the models differ most, so keeping it inflates gaps). It costs about three times the full-field scoring (eleven low-pass
-    applications and two more CRPS passes per variable), so it is off unless asked for.
+    band scores) and the ``full_inner`` band, the full field on those same inner points. On
+    a regional box every band, the full field included, also leaves out a ``box_edge_deg``
+    strip at the box edge (default 1 degree, as the wide box kits do; the edge is where the
+    models differ most, so keeping it inflates gaps). It costs about three times the
+    full-field scoring (eleven low-pass applications and two more CRPS passes per variable;
+    ``full_inner`` reuses the full field's), so it is off unless asked for.
+
+    ``rank_dry_threshold_mm`` (0.1) is the dry floor of the precipitation rank histograms
+    and of the false-drizzle / missed-rain rates, in mm (the files hold metres; converted
+    here). ``ratio_bootstrap_resamples`` / ``ratio_bootstrap_seed`` fix the bootstrap of the
+    corrected spread/RMSE over dates.
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -403,6 +450,9 @@ def compute_probabilistic_scores(
     pooled: dict[tuple[int, str, str, str], PooledMoments] = defaultdict(PooledMoments)
     hist_counts: dict[tuple[int, str, str], np.ndarray] = {}
     hist_dates: dict[tuple[int, str, str], int] = defaultdict(int)
+    # precipitation only: valid points, false-drizzle points, missed-rain points
+    dry_counts: dict[tuple[int, str, str], np.ndarray] = defaultdict(lambda: np.zeros(3, dtype=np.int64))
+    dry_threshold = float(rank_dry_threshold_mm) / DRY_THRESHOLD_MM_TO_NATIVE
     missing_fields: set[str] = set()
     clipped_fields: set[str] = set()
     input_note: dict[str, Any] = {}
@@ -464,10 +514,14 @@ def compute_probabilistic_scores(
                 n_members_seen.add(n_members)
 
                 bands = _band_fields(pred_values, truth_point, input_values, operator)
+                pieces: dict[str, Any] = {}
                 for band, (members, truth, input_members) in bands.items():
                     masks = domain_masks if band == "full" else band_masks
-                    scored = _score_band(members, truth, input_members, weights=weights, masks=masks,
-                                         spread_ddof=spread_ddof)
+                    if band == "full_inner":
+                        pieces = pieces or _band_components(members, truth, input_members, spread_ddof=spread_ddof)
+                    else:
+                        pieces = _band_components(members, truth, input_members, spread_ddof=spread_ddof)
+                    scored = _score_band(pieces, weights=weights, masks=masks)
                     for domain_name in masks:
                         if domain_name not in scored:
                             skipped.append({
@@ -501,7 +555,12 @@ def compute_probabilistic_scores(
                             input_members=0 if input_members is None else int(input_members.shape[0]))
 
                 if rank_histogram and n_members > 1:
-                    ranks = truth_ranks(pred_values, truth_point, tie_rng(pred.date, pred.step, field, seed=rank_tie_seed))
+                    rank_pred, rank_truth = pred_values, truth_point
+                    if field in PRECIP_FIELDS:
+                        # the dry floor: trace amounts become exact zeros, so they tie with a dry truth
+                        rank_pred, rank_truth = dry_floor(pred_values, dry_threshold), dry_floor(truth_point, dry_threshold)
+                        disagree = dry_wet_disagreement(pred_values, truth_point, dry_threshold)
+                    ranks = truth_ranks(rank_pred, rank_truth, tie_rng(pred.date, pred.step, field, seed=rank_tie_seed))
                     for domain_name, domain_mask in domain_masks.items():
                         counts = rank_counts(ranks, n_members, domain_mask)
                         if counts.sum() == 0:
@@ -509,6 +568,10 @@ def compute_probabilistic_scores(
                         key = (int(pred.step), field, domain_name)
                         hist_counts[key] = hist_counts.get(key, 0) + counts
                         hist_dates[key] += 1
+                        if field in PRECIP_FIELDS:
+                            dry_counts[key] += np.array([int((disagree["valid"] & domain_mask).sum()),
+                                                         int((disagree["false_drizzle"] & domain_mask).sum()),
+                                                         int((disagree["missed_rain"] & domain_mask).sum())])
                 del bands
 
     if not rows:
@@ -522,7 +585,8 @@ def compute_probabilistic_scores(
 
     summary_rows = _summarize(rows)
     calibration_rows = [
-        {"step": step, "weather_state": ws, "domain": domain, "band": band, **moments.summary()}
+        {"step": step, "weather_state": ws, "domain": domain, "band": band,
+         **moments.summary(bootstrap_resamples=int(ratio_bootstrap_resamples), bootstrap_seed=int(ratio_bootstrap_seed))}
         for (step, ws, domain, band), moments in sorted(pooled.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2], BANDS.index(kv[0][3])))
         if moments.n_dates
     ]
@@ -530,10 +594,16 @@ def compute_probabilistic_scores(
     hist_rows = []
     for (step, ws, domain), counts in sorted(hist_counts.items()):
         summary = summarize_histogram(counts)
+        dry: dict[str, Any] = {"dry_threshold_mm": "", "false_drizzle_rate": "", "missed_rain_rate": ""}
+        if ws in PRECIP_FIELDS:
+            n_valid, n_drizzle, n_missed = (int(v) for v in dry_counts[(step, ws, domain)])
+            dry = {"dry_threshold_mm": float(rank_dry_threshold_mm),
+                   "false_drizzle_rate": n_drizzle / n_valid if n_valid else math.nan,
+                   "missed_rain_rate": n_missed / n_valid if n_valid else math.nan}
         hist_rows.append({
             "step": step, "weather_state": ws, "domain": domain, "n_members": int(counts.size - 1),
             "n_bins": int(counts.size), "n_dates": hist_dates[(step, ws, domain)],
-            "n_points_total": int(counts.sum()), **summary, "shape": histogram_shape(summary),
+            "n_points_total": int(counts.sum()), **summary, "shape": histogram_shape(summary), **dry,
             **{f"bin_{i}": int(counts[i]) if i < counts.size else "" for i in range(n_bins_max)},
         })
 
@@ -565,20 +635,23 @@ def compute_probabilistic_scores(
         calibration_rows,
         ["step", "weather_state", "domain", "band", "n_members", "n_dates", "n_points_total", "fcrps_mean",
          "fcrps_stderr", "crps_mean", "spread_rms", "rmse_ens_mean", "spread_skill_ratio",
-         "spread_skill_ratio_corrected", "correction_factor", "spread_input_rms", "input_n_members",
+         "spread_skill_ratio_corrected", "spread_skill_ratio_corrected_lo95", "spread_skill_ratio_corrected_hi95",
+         "spread_skill_ratio_corrected_se", "correction_factor", "spread_input_rms", "input_n_members",
          "spread_input_share"],
     )
     _write_csv(
         hist_csv,
         hist_rows,
         ["step", "weather_state", "domain", "n_members", "n_bins", "n_dates", "n_points_total",
-         "outer_two_fraction", "outer_two_expected", "flatness_rms", "rank_mean_norm", "chi2_per_bin", "shape",
+         "bin_0_fraction", "bin_m_fraction", "bin_expected", "outer_two_fraction", "outer_two_expected",
+         "flatness_rms", "rank_mean_norm", "chi2_per_bin", "shape",
+         "dry_threshold_mm", "false_drizzle_rate", "missed_rain_rate",
          *[f"bin_{i}" for i in range(n_bins_max)]],
     )
     skipped_json.write_text(json.dumps(skipped, indent=2) + "\n")
     n_members = max(n_members_seen) if n_members_seen else 0
     payload = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "predictions_dir": str(predictions_dir),
         "score_csv": str(score_csv),
         "summary_csv": str(summary_csv),
@@ -600,6 +673,12 @@ def compute_probabilistic_scores(
         "spread_ddof": int(spread_ddof),
         "correction_factor": math.sqrt((n_members + 1.0) / n_members) if n_members else None,
         "box_edge_deg": float(box_edge_deg),
+        "bands": list(BANDS) if scale_split else ["full"],
+        "bands_note": "full: every point of the region minus the box-edge strip; full_inner, large, fine: the "
+                      "points inside the P_L edge margin. NOT additive (P_L is a taper): full_inner is not "
+                      "large + fine.",
+        "ratio_bootstrap": {"resamples": int(ratio_bootstrap_resamples), "seed": int(ratio_bootstrap_seed),
+                            "level": 0.95, "unit": "dates resampled with replacement; pooled as the point estimate"},
         "scale_split": {
             "enabled": bool(scale_split),
             "edge_margin_km": edge_margin_km if scale_split else None,
@@ -607,7 +686,12 @@ def compute_probabilistic_scores(
         },
         "rank_histogram": {"enabled": bool(rank_histogram), "tie_seed": int(rank_tie_seed),
                            "n_bins": n_members + 1 if n_members else None,
-                           "ties": "all ties broken uniformly at random (covers zero precipitation)"},
+                           "ties": "all ties broken uniformly at random (covers zero precipitation)",
+                           "dry_threshold_mm": float(rank_dry_threshold_mm),
+                           "dry_threshold_native": dry_threshold,
+                           "dry_threshold_note": "tp/cp below the threshold set to exactly 0 before ranking "
+                                                 "(files in metres: 0.1 mm = 1e-4 m); also defines the "
+                                                 "false-drizzle and missed-rain rates"},
         "input_members": input_note,
         "headline_metrics": _headline_metrics(summary_rows, calibration_rows),
     }
