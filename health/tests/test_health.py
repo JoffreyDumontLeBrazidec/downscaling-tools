@@ -192,6 +192,22 @@ def test_cli_audit_and_diff(ckpt, tmp_path, capsys):
     b = json.loads((tmp_path / "b" / "audit.json").read_text())
     assert b["diffs"]["previous"]["moved"] == []  # same file, nothing moves
     assert main(["diff", str(tmp_path / "a" / "audit.json"), str(tmp_path / "b" / "audit.json")]) == 0
+    u = b["diffs"]["previous"]["units"]["processor.1.node_dst_mlp.grad_dead_units"]
+    assert u == {"kept": len(GRAD_DEAD), "new": [], "gone": []}
+    # one unit comes back, one new one dies: the index sets say which
+    a = json.loads((tmp_path / "a" / "audit.json").read_text())
+    b["checks"]["c3_optimizer_dead"]["indices"]["processor.1"]["node_dst_mlp.grad_dead_units"] = [6, 7, 9]
+    b["meta"]["global_step"] = (a["meta"]["global_step"] or 0) + 2000
+    (tmp_path / "c.json").write_text(json.dumps(b))
+    capsys.readouterr()
+    assert main(["diff", str(tmp_path / "a" / "audit.json"), str(tmp_path / "c.json"), "--list-units"]) == 0
+    out = capsys.readouterr().out
+    assert "grad_dead_units: 2 kept, 1 new, 1 gone, 0.50 new per 1k steps" in out and "new  [9]" in out and "gone [5]" in out
+    assert main(["units", str(p), "--role", "processor.1", "--from-audit", str(tmp_path / "a" / "audit.json"), "--units", "0"]) == 0
+    out = capsys.readouterr().out
+    rows = {int(l.split()[0]): [float(x) for x in l.split()[1:]] for l in out.splitlines()[2:]}
+    assert set(rows) == {0, *GRAD_DEAD}
+    assert all(v == 0 for u in GRAD_DEAD for v in rows[u]) and rows[0][1] > 0  # dead: m and v 0; live unit 0: v > 0
 
 
 def test_revive_roundtrip(ckpt, tmp_path):

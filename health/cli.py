@@ -3,7 +3,8 @@
     audit CKPT     CPU checks 1, 3, 6 (numpy only, any login node; ~1 min per 2 GB file); --gpu adds 2, 4, 7, 9 and
                    the graph audit 8 (one GPU, ~10 min); writes audit.json + SUMMARY.txt; check 12 diffs against
                    --prev and the lane reference.
-    diff A B       check 12 between two audit.json files.
+    diff A B       check 12 between two audit.json files, with the dead-unit index sets (kept / new / gone).
+    units CKPT     optimizer moments (m and v) of chosen MLP units: tells "v underflowed" from "no gradient".
     registry       the reference checkpoint of each lane.
     revive SRC DST --audit A   write a revived copy (by hand only; needs torch).
 
@@ -132,6 +133,47 @@ def cmd_diff(a) -> int:
     for k in ("only_before", "only_after"):
         if d[k]:
             print(f"  {k}: {len(d[k])} readings (roles differ), e.g. {d[k][:3]}")
+    print("dead-unit index sets (kept = in both, new = only in B, gone = only in A):")
+    for line in report.unit_lines(d) or ["    no change"]:
+        print(line)
+    if a.list_units:
+        for k, u in d["units"].items():
+            if u["new"] or u["gone"]:
+                print(f"  {k}\n    new  {u['new']}\n    gone {u['gone']}")
+    return 0
+
+
+def cmd_units(a) -> int:
+    """Per unit: the optimizer moments of its bias, W1 row and W2 column, to tell 'v underflowed' from 'no gradient'."""
+    from .ckpt import Reader
+    from .model_map import find_blocks
+
+    r = Reader(a.ckpt)
+    block = next((b for b in find_blocks(r.state, r.config) if b.role == a.role), None)
+    if block is None:
+        print(f"no block with role {a.role}")
+        return 0
+    units = [int(u) for u in a.units.split(",")] if a.units else []
+    if a.from_audit:
+        idx = json.load(open(a.from_audit))["checks"]["c3_optimizer_dead"]["indices"].get(a.role, {})
+        units += idx.get(f"{a.mlp}.grad_dead_units", [])
+    skip = {int(u) for u in a.exclude.split(",")} if a.exclude else set()
+    units = sorted(set(units) - skip)
+    view = r.optimizer()
+    print(f"{a.ckpt}: {view.kind}, mapping {view.status}; {a.role}.{a.mlp}, {len(units)} units")
+    leaves = {}
+    for part, leaf in (("bias", "0.bias"), ("w1_row", "0.weight"), ("w2_col", "2.weight")):
+        s = view.by_name.get(block.key(f"{a.mlp}.{leaf}")) or {}
+        leaves[part] = {n: r.array(s[n]) for n in ("exp_avg", "exp_avg_sq") if hasattr(s.get(n), "is_float")}
+    print("  unit   " + "  ".join(f"{p}: max|m| max v".ljust(28) for p in leaves))
+    for u in units:
+        cells = []
+        for part, mv in leaves.items():
+            sel = (lambda x: x[u]) if part != "w2_col" else (lambda x: x[:, u])
+            m = float(abs(sel(mv["exp_avg"])).max()) if "exp_avg" in mv else float("nan")
+            v = float(sel(mv["exp_avg_sq"]).max()) if "exp_avg_sq" in mv else float("nan")
+            cells.append(f"{m:.3g} {v:.3g}".ljust(28 + len(part) + 2))
+        print(f"  {u:<6} " + "  ".join(cells))
     return 0
 
 
@@ -168,7 +210,16 @@ def main(argv=None) -> int:
     p.add_argument("--threshold", type=float, default=0.25)
     p.add_argument("--top", type=int, default=30)
     p.add_argument("--bands")
+    p.add_argument("--list-units", action="store_true", help="print the indices of new and gone dead units")
     p.set_defaults(func=cmd_diff)
+    p = sub.add_parser("units", help="optimizer moments of chosen MLP units (m vs v: underflow or no gradient)")
+    p.add_argument("ckpt")
+    p.add_argument("--role", required=True, help="e.g. processor.2")
+    p.add_argument("--mlp", default="node_dst_mlp")
+    p.add_argument("--units", help="comma list of unit indices")
+    p.add_argument("--from-audit", help="add the gradient-dead units of --role from this audit.json")
+    p.add_argument("--exclude", help="comma list of indices to leave out (e.g. a known set)")
+    p.set_defaults(func=cmd_units)
     p = sub.add_parser("registry", help="the reference checkpoint of each lane")
     p.add_argument("--lane")
     p.set_defaults(func=cmd_registry)

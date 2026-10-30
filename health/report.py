@@ -166,7 +166,37 @@ def summary_text(audit: dict) -> str:
         lines.append(f"  check 12 vs {label} ({d['against']}): {len(d['moved'])} readings moved > {d['threshold']:.0%}")
         for mv in d["moved"][:10]:
             lines.append(f"    {mv['metric']}: {mv['before']:.4g} -> {mv['after']:.4g}")
+        lines += unit_lines(d)
     return "\n".join(lines) + "\n"
+
+
+def unit_lines(d: dict) -> list[str]:
+    out = []
+    steps = d.get("steps_between")
+    for k, u in (d.get("units") or {}).items():
+        if not (u["new"] or u["gone"]):
+            continue
+        rate = f", {1000 * len(u['new']) / steps:.2f} new per 1k steps" if steps else ""
+        out.append(f"    {k}: {u['kept']} kept, {len(u['new'])} new, {len(u['gone'])} gone{rate}")
+    return out
+
+
+_UNIT_KEYS = (("c1_zero_content", "zero_units"), ("c3_optimizer_dead", "grad_dead_units"))
+
+
+def unit_sets(a: dict, b: dict) -> dict:
+    """Index sets of dead units, b vs a, per role: kept (in both), new (only in b), gone (only in a)."""
+    out = {}
+    for check, suffix in _UNIT_KEYS:
+        ia, ib = (x["checks"].get(check, {}).get("indices", {}) for x in (a, b))
+        for role in sorted(set(ia) | set(ib)):
+            for k in sorted(set(ia.get(role, {})) | set(ib.get(role, {}))):
+                if not k.endswith(suffix):
+                    continue
+                sa, sb = set(ia.get(role, {}).get(k, [])), set(ib.get(role, {}).get(k, []))
+                if sa or sb:
+                    out[f"{role}.{k}"] = {"kept": len(sa & sb), "new": sorted(sb - sa), "gone": sorted(sa - sb)}
+    return out
 
 
 def diff(a: dict, b: dict, rules: list[dict], default_threshold: float = 0.25) -> dict:
@@ -188,7 +218,14 @@ def diff(a: dict, b: dict, rules: list[dict], default_threshold: float = 0.25) -
         "moved": moved,
         "only_before": sorted(set(fa) - set(fb))[:50],
         "only_after": sorted(set(fb) - set(fa))[:50],
+        "units": unit_sets(a, b),
+        "steps_between": _steps(a, b),
     }
+
+
+def _steps(a: dict, b: dict):
+    sa, sb = a["meta"].get("global_step"), b["meta"].get("global_step")
+    return sb - sa if isinstance(sa, int) and isinstance(sb, int) and sb > sa else None
 
 
 def write(audit: dict, out_dir: Path) -> Path:

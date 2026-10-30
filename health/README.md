@@ -24,7 +24,8 @@ cd ~/dev/downscaling-tools
 python -m health audit CKPT [--lane o320_o1280_box] [--prev PREV/audit.json] [--out DIR] [--id NAME]
 # + GPU checks 2, 4, 7, 9 and the graph audit 8 (torch + the model code + one GPU; 2 bundles x 4 sigmas = 8 cases)
 python -m health audit CKPT --gpu --bundles B1_input_bundle.nc B2_input_bundle.nc [--local-scope-json BOX.json]
-python -m health diff A/audit.json B/audit.json      # check 12 between any two audits
+python -m health diff A/audit.json B/audit.json [--list-units]  # check 12; dead-unit index sets kept / new / gone
+python -m health units CKPT --role processor.2 --from-audit A/audit.json [--exclude i,j]  # m and v per unit
 python -m health registry                            # the reference checkpoint of each lane
 python -m health revive SRC DST --audit A/audit.json # BY HAND only: write a revived copy (needs torch)
 sbatch health/slurm/audit.sbatch CKPT [CKPT ...]     # several files in one job (header: per-cluster env)
@@ -74,6 +75,11 @@ smoke tier S, the in-training callback tier T (deferred by the owner: no chain r
   `AMBIGUOUS` means a tensor without a state shares a shape with a state (a frozen block the config does not name), so
   every name after it may be shifted: do not quote gradient-dead indices from such a file. The bias / W1-row /
   W2-column counts agreeing (`agreement` in the JSON) is a second check.
+- A run warm-started from another inherits its dead units: compare an arm with its parent by index set
+  (`diff --list-units`), and read only the NEW deaths per 1k steps as a property of the arm or its optimizer. Units in
+  "gone" got a gradient again inside the window: a window death is reversible.
+- `v == 0` with `m != 0` (the `units` command) means the gradient was nonzero but below ~1e-22 (its square
+  underflows in fp32): dead in practice, not dead in the exact sense.
 - A dead unit costs nothing in the forward (its output is exactly 0) but is capacity paid for and unused.
 - Revival is by hand: `python -m health revive` redraws the input side (W1 row, head input rows) from nn.Linear's
   init and zeroes the output side, then warm start from the new file. The function is unchanged only where the unit's
