@@ -199,7 +199,13 @@ class BundlesBackend:
 
     @property
     def graph(self):
-        return getattr(self.bundle.model, "graph_data", None)
+        m = self.bundle.model
+        for owner in (m, getattr(m, "model", None)):
+            for name in ("graph_data", "_graph_data"):
+                g = getattr(owner, name, None) if owner is not None else None
+                if g is not None and len(getattr(g, "edge_types", None) or (g if hasattr(g, "items") else [])):
+                    return g
+        return None
 
     def _forward(self, prep: dict, sigma: float, input_grad: bool, perturb: float, seed: int) -> CaseResult:
         inner = self.bundle.inner_model

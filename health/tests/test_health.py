@@ -333,6 +333,8 @@ def test_graph_audit():
     assert hh["isolated_frac"] == pytest.approx(1 / 5)  # node 4 has no in-edge
     assert hh["extra_components"] == 2  # {0,1,2}, {3}, {4}
     assert out["graph:data_to_hidden"]["isolated_frac"] == pytest.approx(3 / 5)
+    per_ds = graph_audit({"out_hres": G()})["c8_graph"]["per_role"]  # unified downscaler: one graph per dataset
+    assert per_ds["graph:out_hres:hidden_to_hidden"] == hh
 
 
 def test_bands_cover_metrics():

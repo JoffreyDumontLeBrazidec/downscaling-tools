@@ -379,6 +379,13 @@ def _components(n: int, src: np.ndarray, dst: np.ndarray) -> int:
 def graph_audit(graph) -> dict:
     """Check 8 on a torch_geometric HeteroData (or anything with .edge_types and [edge_type].edge_index)."""
     out = {"per_role": {}, "detail": {}}
+    if not hasattr(graph, "edge_types") and hasattr(graph, "items"):
+        # the unified downscaler keeps one graph per dataset ({"out_hres": HeteroData, ...})
+        for name, g in graph.items():
+            sub = graph_audit(g)["c8_graph"]
+            for k in ("per_role", "detail"):
+                out[k] |= {r.replace("graph:", f"graph:{name}:", 1): v for r, v in sub[k].items()}
+        return {"c8_graph": out}
     for et in getattr(graph, "edge_types", []):
         src_t, _, dst_t = et
         store = graph[et]
