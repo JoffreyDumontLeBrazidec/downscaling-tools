@@ -125,10 +125,44 @@ class BundlesBackend:
             bb = load_single_bundle(self.bundle, p)
             bb = self._to_model_points(checkpoint, bb)
             with torch.no_grad():
-                prep = prepare_batch(self.bundle, bb.x_lres[:, 0], bb.x_hres[:, 0], bb.y[:, 0])
+                if self.dict_api:
+                    prep = self._prepare_dict(bb.x_lres, bb.x_hres, bb.y)
+                else:
+                    prep = prepare_batch(self.bundle, bb.x_lres[:, 0], bb.x_hres[:, 0], bb.y[:, 0])
             self.batches.append((os.path.basename(p), prep))
         if not self.batches:
             raise SystemExit("no bundles found")
+
+    def _prepare_dict(self, x_lres, x_hres, y) -> dict:
+        """The unified (dict-API) downscaler: the training task's data flow (tasks/diffusiondownscaler.py), step by step.
+
+        interp's prepare_batch is written for the legacy `ds` model (one pre_processors callable taking dataset=...);
+        here every dataset has its own normaliser and the residual target needs y in the dataset's DATA layout.
+        Inputs are (batch, time, ensemble, grid, vars), as load_single_bundle returns them.
+        """
+        root, inner, dev = self.bundle.model, self.bundle.inner_model, self.bundle.device
+        x_lres, x_hres, y = x_lres.to(dev), x_hres.to(dev), y.to(dev)
+        xi_raw = inner.residual["in_lres"](x_lres, grid_shard_sizes=None, model_comm_group=None)[:, :, None]
+        ti = inner.data_indices["out_hres"]
+        full = ti.data.output.full.to(dev)
+        if y.shape[-1] != len(full):
+            raise SystemExit(f"bundle target has {y.shape[-1]} channels, the model outputs {len(full)}")
+        y_data = torch.zeros(*y.shape[:-1], len(ti.name_to_index), dtype=y.dtype, device=dev)
+        y_data[..., full] = y  # bundle targets come in model-output order = data.output.full order
+        tend = getattr(root, "pre_processors_tendencies", None)
+        target = inner.compute_residuals(
+            y=y_data,
+            x_interp=xi_raw[..., inner.get_matching_channel_indices("out_hres").to(dev)],
+            pre_processors_state=root.pre_processors["out_hres"],
+            pre_processors_tendencies=tend["out_hres"] if tend is not None and "out_hres" in tend else None,
+            target_dataset="out_hres",
+        )
+        return {
+            "x_interp": root.pre_processors["in_lres"](xi_raw, in_place=False),
+            "x_hres": root.pre_processors["in_hres"](x_hres, in_place=False),
+            "x_interp_raw": xi_raw,
+            "y_residual": target,
+        }
 
     def _to_model_points(self, checkpoint: str, bb):
         """A regional checkpoint (e.g. the E2 box) on global bundles: keep the bundle points the model was trained on.
