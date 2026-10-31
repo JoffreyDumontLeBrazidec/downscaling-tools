@@ -43,6 +43,10 @@ class BundlesBackend:
         if local_scope_json:
             from eval.predict.graph_cut import activate_local_graph_cut
 
+            # eval.predict takes the scope as JSON text; accept a file path too
+            if os.path.isfile(local_scope_json):
+                with open(local_scope_json) as f:
+                    local_scope_json = f.read()
             activate_local_graph_cut(self.bundle.model, local_scope_json)
         self.autocast = torch.bfloat16 if precision == "bf16" else (torch.float16 if precision == "fp16" else None)
         self.dict_api = is_dict_api(self.bundle.inner_model)

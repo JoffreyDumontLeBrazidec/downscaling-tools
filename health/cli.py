@@ -32,12 +32,27 @@ DEFAULT_ROOT = os.path.expanduser(os.environ.get("HEALTH_ROOT", "~/perm/health")
 
 
 def _git_sha() -> str | None:
+    here = Path(__file__).resolve().parent
     try:
         return subprocess.check_output(
-            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"], text=True,
-            stderr=subprocess.DEVNULL,
+            ["git", "-C", str(here), "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.CalledProcessError):
+        pass
+    # no git on PATH (module environments on compute nodes): read the checkout's HEAD directly
+    git = here.parent / ".git"
+    try:
+        head = (git / "HEAD").read_text().strip()
+        if head.startswith("ref: "):
+            ref = head[5:]
+            f = git / ref
+            if f.exists():
+                head = f.read_text().strip()
+            else:
+                packed = (git / "packed-refs").read_text().splitlines()
+                head = next(l.split()[0] for l in packed if l.endswith(" " + ref))
+        return head[:7]
+    except (OSError, StopIteration):
         return None
 
 
@@ -46,7 +61,10 @@ def ckpt_id(path: str, run_id: str | None, step) -> str:
     m = re.search(r"step_?(\d+)", stem)
     s = int(step) if step is not None else (int(m.group(1)) if m else None)
     ema = re.search(r"ema(\d+)", stem)
-    run = (run_id or Path(path).parent.name)[:8]
+    if not run_id:
+        # no run id in the file (hand-made init or converted files): the stem is the only unique name
+        return re.sub(r"[^\w.-]", "_", Path(stem).stem)
+    run = run_id[:8]
     tag = f"{run}_{s // 1000}k" if s is not None and s >= 1000 else f"{run}_{s}" if s is not None else Path(stem).stem
     return tag + (f"_ema{ema.group(1)}" if ema else "")
 

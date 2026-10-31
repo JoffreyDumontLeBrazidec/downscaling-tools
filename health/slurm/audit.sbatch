@@ -23,8 +23,8 @@ fi
 echo "health audit job ${SLURM_JOB_ID:-local} on $(hostname); python $(command -v "${HEALTH_PYTHON:-python3}")"
 cd "${HEALTH_REPO:-$HOME/dev/downscaling-tools}"
 export OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8
-echo "job=${SLURM_JOB_ID:-local} host=$(hostname -s) $(date -u +%FT%TZ) git=$(git rev-parse --short HEAD)"
 PY=${HEALTH_PYTHON:-python3}
+echo "job=${SLURM_JOB_ID:-local} host=$(hostname -s) $(date -u +%FT%TZ) git=$($PY -c 'from health.cli import _git_sha; print(_git_sha())' 2>/dev/null)"
 for c in "$@"; do
   echo "== $c"
   [[ -f "$c" ]] || { echo "MISSING $c"; continue; }
