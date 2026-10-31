@@ -5,8 +5,12 @@ one every interp tool uses; ds and unified APIs), the data from prepml ``*input_
 the target y), prepared exactly as ``interp.core.model.prepare_batch`` does (interpolated low-res, normalised
 conditioning, residual target). Each case is one EDM denoiser call at a fixed sigma on one bundle:
 loss = mean((D(y + sigma n; sigma) - y)^2) in the normalised residual space, the training objective up to the
-per-sigma weight (which cannot turn a zero gradient into a nonzero one). Regional (box) checkpoints evaluated on a
-global bundle take ``--local-scope-json`` (eval.predict's graph cut).
+per-sigma weight (which cannot turn a zero gradient into a nonzero one).
+
+A checkpoint trained on a regional dataset (the E2 box: 55,871 o320 and 814,810 o1280 points) reads global bundles
+as they are: the bundle points are subset to the checkpoint's own point sets (its ``<dataset>/latitudes`` supporting
+arrays), matched by position. ``--local-scope-json`` (eval.predict's graph cut) is for a GLOBAL checkpoint run on part
+of the globe; it cuts only the output side and cannot shrink a regional model's low-res input.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import glob
 import logging
 import os
 
+import numpy as np
 import torch
 
 from .forward_checks import Case, CaseResult
@@ -29,6 +34,53 @@ def _expand(paths: list[str]) -> list[str]:
         hits = sorted(glob.glob(os.path.expanduser(p)))
         out.extend(hits if hits else [p])
     return out
+
+
+def _supporting_arrays(checkpoint: str) -> dict:
+    from anemoi.utils.checkpoints import load_metadata
+
+    for path in (checkpoint, os.path.join(os.path.dirname(checkpoint), "inference-" + os.path.basename(checkpoint))):
+        if not os.path.exists(path):
+            continue
+        try:
+            _, arrays = load_metadata(path, supporting_arrays=True)
+        except Exception:  # noqa: BLE001 - a file without metadata: try the next one
+            continue
+        if arrays:
+            return dict(arrays)
+    return {}
+
+
+def match_points(lat_src, lon_src, lat_dst, lon_dst, tol_deg: float = 1e-3) -> np.ndarray:
+    """Index into the source points of each destination point (same grid, given in degrees); stops on any miss.
+
+    Points are keyed by position rounded to tol_deg (longitudes wrapped to [-180, 180)); a point that rounds across a
+    key boundary is found among the 8 neighbouring keys. numpy only (6.6M points in a few seconds).
+    """
+    def keys(lat, lon, dla=0, dlo=0):
+        la = np.round(np.asarray(lat, np.float64) / tol_deg).astype(np.int64) + dla
+        lo = np.round(((np.asarray(lon, np.float64) + 180.0) % 360.0 - 180.0) / tol_deg).astype(np.int64) + dlo
+        return la * 10**9 + lo
+
+    ks = keys(lat_src, lon_src)
+    order = np.argsort(ks, kind="stable")
+    ks_sorted = ks[order]
+    if len(ks_sorted) > 1 and np.any(ks_sorted[1:] == ks_sorted[:-1]):
+        raise SystemExit(f"two bundle points share a position at {tol_deg} deg: grid too fine for the key")
+    idx = np.full(len(np.asarray(lat_dst)), -1, dtype=np.int64)
+    for dla, dlo in [(0, 0)] + [(a, b) for a in (-1, 0, 1) for b in (-1, 0, 1) if (a, b) != (0, 0)]:
+        todo = np.where(idx < 0)[0]
+        if not todo.size:
+            break
+        kd = keys(np.asarray(lat_dst)[todo], np.asarray(lon_dst)[todo], dla, dlo)
+        pos = np.clip(np.searchsorted(ks_sorted, kd), 0, len(ks_sorted) - 1)
+        hit = ks_sorted[pos] == kd
+        idx[todo[hit]] = order[pos[hit]]
+    if np.any(idx < 0):
+        raise SystemExit(f"bundle points do not contain {int((idx < 0).sum())} of the model's points")
+    if len(np.unique(idx)) != len(idx):
+        raise SystemExit("two model points matched one bundle point: not the same grid")
+    return idx
 
 
 class BundlesBackend:
@@ -57,13 +109,41 @@ class BundlesBackend:
             "x_hres": [vn["input_hres"][i] for i in sorted(vn["input_hres"])],
         }
         self.batches = []
+        self.subset = None
         for p in _expand(bundles):
             bb = load_single_bundle(self.bundle, p)
+            bb = self._to_model_points(checkpoint, bb)
             with torch.no_grad():
                 prep = prepare_batch(self.bundle, bb.x_lres[:, 0], bb.x_hres[:, 0], bb.y[:, 0])
             self.batches.append((os.path.basename(p), prep))
         if not self.batches:
             raise SystemExit("no bundles found")
+
+    def _to_model_points(self, checkpoint: str, bb):
+        """A regional checkpoint (e.g. the E2 box) on global bundles: keep the bundle points the model was trained on.
+
+        The model's own point sets come from the checkpoint's supporting arrays (``<dataset>/latitudes``); each bundle
+        point is matched to them by position, so the subset is exact or the run stops.
+        """
+        n_l, n_h, n_y = bb.x_lres.shape[-2], bb.x_hres.shape[-2], bb.y.shape[-2]
+        arrays = _supporting_arrays(checkpoint)
+        want = {ds: arrays.get(f"{ds}/latitudes") for ds in ("in_lres", "in_hres", "out_hres")}
+        if all(v is None or len(v) == n for v, n in zip(want.values(), (n_l, n_h, n_y))):
+            return bb
+        lat_l, lon_l, lat_h, lon_h = bb.coords
+        idx = {}
+        for ds, lat, lon in (("in_lres", lat_l, lon_l), ("in_hres", lat_h, lon_h), ("out_hres", lat_h, lon_h)):
+            if want[ds] is None:
+                raise SystemExit(f"bundle grid differs from the model's but the checkpoint has no {ds}/latitudes")
+            idx[ds] = match_points(lat, lon, want[ds], arrays[f"{ds}/longitudes"])
+        self.subset = {ds: len(i) for ds, i in idx.items()}
+        LOGGER.info("bundle points subset to the checkpoint's: %s", self.subset)
+        sel = lambda t, i: t[..., torch.as_tensor(i), :]
+        lat_y = np.asarray(lat_h)[idx["out_hres"]]
+        return type(bb)(x_lres=sel(bb.x_lres, idx["in_lres"]), x_hres=sel(bb.x_hres, idx["in_hres"]),
+                        y=sel(bb.y, idx["out_hres"]), paths=bb.paths,
+                        coords=(np.asarray(lat_l)[idx["in_lres"]], np.asarray(lon_l)[idx["in_lres"]],
+                                lat_y, np.asarray(lon_h)[idx["out_hres"]]))
 
     @property
     def root(self) -> torch.nn.Module:

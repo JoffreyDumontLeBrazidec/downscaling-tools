@@ -481,3 +481,15 @@ def test_plain_unwraps_omegaconf_stubs():
     lc.__setstate__({"_content": [node(0.9), node(0.95)], "_metadata": None})
     assert plain(lc) == [0.9, 0.95]
     assert plain({"betas": lc, "lr": 1e-4}) == {"betas": [0.9, 0.95], "lr": 1e-4}
+
+
+def test_match_points_subsets_a_box_exactly():
+    from health.backends import match_points
+
+    lat, lon = np.meshgrid(np.arange(-89.5, 90, 1.0), np.arange(-179.5, 180, 1.0), indexing="ij")
+    lat, lon = lat.ravel().astype(np.float32), lon.ravel().astype(np.float32)
+    box = np.where((lat > 10) & (lat < 70) & ((lon > 280 - 360) | (lon < 40)))[0][::-1]  # any order
+    idx = match_points(lat, lon + np.float32(360) * (lon < 0), lat[box], lon[box])  # 0..360 vs -180..180
+    assert np.array_equal(idx, box)
+    with pytest.raises(SystemExit):
+        match_points(lat, lon, lat[box] + 0.5, lon[box])
