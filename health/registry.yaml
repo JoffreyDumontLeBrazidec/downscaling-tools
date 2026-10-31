@@ -1,0 +1,19 @@
+# Reference registry: one clean checkpoint per lane (review note s8). Every audit with --lane diffs against the
+# entry's audit_json (check 12). Replace an entry when a cleaner checkpoint lands; say why, with its headline.
+# Paths are on the cluster named; audit_json is filled once the reference has been audited there.
+lanes:
+  o320_o1280_box:
+    label: DB300 300k (donor_bound_e2, run 180b9eb5)
+    cluster: jupiter
+    ckpt: /e/data1/jureap-data/ecmwf/users/jdumont/outputs/checkpoint_nm50_box/donor_bound_e2/180b9eb5*/anemoi-by_step-epoch_299-step_300000.ckpt
+    audit_json: null
+    why: >-
+      PROVISIONAL (30 Oct 2026). No zero-weight heads or units (CA300 has 64 dead heads and 32,768 dead units from the
+      512 -> 1,024 widening), but 125 gradient-dead MLP units in processor block 2, inherited from the parent 551dfd1e.
+      Not clean; the cleanest on file. Replace with the first box checkpoint whose audit shows no exact-zero finding.
+  o320_o1280_global:
+    label: donor 12dcefea 400k
+    cluster: atos
+    ckpt: /home/ecm5702/perm/checkpoints/o320_o1280/12dcefeafa92457aab286d4931ffe63f/anemoi-by_epoch-epoch_172-step_400000.ckpt
+    audit_json: null
+    why: PROVISIONAL (30 Oct 2026). Global o320->o1280 donor of the box lines; set after the first sweep.
