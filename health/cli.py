@@ -255,6 +255,9 @@ def main(argv=None) -> int:
     p = sub.add_parser("revive", help="write a revived copy (by hand only)", add_help=False)
     p.set_defaults(func=None)
     args, rest = ap.parse_known_args(argv)
+    import logging
+
+    logging.basicConfig(level=os.environ.get("HEALTH_LOG", "INFO"), format="%(levelname)s %(name)s: %(message)s")
     if args.cmd == "revive":
         from .revive import main as revive_main
 
