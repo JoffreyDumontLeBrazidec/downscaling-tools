@@ -47,8 +47,19 @@ def _supporting_arrays(checkpoint: str) -> dict:
         except Exception:  # noqa: BLE001 - a file without metadata: try the next one
             continue
         if arrays:
-            return dict(arrays)
+            return flatten_arrays(arrays)
     return {}
+
+
+def flatten_arrays(arrays, prefix: str = "") -> dict:
+    """anemoi-utils returns supporting arrays nested per dataset ({'in_lres': {'latitudes': ...}}): flatten to 'in_lres/latitudes'."""
+    out = {}
+    for k, v in dict(arrays).items():
+        if isinstance(v, dict):
+            out |= flatten_arrays(v, f"{prefix}{k}/")
+        else:
+            out[f"{prefix}{k}"] = v
+    return out
 
 
 def match_points(lat_src, lon_src, lat_dst, lon_dst, tol_deg: float = 1e-3) -> np.ndarray:
@@ -128,7 +139,10 @@ class BundlesBackend:
         n_l, n_h, n_y = bb.x_lres.shape[-2], bb.x_hres.shape[-2], bb.y.shape[-2]
         arrays = _supporting_arrays(checkpoint)
         want = {ds: arrays.get(f"{ds}/latitudes") for ds in ("in_lres", "in_hres", "out_hres")}
-        if all(v is None or len(v) == n for v, n in zip(want.values(), (n_l, n_h, n_y))):
+        if all(v is None for v in want.values()):
+            LOGGER.warning("no supporting arrays in %s: bundle points used as they are (%d, %d, %d)", checkpoint, n_l, n_h, n_y)
+            return bb
+        if all(v is not None and len(v) == n for v, n in zip(want.values(), (n_l, n_h, n_y))):
             return bb
         lat_l, lon_l, lat_h, lon_h = bb.coords
         idx = {}

@@ -493,3 +493,12 @@ def test_match_points_subsets_a_box_exactly():
     assert np.array_equal(idx, box)
     with pytest.raises(SystemExit):
         match_points(lat, lon, lat[box] + 0.5, lon[box])
+
+
+def test_flatten_supporting_arrays():
+    from health.backends import flatten_arrays
+
+    a = {"in_lres": {"latitudes": np.zeros(3), "longitudes": np.ones(3)}, "out_hres": {"latitudes": np.zeros(5)}}
+    f = flatten_arrays(a)
+    assert sorted(f) == ["in_lres/latitudes", "in_lres/longitudes", "out_hres/latitudes"] and len(f["out_hres/latitudes"]) == 5
+    assert list(flatten_arrays({"in_lres/latitudes": np.zeros(2)})) == ["in_lres/latitudes"]  # already flat: unchanged
