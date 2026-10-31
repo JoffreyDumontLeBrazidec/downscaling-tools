@@ -14,7 +14,13 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=health_audit_%j.out
 set -uo pipefail
-[[ -n "${HEALTH_ENV:-}" ]] && source "$HEALTH_ENV"
+# module scripts read unset variables (MODULEPATH): source the env with -u off, then check it worked
+if [[ -n "${HEALTH_ENV:-}" ]]; then
+  set +u
+  source "$HEALTH_ENV" || { echo "HEALTH_ENV $HEALTH_ENV failed (rc $?)" >&2; exit 1; }
+  set -u
+fi
+echo "health audit job ${SLURM_JOB_ID:-local} on $(hostname); python $(command -v "${HEALTH_PYTHON:-python3}")"
 cd "${HEALTH_REPO:-$HOME/dev/downscaling-tools}"
 export OPENBLAS_NUM_THREADS=8 OMP_NUM_THREADS=8
 echo "job=${SLURM_JOB_ID:-local} host=$(hostname -s) $(date -u +%FT%TZ) git=$(git rev-parse --short HEAD)"
