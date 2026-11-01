@@ -335,6 +335,11 @@ def test_graph_audit():
     assert out["graph:data_to_hidden"]["isolated_frac"] == pytest.approx(3 / 5)
     per_ds = graph_audit({"out_hres": G()})["c8_graph"]["per_role"]  # unified downscaler: one graph per dataset
     assert per_ds["graph:out_hres:hidden_to_hidden"] == hh
+    from health import report
+
+    rules = report.load_bands()
+    assert report.status(0.2, report.rule_for("c8_graph.graph:out_hres:data_to_hidden.isolated_frac", rules)) == "info"
+    assert report.status(0.2, report.rule_for("c8_graph.graph:out_hres:hidden_to_data.isolated_frac", rules)) == "FAIL"
 
 
 def test_bands_cover_metrics():

@@ -79,6 +79,11 @@ rules:
   - match: "c9_flow.*.silent_output_frac"
     fail_above: 0
   # --- check 8: graph ------------------------------------------------------------------------------------------------
+  # Encoder edges (data_to_hidden): hidden nodes outside every data node's radius get no encoder edge by design (the
+  # hidden mesh is wider than the data grid; DB300 on the E2 box: 21.9 % from o1280, 17.9 % from o320, 1 Nov 2026).
+  # They are fed by the processor. A reading, not a fault: no band. A data node no decoder edge reaches IS a fault.
+  - match: "c8_graph.*data_to_hidden.isolated_frac"
+    note: "encoder: hidden nodes beyond the data radius, by design"
   - match: "c8_graph.*.isolated_frac"
     fail_above: 0
   - match: "c8_graph.*.extra_components"
