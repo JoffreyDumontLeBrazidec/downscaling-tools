@@ -341,6 +341,25 @@ def test_graph_audit():
     assert report.status(0.2, report.rule_for("c8_graph.graph:out_hres:data_to_hidden.isolated_frac", rules)) == "info"
     assert report.status(0.2, report.rule_for("c8_graph.graph:out_hres:hidden_to_data.isolated_frac", rules)) == "FAIL"
 
+    # holes vs halo: hidden nodes 0-2 lie inside the data extent, 3-4 outside; 2 and 4 get no encoder edge
+    class Pos(Nodes):
+        def __init__(self, n, latlon):
+            super().__init__(n)
+            self.x = torch.tensor(np.radians(latlon), dtype=torch.float64)
+
+    class GPos(G):
+        def __getitem__(self, k):
+            if k == "data":
+                return Pos(3, [[10, 0], [20, 10], [30, 20]])
+            if k == "hidden":
+                return Pos(5, [[12, 2], [18, 8], [25, 15], [60, 50], [-40, 0]])
+            return super().__getitem__(k)
+
+    out = graph_audit(GPos())["c8_graph"]["per_role"]
+    d2h = out["graph:data_to_hidden"]
+    assert d2h["isolated_frac"] == pytest.approx(3 / 5) and d2h["isolated_in_region_frac"] == pytest.approx(1 / 5)
+    assert report.status(0.2, report.rule_for("c8_graph.graph:data_to_hidden.isolated_in_region_frac", rules)) == "WARN"
+
 
 def test_bands_cover_metrics():
     from health import report

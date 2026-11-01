@@ -114,6 +114,11 @@ def headline(audit: dict) -> str:
     if c7 and c7.get("per_role"):
         low = [r for r, m in c7["per_role"].items() if role_group(r) == "processor" and m.get("update_ratio", 1) < 0.01]
         parts.append(f"{len(low)} processor blocks add < 1 % to the stream")
+    c8 = (audit["checks"].get("c8_graph") or {}).get("per_role", {})
+    holes = {r.replace("graph:", ""): m["isolated_in_region_frac"] for r, m in c8.items() if m.get("isolated_in_region_frac")}
+    if holes:
+        parts.append("encoder holes (hidden nodes inside the data region with no edge): "
+                     + ", ".join(f"{r} {_pct(v)}" for r, v in holes.items()))
     geo = [m.get("edge_logit_scale.max") for m in audit["checks"]["c6_scale"]["per_role"].values()]
     geo = [g for g in geo if g is not None]
     if geo:

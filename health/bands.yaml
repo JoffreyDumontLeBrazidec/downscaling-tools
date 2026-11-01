@@ -82,6 +82,11 @@ rules:
   # Encoder edges (data_to_hidden): hidden nodes outside every data node's radius get no encoder edge by design (the
   # hidden mesh is wider than the data grid; DB300 on the E2 box: 21.9 % from o1280, 17.9 % from o320, 1 Nov 2026).
   # They are fed by the processor. A reading, not a fault: no band. A data node no decoder edge reaches IS a fault.
+  # Hidden nodes INSIDE the data grid's extent with no encoder edge: holes, a graph-build fault (DB300 in_lres: 815 =
+  # 0.75 %, o320 cutoff ~21 km < half the ~31 km cell diagonal). Fix in the next graph build (cutoff >= 24 km or KNN),
+  # never in a running chain.
+  - match: "c8_graph.*.isolated_in_region_frac"
+    warn_above: 0
   - match: "c8_graph.*data_to_hidden.isolated_frac"
     note: "encoder: hidden nodes beyond the data radius, by design"
   - match: "c8_graph.*.isolated_frac"

@@ -54,7 +54,7 @@ so models of different widths read on the same bands.
 | 4 | pre-activation saturation | GPU | per unit over all nodes: max < -5.55 (GELU output exactly 0), max < -14 (gradient exactly 0), min > 0 (linear) |
 | 7 | residual-stream budget | GPU | per processor block: update / stream norm, attention and MLP parts, max/median abs activation, Dirichlet energy |
 | 9 | information flow | GPU | sigma 0.2, 5, 80: every input variable gets a gradient, every output variable moves when the inputs move |
-| 8 | graph | GPU run | per edge type: destination nodes with no in-edge, degree range, components of the processor graph, edge-index sha1 |
+| 8 | graph | GPU run | per edge type: destination nodes with no in-edge, degree range, components of the processor graph, edge-index sha1. Encoder edges: isolated hidden nodes outside the data grid (the halo) are a reading; isolated ones INSIDE the data grid's lat/lon extent (`isolated_in_region_frac`, holes) WARN; a data node no decoder edge reaches FAILs |
 | 12 | trend | two audits | each reading vs the previous checkpoint (`--prev`) and the lane reference (`--lane`, registry.yaml); exact zeros that appear or vanish always listed |
 
 Not here: check 5 (attention N_eff per head; the pyg ladder in docs `support/20261028_db_attention_health/`), the

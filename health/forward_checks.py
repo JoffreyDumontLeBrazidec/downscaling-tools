@@ -376,6 +376,22 @@ def _components(n: int, src: np.ndarray, dst: np.ndarray) -> int:
     return len({find(i) for i in range(n)})
 
 
+def _inside_source_region(graph, src_t, dst_t):
+    """Destination nodes inside the lat/lon extent of the source nodes (radians in .x), or None without coordinates.
+
+    The extent is a lat/lon box (a global source covers every node). A regional grid that crosses the date line is
+    not handled: its box would be global, which only overstates the region.
+    """
+    xs, xd = getattr(graph[src_t], "x", None), getattr(graph[dst_t], "x", None)
+    if not (torch.is_tensor(xs) and torch.is_tensor(xd)) or xs.shape[-1] < 2 or xd.shape[-1] < 2:
+        return None
+    s, d = np.degrees(xs.detach().cpu().double().numpy()), np.degrees(xd.detach().cpu().double().numpy())
+    wrap = lambda lon: (lon + 180.0) % 360.0 - 180.0
+    lo_s, lo_d = wrap(s[:, 1]), wrap(d[:, 1])
+    return ((d[:, 0] >= s[:, 0].min()) & (d[:, 0] <= s[:, 0].max())
+            & (lo_d >= lo_s.min()) & (lo_d <= lo_s.max()))
+
+
 def graph_audit(graph) -> dict:
     """Check 8 on a torch_geometric HeteroData (or anything with .edge_types and [edge_type].edge_index)."""
     out = {"per_role": {}, "detail": {}}
@@ -402,6 +418,10 @@ def graph_audit(graph) -> dict:
             "edges_per_dst": float(ei.shape[1] / max(n_dst, 1)),
         }
         det = {"n_src": n_src, "n_dst": n_dst, "edges": int(ei.shape[1]), "sha1": hashlib.sha1(ei.tobytes()).hexdigest()}
+        inside = _inside_source_region(graph, src_t, dst_t) if src_t != dst_t else None
+        if inside is not None:
+            # isolated destination nodes INSIDE the source grid's extent: holes in the encoder, not the halo
+            m["isolated_in_region_frac"] = float(((indeg == 0) & inside).mean())
         if src_t == dst_t and n_src <= 5_000_000:
             m["extra_components"] = float(_components(n_src, ei[0], ei[1]) - 1)
         attrs = {}
