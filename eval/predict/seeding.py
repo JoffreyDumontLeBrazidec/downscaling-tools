@@ -29,9 +29,13 @@ a DISTINCT seed from a single base, so per-shard noise is independent while the
 whole run stays reproducible from `ANEMOI_BASE_SEED`.
 
 Reproducibility contract. Seeding happens ONCE per process, in
-`setup_distributed`, before the loop over date/step pairs; members are drawn
-inside that loop and advance the generator, so each member still gets its own
-noise. Two runs therefore reproduce each other only when ALL of the following
+`setup_distributed`, before the loop over date/step pairs. Since 2026-10-30
+(standing rule 31) every member draw is ALSO reseeded, just before its forward
+pass, with `seed_draw(base, date, lead, member)`: the seed is a hash of the four
+integers, so a member's noise no longer depends on which other dates, steps or
+members ran before it in the same process, and two arms that share the base get
+the same noise draw for draw (common random numbers). The per-process seed still
+governs everything else (dataloader order, dropout-free model init). Two runs therefore reproduce each other only when ALL of the following
 match:
 
   * the base seed (`ANEMOI_BASE_SEED`);
@@ -76,6 +80,7 @@ from __future__ import annotations
 import logging
 import os
 
+import numpy as np
 import torch
 
 LOG = logging.getLogger(__name__)
@@ -88,6 +93,10 @@ DEFAULT_BASE_SEED = 756
 # Upstream `_seed_procs` widens small seeds by this factor; mirrored so that a
 # given ANEMOI_BASE_SEED keeps the meaning it has everywhere else in the stack.
 _SEED_THRESHOLD = 1000
+
+# Written into every prediction file (attribute `seed_formula`) so a read can
+# refuse to pair two rows that were not drawn under the same rule.
+SEED_FORMULA = "numpy SeedSequence([base, yyyymmdd, lead_h, member]).generate_state(1, uint32)"
 
 
 def resolve_base_seed(env: dict[str, str] | None = None) -> int:
@@ -123,4 +132,38 @@ def seed_inference(global_rank: int = 0, *, base_seed: int | None = None) -> int
         global_rank,
         seed,
     )
+    return seed
+
+
+def derive_draw_seed(base: int, date: int, lead: int, member: int) -> int:
+    """Seed for ONE sampler draw, derived from (base, init date, lead, member).
+
+    Standing rule 31 (owner, 2026-10-30): a member's noise must never be a
+    constant reused on every date and lead. Measured on the E2 box (ablation
+    note section 14): with ten fixed seeds reused across 30 dates x 6 leads,
+    member k of two DIFFERENT models correlated at 0.90 (wind speed, 34-125 km)
+    and 0.89 (tp), against 0.52 / 0.16 for different seeds, and each seed wrote
+    the same structure on every date (17-20x the pattern-free null). The spread
+    of such a set is ten draws, not 1,800.
+
+    `date` is the init date as a yyyymmdd integer, `lead` the lead in hours,
+    `member` the 0-based member index. The value is independent of the order
+    and count of the cases in a run, so every arm, reference and control that
+    shares `base` gets the same noise for the same (date, lead, member): arm
+    differences stay paired (common random numbers). Use another `base` only to
+    measure seed noise. Box kits use base 1234; the eval path uses the resolved
+    `ANEMOI_BASE_SEED`. The hash is numpy's SeedSequence over the four integers,
+    so it is stable across platforms and library versions.
+    """
+    seq = np.random.SeedSequence([int(base), int(date), int(lead), int(member)])
+    return int(seq.generate_state(1, dtype=np.uint32)[0])
+
+
+def seed_draw(base: int, date: int, lead: int, member: int) -> int:
+    """Seed torch (CPU and CUDA) for one draw with `derive_draw_seed`; return the seed."""
+    seed = derive_draw_seed(base, date, lead, member)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    LOG.info("draw seeded: base=%d date=%d lead=%d member=%d seed=%d", int(base), int(date), int(lead), int(member), seed)
     return seed

@@ -153,4 +153,6 @@ def apply_local_output_scope(ensemble: EnsemblePrediction, raw_scope: str | dict
         y_pred_stack=_subset_hres_array(ensemble.y_pred_stack, mask, name="y_pred"),
         x_interp_stack=_subset_hres_array(ensemble.x_interp_stack, mask, name="x_interp"),
         used_missing_target_unsafe=ensemble.used_missing_target_unsafe,
+        draw_seeds=ensemble.draw_seeds,
+        seed_base=ensemble.seed_base,
     )
