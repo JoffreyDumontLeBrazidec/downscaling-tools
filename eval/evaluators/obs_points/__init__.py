@@ -12,12 +12,17 @@ mean (bias, RMSE, MAE, correlation) and the member-mean MAE are kept as extra co
 field's fair CRPS is its MAE and its spread is zero; every table labels these rows "single field".
 2 m temperature is also scored with quaver's lapse-rate height correction (truth and model at the
 O1280 orography, input at the O320 orography, HRES at its own). tp is also scored as disc means
-around the station's grid point (``radii``). ``plot`` draws the figures from the saved tables
+around the station's grid point (``radii``). When the cache holds 24 h tp and the SEEPS station
+climatology (``obs fetch --tp-periods 12,24 --seeps``), 24 h tp (the sum of two consecutive 12 h files of
+the same date, leads 24 h and later) is scored as variable ``tp24`` on the stations that pass quaver's
+SEEPS filter (dry-day probability in [0.1, 0.85)), with a ``seeps`` column: SEEPS of every member at
+every station (quaver's categories, 0.1 mm rounding and 3 x 3 matrix), averaged over members and
+stations; lower is better (quaver stores 1 - SEEPS). ``plot`` draws the figures from the saved tables
 alone, so ``evaluate --plot-only`` replots without reading a prediction again. Two runs are compared
 date by date with ``eval.cli obs compare``.
 
 Variables: 2t [K], 10ff [m/s, from 10u/10v], msl [Pa], tp [mm per 12 h ending at valid time; file
-metres x 1000, clipped at 0].
+metres x 1000, clipped at 0], tp24 [mm per 24 h, SEEPS only].
 
 Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
   cache          The observation cache directory, or a list or mapping of candidate directories (one
@@ -34,6 +39,7 @@ Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
   min_stations   A region is scored on a date only with at least this many stations. Default 30.
   weighting      none (plain station mean, the default) or station_density (quaver's Gaussian-kernel
                  station-density weights, eval/tools/obs_crps).
+  seeps          Score 24 h SEEPS when the cache allows it. Default true.
   dates, steps   Restrict the files read (YYYYMMDD strings and lead hours).
   plot_regions   Regions drawn in the score figures. Default [all, europe].
 Diagnostic only: no scoreboard row. Point scores at stations penalise realistic but misplaced detail,
@@ -51,7 +57,8 @@ EVALUATOR_SPEC = {
     "requires": ["predictions"],
     "outputs": [
         "scores_per_date.csv: per var, variant, radius, region, lead, date and row (model, input, truth, hres), "
-        "the ensemble scores first (fcrps, spread, spread_rms, ssr_corrected, twcrps<t>, brier<t>, n_obs_gt<t>), "
+        "the ensemble scores first (fcrps, spread, spread_rms, ssr_corrected, twcrps<t>, brier<t>, n_obs_gt<t>, "
+        "seeps for tp24), "
         "then the deterministic ones (bias, rmse_mean, mae_mean, mae_member, corr_mean).",
         "rank_hist.csv: rank-histogram counts of the observation among the members, per date.",
         "summary.csv: mean and SE over dates of every score; paired.csv: paired differences between rows "

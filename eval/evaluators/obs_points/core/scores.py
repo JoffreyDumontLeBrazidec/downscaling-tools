@@ -45,6 +45,20 @@ def rank_counts(ens: np.ndarray, obs: np.ndarray, seed: int = 31) -> np.ndarray:
     return np.bincount(rank, minlength=m + 1)
 
 
+def seeps(fc: np.ndarray, obs: np.ndarray, t1, t2, smat) -> np.ndarray:
+    """SEEPS (Rodwell et al. 2010) of each member at each station, as quaver computes it
+    (ScoresLibAux.seepsField): forecast and observation rounded to 0.1 mm, categories dry (<= t1), light and
+    heavy (>= t2), and the station's 3 x 3 error matrix ``smat`` (n, 9) indexed by forecast category x 3 +
+    observed category. Lower is better; quaver stores 1 - SEEPS. Returns (M, n)."""
+    fc = np.round(np.atleast_2d(np.asarray(fc, np.float64)), 1)
+    ob = np.round(np.asarray(obs, np.float64), 1)
+    t1, t2, smat = np.asarray(t1, np.float64), np.asarray(t2, np.float64), np.asarray(smat, np.float64)
+    oc = (ob > t1).astype(int) + (ob >= t2).astype(int)
+    fcat = (fc > t1).astype(int) + (fc >= t2).astype(int)
+    idx = fcat * 3 + oc[None]
+    return np.take_along_axis(smat.T, idx, axis=0)
+
+
 def _wmean(x, w):
     return float(np.mean(x)) if w is None else float(np.sum(w * x))
 

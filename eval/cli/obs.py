@@ -83,12 +83,16 @@ def _compare(args) -> None:
                 "members": [meta_a.get("members"), meta_b.get("members")],
                 "evaluator": meta_a.get("evaluator", "obs_points"), "where": meta_a.get("where", "at stations"),
                 "sample_unit": meta_a.get("sample_unit", "stations")}
+        # the region shown: "all" for station runs, else the first region the run configured (obs_imerg)
+        order = list(meta_a.get("regions") or meta_a.get("config", {}).get("regions") or [])
+        present = set(tab.region) if len(tab) else set()
+        meta["region"] = "all" if "all" in present else next((r for r in order if r in present), None)
         (out / "compare_meta.json").write_text(json.dumps(meta, indent=2))
-        write_compare_md(tab, meta, out / "paired_runs.md")
+        write_compare_md(tab, meta, out / "paired_runs.md", region=meta["region"])
         for k, v in checks.items():
             print(f"check {k}: {v}")
     meta = json.loads((out / "compare_meta.json").read_text())
-    written = plot_compare(out, pd.read_csv(out / "paired_runs.csv"), meta)
+    written = plot_compare(out, pd.read_csv(out / "paired_runs.csv"), meta, region=meta.get("region"))
     print(f"wrote {out / 'paired_runs.csv'} and {len(written)} figure files in {out}")
 
 

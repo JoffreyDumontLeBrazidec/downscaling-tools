@@ -258,3 +258,66 @@ def test_obs_fetch_refuses_off_atos(monkeypatch, tmp_path):
     monkeypatch.setattr(socket, "gethostname", lambda: "jpbl-s01-02")
     with pytest.raises(SystemExit, match="Atos only"):
         main(["obs", "fetch", "--dates", "20230101", "--out", str(tmp_path / "c")])
+
+
+# ----------------------------------------------------------------------------- SEEPS
+def test_seeps_matches_quaver_indexing():
+    from eval.evaluators.obs_points.core.scores import seeps
+
+    smat = np.arange(9, dtype=float)[None].repeat(3, 0)  # entry k = k, so the result is the index
+    t1, t2 = np.full(3, 0.2), np.full(3, 5.0)
+    obs = np.array([0.0, 1.0, 9.0])          # dry, light, heavy
+    fc = np.array([[0.24, 0.26, 5.0],        # rounds to 0.2 (dry), 0.3 (light), 5.0 (heavy, >= t2)
+                   [7.0, 0.0, 1.0]])
+    np.testing.assert_array_equal(seeps(fc, obs, t1, t2, smat), [[0, 4, 8], [6, 1, 5]])
+
+
+def test_seeps_on_24h_windows(tmp_path):
+    rng = np.random.default_rng(9)
+    la, lo = _grid()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    n_st = 60
+    slat, slon = rng.uniform(31, 59, n_st), rng.uniform(-19, 19, n_st)
+    date = "20230101"
+    rows, rows24, clim = [], [], []
+    for step in (12, 24):
+        valid = (pd.Timestamp(date) + pd.Timedelta(hours=step)).strftime("%Y%m%d%H")
+        for k in range(n_st):
+            rows.append({"valid": valid, "lat": slat[k], "lon": slon[k], "stnid": k, "elevation": 0.0,
+                         "obs": rng.gamma(0.5, 4.0), "h_o1280": 0.0, "h_o320": 0.0})
+    valid24 = "2023010200"
+    for k in range(n_st):
+        rows24.append({"valid": valid24, "lat": slat[k], "lon": slon[k], "stnid": k, "elevation": 0.0,
+                       "obs": rng.gamma(0.5, 8.0), "h_o1280": 0.0, "h_o320": 0.0})
+        p1 = 0.05 if k < 10 else 0.5  # ten stations fail quaver's seeps_filter
+        clim.append({"valid": valid24, "stnid": k, "lat": slat[k], "lon": slon[k], "p1": p1, "t1": 0.2, "t2": 4.0,
+                     **{f"s{j}": float(j != 0 and j != 4 and j != 8) for j in range(9)}})
+    pd.DataFrame(rows).to_csv(cache / "obs_tp.csv", index=False)
+    pd.DataFrame(rows24).to_csv(cache / "obs_tp24.csv", index=False)
+    pd.DataFrame(clim).to_csv(cache / "seeps_clim_tp24.csv", index=False)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    for step in (12, 24):
+        _write(pred / f"predictions_{date}_step{step:03d}.nc", date, step, noise=1.0, seed=step)
+    cfg = {"cache": str(cache), "vars": ["tp"], "max_km": 100.0, "min_stations": 20, "radii": [0],
+           "regions": {"all": None}, "height_classes": {}}
+    out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "out", run_label="S")
+    df = pd.read_csv(out / "scores_per_date.csv")
+    t24 = df[df["var"] == "tp24"]
+    assert set(t24.lead) == {24} and (t24.n == 50).all()  # the ten filtered stations are left out
+    assert t24.seeps.between(0, 1).all() and df[df["var"] == "tp"].seeps.isna().all()
+    # recompute the truth row's SEEPS by hand: 24 h = the +12 and +24 files summed
+    from eval.evaluators.obs_points.runner import read_fields
+    f12 = read_fields(pred / f"predictions_{date}_step012.nc", ["tp"])
+    f24 = read_fields(pred / f"predictions_{date}_step024.nc", ["tp"])
+    m = StationMatcher(f12[0], f12[1])
+    idx, _ = m.match(slat[10:], slon[10:], 100.0)
+    truth = (f12[2]["tp"]["truth"] + f24[2]["tp"]["truth"])[idx]
+    ob = np.round(np.array([r["obs"] for r in rows24[10:]]), 1)
+    fc = np.round(truth, 1)
+    cat = lambda x: (x > 0.2).astype(int) + (x >= 4.0).astype(int)  # noqa: E731
+    expected = (cat(fc) != cat(ob)).mean()
+    assert t24[t24.row == "truth"].seeps.iloc[0] == pytest.approx(expected)
+    obs_points.plot(out, {}, cfg)
+    assert (out / "obs_tp24_raw_scores.png").exists()

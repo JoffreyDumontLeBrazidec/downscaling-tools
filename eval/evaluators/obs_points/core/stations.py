@@ -99,6 +99,14 @@ def load_cache(cache_dir, variables) -> tuple[dict, dict, dict]:
     return obs, hres, meta
 
 
+def load_seeps_clim(cache_dir):
+    """The SEEPS station climatology of the cache (``obs fetch --seeps``), or None."""
+    import pandas as pd
+
+    p = Path(cache_dir) / "seeps_clim_tp24.csv"
+    return pd.read_csv(p, dtype={"valid": str, "stnid": str}) if p.exists() else None
+
+
 def region_masks(lat, lon, regions: dict) -> dict:
     """name -> boolean mask; a region is None (everything) or [lat0, lat1, lon0, lon1], half-open."""
     lat, lon = np.asarray(lat), np.asarray(lon)

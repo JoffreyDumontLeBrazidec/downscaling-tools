@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 
 from eval.discovery.predictions import find_predictions
-from eval.evaluators.obs_points.core.scores import ensemble_scores, rank_counts
+from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
-    StationMatcher, density_weights, height_masks, load_cache, region_masks, resolve_cache,
+    StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache,
 )
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
 
@@ -81,17 +81,28 @@ def _hres_at(hres, date, lead, o):
             o.stnid.map(h.hres_elevation).to_numpy(np.float64) if "hres_elevation" in h else None)
 
 
-def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg):
+def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None):
     """Rows of one variable, one date and one lead. The station sample is the intersection over rows
-    (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations."""
+    (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations.
+    With ``seeps_clim`` (24 h tp) the sample is restricted to stations with a SEEPS climatology whose dry-day
+    probability is in [0.1, 0.85) (quaver's seeps_filter), and every row gets a ``seeps`` column: SEEPS of
+    each member at each station, averaged over members and stations."""
     import pandas as pd
 
     valid = (pd.Timestamp(date) + pd.Timedelta(hours=int(lead))).strftime("%Y%m%d%H")
     o = obs_v[obs_v.valid == valid]
+    clim = None
+    if seeps_clim is not None:
+        c = seeps_clim[seeps_clim.valid == valid].drop_duplicates(subset=["stnid"]).set_index("stnid")
+        p1 = o.stnid.map(c.p1)
+        o = o[(p1 >= 0.1) & (p1 < 0.85)]
     if o.empty:
         return [], [], 0
     idx, keep = matcher.match(o.lat.to_numpy(), o.lon.to_numpy(), cfg["max_km"])
     o, idx = o[keep].reset_index(drop=True), idx[keep]
+    if seeps_clim is not None:
+        cc = c.loc[o.stnid]
+        clim = (cc.t1.to_numpy(), cc.t2.to_numpy(), cc[[f"s{k}" for k in range(9)]].to_numpy())
     ov = o.obs.to_numpy(np.float64)
     hr, hel = _hres_at(hres_v, date, lead, o)
     is_tp = var == "tp"
@@ -134,8 +145,11 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg):
                 base = dict(var=var, variant=tag, radius_km=float(r), region=reg, lead=int(lead), date=str(date))
                 for k, x in vv.items():
                     ens = x[:, m] if x.ndim == 2 else x[m][None]
+                    extra = {}
+                    if clim is not None:
+                        extra["seeps"] = _wmean(seeps(ens, ov[m], clim[0][m], clim[1][m], clim[2][m]).mean(0), w)
                     rows.append({**base, "row": k, "kind": ROW_KIND[k],
-                                 **ensemble_scores(ens, ov[m], thresholds, weights=w)})
+                                 **ensemble_scores(ens, ov[m], thresholds, weights=w), **extra})
                     if ens.shape[0] > 1:
                         counts = rank_counts(ens, ov[m])
                         ranks.append({**base, "row": k, "members": int(ens.shape[0]), "n": int(m.sum()),
@@ -158,6 +172,7 @@ def resolve_config(eval_config: dict) -> dict:
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
+        "seeps": bool(eval_config.get("seeps", True)),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
     }
@@ -174,7 +189,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     output_dir.mkdir(parents=True, exist_ok=True)
     cfg = resolve_config(eval_config)
     cache_dir = resolve_cache(eval_config.get("cache"))
-    obs, hres, cache_meta = load_cache(cache_dir, cfg["vars"])
+    obs, hres, cache_meta = load_cache(cache_dir, cfg["vars"] + (["tp24"] if cfg["seeps"] else []))
+    seeps_clim = load_seeps_clim(cache_dir) if cfg["seeps"] and "tp24" in obs and "tp" in cfg["vars"] else None
+    if cfg["seeps"] and seeps_clim is None:
+        LOG.info("obs_points: no 24 h tp or SEEPS climatology in the cache; SEEPS skipped")
     missing_vars = [v for v in cfg["vars"] if v not in obs]
     if missing_vars:
         LOG.warning("obs_points: no observations in %s for %s", cache_dir, missing_vars)
@@ -187,6 +205,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     members = set()
     stations = defaultdict(list)
     matcher = None
+    prev = {}  # tp of the previous lead of the same date, for the 24 h windows of SEEPS
     for p in preds:
         lat, lon, fields = read_fields(p.path, [v for v in cfg["vars"] if v in obs])
         if matcher is None or not matcher.same_grid(lat, lon):
@@ -199,6 +218,16 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             stations[f"{v} +{p.step:03d}"].append(nst)
             if nst == 0:
                 log.append(f"WARN no observations within {cfg['max_km']:g} km for {v} {p.date} +{p.step} h")
+        if seeps_clim is not None and "tp" in fields:
+            before = prev.get((p.date, p.step - 12))
+            if before is not None:
+                f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"]}
+                r, k, nst = score_valid("tp24", f24, obs["tp24"], None, matcher, date=p.date, lead=p.step,
+                                        cfg=cfg, seeps_clim=seeps_clim)
+                rows += r
+                ranks += k
+                stations[f"tp24 +{p.step:03d}"].append(nst)
+            prev = {(p.date, p.step): fields["tp"]}
         absent = [v for v in cfg["vars"] if v in obs and v not in fields]
         if absent:
             log.append(f"WARN {p.path.name}: no channel for {absent}")

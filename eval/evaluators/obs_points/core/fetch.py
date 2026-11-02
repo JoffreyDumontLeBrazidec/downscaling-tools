@@ -17,8 +17,13 @@ Writes into <cache dir>:
   hres_<var>.csv  operational HRES at the stations from STVL's model table (date, lead, stnid, hres, hres_elevation),
                   a reference row; skipped per (date, lead) when STVL holds nothing (msl and tp are absent for 2023)
   orography_O1280.grib, orography_O320.grib (reused when present), fetch_log.txt
+  seeps_clim_tp24.csv  (``--seeps``) the station climatology quaver's SEEPS uses (VINO ``rodw``, climate period
+                  1980-2009, category equitable_categories, synop; it exists for 24 h only): valid, stnid, lat, lon,
+                  p1 (probability of a dry day), t1 (dry/light boundary, 0.2 mm), t2 (light/heavy boundary, mm) and
+                  s0..s8, the 3 x 3 SEEPS error matrix, index = forecast category x 3 + observed category
   cache_meta.json cache_version, created (UTC), host, dates, leads, vars, box, filters, the STVL request
-                  parameters, rows per file and stations per valid time
+                  parameters, rows per file and stations per valid time; a later fetch into the same directory
+                  adds its files and merges its entries into the manifest
 Filters: quaver toss hard limits (2t 173-333 K, 10ff 0-100 m/s, msl 800-1100 hPa, tp 0-300 mm), one report per
 station and time. No analysis gross-error check.
 """
@@ -122,6 +127,37 @@ def hres_at(var, date, lead):
     return df[["date", "lead", "stnid", "hres", "hres_elevation"]], "ok"
 
 
+SEEPS_CLIM = {"climate_period": "1980-2009", "category": "equitable_categories"}
+SEEPS_MODEL = {"class": "od", "stream": "oper", "expver": "0001", "type": "ec", "anoffset": 0}
+
+
+def seeps_clim_at(valid, box):
+    """The 13 SEEPS climatology values per station for the 24 h window ending at ``valid`` (VINO through STVL):
+    number 0 = p1, 1 = t1, 3 = t2, 4..12 = the 3 x 3 matrix (quaver ScoresLibAux.seepsField)."""
+    import pandas as pd
+    import vtb.media as vm
+
+    fs = vm.stvl_retrieve(table="climatology", parameter="tp", period=dt.timedelta(hours=24),
+                          climatology=dict(SEEPS_CLIM), model=dict(SEEPS_MODEL), sources=["synop"],
+                          reference_datetimes=[valid.strftime("%Y-%m-%dT%H:%M:%S")],
+                          forecast_lengths=[dt.timedelta(hours=0)])
+    if len(fs) < 13:
+        return pd.DataFrame()
+    base = fs[0].to_dataframe().rename(columns={"latitude": "lat", "longitude": "lon", "value_0": "p1"})
+    out = base[["stnid", "lat", "lon", "p1"]].copy()
+    out["t1"] = fs[1].to_dataframe()["value_0"].to_numpy()
+    out["t2"] = fs[3].to_dataframe()["value_0"].to_numpy()
+    for k in range(9):
+        f = fs[4 + k].to_dataframe()
+        assert (f.stnid.to_numpy() == base.stnid.to_numpy()).all(), "climatology fields not aligned by station"
+        out[f"s{k}"] = f["value_0"].to_numpy()
+    out["lon"] = ((out["lon"] + 180.0) % 360.0) - 180.0
+    out = out[(out.lat >= box[0]) & (out.lat <= box[1]) & (out.lon >= box[2]) & (out.lon <= box[3])]
+    out = out.drop_duplicates(subset=["stnid"])
+    out.insert(0, "valid", valid.strftime("%Y%m%d%H"))
+    return out
+
+
 def valid_hours(var, leads):
     """Hours after the 00 UTC date at which the cache holds observations of ``var``."""
     _, period = _stvl_param(var)
@@ -131,12 +167,12 @@ def valid_hours(var, leads):
     return list(range(lo, max(leads) + 1, 12))
 
 
-def fetch_cache(dates, leads, variables, box, out, *, hres=True):
+def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
     import pandas as pd
 
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     log, rows, per_valid = [], {}, {}
-    trees = {g: orography(out, g, log) for g in ("O1280", "O320")}
+    trees = {g: orography(out, g, log) for g in ("O1280", "O320")} if variables else {}
     for var in variables:
         valids = sorted({dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=h)
                          for d in dates for h in valid_hours(var, leads)})
@@ -168,19 +204,51 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True):
             h = pd.concat(frames, ignore_index=True)
             h.to_csv(out / f"hres_{var}.csv", index=False, float_format="%.4f")
             rows[f"hres_{var}.csv"] = int(len(h))
-    (out / "fetch_log.txt").write_text("\n".join(log) + "\n")
+    if seeps:
+        frames, per_valid["seeps_clim_tp24"] = [], {}
+        for v in sorted({dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=h)
+                         for d in dates for h in valid_hours("tp24", leads)}):
+            df = seeps_clim_at(v, box)
+            per_valid["seeps_clim_tp24"][v.strftime("%Y%m%d%H")] = int(len(df))
+            log.append(f"seeps climatology {v:%Y%m%d%H}: {len(df)} stations"); print(log[-1], flush=True)
+            if len(df):
+                frames.append(df)
+        if frames:
+            c = pd.concat(frames, ignore_index=True)
+            c.to_csv(out / "seeps_clim_tp24.csv", index=False, float_format="%.5f")
+            rows["seeps_clim_tp24.csv"] = int(len(c))
+    with open(out / "fetch_log.txt", "a") as f:
+        f.write("\n".join(log) + "\n")
     meta = {
         "cache_version": CACHE_VERSION, "kind": "station observations (obs_points)",
         "created": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "host": socket.gethostname(),
         "dates": list(dates), "leads": list(leads), "vars": list(variables), "box": list(box),
         "limits": {v: LIMITS[v] for v in variables if v in LIMITS},
-        "stvl": {"observation": {"table": "observation", "forecast_lengths_h": [0], "reference_datetimes": "valid time",
-                                 "period_h": {v: _stvl_param(v)[1] for v in variables if _stvl_param(v)[1]}},
-                 "hres": None if not hres else {"table": "model", "model": HRES_MODEL}},
+        "stvl": None if not variables else {
+            "observation": {"table": "observation", "forecast_lengths_h": [0], "reference_datetimes": "valid time",
+                            "period_h": {v: _stvl_param(v)[1] for v in variables if _stvl_param(v)[1]}},
+            "hres": None if not hres else {"table": "model", "model": HRES_MODEL}},
         "orography": "mars class=od stream=enfo type=pf number=1 date=2024-01-01 step=0 param=z, grids O1280 and O320",
         "rows": rows, "stations_per_valid": per_valid, "source": "STVL via vtb",
     }
-    (out / "cache_meta.json").write_text(json.dumps(meta, indent=2))
+    if seeps:
+        meta["seeps_climatology"] = {"table": "climatology", "climat": "rodw", **SEEPS_CLIM, "model": SEEPS_MODEL,
+                                     "sources": ["synop"], "period_h": 24}
+    path = out / "cache_meta.json"
+    if path.exists():  # a second fetch into the same cache: keep what is there, add or replace the new entries
+        old = json.loads(path.read_text())
+        this = {k: meta[k] for k in ("created", "host", "dates", "leads", "vars")} | {"seeps": seeps}
+        for k in ("rows", "stations_per_valid", "limits"):
+            meta[k] = {**old.get(k, {}), **meta[k]}
+        meta["vars"] = sorted(set(old.get("vars", [])) | set(meta["vars"]))
+        meta["history"] = old.get("history", [{k: old.get(k) for k in ("created", "host", "dates", "leads", "vars")}])
+        meta["history"].append(this)
+        for k in ("stvl", "seeps_climatology", "orography"):
+            if k not in meta or meta[k] is None:
+                meta[k] = old.get(k)
+        meta["dates"] = sorted(set(old.get("dates", [])) | set(meta["dates"]))
+        meta["leads"] = sorted(set(old.get("leads", [])) | set(meta["leads"]))
+    path.write_text(json.dumps(meta, indent=2))
     return out
 
 
@@ -191,12 +259,14 @@ def add_args(ap):
     ap.add_argument("--tp-periods", default="12", help="tp accumulations in hours: 12 gives tp, 24 adds tp24 (SEEPS)")
     ap.add_argument("--box", default="9,71,-81,41", help="lat0,lat1,lon0,lon1 (lon -180..180)")
     ap.add_argument("--no-hres", action="store_true", help="skip HRES at the stations")
+    ap.add_argument("--seeps", action="store_true",
+                    help="also fetch the SEEPS station climatology (24 h windows ending at date + 24..max lead)")
     ap.add_argument("--out", required=True, help="cache directory (created)")
 
 
 def variables_from_args(a):
     out = []
-    for v in a.vars.split(","):
+    for v in filter(None, a.vars.split(",")):
         if v == "tp":
             out += ["tp" if p == 12 else f"tp{p}" for p in (int(x) for x in a.tp_periods.split(","))]
         else:
@@ -207,7 +277,7 @@ def variables_from_args(a):
 def run_from_args(a):
     require_atos()
     return fetch_cache(a.dates.split(","), [int(x) for x in a.leads.split(",")], variables_from_args(a),
-                       [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres)
+                       [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres, seeps=a.seeps)
 
 
 def main(argv=None):
