@@ -17,6 +17,7 @@ source /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-re
 set +e
 LEADS=${*:-12 24 36 48 60 72}   # leads as arguments (sbatch --export splits at commas)
 for lead in 24 72; do
+  [[ " $LEADS " == *" $lead "* ]] || { echo "[final] zoom maps +$lead h skipped: not among the read's leads ($LEADS)"; continue; }
   L=$(printf %03d $lead)
   [[ -f $OUT/maps/L$L/cases.json ]] || python $KIT/scripts/zoom_maps_o2560.py $lead $OUT/maps/L$L A100=$OUT/pred/A100_L$L B24=$OUT/pred/B24_L$L B50=$OUT/pred/B50_L$L > $OUT/maps_L$L.log 2>&1
   echo "[final] zoom maps L$L rc=$? $(grep -h CASES $OUT/maps_L$L.log | head -1) $(date -u +%FT%TZ)"

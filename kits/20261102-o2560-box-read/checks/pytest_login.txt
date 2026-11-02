@@ -1,42 +1,51 @@
-Mon Nov  2 07:21:06 AM UTC 2026
+Mon Nov  2 07:53:46 AM UTC 2026
 jpbl-s03-01
 ============================= test session starts ==============================
 platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds/bin/python
 hypothesis profile 'default'
 rootdir: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read
 plugins: hypothesis-6.151.5, hydra-core-1.3.2, mock-3.15.1, xdist-3.8.0, skip-slow-0.0.5, typeguard-4.4.4, anyio-4.12.1
-collecting ... collected 30 items
+collecting ... collected 39 items
 
-tests/test_configs.py::test_A_and_B_configs_agree_on_model_graph_data PASSED [  3%]
-tests/test_dates.py::test_validation_dates_outside_training[/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_crop_100k_AG.yaml] PASSED [  6%]
-tests/test_dates.py::test_validation_dates_outside_training[/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_read.yaml] PASSED [ 10%]
-tests/test_dates.py::test_checkpoint_metadata_training_range[A100] PASSED [ 13%]
-tests/test_dates.py::test_checkpoint_metadata_training_range[B24] PASSED [ 16%]
-tests/test_dates.py::test_checkpoint_metadata_training_range[B50] PASSED [ 20%]
-tests/test_dates.py::test_store_ends_on_the_last_validation_date PASSED  [ 23%]
-tests/test_grid.py::test_store_matrix_and_graph_point_counts PASSED      [ 26%]
-tests/test_layout_and_scores.py::test_fair_crps_matches_brute_force PASSED [ 30%]
-tests/test_layout_and_scores.py::test_written_file_reads_in_the_eval_tools PASSED [ 33%]
-tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[A100] PASSED   [ 36%]
-tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[B24] PASSED    [ 40%]
-tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[B50] PASSED    [ 43%]
-tests/test_outputs.py::test_file_is_the_ema10000_copy[A100] PASSED       [ 46%]
-tests/test_outputs.py::test_file_is_the_ema10000_copy[B24] PASSED        [ 50%]
-tests/test_outputs.py::test_file_is_the_ema10000_copy[B50] PASSED        [ 53%]
-tests/test_precip.py::test_clip_only_precip_and_report PASSED            [ 56%]
-tests/test_precip.py::test_deaccumulate_from_start_totals PASSED         [ 60%]
-tests/test_precip.py::test_deaccumulate_needs_previous_lead PASSED       [ 63%]
-tests/test_safety.py::test_kit_files_found PASSED                        [ 66%]
-tests/test_safety.py::test_no_fdb_call_anywhere PASSED                   [ 70%]
-tests/test_safety.py::test_outputs_not_under_home PASSED                 [ 73%]
-tests/test_safety.py::test_no_cancel_or_delete_commands PASSED           [ 76%]
-tests/test_scoring_pipeline.py::test_scoring_scripts_end_to_end PASSED   [ 80%]
-tests/test_scoring_pipeline.py::test_spectra_table PASSED                [ 83%]
-tests/test_scoring_pipeline.py::test_box_spectra_runner_reads_the_kit_layout PASSED [ 86%]
-tests/test_seeds.py::test_check_values PASSED                            [ 90%]
-tests/test_seeds.py::test_one_seed_per_draw_no_reuse PASSED              [ 93%]
-tests/test_seeds.py::test_seeds_do_not_depend_on_the_row PASSED          [ 96%]
-tests/test_seeds.py::test_dry_run_records_hold_the_same_seeds_for_every_row PASSED [100%]
+tests/test_configs.py::test_A_and_B_configs_agree_on_model_graph_data PASSED [  2%]
+tests/test_dates.py::test_validation_dates_outside_training[/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_crop_100k_AG.yaml] PASSED [  5%]
+tests/test_dates.py::test_validation_dates_outside_training[/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_read.yaml] PASSED [  7%]
+tests/test_dates.py::test_checkpoint_metadata_training_range[A100] PASSED [ 10%]
+tests/test_dates.py::test_checkpoint_metadata_training_range[B24] PASSED [ 12%]
+tests/test_dates.py::test_checkpoint_metadata_training_range[B50] PASSED [ 15%]
+tests/test_dates.py::test_store_ends_on_the_last_validation_date PASSED  [ 17%]
+tests/test_grid.py::test_store_matrix_and_graph_point_counts PASSED      [ 20%]
+tests/test_layout_and_scores.py::test_fair_crps_matches_brute_force PASSED [ 23%]
+tests/test_layout_and_scores.py::test_written_file_reads_in_the_eval_tools PASSED [ 25%]
+tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[A100] PASSED   [ 28%]
+tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[B24] PASSED    [ 30%]
+tests/test_outputs.py::test_eleven_outputs_in_order_no_sp[B50] PASSED    [ 33%]
+tests/test_outputs.py::test_file_is_the_ema10000_copy[A100] PASSED       [ 35%]
+tests/test_outputs.py::test_file_is_the_ema10000_copy[B24] PASSED        [ 38%]
+tests/test_outputs.py::test_file_is_the_ema10000_copy[B50] PASSED        [ 41%]
+tests/test_precip.py::test_clip_only_precip_and_report PASSED            [ 43%]
+tests/test_precip.py::test_deaccumulate_from_start_totals PASSED         [ 46%]
+tests/test_precip.py::test_deaccumulate_needs_previous_lead PASSED       [ 48%]
+tests/test_provenance.py::test_A_and_B_trained_on_the_same_statistics_and_donor PASSED [ 51%]
+tests/test_provenance.py::test_manifest_holds_the_training_inputs PASSED [ 53%]
+tests/test_safety.py::test_kit_files_found PASSED                        [ 56%]
+tests/test_safety.py::test_no_fdb_call_anywhere PASSED                   [ 58%]
+tests/test_safety.py::test_outputs_not_under_home PASSED                 [ 61%]
+tests/test_safety.py::test_no_cancel_or_delete_commands PASSED           [ 64%]
+tests/test_scoring_pipeline.py::test_calibrated_ensemble_reads_one PASSED [ 66%]
+tests/test_scoring_pipeline.py::test_input_row_is_one_member PASSED      [ 69%]
+tests/test_scoring_pipeline.py::test_tp_tail_and_10ff_scores_by_hand PASSED [ 71%]
+tests/test_scoring_pipeline.py::test_summary_and_zoom_maps PASSED        [ 74%]
+tests/test_scoring_pipeline.py::test_rows_with_different_dates_are_refused PASSED [ 76%]
+tests/test_scoring_pipeline.py::test_box_spectra_runner_reads_the_kit_layout PASSED [ 79%]
+tests/test_scoring_pipeline.py::test_spectra_table_places_each_column PASSED [ 82%]
+tests/test_seeds.py::test_check_values PASSED                            [ 84%]
+tests/test_seeds.py::test_one_seed_per_draw_no_reuse PASSED              [ 87%]
+tests/test_seeds.py::test_seeds_do_not_depend_on_the_row PASSED          [ 89%]
+tests/test_seeds.py::test_dry_run_records_hold_the_same_seeds_for_every_row PASSED [ 92%]
+tests/test_weights.py::test_ring_counts_and_weights_on_a_full_grid PASSED [ 94%]
+tests/test_weights.py::test_wrong_ring_index_fails PASSED                [ 97%]
+tests/test_weights.py::test_ring_counts_on_the_o2560_box_store PASSED    [100%]
 
 =============================== warnings summary ===============================
 tests/test_grid.py::test_store_matrix_and_graph_point_counts
@@ -50,5 +59,5 @@ tests/test_layout_and_scores.py::test_written_file_reads_in_the_eval_tools
     ds = xr.open_dataset(f)
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================= 30 passed, 2 warnings in 13.35s ========================
-[W1102 08:21:21.673470556 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())
+======================= 39 passed, 2 warnings in 26.86s ========================
+[W1102 08:54:15.950467175 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())

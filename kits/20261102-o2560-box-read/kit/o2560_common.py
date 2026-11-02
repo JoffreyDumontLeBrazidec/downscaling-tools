@@ -10,6 +10,8 @@ Input reference: the o1280 operational IFS input interpolated to o2560 (x_interp
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 KIT_ROOT = "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read"
@@ -99,8 +101,9 @@ def od_area_mask(lat: np.ndarray, lon360: np.ndarray, area_nwse=(71.5, -81.5, 8.
 
 
 def fcrps_terms(f: np.ndarray, y: np.ndarray):
-    """f (m, p), y (p,): pointwise fair CRPS, spread (ddof 1), squared ensemble-mean error.
-    With one member (the input row IN): mean absolute error, zero spread, squared error."""
+    """f (m, p), y (p,): pointwise fair CRPS, ensemble VARIANCE (ddof 1) and squared ensemble-mean error.
+    Spread over an area is sqrt(weighted mean of the variance), never the mean of the standard deviation.
+    With one member (the input row IN): absolute error, zero variance, squared error."""
     m = f.shape[0]
     term1 = np.mean(np.abs(f - y[None]), axis=0)
     if m == 1:
@@ -108,4 +111,71 @@ def fcrps_terms(f: np.ndarray, y: np.ndarray):
     sf = np.sort(f, axis=0)
     coeff = (2.0 * np.arange(1, m + 1) - m - 1.0)[:, None]
     pair = 2.0 * np.sum(coeff * sf, axis=0)
-    return term1 - pair / (2.0 * m * (m - 1)), np.std(f, axis=0, ddof=1), np.square(f.mean(0) - y)
+    return term1 - pair / (2.0 * m * (m - 1)), np.var(f, axis=0, ddof=1), np.square(f.mean(0) - y)
+
+
+# ---- area weights on the octahedral reduced Gaussian grid (review fix 3, 2 Nov 2026) ----
+O_N = 2560   # o2560: 2 x 2560 latitude rings; ring i (1-based from the pole, per hemisphere) holds 4 i + 16 points
+
+
+def octahedral_ring_counts(lat: np.ndarray, lon: np.ndarray, n: int = O_N, check: bool = True) -> np.ndarray:
+    """Number of points on the FULL global ring of each point (4 i + 16), i from the latitude
+    (ring i lies near 90 - (i - 0.5) * 90 / n degrees). With check=True the longitude spacing of the box points on every
+    ring is verified to be 360 / (4 i + 16), so a wrong ring index fails instead of weighting silently."""
+    i = np.rint((90.0 - np.abs(lat)) * n / 90.0 + 0.5).astype(np.int64)
+    if (i < 1).any() or (i > n).any():
+        raise ValueError("ring index outside 1..n")
+    cnt = 4 * i + 16
+    if check:
+        ul, inv = np.unique(lat, return_inverse=True)
+        for k in range(ul.size):
+            sel = inv == k
+            if sel.sum() < 3:
+                continue
+            d = np.diff(np.sort(np.mod(lon[sel], 360.0)))
+            step = float(np.median(d))
+            want = 360.0 / int(cnt[sel][0])
+            if abs(step - want) > 1e-6 * want + 1e-9:
+                raise ValueError(f"ring at lat {ul[k]:.5f}: lon spacing {step:.8f} != 360/{int(cnt[sel][0])} = {want:.8f}")
+    return cnt
+
+
+def area_weights(lat: np.ndarray, lon: np.ndarray, n: int = O_N, check: bool = True) -> np.ndarray:
+    """Point area weight on the octahedral grid: cos(lat) / (points on the full ring). Summed over a full ring it is
+    cos(lat); summing cos(lat) per point instead would over-weight the high-latitude rings, which hold fewer points."""
+    return np.cos(np.deg2rad(lat)) / octahedral_ring_counts(lat, lon, n, check)
+
+
+# ---- spread/RMSE ratio pooled over dates (review fix 2; rule 32 convention of eval/.../probabilistic/core/calibration.py) ----
+RATIO_BOOTSTRAP_SEED = 32
+RATIO_BOOTSTRAP_RESAMPLES = 2000
+
+
+def spread_skill_corrected(mean_var: np.ndarray, mean_sq: np.ndarray, m: int) -> float:
+    """sqrt((m+1)/m) * sqrt(mean over dates of the area-mean ensemble variance) / sqrt(mean over dates of the area-mean
+    squared error of the ensemble mean). A calibrated ensemble reads 1."""
+    return float(math.sqrt((m + 1.0) / m) * math.sqrt(max(float(np.mean(mean_var)), 0.0) / float(np.mean(mean_sq))))
+
+
+def ratio_bootstrap(mean_var, mean_sq, m: int, mean_var_b=None, mean_sq_b=None, n_res: int = RATIO_BOOTSTRAP_RESAMPLES,
+                    seed: int = RATIO_BOOTSTRAP_SEED, level: float = 0.95) -> dict:
+    """95 % date-bootstrap interval of the corrected ratio; with a second row (same dates, same order) also the paired
+    bootstrap of the difference first minus second (the same resampled dates for both rows)."""
+    mv, ms = np.asarray(mean_var, float), np.asarray(mean_sq, float)
+    n = mv.size
+    out = {"ratio": spread_skill_corrected(mv, ms, m), "n_dates": n}
+    if n < 2:
+        return {**out, "lo": float("nan"), "hi": float("nan")}
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(n_res, n))
+    c = math.sqrt((m + 1.0) / m)
+    r = c * np.sqrt(np.maximum(mv[idx].mean(1), 0) / ms[idx].mean(1))
+    a = (1 - level) / 2
+    out.update(lo=float(np.quantile(r, a)), hi=float(np.quantile(r, 1 - a)))
+    if mean_var_b is not None:
+        vb, sb = np.asarray(mean_var_b, float), np.asarray(mean_sq_b, float)
+        rb = c * np.sqrt(np.maximum(vb[idx].mean(1), 0) / sb[idx].mean(1))
+        d = r - rb
+        out.update(ratio_b=spread_skill_corrected(vb, sb, m), diff=out["ratio"] - spread_skill_corrected(vb, sb, m),
+                   diff_lo=float(np.quantile(d, a)), diff_hi=float(np.quantile(d, 1 - a)))
+    return out

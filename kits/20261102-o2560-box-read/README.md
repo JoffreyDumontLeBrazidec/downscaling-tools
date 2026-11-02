@@ -60,26 +60,44 @@ The A checkpoint files (raw, inference, EMA-2000, EMA-10000 at 100k) were also c
 
 - `kit/o2560_box_predict.py`: the predictor (MODE dry, smoke or predict). `kit/o2560_common.py`: seeds, dates, outputs,
   clipping, fair CRPS. `kit/rows.sh`, `kit/env.sh`, `kit/eval_env.sh`: rows and environments.
-- `kit/smoke.sbatch` + `kit/smoke_compare.py`: the GPU smoke (one date, +24 h, 2 members, rows B24, A100, B50, B24X; B24X
+- `kit/smoke.sbatch` + `kit/seed_check.py` + `kit/smoke_compare.py`: the GPU smoke (one date, +24 h, 2 members, rows B24, A100, B50, B24X; B24X
   runs B24's weights on A's code to show the crop commits leave full-box inference unchanged).
 - `kit/predict.sbatch`: one row at one lead. `kit/score.sbatch`: one lead (box spectra per row, spectra table, paired
   scores). `kit/final.sbatch`: zoom maps, summary tables, `eval.cli judge` (rule 32 v2).
 - `scripts/paired_scores_o2560.py`, `scripts/spectra_table.py`, `scripts/zoom_maps_o2560.py`, `scripts/summarize.py`,
   `scripts/compare_configs.py`, `scripts/dry_all.sh`, `scripts/submit_all.sh`.
 - `tests/`: pytest unit tests (run on the Jupiter login node; output in `checks/pytest_login.txt`).
-- `checks/`: dry-run logs, pytest output, config diff, MANIFEST.json.
+- `checks/`: dry-run logs, pytest output, config diff, MANIFEST.json, provenance of each chain's training inputs
+  (`provenance_atos_A.json`, `provenance_jupiter_B.json`: residual statistics 10e6c0a4 and DB300 warm start b7e854f7 on
+  both, and identical mean/stdev/minimum/maximum of both box stores).
 
 ## Scoring (rule order, wind speed and tp first)
 
+The 1-degree edge strip of the box IS excluded from every score below (points within 1 degree of 10 N, 70 N, 80 W or
+40 E). Area weights are cos(lat) divided by the number of points on the full octahedral ring of the point
+(4 i + 16 on ring i), which is the point area of the o2560 reduced Gaussian grid; `o2560_common.area_weights` checks the
+longitude spacing of every ring, so a wrong ring index fails instead of weighting silently. Note for Joffrey: the
+repository's `eval/evaluators/surface/core/compute.py:_area_weights` uses cos(lat) per point, without the division by
+the ring count; that is not changed here.
+
 1. Per-bin amplitude spectra, full field and residual against the o2560 truth, and the input's ratio: `box_spectra` of
-   downscaling-tools 4e659c3 at 0.035 degrees (the o2560 spacing), whole box without a 1-degree margin, ws tp 10u 10v 2t
-   msl, pooled over 12 dates x 10 members. Bins below 15.6 km are marked model against model.
-2. tp tail: p99, p99.9, p99.99 and the per-date maximum over the box without the edge strip, members pooled, for each row,
-   IN and the truth; counts of points at or above 10, 25, 50, 100 mm per 6 h.
-3. Zoom maps at +24 and +72 h: the Alps box 43-49 N 4-16 E on the wettest Alps date, and the date with the deepest truth
-   low north of 35 N (called a storm only if below 990 hPa); truth, input, members 1-3 of each row; tp and wind speed.
-4. Fair CRPS, spread, ensemble-mean RMSE and the corrected spread/RMSE ratio sqrt((M+1)/M) x spread / RMSE, per date, for
-   all 11 outputs plus 10 m wind speed, over the box, Europe and the Alps, with paired SE over the 12 dates.
+   downscaling-tools 4e659c3 at 0.035 degrees (the o2560 spacing), ws tp 10u 10v 2t msl, pooled over 12 dates x 10
+   members, on two regions: the whole box less a 1-degree margin, and Europe 35-70 N 25 W-40 E. Bins below 15.6 km are
+   marked model against model. box_spectra takes one dx, at the region's middle latitude (40 N for the box, 52.5 N for
+   Europe), so the wavelength labels are approximate across latitudes; the ratios between rows, truth and input are valid.
+2. tp tail per date over the box: p99, p99.9 and p99.99 with all points and members pooled (labelled `_pooled`), and the
+   mean over members of each member's maximum (`max_member_mean`), for each row, IN and the truth; counts of points at or
+   above 10, 25, 50, 100 mm per 6 h.
+3. Zoom maps at +24 and +72 h (those of the two among the read's leads): the Alps box 43-49 N 4-16 E on the wettest Alps
+   date, and the date with the deepest truth low north of 35 N (called a storm only if below 990 hPa); cases chosen among
+   the dates every row holds; truth, input, members 1-3 of each row; tp and wind speed.
+4. Per date: fair CRPS, spread = sqrt(area-mean ensemble variance, ddof 1) and RMSE = sqrt(area-mean squared error of the
+   ensemble mean), for all 11 outputs plus 10 m wind speed (per member from 10u and 10v), over the box, Europe and the
+   Alps, with paired SE over the 12 dates. The corrected spread/RMSE ratio sqrt((M+1)/M) x sqrt(mean over dates of the
+   variance) / sqrt(mean over dates of the squared error), pooled over dates as in
+   `eval/evaluators/probabilistic/core/calibration.py`, with a 95 % date-bootstrap interval (seed 32, 2000 resamples)
+   and a paired bootstrap of the ratio difference between rows. All rows must hold the same dates, member count, seeds,
+   truth, input and grid; the scoring stops otherwise.
 5. `eval.cli judge --lane o1280_o2560` (rule 32 v2) A100 vs B24 and A100 vs B50 at every lead. It has never run on o2560
    rows; a failure is recorded, not patched.
 
@@ -90,15 +108,20 @@ cyclone in the box in these dates).
 ## Jobs (to submit after the review and the go)
 
 1. Smoke: `ssh ac6-100 'ssh jupiter sbatch /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/kit/smoke.sbatch'`
-   (1 GH200, at most 2 h). Read: O2560_SMOKE_DONE, finite draws, RANGE and SANITY lines, seconds and peak GiB per draw,
-   SMOKE_COMPARE_PASS, then `sacct -j <id> --format=JobID,MaxRSS,Elapsed`.
+   (1 GH200, at most 2.5 h; outputs `outputs/o2560_box_read_20261102/smoke_<jobid>/`). Rows on 20241101: B24 at +24 and
+   +48 h (2 members), B24 at +24 h with 1 member in a separate process, B24 at +24 h with chunks 8, A100, B50 and B24X
+   (B24 on A's code) at +24 h (2 members). Read: O2560_SMOKE_DONE; SEED_CHECK_PASS (member 1 reproduced by the 1-member
+   run, members 1 and 2 differ, +24 and +48 differ, seeds as derive_draw_seed; chunks 8 against 16 reported);
+   SMOKE_COMPARE_PASS or WARN (code pins, information only, 1e-2 of the truth's std); finite draws, RANGE and SANITY
+   lines, seconds and peak GiB per draw; then `sacct -j <id> --format=JobID,MaxRSS,Elapsed`.
 2. Read: `ssh ac6-100 'ssh jupiter bash /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/scripts/submit_all.sh'`:
    18 predictions (3 rows x 6 leads), 6 scorings (afterany on their lead's 3 predictions), 1 final (afterany on the 6
-   scorings). Ids in `state/jobs.txt`; a second run refuses (`state/SUBMITTED`).
+   scorings). Ids in `state/jobs.txt`; a second run refuses (`state/SUBMITTED`). If an sbatch fails part way, the script
+   prints the jobs already queued and the MISSING ones, to submit by hand.
 
 Progress check: `ssh ac6-100 'ssh jupiter "squeue -u $USER -o \"%.10i %.24j %.8T %.10M %R\" | grep o25; ls /e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/pred/*/ | grep -c nc; grep -h DONE /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/logs/o25*.out"'`
 
-Results: `outputs/o2560_box_read_20261102/pairs/L<lead>/{paired.md,tail.md,spectra.md,per_date.csv,spectra.csv}`,
+Results: `outputs/o2560_box_read_20261102/pairs/L<lead>/{paired.md,tail.md,ratio.csv,per_date.csv,spectra_box.md,spectra_europe.md,spectra_*.csv}`,
 `summary/summary_{box,europe,alps}.md`, `summary/summary_scores.csv`, `maps/L024/*.png`, `judge/`.
 
 ## Dry run and tests (2 Nov 2026, Jupiter login node, CPU)
@@ -113,13 +136,18 @@ the split (12 dates x leads 6-72 h), B24 and B50 on one case each. What it showe
   both stores hold 6 h windows (a total since the start would grow about twelvefold); truth and input agree within 0.02 mm;
 - the model's outputs are the 11 expected in the expected order; all 144 rows resolve; truth and input are finite.
 
-`python -m pytest tests` (output `checks/pytest_login.txt`): 30 passed. The tests cover the seed check values, one seed
-per draw with no reuse, identical seeds across rows (also read back from the dry-run records), the 11 outputs and the
-EMA-10000 half-life in each checkpoint's metadata, tp clipping and de-accumulation on synthetic arrays, the point counts
-of the stores, the graph and the matrix (3,248,042 o2560 points, 434,914 hidden nodes, 876,159 o1280 points), validation
-dates outside training (both configs and each checkpoint's metadata), no FDB call, no scancel or deletion, no output under
-home, the A-against-B config comparison, the fair CRPS against a brute-force formula, and an end-to-end run of the scoring
-scripts and of the `box_spectra` runner on synthetic files written by the predictor's own writer.
+`python -m pytest tests` (output `checks/pytest_login.txt`): 39 passed (after the 2 Nov review fixes). The tests cover the
+seed check values, one seed per draw with no reuse, identical seeds across rows (also read back from the dry-run records),
+the 11 outputs and the EMA-10000 half-life in each checkpoint's metadata, tp clipping and de-accumulation on synthetic
+arrays, the point counts of the stores, the graph and the matrix (3,248,042 o2560 points, 434,914 hidden nodes, 876,159
+o1280 points), validation dates outside training (both configs and each checkpoint's metadata), the octahedral ring
+weights (a full synthetic grid, a wrong ring index failing, and the longitude spacing of every ring of the real o2560
+box store), equal training inputs of A and B (residual statistics, DB300 donor, store statistics), no FDB call, no
+scancel or deletion, no output under home, the A-against-B config comparison, the fair CRPS against a brute-force formula,
+and the scoring scripts end to end on synthetic files written by the predictor's own writer: a calibrated synthetic
+ensemble reads a corrected spread/RMSE within 0.02 of 1 for every variable (under- and over-dispersive rows below 0.9 and
+above 1.2), tp percentiles, member maxima and the 10 m wind speed scores match values computed by hand, rows with
+different dates are refused, the box_spectra runner reads the layout, and the spectra table puts every value in its column.
 
 Not tested before a GPU job: memory and time per draw on one GH200 with chunking 16, and whether heads sharding with a
 one-rank group runs on GPU (the smoke tests both).

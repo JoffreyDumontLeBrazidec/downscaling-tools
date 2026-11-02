@@ -36,7 +36,10 @@ def load(path, var_names, members=(0, 1, 2)):
     return lat, lon, g
 
 
-files = sorted(first.glob(f"predictions_*_step{lead:03d}.nc"))
+common = set.intersection(*[{p.name[12:20] for p in d.glob(f"predictions_*_step{lead:03d}.nc")} for d in ROWS.values()])
+if not common:
+    sys.exit(f"FATAL: no date common to all rows at +{lead} h")
+files = sorted(first / f"predictions_{q}_step{lead:03d}.nc" for q in common)   # cases are chosen among dates every row holds
 best_alps = best_storm = None
 for f in files:
     lat, lon, g = load(f, ("tp", "msl"), members=(0,))

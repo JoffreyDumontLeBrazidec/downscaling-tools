@@ -1,0 +1,88 @@
+{
+ "side": "atos_A",
+ "residual_statistics": {
+  "path": "/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/residuals_statistics/o2560_dict_6_72.npy",
+  "sha256": "10e6c0a409b851c1b0a1ea2371291a6cca5e4363a50aed7b3a5b895b8024cac5"
+ },
+ "warm_start": {
+  "path": "/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/db300_raw_300k.ckpt",
+  "sha256": "b7e854f78bec73d06a6654421303697af833804de746b693d6fbfbbb70394e5f"
+ },
+ "stores": {
+  "in_lres_o1280.zarr": {
+   "variables": [
+    "10u",
+    "10v",
+    "2d",
+    "2t",
+    "msl",
+    "skt",
+    "tcw",
+    "q_1000",
+    "q_925",
+    "q_850",
+    "q_700",
+    "q_500",
+    "t_1000",
+    "t_925",
+    "t_850",
+    "t_700",
+    "t_500",
+    "u_1000",
+    "u_925",
+    "u_850",
+    "u_700",
+    "u_500",
+    "v_1000",
+    "v_925",
+    "v_850",
+    "v_700",
+    "v_500",
+    "w_1000",
+    "w_925",
+    "w_850",
+    "w_700",
+    "w_500",
+    "z_1000",
+    "z_925",
+    "z_850",
+    "z_700",
+    "z_500"
+   ],
+   "mean_sha256": "e63c6207fd51f0e0d442a065a47068890eeed088c1e4df57741a650b6edc3590",
+   "stdev_sha256": "b1c25f79c92ae63fede6ad4f9ded4b14708f6d7452fffbb7c9dac28e6818363d",
+   "minimum_sha256": "e3676aa971fa3ed1fffa11af42d68ea857b4978ae60044c8b9a343b92582abb0",
+   "maximum_sha256": "def29ec730d73e687e824bd1e536cd611470ff2685044a82326e85547e41c06e"
+  },
+  "hres_o2560.zarr": {
+   "variables": [
+    "cos_julian_day",
+    "cos_latitude",
+    "cos_local_time",
+    "cos_longitude",
+    "cos_solar_zenith_angle",
+    "lsm",
+    "sin_julian_day",
+    "sin_latitude",
+    "sin_local_time",
+    "sin_longitude",
+    "z",
+    "10u",
+    "10v",
+    "2d",
+    "2t",
+    "msl",
+    "skt",
+    "tcw",
+    "cp",
+    "tp",
+    "z_500",
+    "t_850"
+   ],
+   "mean_sha256": "cef417a8ccbea571d17d26456ddcba334ea7af517a702354abb50b44df2ad226",
+   "stdev_sha256": "6c5834bcc92a9ed1b823c69883b8fe16806e1a041983f2b7fbd4c6e3c25e975c",
+   "minimum_sha256": "223e21c8c2d79b151ae6cbb296ae8bcefd1d2680b2f94865fb94b638d4aab0f5",
+   "maximum_sha256": "9d63b68916701fe9c8a2270bae01b48e658383371a7bd18770ad69b49534b661"
+  }
+ }
+}

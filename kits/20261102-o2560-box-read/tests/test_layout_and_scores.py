@@ -12,7 +12,7 @@ def test_fair_crps_matches_brute_force():
     m = f.shape[0]
     brute = np.abs(f - y).mean(0) - np.abs(f[:, None] - f[None]).sum((0, 1)) / (2 * m * (m - 1))
     np.testing.assert_allclose(fc, brute, rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(sd, f.std(0, ddof=1)); np.testing.assert_allclose(se, (f.mean(0) - y) ** 2)
+    np.testing.assert_allclose(sd, f.var(0, ddof=1)); np.testing.assert_allclose(se, (f.mean(0) - y) ** 2)   # variance, not std
     fc1, sd1, se1 = fcrps_terms(f[:1], y)
     np.testing.assert_allclose(fc1, np.abs(f[0] - y)); assert (sd1 == 0).all()
 
