@@ -90,7 +90,57 @@ def _hres_at(hres, date, lead, o):
             o.stnid.map(h.hres_elevation).to_numpy(np.float64) if "hres_elevation" in h else None)
 
 
-def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None):
+def hres_tp_in_metres(hr, ov) -> bool:
+    """The A0 audit, decided once per run on pooled values: HRES tp from STVL looks like metres when its maximum
+    is below 1 and its mean is below 1 % of the mean of the wet observations (> 1 mm). False when there is no
+    wet observation or no HRES value (nothing to decide on)."""
+    hr, ov = np.asarray(hr, np.float64), np.asarray(ov, np.float64)
+    wet = ov[np.isfinite(ov) & (ov > 1.0)]
+    if not np.isfinite(hr).any() or not wet.size:
+        return False
+    return bool(np.nanmax(hr) < 1.0 and np.nanmean(hr) < 0.01 * wet.mean())
+
+
+def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
+    """The A0 accumulation-window audit, at the nearest grid point: correlation of the truth, the input and the
+    ensemble mean with the station tp of the 12 h window ending at valid time (corr_valid) and of the window
+    before (corr_prev, observations valid 12 h earlier), on the stations that report both windows (joined on
+    station id, so both correlations use the same stations and the same forecast values). The file's tp must
+    match the window ending at valid time, so corr_valid should be the larger; prev_better flags the dates
+    where it is not. Skipped with a log line when a window has no observations, fewer than min_stations
+    stations report both, or a series is constant."""
+    import pandas as pd
+
+    log = [] if log is None else log
+    valid = pd.Timestamp(date) + pd.Timedelta(hours=int(lead))
+    prev = valid - pd.Timedelta(hours=12)
+    o = obs_v[obs_v.valid == valid.strftime("%Y%m%d%H")]
+    op = obs_v[obs_v.valid == prev.strftime("%Y%m%d%H")]
+    if o.empty or op.empty:
+        log.append(f"window audit skipped for {date} +{lead} h: no station tp at "
+                   f"{(valid if o.empty else prev):%Y%m%d%H}")
+        return []
+    j = o[["stnid", "lat", "lon", "obs"]].drop_duplicates(subset=["stnid"]).merge(
+        op[["stnid", "obs"]].drop_duplicates(subset=["stnid"]), on="stnid", suffixes=("", "_prev"))
+    idx, keep = matcher.match(j.lat.to_numpy(), j.lon.to_numpy(), cfg["max_km"])
+    j, idx = j[keep], idx[keep]
+    if len(j) < cfg["min_stations"]:
+        log.append(f"window audit skipped for {date} +{lead} h: {len(j)} stations report both windows")
+        return []
+    ov, opv = j.obs.to_numpy(np.float64), j.obs_prev.to_numpy(np.float64)
+    out = []
+    for row, f in (("truth", fields["truth"]), ("input", fields["input"]), ("model", fields["model"].mean(0))):
+        x = f[idx]
+        if x.std() == 0 or ov.std() == 0 or opv.std() == 0:
+            log.append(f"window audit skipped for {date} +{lead} h {row}: a constant series")
+            continue
+        cv, cp = float(np.corrcoef(x, ov)[0, 1]), float(np.corrcoef(x, opv)[0, 1])
+        out.append({"lead": int(lead), "date": str(date), "row": row, "corr_valid": cv, "corr_prev": cp,
+                    "prev_better": bool(cp > cv), "n": int(ov.size)})
+    return out
+
+
+def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None, hres_pool=None):
     """Rows of one variable, one date and one lead. The station sample is the intersection over rows
     (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations.
     With ``seeps_clim`` (24 h tp) the sample is restricted to stations with a SEEPS climatology whose dry-day
@@ -114,6 +164,8 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
         clim = (cc.t1.to_numpy(), cc.t2.to_numpy(), cc[[f"s{k}" for k in range(9)]].to_numpy())
     ov = o.obs.to_numpy(np.float64)
     hr, hel = _hres_at(hres_v, date, lead, o)
+    if var.startswith("tp") and hr is not None and hres_pool is not None:
+        hres_pool.setdefault(var, []).append((hr, ov))  # the metres audit is decided once per run
     is_tp = var == "tp"
     thresholds = cfg["thresholds"] if is_tp else ()
     radii = cfg["radii"] if is_tp else (0.0,)
@@ -210,7 +262,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     if not preds:
         raise FileNotFoundError(f"No prediction files to read in {predictions_dir}")
 
-    rows, ranks, log, files = [], [], [], []
+    rows, ranks, log, files, window, hres_pool = [], [], [], [], [], {}
     members = set()
     stations = defaultdict(list)
     matcher = None
@@ -221,7 +273,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             matcher = StationMatcher(lat, lon)
         for v, f in fields.items():
             members.add(int(f["model"].shape[0]))
-            r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg)
+            r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,
+                                    hres_pool=hres_pool)
+            if v == "tp":
+                window += tp_window_check(f, obs[v], matcher, date=p.date, lead=p.step, cfg=cfg, log=log)
             rows += r
             ranks += k
             stations[f"{v} +{p.step:03d}"].append(nst)
@@ -253,6 +308,21 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
 
     df = pd.DataFrame(rows)
     df.to_csv(output_dir / "scores_per_date.csv", index=False)
+    for v, pairs in hres_pool.items():
+        hr, ov = np.concatenate([a for a, _ in pairs]), np.concatenate([b for _, b in pairs])
+        if hres_tp_in_metres(hr, ov):
+            log.append(f"WARN HRES {v} looks like metres over the run (max {np.nanmax(hr):.3g}, mean {np.nanmean(hr):.3g}; "
+                       f"mean of the observations above 1 mm {ov[ov > 1].mean():.3g} mm)")
+    if window:
+        w = pd.DataFrame(window)
+        w.to_csv(output_dir / "tp_window_check.csv", index=False)
+        ws = w.groupby(["lead", "row"]).agg(corr_valid=("corr_valid", "mean"), corr_prev=("corr_prev", "mean"),
+                                            dates=("corr_valid", "count"), dates_prev_better=("prev_better", "sum"),
+                                            mean_n=("n", "mean")).reset_index()
+        ws.to_csv(output_dir / "tp_window_summary.csv", index=False)
+        for r in ws[ws.corr_prev > ws.corr_valid].itertuples():
+            log.append(f"WARN tp window: at +{r.lead} h the {r.row} correlates better with the 12 h window before "
+                       f"valid time ({r.corr_prev:.3f}) than with the window ending at it ({r.corr_valid:.3f})")
     pd.DataFrame(ranks).to_csv(output_dir / "rank_hist.csv", index=False)
     summ = summarise(df)
     summ.to_csv(output_dir / "summary.csv", index=False)

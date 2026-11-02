@@ -82,8 +82,13 @@ obs_points:
 # nigel=4662 philippe=4667 tammy=4679; dates 20230822 20230829 20230909 20230919 20230930 20231021.
 tc_obs:
   cache:
-    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/tc_2023_v1
-    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/tc_2023_v1
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/tc_2023_v2
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/tc_2023_v2
+  # NOAA NCEI IBTrACS v04r01 (downloaded 2026-11-01, sha256 6666...2c97): best-track wind (USA_WIND x 0.93,
+  # 10-minute equivalent), USA_PRES and USA_RMW; read at run time, before the cache's best-track rows
+  noaa_csv:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/ibtracs_csv/ibtracs.NA.list.v04r01.csv
+    atos: /home/ecm5702/perm/obs/ibtracs/ibtracs.NA.list.v04r01.csv
   only_storm_ok: true
   max_gap_h: 6
 

@@ -374,3 +374,84 @@ def test_seeps_climatology_is_joined_by_station(monkeypatch):
     import datetime as dt
     c = fetch.seeps_clim_at(dt.datetime(2023, 1, 2), (0, 90, -180, 180)).set_index("stnid")
     assert list(c.t2) == [30.0, 31.0, 32.0] and list(c.t1) == [10.0, 11.0, 12.0] and list(c.s0) == [40.0, 41.0, 42.0]
+
+
+# ----------------------------------------------------------------------------- A0 audits
+@pytest.mark.parametrize("swap", [False, True])
+def test_tp_window_check(tmp_path, swap):
+    """Station tp equal to the file's 12 h tp (+0.5 mm) in the window ending at valid time, noise in the window
+    before; with swap the two are exchanged. The two windows are reported by different station sets (60 common,
+    20 only at valid time, 15 only the window before): both correlations use the 60 common stations."""
+    from eval.evaluators.obs_points.runner import read_fields
+
+    date, step = "20230101", 24
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    _write(pred / f"predictions_{date}_step{step:03d}.nc", date, step, noise=0.5, seed=1)
+    la, lo, f = read_fields(pred / f"predictions_{date}_step{step:03d}.nc", ["tp"])
+    rng = np.random.default_rng(2)
+    n_st = 95
+    slat, slon = rng.uniform(31, 59, n_st), rng.uniform(-19, 19, n_st)
+    idx, _ = StationMatcher(la, lo).match(slat, slon, 100.0)
+    truth = f["tp"]["truth"][idx]
+    exact, noise = truth + 0.5, rng.gamma(0.5, 2.0, n_st)
+    at_valid, at_prev = np.arange(0, 80), np.r_[np.arange(0, 60), np.arange(80, 95)]
+    rows = []
+    for valid, vals, which in (("2023010200", noise if swap else exact, at_valid),
+                               ("2023010112", exact if swap else noise, at_prev)):
+        rows += [{"valid": valid, "lat": slat[k], "lon": slon[k], "stnid": k, "elevation": 0.0, "obs": vals[k],
+                  "h_o1280": 0.0, "h_o320": 0.0} for k in which]
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    pd.DataFrame(rows).to_csv(cache / "obs_tp.csv", index=False)
+    pd.DataFrame([{"date": date, "lead": step, "stnid": k, "hres": 0.001, "hres_elevation": 0.0}
+                  for k in at_valid]).to_csv(cache / "hres_tp.csv", index=False)
+    out = obs_points.run(pred, {}, {"cache": str(cache), "vars": ["tp"], "radii": [0], "max_km": 100.0,
+                                    "min_stations": 10, "regions": {"all": None}, "height_classes": {}},
+                         output_dir=tmp_path / "out")
+    w = pd.read_csv(out / "tp_window_check.csv")
+    t = w[w.row == "truth"].iloc[0]
+    common = np.arange(60)
+    assert set(w.row) == {"truth", "input", "model"} and t.n == 60
+    assert t.corr_valid == pytest.approx(np.corrcoef(truth[common], (noise if swap else exact)[common])[0, 1])
+    assert t.corr_prev == pytest.approx(np.corrcoef(truth[common], (exact if swap else noise)[common])[0, 1])
+    assert (t.corr_valid == pytest.approx(1.0)) != swap and bool(t.prev_better) == swap
+    warn = json.loads((out / "run_meta.json").read_text())["warnings"]
+    assert any("WARN tp window" in x and "truth" in x for x in warn) == swap
+    assert any("looks like metres" in x for x in warn)  # HRES tp of 0.001 against mm observations
+    s = pd.read_csv(out / "tp_window_summary.csv")
+    assert (s.dates == 1).all()
+
+
+def test_tp_window_check_skips(tmp_path):
+    from eval.evaluators.obs_points.runner import tp_window_check
+
+    la, lo = _grid()
+    m = StationMatcher(la, lo)
+    fields = {"truth": np.arange(la.size, dtype=float), "input": np.ones(la.size), "model": np.ones((2, la.size))}
+    cfg = {"max_km": 100.0, "min_stations": 5}
+    obs = pd.DataFrame({"valid": ["2023010200"] * 8 + ["2023010112"] * 8, "stnid": list(range(8)) * 2,
+                        "lat": list(np.linspace(35, 55, 8)) * 2, "lon": 0.0, "obs": np.r_[np.arange(8.0), np.arange(8.0)[::-1]]})
+    log = []
+    rows = tp_window_check(fields, obs, m, date="20230101", lead=24, cfg=cfg, log=log)
+    assert [r["row"] for r in rows] == ["truth"]  # input and model are constant: skipped
+    assert sum("constant series" in x for x in log) == 2
+    log = []
+    assert tp_window_check(fields, obs[obs.valid == "2023010200"], m, date="20230101", lead=24, cfg=cfg, log=log) == []
+    assert "window audit skipped" in log[0] and "no station tp at 2023010112" in log[0]
+    log = []
+    assert tp_window_check(fields, obs, m, date="20230101", lead=24, cfg={**cfg, "min_stations": 20}, log=log) == []
+    assert "8 stations report both windows" in log[0]
+
+
+def test_hres_metres_rule():
+    from eval.evaluators.obs_points.runner import hres_tp_in_metres
+
+    obs = np.array([0.0, 0.0, 0.0, 1.0, 2.0, 8.0, 15.0])
+    assert hres_tp_in_metres(obs / 1000.0, obs)
+    assert not hres_tp_in_metres(obs * 0.9, obs)
+    assert not hres_tp_in_metres(np.full(7, np.nan), obs)
+    dry = np.array([0.0, 0.0, 0.0, 0.2, 0.0, 0.4, 0.0])  # median 0 and no report above 1 mm: nothing to decide
+    assert not hres_tp_in_metres(dry, dry) and not hres_tp_in_metres(dry / 1000.0, dry)
+    mostly_dry = np.r_[np.zeros(50), [5.0, 12.0]]  # a dry median does not make correct mm HRES look like metres
+    assert not hres_tp_in_metres(mostly_dry * 0.8, mostly_dry)
