@@ -44,3 +44,59 @@ precip_read:
     europe_fronts: "European frontal rain, +24 h: truth, input and CA300"
   map_members: [0, 1, 2]
   bootstrap: 2000
+
+# Station observations (added 2026-11-02): ensemble scores of the run at STVL stations (fair CRPS,
+# spread/skill, rank histograms, tp twCRPS and fair Brier), next to input, truth and HRES as single fields.
+# Cache: `python3 -m eval.cli obs fetch` on Atos (module python3 + vtb), copied to Jupiter.
+# Run:   python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_points \
+#          --predictions-dir <dir of predictions_<date>_step<NNN>.nc, all leads> --run-label CA300
+# Two runs, paired by date: python -m eval.cli obs compare --a <runA>/evaluators/obs_points \
+#          --b <runB>/evaluators/obs_points --out <dir>
+obs_points:
+  # 30 seed-locked dates of 2023, leads 12-72 h, box 9-71 N 81 W-41 E; manifest in cache_meta.json
+  cache:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
+  vars: [2t, 10ff, msl, tp]
+  regions:
+    all: null
+    europe: [35.0, 75.0, -12.5, 42.5]
+    40-70N: [40.0, 70.01, -180.0, 180.0]
+    25-40N: [25.0, 40.0, -180.0, 180.0]
+    10-25N: [10.0, 25.0, -180.0, 180.0]
+  height_classes:
+    all_dz<100m: [0.0, 100.0]
+    all_dz>=300m: [300.0, 100000.0]
+  thresholds: [5, 10, 20]      # mm per 12 h
+  radii: [0, 18, 36]           # km, tp disc means; 0 = nearest grid point
+  max_km: 15.0
+  lapse_rate: 0.0065           # K/m, quaver
+  min_stations: 30
+  weighting: none              # or station_density (quaver's kernel)
+  seeps: true                  # 24 h SEEPS (tp24 + seeps_clim_tp24.csv in the cache)
+  plot_regions: [all, europe]
+
+# Tropical cyclones against the IBTrACS best track and the operational HRES/ENS trackers (added 2026-11-02).
+# Needs tc_structure's cases.csv (default <run>/evaluators/tc_structure/cases.csv; set tc_obs.cases otherwise).
+# Cache: python3 -m eval.cli obs fetch-tc (Atos). Storms: franklin=4648 idalia=4654 lee=4660 margot=4661
+# nigel=4662 philippe=4667 tammy=4679; dates 20230822 20230829 20230909 20230919 20230930 20231021.
+tc_obs:
+  cache:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/tc_2023_v1
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/tc_2023_v1
+  only_storm_ok: true
+  max_gap_h: 6
+
+# 12 h tp against IMERG Final V07B on the same O1280 points (added 2026-11-02). Cut: python3 -m eval.cli
+# obs fetch-imerg (Atos). IMERG is weak poleward of 60 N and over snow: regions stay within 25-60 N.
+obs_imerg:
+  imerg:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/imerg_e2_2023_tp12_v1.nc
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/imerg_e2_2023_tp12_v1.nc
+  regions:
+    25-60N: [25.0, 60.0, -80.0, 40.0]
+    europe: [35.0, 60.0, -12.5, 40.0]
+    25-40N: [25.0, 40.0, -80.0, 40.0]
+    40-60N: [40.0, 60.0, -80.0, 40.0]
+  thresholds: [5, 10, 20]      # mm per 12 h
+  plot_regions: [25-60N, europe]

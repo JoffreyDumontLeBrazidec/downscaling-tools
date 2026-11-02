@@ -207,6 +207,23 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "pressure, wind profile, radius of maximum wind, wind radii, vorticity and "
         "asymmetry?",
     ),
+    Evaluator(
+        "obs_points", DIAGNOSTIC, False,
+        "How good is the model ensemble against surface station observations (2 m temperature, 10 m "
+        "wind speed, sea-level pressure and 12 h precipitation), in fair CRPS, spread/skill, rank "
+        "histograms and precipitation tail scores, next to the input, the truth and HRES as single fields?",
+    ),
+    Evaluator(
+        "tc_obs", DIAGNOSTIC, False,
+        "Are the model's tropical cyclones where the IBTrACS best track puts them, and as deep, judged "
+        "as an ensemble (fair CRPS of central pressure, member position error, spread) next to the truth, "
+        "the input and the operational HRES and ENS trackers?",
+    ),
+    Evaluator(
+        "obs_imerg", DIAGNOSTIC, False,
+        "How good is the model's 12 h precipitation ensemble against IMERG on the same O1280 points, in fair "
+        "CRPS, spread/skill, rank histograms, tail scores and PDFs, next to the input and the truth?",
+    ),
     # ----------------------------------------------------------------- retired
     Evaluator(
         "spectra", RETIRED, False,
