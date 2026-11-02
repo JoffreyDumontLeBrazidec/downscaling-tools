@@ -8,6 +8,9 @@
 - **`docs/eval-repertoire/REPERTOIRE.md`** — one section and one example figure per eval.cli tool:
   the question it answers, its method, cost, how to read it, and overlaps (written 2026-09-29).
 - **`ARCHITECTURE.md`** — the stack map and the four independent resolution lanes.
+- **`health/README.md`** — `python -m health audit <ckpt>`: how much of a checkpoint is dead or misused
+  (zero-weight and gradient-dead units and heads, scale ladders, stream budget). Run it when a checkpoint lands
+  and before any capacity claim; readings, not gates.
 - **`eval/README.md`** — the evaluation harness (`eval.cli`), and the lane-retirement convention.
 - **`eval/config/lanes/README.md`** — how `base:` inheritance works and why the generated
   `_ladder_*` files are not tracked.
