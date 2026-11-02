@@ -170,5 +170,61 @@ def test_noaa_csv_from_the_lane_gives_wind_and_rmw_scores(tmp_path):
     assert truth.rmw_err == pytest.approx(12.0 - 5 * 1.852)
     assert {"wind_crps", "rmw_crps"} <= set(pd.read_csv(out / "paired.csv").metric)
     md = (out / "summary.md").read_text()
-    assert "Maximum 10 m wind" in md and "Radius of maximum wind" in md
+    assert "Maximum 10 m wind" in md and "Radius of maximum wind" in md and "10 km bins" in md
     tc_obs.plot(out, {}, cfg)
+
+
+def _edited_sample(tmp_path, edits):
+    """The real sample with some cells changed: edits = {(line index, column): value}."""
+    import csv
+
+    with open(SAMPLE, newline="") as f:
+        rows = list(csv.reader(f))
+    col = {k: i for i, k in enumerate(rows[0])}
+    for (i, c), v in edits.items():
+        rows[i][col[c]] = v
+    p = tmp_path / "edited.csv"
+    with open(p, "w", newline="") as f:
+        csv.writer(f).writerows(rows)
+    return p
+
+
+def test_noaa_csv_hurdat_wmo_wind_is_one_minute(tmp_path):
+    # line 2 = Franklin 2023-08-28 18:00 (WMO_AGENCY hurdat_atl, WMO_WIND 125): USA_WIND blanked
+    p = _edited_sample(tmp_path, {(2, "USA_WIND"): " "})
+    x = read_noaa_csv(p, ["franklin"], 2023).set_index("time")
+    assert x.loc["202308281800", "wind_src"] == "wmo_wind_hurdat_1min_x0.93"
+    assert x.loc["202308281800", "wind_ms"] == pytest.approx(125 * 0.93 * 0.514444)
+    p = _edited_sample(tmp_path, {(2, "USA_WIND"): " ", (2, "WMO_AGENCY"): "tokyo"})
+    x = read_noaa_csv(p, ["franklin"], 2023).set_index("time")
+    assert x.loc["202308281800", "wind_src"] == "wmo_wind" and x.loc["202308281800", "wind_ms"] == pytest.approx(125 * 0.514444)
+
+
+def test_noaa_csv_time_window_instead_of_season(tmp_path):
+    p = _edited_sample(tmp_path, {(5, "SEASON"): "2024"})  # Lee labelled with another season, as for SH storms
+    assert read_noaa_csv(p, ["lee"], 2023).empty
+    x = read_noaa_csv(p, ["lee", "franklin"], window=("2023-09-09", "2023-09-11"))
+    assert list(x.event) == ["lee"] and x.time.iloc[0] == "202309100000"
+
+
+def test_blank_noaa_pressure_falls_back_to_the_zarr(tmp_path):
+    x = read_noaa_csv(_edited_sample(tmp_path, {(4, "USA_PRES"): " ", (4, "WMO_PRES"): " "}), ["franklin"], 2023)
+    zarr = pd.DataFrame([{"event": "franklin", "storm_id": "4648", "time": "2023082900", "lat": 29.0, "lon": -71.0,
+                          "pmin_hpa": 927.0, "wind_ms": np.nan, "source": "ibtracs_zarr"}])
+    b = best_track_at(pd.concat([x, zarr], ignore_index=True), "franklin", pd.Timestamp("2023-08-29").to_pydatetime())
+    assert b["source"] == "ibtracs_zarr" and b["pmin_hpa"] == 927.0 and b["noaa_incomplete"]
+    b = best_track_at(x, "franklin", pd.Timestamp("2023-08-28 21:00").to_pydatetime())
+    assert b["source"] == "noaa_ibtracs_csv" and not b["noaa_incomplete"]
+
+
+def test_ens_found_fraction_counts_members_that_lost_the_storm(tmp_path):
+    cases, cache = _cases(tmp_path)
+    tr = pd.read_csv(cache / "tracker_enfo_20230829.csv")
+    lost = tr.member.between(40, 51)
+    other = tr[lost].assign(storm="09L", name="GERT")  # members 40-51 track another storm only
+    pd.concat([tr[~lost], other]).to_csv(cache / "tracker_enfo_20230829.csv", index=False)
+    out = tc_obs.run(tmp_path, {}, {"cache": str(cache), "cases": str(cases)}, output_dir=tmp_path / "out",
+                     run_label="X")
+    ens = pd.read_csv(out / "cases_obs.csv").query("row == 'ens'")
+    assert (ens.members_total == 51).all() and (ens.n_found == 39).all()
+    assert ens.found_frac.iloc[0] == pytest.approx(39 / 51)

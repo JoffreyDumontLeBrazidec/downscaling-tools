@@ -94,6 +94,9 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
         event, date, lead = str(k.event), str(k.date), int(k.lead)
         valid = pd.Timestamp(date) + pd.Timedelta(hours=lead)
         b = best_track_at(bt, event, valid.to_pydatetime(), max_gap_h=max_gap_h)
+        if b is not None and b.get("noaa_incomplete"):
+            log.append(f"WARN {event} {date} +{lead} h: the NOAA best track has no pressure or position near "
+                       f"{valid:%Y%m%d%H}; the anemoi zarr fix is used")
         tag = f"{event} {date} +{lead} h"
         if b is None:
             log.append(f"WARN {tag}: no best-track fix within {max_gap_h:g} h of {valid:%Y%m%d%H}; case skipped")
@@ -131,7 +134,11 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             if t.empty:
                 log.append(f"WARN {tag}: no {row.upper()} row in the {stream} tracker for {event.upper()} at +{lead} h")
                 continue
-            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, int(storm[sel].member.nunique()), None)
+            # members_total: HRES 1; ENS = the members 1-51 present in this date's file (not only those that
+            # tracked this storm), so found_frac counts a member that lost the storm as not found
+            n_tot = (int(storm[sel].member.nunique()) if row == "hres" else
+                     int(tr[(tr.member >= 1) & (tr.member <= 51)].member.nunique()))
+            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, n_tot, None)
         for row, (p, la, lo, w, mem, n_tot, rmw) in rows.items():
             sc = case_scores(p, la, lo, b, w, rmw)
             out.append({**base, "row": row, "kind": ROW_KIND[row], "members_total": n_tot,
@@ -213,8 +220,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         # the NOAA best track (with winds and RMW) read directly; it replaces any NOAA rows of the cache
         noaa_path = _first_file(eval_config["noaa_csv"])
         events = sorted(set(cases.event.astype(str)))
-        noaa = pd.concat([read_noaa_csv(noaa_path, events, season) for season in sorted({int(d[:4]) for d in cases.date})],
-                         ignore_index=True)
+        # ISO_TIME window around the cases (the IBTrACS season is not the calendar year everywhere)
+        t0 = pd.Timestamp(min(cases.date)) - pd.Timedelta(days=1)
+        t1 = pd.Timestamp(max(cases.date)) + pd.Timedelta(hours=int(cases.lead.max()) + 24)
+        noaa = read_noaa_csv(noaa_path, events, window=(t0, t1))
         bt = pd.concat([bt[bt.source != "noaa_ibtracs_csv"], noaa], ignore_index=True)
     df, mem, log = score_cases(cases, bt, trackers, only_storm_ok=bool(eval_config.get("only_storm_ok", True)),
                                max_gap_h=float(eval_config.get("max_gap_h", 6.0)),
@@ -255,7 +264,9 @@ def write_summary_md(summ, pr, meta, path):
                       ("pos_spread_km", "Centre position: ensemble spread (km)"),
                       ("wind_crps", "Maximum 10 m wind: fair CRPS (m/s) against the best-track 10-minute wind"),
                       ("wind_err", "Maximum 10 m wind: mean error (m/s)"),
-                      ("rmw_crps", "Radius of maximum wind: fair CRPS (km) against USA_RMW"),
+                      ("rmw_crps", "Radius of maximum wind: fair CRPS (km) against USA_RMW (tc_structure's RMW "
+                                   "uses 10 km bins on O1280, while the best-track RMW of intense storms is 9-20 km, "
+                                   "so RMW errors partly reflect resolution)"),
                       ("rmw_err", "Radius of maximum wind: mean error (km)")):
         if key not in summ or summ[key].isna().all():
             continue

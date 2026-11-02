@@ -61,9 +61,11 @@ def read_ibtracs_zarr(path, storms: dict):
     return pd.DataFrame(out)
 
 
-def read_noaa_csv(path, events, season: int | None = None):
+def read_noaa_csv(path, events, season: int | None = None, window=None):
     """Best-track rows of a NOAA NCEI IBTrACS v04 CSV (``ibtracs.<basin|last3years|ALL>.list.v04r01.csv``) for
-    the storms named like ``events`` (case-insensitive) in ``season``.
+    the storms named like ``events`` (case-insensitive), in ``season`` and/or with ISO_TIME inside ``window``
+    (start, end), which is the safer selection: the IBTrACS SEASON is not the calendar year for southern-hemisphere
+    storms.
 
     The file has a row of column names and then a row of units (skipped); a missing value is a single space;
     TRACK_TYPE 'main' rows only (not the provisional or spur tracks); LON is -180..180; times are kept to the
@@ -79,19 +81,28 @@ def read_noaa_csv(path, events, season: int | None = None):
     x = x[x.NAME.isin([e.lower() for e in events])]
     if season is not None:
         x = x[pd.to_numeric(x["SEASON"], errors="coerce") == season]
+    if window is not None:
+        t = pd.to_datetime(x["ISO_TIME"].str.strip())
+        x = x[(t >= pd.Timestamp(window[0])) & (t <= pd.Timestamp(window[1]))]
     if "TRACK_TYPE" in x:
         x = x[x["TRACK_TYPE"].str.strip() == "main"]
     sids = x.groupby("NAME")["SID"].nunique()
     if (sids > 1).any():
-        raise ValueError(f"IBTrACS names matching several storms in season {season}: "
+        raise ValueError(f"IBTrACS names matching several storms (season {season}, window {window}): "
                          f"{x[x.NAME.isin(sids[sids > 1].index)].groupby('NAME').SID.unique().to_dict()}")
 
     def num(col):
         return pd.to_numeric(x[col].str.strip(), errors="coerce") if col in x else pd.Series(np.nan, index=x.index)
 
     usa, wmo = num("USA_WIND"), num("WMO_WIND")
-    wind = (usa * USA_1MIN_TO_10MIN).where(usa.notna(), wmo) * KT
-    wind_src = np.where(usa.notna(), "usa_wind_1min_x0.93", np.where(wmo.notna(), "wmo_wind", ""))
+    # WMO_WIND reported by HURDAT (NHC) is also a 1-minute wind: the same 0.93 applies to it
+    hurdat = x["WMO_AGENCY"].str.strip().str.lower().str.startswith("hurdat") if "WMO_AGENCY" in x else \
+        pd.Series(False, index=x.index)
+    wmo10 = wmo.where(~hurdat, wmo * USA_1MIN_TO_10MIN)
+    wind = (usa * USA_1MIN_TO_10MIN).where(usa.notna(), wmo10) * KT
+    wind_src = np.where(usa.notna(), "usa_wind_1min_x0.93",
+                        np.where(wmo.notna() & hurdat, "wmo_wind_hurdat_1min_x0.93",
+                                 np.where(wmo.notna(), "wmo_wind", "")))
     pres = num("USA_PRES").fillna(num("WMO_PRES"))
     t = pd.to_datetime(x["ISO_TIME"].str.strip())
     return pd.DataFrame({"event": x.NAME, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H%M"),
@@ -174,8 +185,9 @@ def fetch_tc(storms: dict, dates, out, *, zarr_path=IBTRACS_ZARR, noaa_csv=None,
     log = []
     bt = [read_ibtracs_zarr(zarr_path, storms)]
     if noaa_csv:
-        season = int(str(min(dates))[:4])
-        bt.append(read_noaa_csv(noaa_csv, list(storms), season))
+        t0 = pd.Timestamp(str(min(dates)))
+        bt.append(read_noaa_csv(noaa_csv, list(storms), window=(t0 - pd.Timedelta(days=1),
+                                                              pd.Timestamp(str(max(dates))) + pd.Timedelta(days=11))))
     bt = pd.concat(bt, ignore_index=True)
     bt.to_csv(out / "best_track.csv", index=False, float_format="%.4f")
     log.append(f"best track: {len(bt)} rows for {sorted(set(bt.event))}")
@@ -203,17 +215,25 @@ def fetch_tc(storms: dict, dates, out, *, zarr_path=IBTRACS_ZARR, noaa_csv=None,
 
 def best_track_at(bt, event, when, *, max_gap_h: float = 6.0):
     """Best-track position, pressure, wind and RMW of ``event`` at ``when`` (datetime): exact fix, or linear
-    interpolation in time between the two fixes around it when they are at most ``max_gap_h`` apart.
-    The NOAA rows are used first; the anemoi zarr rows only when the NOAA rows give nothing. Returns a dict
-    (with ``source``) or None."""
+    interpolation in time between the two fixes around it when they are at most ``max_gap_h`` apart. Only fixes
+    with a finite pressure and position count. The NOAA rows are used first; the anemoi zarr rows only when the
+    NOAA rows give nothing, and then ``noaa_incomplete`` is True if the NOAA file had a fix there without
+    pressure or position. Returns a dict (with ``source``) or None."""
     b = bt[bt.event.str.lower() == event.lower()]
     if b.empty:
         return None
     sources = ["noaa_ibtracs_csv"] + sorted(set(b.source) - {"noaa_ibtracs_csv"}) if "source" in b else [None]
+    incomplete = False
     for src in sources:
-        r = _fix_at(b if src is None else b[b.source == src], when, max_gap_h)
+        bs = b if src is None else b[b.source == src]
+        if bs.empty:
+            continue
+        ok = np.isfinite(bs.pmin_hpa.astype(float)) & np.isfinite(bs.lat.astype(float)) & np.isfinite(bs.lon.astype(float))
+        r = _fix_at(bs[ok], when, max_gap_h)
         if r is not None:
-            return {**r, "source": src}
+            return {**r, "source": src, "noaa_incomplete": incomplete}
+        if src == "noaa_ibtracs_csv" and (~ok).any() and _fix_at(bs, when, max_gap_h) is not None:
+            incomplete = True
     return None
 
 
