@@ -1,0 +1,19 @@
+Mon Nov  2 09:35:28 AM UTC 2026
+seeds 2-member +24: [1473646872, 1137768447] expected [1473646872, 1137768447]
+seeds 2-member +48: [3003937880, 3750071841] expected [3003937880, 3750071841]
+seeds 1-member +24: [1473646872] expected [1473646872]
+seeds chunks-8 +24: [1473646872] expected [1473646872]
+seeds 2-rank +24: [1473646872] expected [1473646872]
+10u    rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 1.189e-01 | +24 vs +48 m1 mean|d|/sd 4.595e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 3.32e-05 max 1.77e-03
+10v    rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 1.598e-01 | +24 vs +48 m1 mean|d|/sd 7.501e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 4.40e-05 max 1.61e-03
+2d     rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 5.043e-02 | +24 vs +48 m1 mean|d|/sd 2.482e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 1.47e-05 max 1.63e-03
+2t     rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 4.094e-02 | +24 vs +48 m1 mean|d|/sd 1.606e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 1.49e-05 max 2.94e-03
+msl    rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 2.542e-02 | +24 vs +48 m1 mean|d|/sd 4.621e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 7.05e-06 max 8.02e-04
+skt    rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 2.496e-02 | +24 vs +48 m1 mean|d|/sd 9.933e-02 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 1.33e-05 max 2.55e-03
+tcw    rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 6.339e-02 | +24 vs +48 m1 mean|d|/sd 3.561e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 1.47e-05 max 5.02e-04
+cp     rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 2.157e-01 | +24 vs +48 m1 mean|d|/sd 3.162e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 4.54e-05 max 1.76e-02
+tp     rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 2.184e-01 | +24 vs +48 m1 mean|d|/sd 3.816e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 5.35e-05 max 1.75e-02
+z_500  rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 5.504e-03 | +24 vs +48 m1 mean|d|/sd 1.683e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 9.28e-07 max 1.96e-05
+t_850  rerun m1: max|d|/sd 0.00e+00 (bit-identical) | m1 vs m2 mean|d|/sd 3.404e-02 | +24 vs +48 m1 mean|d|/sd 2.454e-01 | chunks 8 vs 16 max|d|/sd 0.00e+00 | 2 vs 4 ranks mean|d|/sd 8.30e-06 max 5.66e-04
+SEED_CHECK_PASS
+rc=0

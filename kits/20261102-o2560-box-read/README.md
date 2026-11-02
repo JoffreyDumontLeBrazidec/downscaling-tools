@@ -7,15 +7,15 @@ chains finished on 1 Nov 2026 with no way to evaluate them: the AG crop chain `d
 step on one of nine overlapping windows of the box) and the Jupiter full-box chain `db_o2560_e2_50k_v2` (50,000 steps on
 the whole box). The read compares them at equal GPU-hours (A100 against B24) and at their last steps (A100 against B50),
 with the o1280 input interpolated to o2560 as the reference (the objective is to beat it), on the only dates outside
-training: 1-12 November 2024. The kit predicts on Jupiter, one GH200 per job, and scores on CPU. The record of the lane
+training: 1-12 November 2024. The kit predicts on Jupiter, one node of 4 GH200 per job with the model sharded over the four, and scores on CPU. The record of the lane
 lives in the docs repo note `epics/o1280-o2560-lane-defects/in-progress/20261027_ca300_finetune_o1280_o2560_smoke.md`.
 
 The live copy is on Jupiter at `/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/`; this
 folder is the reviewed copy (same files, plus the dry-run and test outputs under `checks/`). Outputs go to
 `/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/` (never home).
 
-**Status: built and dry-run on the login node; nothing submitted. The GPU smoke and the read wait for the review and
-Joffrey's go.**
+**Status (2 Nov 2026 09:40 UTC): reviewed (Fable and two Sonnet reviewers, fixes in 9a1fba9), GPU smoke 2645931 accepted
+as a pass, read submitted with `scripts/submit_all.sh` under Joffrey's go; job ids in `state/jobs.txt` on Jupiter.**
 
 ## Rows
 
@@ -43,7 +43,7 @@ The A checkpoint files (raw, inference, EMA-2000, EMA-10000 at 100k) were also c
 - 10 members per (date, lead); seed of member m = `derive_draw_seed(1234, yyyymmdd, lead_h, m)` (numpy SeedSequence,
   rule 31), identical in every row and written into each file's `seeds` attribute.
 - Sampler: 30-step piecewise (10 exponential + 20 Karras), sigma_max 1e5, Heun, churn off (59 model calls per draw).
-- fp32 with TF32 matmul, `ANEMOI_INFERENCE_NUM_CHUNKS=16`, one GH200, fixed Triton kernel (env.sh checks the two `gt.py`
+- fp32 with TF32 matmul, `ANEMOI_INFERENCE_NUM_CHUNKS=8`, the model sharded over 4 GH200 (one node), fixed Triton kernel (env.sh checks the two `gt.py`
   lines of the training job's exit-47 guard).
 - Config: `configs/db_o2560_read.yaml` = the Jupiter chain's config a6eb3db6 for all rows. `scripts/compare_configs.py`
   checks that A's config (AG 4b87aff5) differs only in paths, crop, compile, hardware, run length and naming
@@ -108,7 +108,7 @@ cyclone in the box in these dates).
 ## Jobs (to submit after the review and the go)
 
 1. Smoke: `ssh ac6-100 'ssh jupiter sbatch /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/kit/smoke.sbatch'`
-   (1 GH200, at most 2.5 h; outputs `outputs/o2560_box_read_20261102/smoke_<jobid>/`). Rows on 20241101: B24 at +24 and
+   (1 node of 4 GH200, at most 2.5 h; outputs `outputs/o2560_box_read_20261102/smoke_<jobid>/`). Rows on 20241101: B24 at +24 and
    +48 h (2 members), B24 at +24 h with 1 member in a separate process, B24 at +24 h with chunks 8, A100, B50 and B24X
    (B24 on A's code) at +24 h (2 members). Read: O2560_SMOKE_DONE; SEED_CHECK_PASS (member 1 reproduced by the 1-member
    run, members 1 and 2 differ, +24 and +48 differ, seeds as derive_draw_seed; chunks 8 against 16 reported);
@@ -173,12 +173,30 @@ identical on every rank. Rank 0 computes the input reference and writes the file
 4 GH200. The second smoke also runs B24 on 2 ranks: if 2 GH200 suffice and cost fewer GPU-hours per draw, the read can use
 2; the seed check requires the 2-rank and 4-rank draws to agree to float level.
 
-## Cost (estimate, the smoke measures it)
+## GPU smoke 2645931 (2 Nov 2026, 09:03-09:32 UTC, one node of 4 GH200): accepted as a pass
 
-Forward-only inference of this model on the full box is unmeasured. From training (1.99 s per fwd+bwd step on 2 GH200),
-a 59-call draw on 4 GH200 is guessed at 30-60 s: 3 rows x 6 leads x 12 dates x 10 members = 2,160 draws = about
-72-144 GH200-h for the predictions (each job 1-2 h of wall for its 120 draws, wall limit 6 h), plus CPU scoring.
-Disk: about 1.77 GB per file, 216 files = about 382 GB under `/e/data1`. All twelve leads would double both.
+All seven runs completed (srun steps 0:0, MaxRSS 7.8-8.6 GB per step); all 13 draws finite; no SANITY flag; RANKCHECK
+identical on all ranks. Log: `checks/smoke_2645931/o25_smoke-2645931.out`.
+- Time per draw, model on 4 ranks: 95.4 s for the first draw of a process, 87.4-87.5 s after, at chunks 16; 59.2 s at
+  chunks 8 (one draw). On 2 ranks: 174.0 s (the same GPU-seconds, twice the wall).
+- Memory: 30.7-31.2 GiB allocated per GPU on 4 ranks (nvidia-smi 48.7 GB); 59.3 GiB on 2 ranks (nvidia-smi 82.6 GB).
+- Seeds (`checks/seed_check_2645931_rerun.txt`, SEED_CHECK_PASS): the seeds written equal derive_draw_seed; member 1 of a
+  separate one-member process is bit-identical to member 1 of the two-member run; members 1 and 2 differ by 0.006 (z_500)
+  to 0.22 (tp) of the truth's standard deviation on average; +24 and +48 h differ by 0.10-0.75; chunks 8 and 16 are
+  bit-identical; 2 and 4 ranks agree at a mean of 1e-6 to 5e-5 of the truth's standard deviation (maximum 1.75e-2 in the
+  tp and cp tails: float-level, reduction order over 59 sampler calls). The batch step was marked FAILED because the first
+  version of this check judged the 2-against-4-rank maximum against 1e-2; it now judges the mean against 1e-3 and reports
+  the maximum, and the rerun on the same files passes.
+- B24's weights on A's code (4ad32838c) give bit-identical output to B24 on its own code (20ba15241): SMOKE_COMPARE_PASS,
+  worst ratio 0.
+
+Read settings chosen from it (coordinator, 09:35 UTC): chunks 8, 4 GH200 per job, prediction wall 6 h.
+
+## Cost
+
+2,160 draws (3 rows x 6 leads x 12 dates x 10 members) at 60-88 s on 4 GH200 = about 144-210 GH200-h for the
+predictions (each job of 120 draws about 2.0-2.9 h of wall, limit 6 h), plus CPU scoring. Disk: about 1.77 GB per file,
+216 files = about 382 GB under `/e/data1`.
 
 ## Caveats a reader needs
 

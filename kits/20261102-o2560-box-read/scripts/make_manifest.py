@@ -52,7 +52,7 @@ man = {"built_utc": subprocess.run(["date", "-u", "+%FT%TZ"], capture_output=Tru
        "dates": c.DATES12, "leads_default": c.LEADS_DEFAULT, "leads_possible": c.LEADS_ALL, "members": c.MEMBERS,
        "seed_base": c.SEED_BASE, "seed_formula": c.SEED_FORMULA,
        "seed_check": {"(1234,20230101,12,0)": c.derive_draw_seed(1234, 20230101, 12, 0), "(1234,20230101,12,1)": c.derive_draw_seed(1234, 20230101, 12, 1)},
-       "sampler": {**c.PW_SCHED, **c.PW_SAMPLER}, "outputs": list(c.OUTPUT_VARS), "inference_num_chunks": 16,
+       "sampler": {**c.PW_SCHED, **c.PW_SAMPLER}, "outputs": list(c.OUTPUT_VARS), "inference_num_chunks": 8, "model_ranks_per_job": 4,
        "out_root": c.OUT_ROOT}
 # provenance of each chain's training inputs (scripts/provenance_side.py run on Atos for A and on Jupiter for B)
 man["training_inputs"] = {side: json.loads((Path(J) / "checks" / f"provenance_{side}.json").read_text())

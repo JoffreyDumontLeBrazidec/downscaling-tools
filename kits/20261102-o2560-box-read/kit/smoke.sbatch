@@ -3,7 +3,7 @@
 # B24_g2), the read's sampler, rule-31 seeds, date 20241101. Rerun after smoke 2645083 (one GH200 per model ran out of memory).
 #   B24     2 members at +24 h and +48 h            (seed checks; finite fields; RANGE, SANITY, RANKCHECK lines; s and GiB per draw)
 #   B24_m1  1 member at +24 h, separate process     (must reproduce B24 member 1)
-#   B24_c8  1 member at +24 h, ANEMOI_INFERENCE_NUM_CHUNKS=8 (the read uses 16; difference reported)
+#   B24_c8  1 member at +24 h, ANEMOI_INFERENCE_NUM_CHUNKS=8 (the other smoke rows use 16; difference reported)
 #   B24_g2  1 member at +24 h on 2 ranks            (memory and time on 2 GPUs; must equal the 4-rank member 1 to float level)
 #   A100, B50, B24X (B24 weights on A's code, crop off): 2 members at +24 h
 # Then seed_check.py (SEED_CHECK_PASS or SEED_CHECK_FAIL) and smoke_compare.py B24 vs B24X (information only), nvidia-smi

@@ -17,7 +17,7 @@ grep -q 'out_saved = torch.empty((N_dst, H, C), device=q.device, dtype=torch.flo
 export OUTPUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/_anemoi_output
 export HYDRA_FULL_ERROR=1 PYTHONFAULTHANDLER=1 TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 TORCH_COMPILE_DISABLE=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True ANEMOI_GRAPH_TRANSFORMER_IMPL=triton ANEMOI_BASE_SEED=756
-export ANEMOI_INFERENCE_NUM_CHUNKS=${ANEMOI_INFERENCE_NUM_CHUNKS:-16}
+export ANEMOI_INFERENCE_NUM_CHUNKS=${ANEMOI_INFERENCE_NUM_CHUNKS:-8}   # smoke 2645931: 8 is bit-identical to 16 and ~60 s vs ~87.5 s per draw
 export SLURM_GPUS_PER_NODE=${SLURM_GPUS_PER_NODE:-1} SLURM_NNODES=${SLURM_NNODES:-1} TMPDIR=/tmp
 export TRITON_CACHE_DIR=/e/data1/jureap-data/ecmwf/users/jdumont/.cache/triton
 export CUDA_CACHE_PATH=/e/data1/jureap-data/ecmwf/users/jdumont/.cache/nv_compute

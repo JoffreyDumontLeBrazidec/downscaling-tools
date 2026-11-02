@@ -16,7 +16,8 @@ trained with. What changed against that predictor, nothing else:
   * the file layout is the one eval.cli reads without a convert step: dimension grid_point_hres; y and x_interp
     (sample, grid_point_hres, weather_state), y_pred (sample, ensemble_member, grid_point_hres, weather_state); init_date and
     lead_step_hours variables; written to a temporary name and renamed when complete; an existing complete file is skipped;
-  * ANEMOI_INFERENCE_NUM_CHUNKS (env.sh, 16) chunks the mappers and processor in inference to fit one GH200.
+  * ANEMOI_INFERENCE_NUM_CHUNKS (env.sh, 8) chunks the mappers and processor in inference (8 and 16 are bit-identical,
+    smoke 2645931; 8 is faster). The model is sharded over the job's ranks (one GH200 is not enough, smoke 2645083).
 Env: MODE (dry | predict | smoke), ROW, CKPT_FILE, CKPT_STEP, RAW_FILE (raw inference file of the same step, dry mode
 compares it with the EMA file), CODE_ROOT, CODE_PIN_SHA, CFG_DIR, CFG_NAME, OUTDIR, CASES ("YYYYMMDD:lead,..."), MEMBERS.
 Nothing here trains, writes a checkpoint, touches a chain or writes FDB.

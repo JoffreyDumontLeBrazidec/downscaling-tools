@@ -1,5 +1,5 @@
 {
- "built_utc": "2026-11-02T07:52:40Z",
+ "built_utc": "2026-11-02T09:36:03Z",
  "files": {
   "A100_ema10000": {
    "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/ckpt/A100k/inference-ema10000-anemoi-by_step-epoch_198-step_100000.ckpt",
@@ -193,7 +193,8 @@
   "z_500",
   "t_850"
  ],
- "inference_num_chunks": 16,
+ "inference_num_chunks": 8,
+ "model_ranks_per_job": 4,
  "out_root": "/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102",
  "training_inputs": {
   "atos_A": {
