@@ -80,6 +80,8 @@ class PredictionMetadata:
     missing_target_policy: str | None = None
     local_scope_json: str = ""
     local_scope_hres_node_count: int = 0
+    # one line read by eval.cli judge, e.g. "jumps 2 from sigma 80" for a flow-map run
+    sampler_summary: str = ""
 
     def to_attrs(self) -> dict[str, str | int]:
         """Return NetCDF-safe global attributes."""
@@ -102,6 +104,8 @@ class PredictionMetadata:
             "slim_output": int(bool(self.slim_output)),
             "source_bundle_count": int(len(self.source_bundle_paths)),
         }
+        if self.sampler_summary:
+            attrs["sampler_summary"] = self.sampler_summary
         if self.local_scope_json:
             attrs["local_scope_json"] = self.local_scope_json
             attrs["local_scope_hres_node_count"] = int(self.local_scope_hres_node_count)

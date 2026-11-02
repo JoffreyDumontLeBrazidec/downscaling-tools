@@ -39,6 +39,13 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     """Run predictions via subprocess call to eval.predict.main."""
     mode = getattr(args, "mode", "manual")
     if mode == "prepml":
+        from manual_inference.prediction.sampler_spec import is_flow_map
+
+        if is_flow_map((lane_config.get("predict") or {}).get("sampler")):
+            raise SystemExit(
+                "predict: a flow_map sampler (jumps) runs in manual mode only; the prepml runner "
+                "knows only the EDM schedules. Drop --mode prepml."
+            )
         from eval.predict.prepml import prepml_predict
         input_root = _resolve_predict_input_root(
             args, lane_config, host_config, output_dir,

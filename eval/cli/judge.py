@@ -202,9 +202,36 @@ def sampler_line(facts: dict) -> str:
         cfg = json.loads(raw)
     except ValueError:
         return raw[:200]
+    if not isinstance(cfg, dict):
+        return raw[:200]
+    from manual_inference.prediction.sampler_spec import describe_sampler, is_flow_map
+
+    if is_flow_map(cfg):  # e.g. "jumps 2 from sigma 80 (flow_map)"
+        return f"{describe_sampler(cfg)} (flow_map)"
     keys = ("num_steps", "steps", "S_churn", "churn", "S_noise", "sigma_max", "sigma_min", "rho", "sampler")
     picked = {k: cfg[k] for k in keys if k in cfg}
     return json.dumps(picked or cfg, sort_keys=True)[:300]
+
+
+def flow_map_sampler_note(run_raw: str, ref_raw: str) -> str | None:
+    """The sampler warning when a flow-map run (jumps) is read against another sampler, else None.
+
+    A flow-map run against an EDM run of its parent checkpoint compares samplers on purpose;
+    what must match is the start sigma (both from sigma 80 in the protocol).
+    """
+    from manual_inference.prediction.sampler_spec import describe_sampler, is_flow_map
+
+    try:
+        run_cfg, ref_cfg = json.loads(run_raw), json.loads(ref_raw)
+    except ValueError:
+        return None
+    if not (is_flow_map(run_cfg) or is_flow_map(ref_cfg)):
+        return None
+    note = (f"the two arms sample differently by design ({describe_sampler(run_cfg)} against "
+            f"{describe_sampler(ref_cfg)})")
+    if float(run_cfg.get("sigma_max", -1)) != float(ref_cfg.get("sigma_max", -2)):
+        note += "; their start sigmas differ, so this is not the same-start comparison of the protocol"
+    return note
 
 
 def storm_centre(pred_dir: Path, date: str, step: int, member: int, event: str):
@@ -691,7 +718,8 @@ def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, map
                         "evaluators that pool over the whole file are not on one instrument")
     if fr.get("sampling_config_json") and ff.get("sampling_config_json") \
             and fr["sampling_config_json"] != ff["sampling_config_json"]:
-        warnings.append("the sampler settings recorded in the files differ (never compare unequal samplers)")
+        warnings.append(flow_map_sampler_note(fr["sampling_config_json"], ff["sampling_config_json"])
+                        or "the sampler settings recorded in the files differ (never compare unequal samplers)")
     if fr.get("n_members") != ff.get("n_members"):
         warnings.append("the member counts differ")
     for w in warnings:

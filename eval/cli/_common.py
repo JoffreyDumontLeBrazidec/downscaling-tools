@@ -104,7 +104,8 @@ def add_lane_override_args(parser: argparse.ArgumentParser) -> None:
         "--opt", action="append", default=None, metavar="BLOCK.KEY=VALUE",
         help=(
             "Set one key of a lane block for this call, e.g. --opt shape.box=north_atlantic or "
-            "--opt 'zoom_maps.steps=[24]'. VALUE is read as YAML. Repeatable; recorded in "
+            "--opt 'zoom_maps.steps=[24]'; sampler.KEY sets one key of predict.sampler (e.g. "
+            "--opt sampler.num_steps=1). VALUE is read as YAML. Repeatable; recorded in "
             "effective_config.json like the other overrides."
         ),
     )
@@ -194,6 +195,11 @@ def _build_lane_overrides(args: argparse.Namespace) -> dict:
     # directly to lane_config["predict"]["env"] after load_lane returns.
     overrides: dict = {"predict": predict_overrides} if predict_overrides else {}
     for block, key, value in parse_opts(getattr(args, "opt", None)):
+        if block == "sampler":
+            # --opt sampler.num_steps=1: one key of predict.sampler, merged key by key
+            # through predict.sampler_overrides (the rest of the lane's block is kept)
+            overrides.setdefault("predict", {}).setdefault("sampler_overrides", {})[key] = value
+            continue
         overrides.setdefault(block, {})[key] = value
     return overrides
 

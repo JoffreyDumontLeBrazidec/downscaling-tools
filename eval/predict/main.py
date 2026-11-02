@@ -21,6 +21,8 @@ from .model_loader import load_inference_model
 from .output_writer import prediction_output_path, write_predictions_file
 from .types import BundleKey, PredictionConfig
 
+from manual_inference.prediction.sampler_spec import SamplerConfigError, normalize_sampler_json
+
 
 def parse_int_list(raw: str) -> list[int]:
     """Parse a comma-separated list of integers."""
@@ -178,6 +180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--allow-missing-target is no longer supported in the new stack. "
             "Bundles must include target_hres_* so y is always present."
         )
+    # A flow-map block (schedule_type flow_map) is checked and written in its canonical form,
+    # so the files record exactly what predict_step received; EDM blocks pass unchanged.
+    try:
+        args.extra_args_json = normalize_sampler_json(args.extra_args_json, warn=True)
+    except SamplerConfigError as exc:
+        raise SystemExit(f"--extra-args-json: {exc}") from None
 
     input_dir = Path(args.input_root)
     out_dir = Path(args.out_dir)

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import xarray as xr
+
+from manual_inference.prediction.sampler_spec import describe_sampler
 
 from .dataset_builder import build_prediction_dataset, validate_predictions_dataset
 from .distributed_io import Rank0FileWriter
@@ -16,6 +19,14 @@ def prediction_output_path(output_dir: Path, date: str, step: int) -> Path:
     """Return the canonical predictions filename for a date/step pair."""
 
     return output_dir / f"predictions_{date}_step{int(step):03d}.nc"
+
+
+def _sampler_summary(extra_args_json: str) -> str:
+    try:
+        cfg = json.loads(extra_args_json) if extra_args_json else {}
+    except ValueError:
+        return ""
+    return describe_sampler(cfg) if isinstance(cfg, dict) and cfg else ""
 
 
 def _metadata_from_ensemble(
@@ -32,6 +43,7 @@ def _metadata_from_ensemble(
         checkpoint_path=str(config.checkpoint_path),
         source_bundle_paths=list(ensemble.source_bundle_paths),
         sampling_config_json=config.extra_args_json,
+        sampler_summary=_sampler_summary(config.extra_args_json),
         validation_frequency=config.validation_frequency,
         output_weather_state_mode=config.output_weather_state_mode,
         output_weather_states=output_weather_states,

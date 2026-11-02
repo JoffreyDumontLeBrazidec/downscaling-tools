@@ -270,3 +270,30 @@ def test_read_header_carries_the_seed_warning(tmp_path):
                               weights=None, out_dir=tmp_path, commit="abc")
     assert "WARNING: RULE 31, SEEDS: donor carries no per-draw seeds" in text
     assert "Seeds (rule 31): run seed_rule per_draw, base 1234" in text
+
+
+FLOW_MAP_JSON = ('{"num_steps": 2, "sampler": "jumps", "schedule_type": "flow_map", '
+                 '"sigma_max": 80.0, "sigma_min": 0.0}')
+EDM30_JSON = ('{"schedule_type": "karras", "num_steps": 30, "sigma_max": 80.0, "sigma_min": 0.03, '
+              '"rho": 7.0, "sampler": "heun", "S_churn": 0.0}')
+
+
+def test_sampler_line_flow_map():
+    assert judge.sampler_line({"sampling_config_json": FLOW_MAP_JSON}) == "jumps 2 from sigma 80 (flow_map)"
+
+
+def test_read_header_of_a_flow_map_run_against_its_edm_row(tmp_path):
+    arms = {"member": 1, "run": _arm(tmp_path, "mfx2t"), "reference": _arm(tmp_path, "edm30")}
+    arms["run"]["facts"]["sampling_config_json"] = FLOW_MAP_JSON
+    arms["reference"]["facts"]["sampling_config_json"] = EDM30_JSON
+    text = judge.compose_read(arms, step=24, dates=["20230226"], shape_box="e2", maps={},
+                              domain="europe", weights="EMA", out_dir=tmp_path, commit="abc")
+    assert "run jumps 2 from sigma 80 (flow_map)" in text
+    assert "sample differently by design" in text and "never compare unequal samplers" not in text
+    assert "start sigmas differ" not in text
+
+
+def test_flow_map_note_flags_a_different_start_sigma():
+    note = judge.flow_map_sampler_note(FLOW_MAP_JSON, EDM30_JSON.replace('"sigma_max": 80.0', '"sigma_max": 100000.0'))
+    assert "start sigmas differ" in note
+    assert judge.flow_map_sampler_note('{"num_steps": 30}', '{"num_steps": 40}') is None

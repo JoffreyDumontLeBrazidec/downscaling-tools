@@ -1,0 +1,51 @@
+base: o320_o1280
+
+# Flow-map runs (MeanFlow / iMF, warm-started from an EDM checkpoint of the E2 Europe box,
+# 10-70 N, 80 W-40 E) read through eval.cli. They sample by a few jumps from sigma 80, not by
+# an EDM schedule (manual_inference/prediction/sampler_spec.py). Added 2026-11-02 (flow-map
+# recap note, section 21, item I1).
+#
+# Default row: 2 jumps from sigma 80 (2 network calls). The 1- and 4-jump rows are the same
+# lane with one key changed at call time, no extra file:
+#   --opt sampler.num_steps=1        (1 call)
+#   --opt sampler.num_steps=4        (4 calls)
+# Comparison row: o320_o1280_e2_flowmap_edm30 (the parent EDM checkpoint, 30 Karras steps
+# from sigma 80, churn off, 59 calls), same dates, leads, members and rule-31 seeds.
+#
+# Predict (the E2 checkpoint predicts on its own box grid; bundles are the E2 bundles):
+#   python -m eval.cli predict --lane o320_o1280_e2_flowmap --host jupiter \
+#     --checkpoint <flow-map ckpt> --bundle-dir <E2 bundles> --output-dir <run dir>
+# Read, one lead at a time (rule 24), against the EDM row:
+#   python -m eval.cli judge --lane o320_o1280_e2_flowmap --host jupiter --step 24 \
+#     --run MF2=<run dir>/predictions --reference EDM30=<edm30 dir>/predictions --output-dir <read dir>
+# The read header prints "jumps 2 from sigma 80 (flow_map)" from the files' sampling_config_json.
+#
+# Seeds: rule 31, unchanged (eval/predict/seeding.py): every draw is seeded from
+# (base, date, lead, member), the same in the flow-map and the EDM rows.
+
+allowed_hosts:
+  prepare: [jupiter, atos_ag]
+  predict: [jupiter, atos_ag]
+  run: []
+  evaluate: [jupiter, atos_ac, atos_ag]
+  scoreboard: [atos_ac]
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [12, 24, 48, 72]
+  # The 30 dates of 2023 (00 UTC) of the E2 seed-locked wide reads (CA300 leads, DB300 vs
+  # CA300, the 2 Nov 2t 30k read of the flow-map runs); list copied from the docs kits
+  # epics/misc/support/20261019_wide_tail/wide_score_19.py and 20261021_ca300_tp_read.
+  dates: ["20230101", "20230111", "20230122", "20230201", "20230212", "20230226",
+          "20230304", "20230314", "20230325", "20230404", "20230415", "20230425",
+          "20230506", "20230516", "20230527", "20230606", "20230617", "20230627",
+          "20230708", "20230718", "20230729", "20230808", "20230822", "20230829",
+          "20230909", "20230919", "20230930", "20231010", "20231021", "20231031"]
+  # This block REPLACES the base sampler wholesale (load_lane prints an advisory about the
+  # dropped EDM keys; that is intended: churn keys are refused with flow_map).
+  sampler:
+    schedule_type: "flow_map"
+    num_steps: 2          # jumps = network calls; 1 and 4 via --opt sampler.num_steps=N
+    sigma_max: 80.0       # start sigma
+    sigma_min: 0.0
+    sampler: "jumps"

@@ -37,6 +37,7 @@ from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction.utils import extract_filtered_input_from_output
+from manual_inference.prediction.sampler_spec import is_flow_map, normalize_flow_map_sampler
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -63,6 +64,9 @@ _NOISE_SCHEDULER_KEYS = _LOOSE_NOISE_SCHEDULER_KEYS | {
     "rho_low",
 }
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
+# A flow-map block (schedule_type "flow_map", sampler "jumps") travels on the same two routes:
+# schedule_type / num_steps / sigma_max / sigma_min are noise-scheduler keys (all loose ones),
+# sampler is a sampler key. See manual_inference/prediction/sampler_spec.py.
 
 
 def _model_takes_lead_hours(inference_model) -> bool:
@@ -87,6 +91,9 @@ def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group,
     Sampling overrides are routed by inspecting the predict_step signature: either a
     single ``extra_args`` dict, or split ``noise_scheduler_params``/``sampler_params``.
     """
+    if is_flow_map(extra_args):
+        # canonical block: exactly the five flow-map keys, churn and EDM keys refused
+        extra_args = normalize_flow_map_sampler(extra_args)
     predict_params = inspect.signature(inference_model.predict_step).parameters
     predict_kwargs = {"model_comm_group": model_comm_group}
 
