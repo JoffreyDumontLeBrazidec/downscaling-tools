@@ -14,6 +14,7 @@ _compute_x_interp_for_export = _mi_predict._compute_x_interp_for_export
 _predict_from_bundle = _mi_predict._predict_from_bundle
 
 from .bundle_manager import date_str_to_datetime64
+from .seeding import resolve_base_seed, seed_draw
 from .types import BundleKey, EnsemblePrediction, PredictionResult
 
 
@@ -99,11 +100,18 @@ def predict_ensemble_members(
     y_pred_members: list[np.ndarray] = []
     source_bundle_paths: list[str] = []
     members_missing_target: list[int] = []
+    draw_seeds: list[int] = []
     lon_lres = lat_lres = lon_hres = lat_hres = None
     weather_states: list[str] = []
 
+    # Rule 31: every draw gets its own seed from (base, date, lead, member), the
+    # same in every arm that shares the base, never a constant reused across
+    # dates and leads and never "wherever the generator happens to be".
+    seed_base = resolve_base_seed()
+
     for member in members:
         bundle_path = bundle_map[BundleKey(date, step, int(member))]
+        draw_seeds.append(seed_draw(seed_base, int(date), int(step), int(member)))
         result = predict_single_bundle(
             inference_model,
             datamodule,
@@ -139,6 +147,8 @@ def predict_ensemble_members(
         source_bundle_paths=source_bundle_paths,
         members_missing_target=members_missing_target,
         weather_states=weather_states,
+        draw_seeds=draw_seeds,
+        seed_base=int(seed_base),
         lon_lres=lon_lres,
         lat_lres=lat_lres,
         lon_hres=lon_hres,

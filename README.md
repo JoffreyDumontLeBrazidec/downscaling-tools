@@ -48,6 +48,7 @@ lane's configuration after its `base:` chain is merged.
 | `manual_inference/` | Inference from a checkpoint and a prebuilt input bundle, for the unified checkpoint lineage |
 | `manual_inference_legacy_ds/` | A frozen copy of the same package for the older single-dataset ("ds") checkpoints; it is installed under the name `manual_inference` where those checkpoints run, so do not restructure it |
 | `interp/` | Interpretability tools, run as `python -m interp <tool>` |
+| `health/` | Network-health audit of a checkpoint (dead heads and units, gradient-dead units, scale ladders, stream budget, information flow), run as `python -m health audit <ckpt>`; readings, not gates |
 | `distributed/` | Small helpers for distributed (multi-process) runs |
 | `tools/` | Stand-alone toolkits: `aifsens2_regen` (rebuilds the AIFS ensemble datasets) and `station_head` (building code for the station head adapter) |
 | `scripts/` | One-off analysis and figure scripts written for single investigations |

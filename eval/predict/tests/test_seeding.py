@@ -4,7 +4,9 @@ import torch
 
 from eval.predict.seeding import (
     DEFAULT_BASE_SEED,
+    derive_draw_seed,
     derive_rank_seed,
+    seed_draw,
     resolve_base_seed,
     seed_inference,
 )
@@ -53,3 +55,36 @@ def test_different_ranks_draw_different_noise():
     for i in range(len(draws)):
         for j in range(i + 1, len(draws)):
             assert not torch.equal(draws[i], draws[j]), f"rank {i} and {j} collided"
+
+
+def test_draw_seed_is_a_pure_function_of_date_lead_member():
+    # Rule 31: the same (base, date, lead, member) gives the same seed in any kit,
+    # on any case list, so arms share noise draw for draw.
+    assert derive_draw_seed(1234, 20230101, 12, 0) == derive_draw_seed(1234, 20230101, 12, 0)
+    assert derive_draw_seed(1234, 20230101, 12, 0) == 4097385291
+    assert derive_draw_seed(1234, 20230101, 12, 1) == 2762430685
+
+
+def test_draw_seeds_differ_across_dates_leads_members_and_bases():
+    ref = derive_draw_seed(1234, 20230101, 12, 0)
+    assert derive_draw_seed(1234, 20230111, 12, 0) != ref  # another date
+    assert derive_draw_seed(1234, 20230101, 24, 0) != ref  # another lead
+    assert derive_draw_seed(1234, 20230101, 12, 1) != ref  # another member
+    assert derive_draw_seed(1235, 20230101, 12, 0) != ref  # another base
+
+
+def test_draw_seeds_have_no_collisions_on_the_wide_instrument():
+    dates = [20230101 + 10 * i for i in range(30)]
+    seeds = {derive_draw_seed(1234, d, lead, m) for d in dates for lead in range(12, 73, 12) for m in range(10)}
+    assert len(seeds) == 30 * 6 * 10
+
+
+def test_seed_draw_reproduces_and_separates_draws():
+    seed_draw(1234, 20230101, 12, 3)
+    a = torch.randn(1024)
+    seed_draw(1234, 20230101, 12, 3)
+    b = torch.randn(1024)
+    seed_draw(1234, 20230101, 12, 4)
+    c = torch.randn(1024)
+    assert torch.equal(a, b)
+    assert not torch.equal(a, c)
