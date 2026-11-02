@@ -13,13 +13,13 @@ from pathlib import Path
 import numpy as np
 
 KEYS = ["var", "variant", "radius_km", "region", "lead"]
-HEADLINE = ("fcrps", "spread", "spread_rms", "ssr_corrected")
+HEADLINE = ("fcrps", "spread", "spread_rms", "ssr_corrected", "seeps")
 SECONDARY = ("bias", "rmse_mean", "mae_mean", "mae_member", "corr_mean")
 TAIL_PREFIXES = ("twcrps", "brier", "n_obs_gt")
 # Rows of one run compared date by date: (a, b) gives a - b.
 DEFAULT_PAIRS = (("model", "input"), ("model", "truth"), ("truth", "input"),
                  ("model", "hres"), ("hres", "truth"), ("hres", "input"))
-VAR_UNITS = {"2t": "K", "10ff": "m/s", "msl": "Pa", "tp": "mm / 12 h"}
+VAR_UNITS = {"2t": "K", "10ff": "m/s", "msl": "Pa", "tp": "mm / 12 h", "tp24": "mm / 24 h"}
 
 
 def tail_name(col: str) -> str:
@@ -37,6 +37,7 @@ def tail_columns(df) -> list[str]:
 def oriented_metrics(df) -> list[str]:
     """Metrics with a direction (lower or higher is better), headline first."""
     return ["fcrps"] + [c for c in df.columns if c.startswith(("twcrps", "brier"))] + \
+           (["seeps"] if "seeps" in df.columns else []) + \
            [c for c in ("mae_mean", "rmse_mean", "mae_member", "corr_mean") if c in df.columns]
 
 
@@ -130,10 +131,12 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
     leads = sorted(set(summ.lead))
     lines = [f"# {meta.get('evaluator', 'obs_points')}: {label} against {meta.get('reference', 'station observations')}", "",
              f"Region `{region}`. Mean over dates of the per-date mean over {unit_name}; SE over dates in brackets. "
-             f"`model` is the {max(meta.get('members') or [0])}-member ensemble; `input`, `truth` and `hres` are single "
-             "fields (their fair CRPS is the mean absolute error and their spread is zero). Deterministic columns "
-             "(bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
-             f"Dates: {len(meta.get('dates', []))}. Cache: `{meta.get('cache_dir')}`. Weighting: "
+             f"`model` is the {max(meta.get('members') or [0])}-member ensemble; "
+             + ", ".join(f"`{r}`" for r in ("input", "truth", "hres") if r in set(summ.row))
+             + " are single fields (their fair CRPS is the mean absolute error and their spread is zero). Deterministic "
+             "columns (bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
+             f"Dates: {len(meta.get('dates', []))}. Reference: `{meta.get('cache_dir') or meta.get('imerg_file')}`. "
+             "Weighting: "
              f"{meta.get('config', {}).get('weighting', 'none')}.", ""]
     s = summ[summ.region == region]
     for (v, var_, r), q in s.groupby(["var", "variant", "radius_km"], sort=False):
@@ -142,6 +145,8 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
         lines += [head, "", "| row | score | " + " | ".join(f"+{l} h" for l in leads) + " |",
                   "|---|---|" + "---|" * len(leads)]
         mets = [("fcrps", "fair CRPS"), ("ssr_corrected", "spread/skill (corrected)"), ("spread", "spread")]
+        if "seeps" in q.columns and q["seeps"].notna().any():
+            mets.append(("seeps", "SEEPS (mean over members)"))
         mets += [(c, tail_name(c)) for c in q.columns
                  if c.startswith(("twcrps", "brier")) and not c.endswith("_se") and q[c].notna().any()]
         for row in ("model", "input", "truth", "hres"):
@@ -175,8 +180,15 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
     Path(path).write_text("\n".join(lines) + "\n")
 
 
-def write_compare_md(tab, meta, path, *, region="all"):
+def default_region(regions) -> str:
+    """'all' when the run has it (obs_points), else its first region (obs_imerg)."""
+    regions = list(dict.fromkeys(regions))
+    return "all" if "all" in regions or not regions else regions[0]
+
+
+def write_compare_md(tab, meta, path, *, region=None):
     """Paired run comparison, headline metrics only, for one region."""
+    region = region or (default_region(tab.region) if len(tab) else "all")
     la, lb, row = meta["label_a"], meta["label_b"], meta["row"]
     unit_name = meta.get("sample_unit", "stations")
     lines = [f"# {la} minus {lb} ({row} rows), paired by date", "",
@@ -187,14 +199,14 @@ def write_compare_md(tab, meta, path, *, region="all"):
     if tab.empty:
         Path(path).write_text("\n".join(lines + ["No common rows."]) + "\n")
         return
-    t = tab[(tab.region == region) & (tab.metric.str.startswith(("fcrps", "twcrps", "brier")))]
+    t = tab[(tab.region == region) & (tab.metric.str.startswith(("fcrps", "twcrps", "brier", "seeps")))]
     leads = sorted(set(tab.lead))
     for (v, var_, r), q in t.groupby(["var", "variant", "radius_km"], sort=False):
         lines += [f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({VAR_UNITS.get(v, '')})", "",
                   "| score | " + " | ".join(f"+{l} h" for l in leads) + " |", "|---|" + "---|" * len(leads)]
         for met, qq in q.groupby("metric", sort=False):
             qq = qq.set_index("lead")
-            name = "fair CRPS" if met == "fcrps" else tail_name(met)
+            name = {"fcrps": "fair CRPS", "seeps": "SEEPS"}.get(met) or tail_name(met)
             lines.append(f"| {name} | " + " | ".join(
                 f"{qq.loc[l, 'mean']:+.4f} ({qq.loc[l, 'se']:.4f}) w{int(qq.loc[l, 'wins'])}/{int(qq.loc[l, 'dates'])}"
                 if l in qq.index else "" for l in leads) + " |")

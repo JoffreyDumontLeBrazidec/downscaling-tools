@@ -6,7 +6,9 @@
     obs fetch-tc  Atos only. Tropical cyclone references for the tc_obs evaluator: IBTrACS best-track rows of
                   the configured storms (anemoi zarr; a NOAA IBTrACS CSV too when a local path is given) and
                   the ECMWF operational tracker (HRES and ENS) for the given dates, decoded from MARS BUFR.
-    obs compare   Any cluster. Paired comparison of two obs_points results (run A minus run B), date by
+    obs fetch-imerg  Atos (or ac6-100) only. IMERG Final V07B 12 h precipitation on the E2 O1280 points for the
+                  given dates and leads, one small netCDF file for the obs_imerg evaluator.
+    obs compare   Any cluster. Paired comparison of two obs_points (or obs_imerg) results (run A minus run B), date by
                   date: mean difference, SE over dates and date wins, as paired_runs.csv, paired_runs.md
                   and figures.
 
@@ -43,7 +45,12 @@ def register(subparsers) -> argparse.ArgumentParser:
     t.add_argument("--noaa-csv", default=None, help="Optional local NOAA IBTrACS CSV (adds best-track wind). Never downloaded.")
     t.add_argument("--out", required=True, help="Cache directory (created).")
 
-    c = sub.add_parser("compare", help="Paired comparison of two obs_points results (A minus B).")
+    from eval.evaluators.obs_imerg.core import fetch as imerg_fetch
+    i = sub.add_parser("fetch-imerg", help="IMERG 12 h precipitation cut on the E2 points (Atos only).",
+                       description=imerg_fetch.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    imerg_fetch.add_args(i)
+
+    c = sub.add_parser("compare", help="Paired comparison of two obs_points (or obs_imerg) results (A minus B).")
     c.add_argument("--a", required=True, help="obs_points results directory of run A (holds scores_per_date.csv).")
     c.add_argument("--b", required=True, help="obs_points results directory of run B.")
     c.add_argument("--label-a", default=None, help="Display label of run A (default: its run_meta.json run_label).")
@@ -99,6 +106,9 @@ def run(args: argparse.Namespace) -> None:
                        zarr_path=args.ibtracs_zarr or IBTRACS_ZARR, noaa_csv=args.noaa_csv,
                        streams=tuple(args.streams.split(",")))
         print(f"tropical cyclone reference cache written: {out}")
+    elif args.obs_cmd == "fetch-imerg":
+        from eval.evaluators.obs_imerg.core.fetch import run_from_args as imerg_run
+        print(f"IMERG cut written: {imerg_run(args)}")
     elif args.obs_cmd == "compare":
         _compare(args)
 

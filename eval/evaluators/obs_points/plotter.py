@@ -17,7 +17,7 @@ LOG = logging.getLogger(__name__)
 ROW_ROLE = {"model": "model", "truth": "truth", "input": "input", "hres": "baseline"}
 ROW_OFFSET = {"model": 0.0, "truth": -1.5, "input": 1.5, "hres": 3.0}
 VAR_TITLE = {"2t": "2 m temperature", "10ff": "10 m wind speed", "msl": "Mean sea-level pressure",
-             "tp": "12 h precipitation"}
+             "tp": "12 h precipitation", "tp24": "24 h precipitation"}
 VARIANT_TITLE = {"raw": "nearest grid point", "lapse": "nearest grid point, lapse-rate height correction",
                  "imerg": "IMERG Final V07B on the same O1280 points"}
 
@@ -74,6 +74,8 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
     unit = VAR_UNITS.get(var, "")
     panels = [("fcrps", f"Fair CRPS ({unit})"), ("ssr_corrected", "Spread / skill, corrected"),
               ("paired", f"Paired fair CRPS difference ({unit})")]
+    if "seeps" in s.columns and s["seeps"].notna().any():
+        panels.insert(1, ("seeps", "SEEPS, mean over members"))
     with eval_style():
         fig, axes = plt.subplots(len(panels), len(regions), figsize=(5.4 * len(regions), 3.0 * len(panels)),
                                  squeeze=False, sharex=True)
@@ -83,11 +85,12 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
             ns = float(q[q.row == "model"].mean_n.mean())
             for i, (key, ylabel) in enumerate(panels):
                 ax = axes[i, j]
-                if key == "fcrps":
+                if key in ("fcrps", "seeps"):
                     for row in ("model", "truth", "input", "hres"):
                         if row in set(q.row):
                             _series(ax, q, key, row, run_label, leads)
-                    ax.set_title(f"{reg}: {nd} dates, ~{ns:,.0f} {unit_name} per date", fontsize=10.5)
+                    if key == "fcrps":
+                        ax.set_title(f"{reg}: {nd} dates, ~{ns:,.0f} {unit_name} per date", fontsize=10.5)
                 elif key == "ssr_corrected":
                     _series(ax, q, key, "model", run_label, leads)
                     ax.axhline(1.0, color="#0b0b0b", lw=1, ls="--")
@@ -226,20 +229,26 @@ def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, 
     return written
 
 
-def plot_compare(out_dir, tab, meta, region="all"):
+def plot_compare(out_dir, tab, meta, region=None):
     """Paired run comparison by lead: one panel per (variable, variant) for fair CRPS, plus the tp tail
     scores; points are the mean difference A - B over dates, bars one SE, labels the date wins of A."""
     import matplotlib.pyplot as plt
     from eval.plotting import eval_style, save_figure
 
+    from eval.evaluators.obs_points.core.summary import default_region
+
     if tab.empty:
         return []
+    region = region or default_region(tab.region)
     la, lb = meta["label_a"], meta["label_b"]
     where, unit_name = _words(meta)
     t = tab[(tab.region == region) & (tab.radius_km == 0)]
     panels = [(v, var_, "fcrps") for (v, var_), _ in t.groupby(["var", "variant"], sort=False)]
-    panels += [("tp", "raw", m) for m in sorted(set(t[t["var"] == "tp"].metric))
-               if m.startswith(("twcrps", "brier"))]
+    panels += [(v, var_, m) for (v, var_), q in t[t["var"] == "tp"].groupby(["var", "variant"], sort=False)
+               for m in sorted(set(q.metric)) if m.startswith(("twcrps", "brier"))]
+    panels += [(v, var_, "seeps") for (v, var_), q in t.groupby(["var", "variant"], sort=False) if "seeps" in set(q.metric)]
+    if not panels:
+        return []
     leads = sorted(set(t.lead))
     ncol = min(4, len(panels))
     nrow = int(np.ceil(len(panels) / ncol))
@@ -253,12 +262,12 @@ def plot_compare(out_dir, tab, meta, region="all"):
                 if np.isfinite(y):
                     ax.annotate(f"{int(w)}/{int(d)}", (x, y), textcoords="offset points", xytext=(4, 4), fontsize=7)
             ax.axhline(0.0, color="#0b0b0b", lw=1)
-            name = "fair CRPS" if met == "fcrps" else tail_name(met)
+            name = {"fcrps": "fair CRPS", "seeps": "SEEPS"}.get(met) or tail_name(met)
             ns = q["mean_n"].mean() if "mean_n" in q else np.nan
             ax.set_title(f"{v} {var_}: {name}\n{int(q['dates'].max())} dates, ~{ns:,.0f} {unit_name}", fontsize=9.5)
             _lead_axis(ax, leads)
             ax.set_xlabel("Lead time (h)")
-            unit = "" if met.startswith("brier") else f" ({VAR_UNITS.get(v, '')})"
+            unit = "" if met.startswith(("brier", "seeps")) else f" ({VAR_UNITS.get(v, '')})"
             ax.set_ylabel(f"{la} - {lb}{unit}")
         for ax in list(axes.flat)[len(panels):]:
             ax.set_visible(False)

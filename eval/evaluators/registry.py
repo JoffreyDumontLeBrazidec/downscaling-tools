@@ -219,6 +219,11 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "as an ensemble (fair CRPS of central pressure, member position error, spread) next to the truth, "
         "the input and the operational HRES and ENS trackers?",
     ),
+    Evaluator(
+        "obs_imerg", DIAGNOSTIC, False,
+        "How good is the model's 12 h precipitation ensemble against IMERG on the same O1280 points, in fair "
+        "CRPS, spread/skill, rank histograms, tail scores and PDFs, next to the input and the truth?",
+    ),
     # ----------------------------------------------------------------- retired
     Evaluator(
         "spectra", RETIRED, False,

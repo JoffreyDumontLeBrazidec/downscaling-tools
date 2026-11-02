@@ -23,7 +23,7 @@ command.
 | pipeline | `run`, `predict`, `prepare`, `evaluate`, `judge`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
-| observations | `obs fetch`, `obs fetch-tc`, `obs compare` |
+| observations | `obs fetch`, `obs fetch-tc`, `obs fetch-imerg`, `obs compare` |
 | figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
 | retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
@@ -38,7 +38,7 @@ python -m eval.cli judge --lane o320_o1280 --host jupiter \
     --output-dir <read_dir> --weights "EMA-10000 / EMA-10000"
 ```
 
-### Scores against observations (`obs`, `obs_points`, `tc_obs`)
+### Scores against observations (`obs`, `obs_points`, `tc_obs`, `obs_imerg`)
 
 Observation references are fetched once on Atos into small cache directories (CSV plus a JSON
 manifest), copied to the cluster that holds the predictions, and read by diagnostic evaluators. Ensemble
@@ -50,7 +50,7 @@ fair Brier for precipitation); input, truth and HRES are scored on the same samp
 # Atos, module python3 (vtb is not in the eval venv); reads only, never writes to FDB
 module load python3 vtb ecmwf-toolbox; export TMPDIR=<a folder you own>
 python3 -m eval.cli obs fetch --dates 20230101,20230111 --leads 12,24,36,48,60,72 \
-    --vars 2t,10ff,msl,tp --tp-periods 12,24 --box 9,71,-81,41 --out <station cache>
+    --vars 2t,10ff,msl,tp --tp-periods 12,24 --seeps --box 9,71,-81,41 --out <station cache>
 # any cluster, eval venv: station scores of one run, then two runs paired by date
 python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_points \
     --predictions-dir <dir with every lead> --run-label CA300 --output-dir <run dir>
@@ -67,8 +67,18 @@ python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only tc_obs
     --predictions-dir <dir> --run-label CA300 --output-dir <run dir>
 ```
 
+`obs_imerg` scores the 12 h tp ensemble against IMERG Final V07B on the same O1280 points (no
+interpolation; default regions within 25-60 N). Its input is one netCDF cut made on Atos:
+
+```bash
+python3 -m eval.cli obs fetch-imerg --dates <YYYYMMDD,...> --leads 12,24,36,48,60,72 --out <imerg_e2_tp12.nc>
+python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_imerg \
+    --predictions-dir <dir> --run-label CA300 --output-dir <run dir>
+```
+
 The lane keys are documented in each evaluator's docstring (`python -m eval.cli describe obs_points`).
-`obs_points` reproduces the A0 kit (`kits/20261102-obs-a0/score_a0.py`) exactly on the 30 seed-locked
+With 24 h tp and the SEEPS climatology in the cache (`--tp-periods 12,24 --seeps`), `obs_points` also
+scores 24 h SEEPS per member (quaver's climatology and categories), averaged over members. `obs_points` reproduces the A0 kit (`kits/20261102-obs-a0/score_a0.py`) exactly on the 30 seed-locked
 dates of 2023.
 
 `--opt BLOCK.KEY=VALUE` (on `evaluate`, `run`, `predict` and `judge`) sets one key of a lane

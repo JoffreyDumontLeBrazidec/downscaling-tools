@@ -73,6 +73,7 @@ obs_points:
   lapse_rate: 0.0065           # K/m, quaver
   min_stations: 30
   weighting: none              # or station_density (quaver's kernel)
+  seeps: true                  # 24 h SEEPS (tp24 + seeps_clim_tp24.csv in the cache)
   plot_regions: [all, europe]
 
 # Tropical cyclones against the IBTrACS best track and the operational HRES/ENS trackers (added 2026-11-02).
@@ -85,3 +86,17 @@ tc_obs:
     atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/tc_2023_v1
   only_storm_ok: true
   max_gap_h: 6
+
+# 12 h tp against IMERG Final V07B on the same O1280 points (added 2026-11-02). Cut: python3 -m eval.cli
+# obs fetch-imerg (Atos). IMERG is weak poleward of 60 N and over snow: regions stay within 25-60 N.
+obs_imerg:
+  imerg:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/imerg_e2_2023_tp12_v1.nc
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/imerg_e2_2023_tp12_v1.nc
+  regions:
+    25-60N: [25.0, 60.0, -80.0, 40.0]
+    europe: [35.0, 60.0, -12.5, 40.0]
+    25-40N: [25.0, 40.0, -80.0, 40.0]
+    40-60N: [40.0, 60.0, -80.0, 40.0]
+  thresholds: [5, 10, 20]      # mm per 12 h
+  plot_regions: [25-60N, europe]
