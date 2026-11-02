@@ -35,6 +35,15 @@ MM = 1000.0
 ROW_KIND = {"model": "ensemble", "input": "single field", "truth": "single field", "hres": "single field"}
 
 
+def rank_seed(base: dict, row: str) -> int:
+    """Seed of the random tie-breaking in the rank histogram, fixed per (var, variant, radius, region, lead,
+    date, row), so a rerun gives the same counts and two rows never share one random stream."""
+    import zlib
+
+    key = "|".join(str(base[k]) for k in ("var", "variant", "radius_km", "region", "lead", "date")) + "|" + row
+    return zlib.crc32(key.encode())
+
+
 def read_fields(path, variables):
     """lat, lon (-180..180), {var: {"truth": (n,), "input": (n,), "model": (M, n)}} in observation units:
     2t K, 10ff m/s (from 10u/10v), msl Pa, tp mm (file metres x 1000, clipped at 0). Truth and input take
@@ -151,7 +160,7 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                     rows.append({**base, "row": k, "kind": ROW_KIND[k],
                                  **ensemble_scores(ens, ov[m], thresholds, weights=w), **extra})
                     if ens.shape[0] > 1:
-                        counts = rank_counts(ens, ov[m])
+                        counts = rank_counts(ens, ov[m], seed=rank_seed(base, k))
                         ranks.append({**base, "row": k, "members": int(ens.shape[0]), "n": int(m.sum()),
                                       **{f"r{i}": int(c) for i, c in enumerate(counts)}})
     return rows, ranks, int(ov.size)
@@ -220,6 +229,12 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                 log.append(f"WARN no observations within {cfg['max_km']:g} km for {v} {p.date} +{p.step} h")
         if seeps_clim is not None and "tp" in fields:
             before = prev.get((p.date, p.step - 12))
+            last = next(iter(prev), None)
+            if last is not None and last[0] == p.date and p.step - last[1] != 12:
+                log.append(f"WARN {p.date}: leads +{last[1]} and +{p.step} h are not 12 h apart; 24 h SEEPS windows "
+                           "need consecutive 12 h files")
+            if before is None and p.step >= 24:
+                log.append(f"WARN {p.date}: no +{p.step - 12} h file, so no 24 h SEEPS window ending at +{p.step} h")
             if before is not None:
                 f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"]}
                 r, k, nst = score_valid("tp24", f24, obs["tp24"], None, matcher, date=p.date, lead=p.step,

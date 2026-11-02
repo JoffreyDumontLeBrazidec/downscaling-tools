@@ -83,6 +83,8 @@ def test_run_then_plot(tmp_path):
     ens = df[df.row == "ens"]
     assert (ens.n_found == 51).all() and (ens.members_total == 51).all()  # member 52 (HRES) is not in the ENS row
     assert (df[df.kind == "single field"].pos_spread_km == 0).all()
+    assert (df[df.row.isin(["model", "ens"])].found_frac == 1).all()
+    assert "found_frac" in pd.read_csv(out / "summary.csv").columns
     truth = df[(df.row == "truth") & (df.lead == 24)].iloc[0]
     assert truth.pmin_crps == pytest.approx(1.0)  # 5 x 0.2 hPa above the best track
     meta = json.loads((out / "run_meta.json").read_text())
@@ -102,7 +104,9 @@ def test_noaa_csv_reader(tmp_path):
                  "2023Y,2023,2,NA,MM,LEE,2023-09-10 00:00:00,TS,20.0,290.0,80,960, , \n")
     x = read_noaa_csv(p, ["franklin", "lee"], 2023)
     assert list(x.event) == ["franklin", "lee"]
-    assert x.wind_ms.iloc[0] == pytest.approx(100 * 0.514444) and x.pmin_hpa.iloc[1] == 960
+    assert x.wind_ms.iloc[0] == pytest.approx(100 * 0.514444 * 0.93) and x.pmin_hpa.iloc[1] == 960
+    assert x.wind_ms.iloc[1] == pytest.approx(80 * 0.514444)  # WMO_WIND only where USA_WIND is missing
+    assert list(x.wind_src) == ["usa_wind_1min_x0.93", "wmo_wind"]
     assert x.lon.iloc[1] == pytest.approx(-70.0) and x.time.iloc[0] == "2023083000"
 
 
@@ -113,3 +117,18 @@ def test_fetch_tc_refuses_off_atos(monkeypatch, tmp_path):
     monkeypatch.setattr(socket, "gethostname", lambda: "jrlogin05")
     with pytest.raises(SystemExit, match="Atos only"):
         main(["obs", "fetch-tc", "--storms", "franklin=4648", "--dates", "20230829", "--out", str(tmp_path / "c")])
+
+
+def test_hres_without_member_number_and_missing_hres_warns(tmp_path):
+    cases, cache = _cases(tmp_path)
+    tr = pd.read_csv(cache / "tracker_oper_20230829.csv")
+    tr["member"] = -1  # a message without ensembleMemberNumber decodes as -1
+    tr.to_csv(cache / "tracker_oper_20230829.csv", index=False)
+    cfg = {"cache": str(cache), "cases": str(cases)}
+    out = tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "out", run_label="X")
+    df = pd.read_csv(out / "cases_obs.csv")
+    assert (df.row == "hres").sum() == 2
+    tr[tr.step_h != 48].to_csv(cache / "tracker_oper_20230829.csv", index=False)
+    out = tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "out2", run_label="X")
+    log = json.loads((out / "run_meta.json").read_text())["log"]
+    assert any(x.startswith("WARN") and "HRES" in x and "+48 h" in x for x in log)

@@ -38,6 +38,10 @@ def fetch_imerg(dates, leads, out, *, accum_h=12, zarr_path=IMERG_ZARR, box=E2_B
     import zarr
 
     g = zarr.open(str(zarr_path), mode="r")
+    names = list(g.attrs.get("variables", ["tp"]))
+    if "tp" not in names:
+        raise KeyError(f"IMERG store {zarr_path} has no variable 'tp' (variables: {names})")
+    var = names.index("tp")
     times = np.asarray(g["dates"][:]).astype("datetime64[s]").astype(dt.datetime)
     pos = {t: i for i, t in enumerate(times)}
     lat, lon = np.asarray(g["latitudes"][:]), np.asarray(g["longitudes"][:])
@@ -51,7 +55,7 @@ def fetch_imerg(dates, leads, out, *, accum_h=12, zarr_path=IMERG_ZARR, box=E2_B
         if t not in cache:
             if t not in pos:
                 raise KeyError(f"IMERG store has no step {t:%Y-%m-%d %H} UTC")
-            cache[t] = np.asarray(g["data"][pos[t], 0, 0, :], np.float32)[idx]
+            cache[t] = np.asarray(g["data"][pos[t], var, 0, :], np.float32)[idx]
         return cache[t]
 
     with netCDF4.Dataset(str(out), "w") as ds:

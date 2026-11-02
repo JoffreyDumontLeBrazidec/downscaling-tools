@@ -231,7 +231,11 @@ def test_good_ensemble_beats_noisy_one_and_compare(two_runs, tmp_path):
         assert (tmp_path / "cmp" / name).exists(), name
     meta = json.loads((tmp_path / "cmp" / "compare_meta.json").read_text())
     assert meta["label_a"] == "GOOD" and meta["label_b"] == "BAD"
-    main(["obs", "compare", "--a", "x", "--b", "y", "--out", str(tmp_path / "cmp"), "--plot-only"])
+    (tmp_path / "cmp" / "paired_runs.png").unlink()
+    main(["obs", "compare", "--out", str(tmp_path / "cmp"), "--plot-only"])
+    assert (tmp_path / "cmp" / "paired_runs.png").exists()  # redrawn from paired_runs.csv alone
+    with pytest.raises(SystemExit, match="--a and --b"):
+        main(["obs", "compare", "--out", str(tmp_path / "cmp2")])
 
 
 def test_station_density_weighting_runs(two_runs, tmp_path):
@@ -321,3 +325,52 @@ def test_seeps_on_24h_windows(tmp_path):
     assert t24[t24.row == "truth"].seeps.iloc[0] == pytest.approx(expected)
     obs_points.plot(out, {}, cfg)
     assert (out / "obs_tp24_raw_scores.png").exists()
+
+
+def test_seeps_warns_when_a_12h_file_is_missing(tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    rows = [{"valid": v, "lat": 45.0 + k * 0.1, "lon": 0.0, "stnid": k, "elevation": 0.0, "obs": 1.0,
+             "h_o1280": 0.0, "h_o320": 0.0} for v in ("2023010112", "2023010212") for k in range(40)]
+    pd.DataFrame(rows).to_csv(cache / "obs_tp.csv", index=False)
+    pd.DataFrame(rows).to_csv(cache / "obs_tp24.csv", index=False)
+    pd.DataFrame([{"valid": "2023010212", "stnid": k, "lat": 45.0, "lon": 0.0, "p1": 0.5, "t1": 0.2, "t2": 4.0,
+                   **{f"s{j}": 0.0 for j in range(9)}} for k in range(40)]).to_csv(cache / "seeps_clim_tp24.csv",
+                                                                                  index=False)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    for step in (12, 36):  # +24 h is missing: no 24 h window ending at +36 h
+        _write(pred / f"predictions_20230101_step{step:03d}.nc", "20230101", step, noise=1.0, seed=step)
+    out = obs_points.run(pred, {}, {"cache": str(cache), "vars": ["tp"], "radii": [0], "min_stations": 10,
+                                    "regions": {"all": None}, "height_classes": {}}, output_dir=tmp_path / "out")
+    warn = json.loads((out / "run_meta.json").read_text())["warnings"]
+    assert any("no +24 h file" in w for w in warn) and any("not 12 h apart" in w for w in warn)
+
+
+def test_seeps_climatology_is_joined_by_station(monkeypatch):
+    """The 13 climatology fields are matched on station id, not on row position."""
+    import sys
+    import types
+
+    from eval.evaluators.obs_points.core import fetch
+
+    class F:
+        def __init__(self, ids, vals):
+            self.df = pd.DataFrame({"latitude": 45.0, "longitude": 5.0, "stnid": ids, "elevation": 0.0,
+                                    "value_0": vals})
+
+        def to_dataframe(self):
+            return self.df.copy()
+
+    class FS(list):
+        header = {"number": list(range(13))}
+
+    ids = ["a", "b", "c"]
+    fields = FS(F(ids if k != 3 else ids[::-1], [10.0 * k + i for i in range(3)][::(-1 if k == 3 else 1)])
+                for k in range(13))
+    vm = types.SimpleNamespace(stvl_retrieve=lambda **kw: fields)
+    monkeypatch.setitem(sys.modules, "vtb", types.SimpleNamespace(media=vm))
+    monkeypatch.setitem(sys.modules, "vtb.media", vm)
+    import datetime as dt
+    c = fetch.seeps_clim_at(dt.datetime(2023, 1, 2), (0, 90, -180, 180)).set_index("stnid")
+    assert list(c.t2) == [30.0, 31.0, 32.0] and list(c.t1) == [10.0, 11.0, 12.0] and list(c.s0) == [40.0, 41.0, 42.0]

@@ -77,7 +77,7 @@ def fetch(dates, leads, period_h, box, out):
         t0 = dt.datetime.strptime(d, "%Y%m%d")
         for h in leads:
             v = t0 + dt.timedelta(hours=int(h))
-            df = obs_at(var, v, box)
+            df = obs_at(var, v, box, limits=False, dedup=False)  # as before: obs_max applies when loading
             if df.empty:
                 print("no observations", v, flush=True)
                 continue

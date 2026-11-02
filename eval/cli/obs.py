@@ -51,8 +51,9 @@ def register(subparsers) -> argparse.ArgumentParser:
     imerg_fetch.add_args(i)
 
     c = sub.add_parser("compare", help="Paired comparison of two obs_points (or obs_imerg) results (A minus B).")
-    c.add_argument("--a", required=True, help="obs_points results directory of run A (holds scores_per_date.csv).")
-    c.add_argument("--b", required=True, help="obs_points results directory of run B.")
+    c.add_argument("--a", default=None, help="Results directory of run A (holds scores_per_date.csv); not needed "
+                                             "with --plot-only.")
+    c.add_argument("--b", default=None, help="Results directory of run B; not needed with --plot-only.")
     c.add_argument("--label-a", default=None, help="Display label of run A (default: its run_meta.json run_label).")
     c.add_argument("--label-b", default=None, help="Display label of run B.")
     c.add_argument("--row", default="model", help="Row compared (default model; input, truth or hres also work).")
@@ -68,6 +69,10 @@ def _compare(args) -> None:
     from eval.evaluators.obs_points.plotter import plot_compare
 
     out = Path(args.out)
+    if args.plot_only and not (out / "paired_runs.csv").exists():
+        raise SystemExit(f"obs compare --plot-only: no paired_runs.csv in {out}")
+    if not args.plot_only and not (args.a and args.b):
+        raise SystemExit("obs compare: --a and --b are required unless --plot-only is given")
     out.mkdir(parents=True, exist_ok=True)
     if not args.plot_only:
         a_dir, b_dir = Path(args.a), Path(args.b)

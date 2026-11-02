@@ -11,6 +11,7 @@ from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import ensemble_scores, rank_counts
 from eval.evaluators.obs_points.core.stations import resolve_cache, wrap_lon
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
+from eval.evaluators.obs_points.runner import rank_seed
 from eval.evaluators.precip_read.core.metrics import EDGES
 from eval.evaluators.precip_read.runner import read_tp
 
@@ -59,8 +60,11 @@ class Imerg:
 
 
 def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_points=1000):
-    """Rows, rank rows and histogram counts of one file against one IMERG field (NaN points left out)."""
+    """Rows, rank rows and histogram counts of one file against one IMERG field. A point is used only where
+    IMERG and every field (all members, input, truth) are finite, so every row is scored on the same points."""
     ok = np.isfinite(ref)
+    for x in fields.values():
+        ok &= np.isfinite(x).all(0) if x.ndim == 2 else np.isfinite(x)
     rows, ranks, hist = [], [], {}
     for reg, b in regions.items():
         m = ok & (lat >= b[0]) & (lat <= b[1]) & (lon >= b[2]) & (lon <= b[3])
@@ -75,7 +79,7 @@ def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_po
             hist[reg][k] = sum(np.histogram(e, EDGES)[0] for e in ens)
             if ens.shape[0] > 1:
                 ranks.append({**base, "row": k, "members": int(ens.shape[0]), "n": int(m.sum()),
-                              **{f"r{i}": int(c) for i, c in enumerate(rank_counts(ens, r))}})
+                              **{f"r{i}": int(c) for i, c in enumerate(rank_counts(ens, r, seed=rank_seed(base, k)))}})
     return rows, ranks, hist
 
 

@@ -49,7 +49,15 @@ def seeps(fc: np.ndarray, obs: np.ndarray, t1, t2, smat) -> np.ndarray:
     """SEEPS (Rodwell et al. 2010) of each member at each station, as quaver computes it
     (ScoresLibAux.seepsField): forecast and observation rounded to 0.1 mm, categories dry (<= t1), light and
     heavy (>= t2), and the station's 3 x 3 error matrix ``smat`` (n, 9) indexed by forecast category x 3 +
-    observed category. Lower is better; quaver stores 1 - SEEPS. Returns (M, n)."""
+    observed category. Lower is better; quaver stores 1 - SEEPS. Returns (M, n).
+
+    Evidence (2 Nov 2026): quaver 3.8.2, quaver/ScoresLibAux.py, ScoresLibAux.seepsField, lines 83-108:
+    fc and ob are ``DataArray.round(1)`` (numpy rounding, half to even, as np.round here); t1 = climatology
+    field number 1, t2 = number 3, the matrix = numbers 4..12; category = (x > t1) + (x >= t2); index =
+    fc_ind * 3 + ob_ind. Scored with seepsField itself on all 5,116 stations of the 24 h climatology ending
+    2023-08-30 00 UTC, with edge cases at t1, t2 and the 0.05 mm rounding: max |seepsField - this| = 0;
+    the transposed index (ob * 3 + fc) differs by up to 49. Script:
+    /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/seeps_vs_quaver.py (Atos, quaver's environment)."""
     fc = np.round(np.atleast_2d(np.asarray(fc, np.float64)), 1)
     ob = np.round(np.asarray(obs, np.float64), 1)
     t1, t2, smat = np.asarray(t1, np.float64), np.asarray(t2, np.float64), np.asarray(smat, np.float64)

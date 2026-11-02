@@ -47,6 +47,14 @@ def summarise(df):
     g = df.groupby(KEYS + ["row", "kind"])
     s = g[cols].mean().join(g[cols].sem().add_suffix("_se")).join(g["n"].mean().rename("mean_n"))
     s = s.join(g["members"].first()).join(g.size().rename("dates"))
+    if {"spread_rms", "rmse_mean"} <= set(df.columns):
+        # spread/skill from the variance and MSE pooled over dates, next to the mean of the per-date ratios
+        def pooled_ssr(q):
+            m, mse = q.members.iloc[0], (q.rmse_mean ** 2).mean()
+            return np.sqrt((q.spread_rms ** 2).mean() / mse * (m + 1) / m) if m > 1 and mse > 0 else np.nan
+
+        pool = g[["spread_rms", "rmse_mean", "members"]].apply(pooled_ssr)
+        s = s.join(pool.rename("ssr_pooled"))
     return s.reset_index()
 
 

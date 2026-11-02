@@ -88,7 +88,7 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             continue
         base = {"event": event, "date": date, "lead": lead, "valid": valid.strftime("%Y%m%d%H"),
                 "bt_lat": b["lat"], "bt_lon": b["lon"], "bt_pmin_hpa": b["pmin_hpa"], "bt_wind_ms": b["wind_ms"],
-                "bt_interpolated": bool(b["interpolated"])}
+                "bt_interpolated": bool(b["interpolated"]), "bt_wind_src": b.get("wind_src", "")}
         sub = c[(c.event == event) & (c.date == date) & (c.lead == lead)]
         rows = {}
         mod = sub[(sub.field == "model") & (sub.found == 1) & np.isfinite(sub.pmin_hpa) & np.isfinite(sub.centre_lat)]
@@ -99,22 +99,28 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             s = _single(sub[sub.field == f], log, f"{tag} {f}")
             if s is not None:
                 rows[f] = (s.pmin_hpa, s.centre_lat, s.centre_lon, s[wind_col] if wind_col in s else None, None, 1)
-        for stream, row, sel in (("oper", "hres", lambda t: t.member == HRES_MEMBER),
-                                 ("enfo", "ens", lambda t: (t.member >= 1) & (t.member <= 51))):
+        for stream, row in (("oper", "hres"), ("enfo", "ens")):
             tr = trackers.get((stream, date))
             if tr is None:
                 log.append(f"WARN {tag}: no {stream} tracker file for {date}")
                 continue
-            t = tr[(tr.name.astype(str).str.upper() == event.upper()) & (tr.step_h == lead)]
-            t = t[sel(t)].dropna(subset=["lat", "lon", "msl_hpa"])
+            storm = tr[tr.name.astype(str).str.upper() == event.upper()]
+            if row == "hres":
+                # HRES is member 52; a message without a member number decodes as -1: take the single member then
+                present = set(storm.member)
+                keep = {HRES_MEMBER} if HRES_MEMBER in present else (present if len(present) == 1 else set())
+                sel = storm.member.isin(keep)
+            else:
+                sel = (storm.member >= 1) & (storm.member <= 51)
+            t = storm[sel & (storm.step_h == lead)].dropna(subset=["lat", "lon", "msl_hpa"])
             if t.empty:
-                log.append(f"{tag}: the {stream} tracker has no {event.upper()} at +{lead} h")
+                log.append(f"WARN {tag}: no {row.upper()} row in the {stream} tracker for {event.upper()} at +{lead} h")
                 continue
-            n_tot = int(tr[(tr.name.astype(str).str.upper() == event.upper()) & sel(tr)].member.nunique())
-            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, n_tot)
+            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, int(storm[sel].member.nunique()))
         for row, (p, la, lo, w, mem, n_tot) in rows.items():
+            sc = case_scores(p, la, lo, b, w)
             out.append({**base, "row": row, "kind": ROW_KIND[row], "members_total": n_tot,
-                        **case_scores(p, la, lo, b, w)})
+                        "found_frac": sc["n_found"] / n_tot if n_tot else np.nan, **sc})
             if mem is not None:
                 d = gc_km(la, lo, b["lat"], b["lon"])
                 for mm, pp, dd in zip(np.asarray(mem), np.asarray(p, float), np.asarray(d)):
@@ -127,7 +133,7 @@ def summarise(df):
     """Mean and SE over cases per (lead, row), and pooled over leads (lead = 'all')."""
     import pandas as pd
 
-    cols = [c for c in SCORES + ("wind_crps", "wind_err", "pmin_mean", "n_found") if c in df.columns]
+    cols = [c for c in SCORES + ("wind_crps", "wind_err", "pmin_mean", "n_found", "found_frac") if c in df.columns]
 
     def agg(g):
         s = g[cols].mean().join(g[cols].sem().add_suffix("_se"))
@@ -222,6 +228,15 @@ def write_summary_md(summ, pr, meta, path):
             tag = row if ROW_KIND[row] == "ensemble" else f"{row} (single field)"
             lines.append(f"| {tag} | " + " | ".join(cells) + " |")
         lines.append("")
+    lines += ["## Members that found the storm (fraction of members; the ensemble scores above use only these)", "",
+              "| row | " + " | ".join(("+" + l + " h") if l != "all" else "all leads" for l in lead_order) + " |",
+              "|---|" + "---|" * len(lead_order)]
+    for row in ("model", "ens"):
+        q = summ[summ.row == row].set_index("lead")
+        if len(q) and "found_frac" in q:
+            lines.append(f"| {row} | " + " | ".join(f"{q.loc[l, 'found_frac']:.2f}" if l in q.index else ""
+                                                   for l in lead_order) + " |")
+    lines.append("")
     lines += ["## Paired, per case (model minus reference; wins = cases where the model is better)", "",
               "| pair | metric | " + " | ".join(("+" + l + " h") if l != "all" else "all leads" for l in lead_order) + " |",
               "|---|---|" + "---|" * len(lead_order)]

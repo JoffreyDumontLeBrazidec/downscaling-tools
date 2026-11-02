@@ -4,10 +4,11 @@
 
   best_track.csv      event, storm_id, time (YYYYMMDDHH), lat, lon (-180..180), pmin_hpa, wind_ms, source
                       from the anemoi IBTrACS zarr (6-hourly, central pressure only, no wind; storms by numeric
-                      id) and, when a NOAA IBTrACS CSV path is given, from that file (adds wind_ms, the
-                      USA_WIND or WMO_WIND 1-minute or 10-minute sustained wind converted from knots).
+                      id) and, when a NOAA IBTrACS CSV path is given, from that file (adds wind_ms, a 10-minute
+                      sustained wind in m/s: USA_WIND (1-minute) x 0.93, or WMO_WIND where USA_WIND is missing;
+                      wind_src says which).
   tracker_<stream>_<YYYYMMDD>.csv
-                      storm, name, member, step_h, lat, lon, msl_hpa, wind_ms decoded from MARS
+                      storm, name, member (-1 when the message has no member number), step_h, lat, lon, msl_hpa, wind_ms decoded from MARS
                       (class=od, expver=0001, type=tf, obstype=32, stream=oper|enfo, time=00). In both files the
                       HRES is member 52; the enfo file also carries the 50 perturbed members (1-50) and the
                       control (51). The BUFR files are kept next to them.
@@ -27,6 +28,7 @@ import numpy as np
 
 CACHE_VERSION = 1
 KT = 0.514444
+USA_1MIN_TO_10MIN = 0.93
 IBTRACS_ZARR = "/ec/ai/project/ai-ml/datasets/dop-file-1980-2025-v1-ibtracs.zarr"
 # Column order of the anemoi IBTrACS zarr: __date (days since 1970), __time (s), __latitude, __longitude (0..360),
 # storm (numeric id), date_time, obsvalue_pmsl_0 (Pa), then derived columns.
@@ -53,7 +55,8 @@ def read_ibtracs_zarr(path, storms: dict):
             t = epoch + dt.timedelta(days=float(row[ZARR_COLS["date"]]), seconds=float(row[ZARR_COLS["time"]]))
             out.append({"event": event, "storm_id": str(int(sid)), "time": t.strftime("%Y%m%d%H"),
                         "lat": row[ZARR_COLS["lat"]], "lon": float(_wrap(row[ZARR_COLS["lon"]])),
-                        "pmin_hpa": row[ZARR_COLS["pmsl"]] / 100.0, "wind_ms": np.nan, "source": "ibtracs_zarr"})
+                        "pmin_hpa": row[ZARR_COLS["pmsl"]] / 100.0, "wind_ms": np.nan, "wind_src": "",
+                        "source": "ibtracs_zarr"})
     return pd.DataFrame(out)
 
 
@@ -70,12 +73,16 @@ def read_noaa_csv(path, events, season: int | None = None):
     def num(col):
         return pd.to_numeric(x[col], errors="coerce") if col in x else pd.Series(np.nan, index=x.index)
 
-    wind = num("USA_WIND").fillna(num("WMO_WIND")) * KT
+    usa, wmo = num("USA_WIND"), num("WMO_WIND")
+    # USA_WIND is a 1-minute sustained wind: x 0.93 gives the 10-minute equivalent (WMO guideline at sea).
+    # WMO_WIND (the reporting agency's own averaging) is used only where USA_WIND is missing.
+    wind = (usa * USA_1MIN_TO_10MIN).where(usa.notna(), wmo) * KT
+    wind_src = np.where(usa.notna(), "usa_wind_1min_x0.93", np.where(wmo.notna(), "wmo_wind", ""))
     pres = num("USA_PRES").fillna(num("WMO_PRES"))
     t = pd.to_datetime(x["ISO_TIME"])
     return pd.DataFrame({"event": x.NAME, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H"),
                          "lat": num("LAT"), "lon": _wrap(num("LON")), "pmin_hpa": pres, "wind_ms": wind,
-                         "source": "noaa_ibtracs_csv"}).reset_index(drop=True)
+                         "wind_src": wind_src, "source": "noaa_ibtracs_csv"}).reset_index(drop=True)
 
 
 def decode_tracker(bufr_path):
@@ -195,7 +202,8 @@ def best_track_at(bt, event, when, *, max_gap_h: float = 6.0):
     exact = b[b._t == when]
     if len(exact):
         r = exact.iloc[0]
-        return {"lat": r.lat, "lon": r.lon, "pmin_hpa": r.pmin_hpa, "wind_ms": r.wind_ms, "interpolated": False}
+        return {"lat": r.lat, "lon": r.lon, "pmin_hpa": r.pmin_hpa, "wind_ms": r.wind_ms,
+                "wind_src": r.get("wind_src", ""), "interpolated": False}
     before, after = b[b._t < when], b[b._t > when]
     if before.empty or after.empty:
         return None
@@ -207,7 +215,8 @@ def best_track_at(bt, event, when, *, max_gap_h: float = 6.0):
     dlon = ((r1.lon - r0.lon + 180.0) % 360.0) - 180.0
     return {"lat": r0.lat + w * (r1.lat - r0.lat), "lon": float(_wrap(r0.lon + w * dlon)),
             "pmin_hpa": r0.pmin_hpa + w * (r1.pmin_hpa - r0.pmin_hpa),
-            "wind_ms": r0.wind_ms + w * (r1.wind_ms - r0.wind_ms), "interpolated": True}
+            "wind_ms": r0.wind_ms + w * (r1.wind_ms - r0.wind_ms), "wind_src": r0.get("wind_src", ""),
+            "interpolated": True}
 
 
 def load_cache(cache_dir):

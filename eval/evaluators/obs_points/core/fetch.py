@@ -83,7 +83,9 @@ def _stvl_param(var):
     return var, None
 
 
-def obs_at(var, valid, box):
+def obs_at(var, valid, box, *, limits=True, dedup=True):
+    """Station observations of ``var`` valid at ``valid`` inside ``box``; quaver's hard limits and one report
+    per station unless ``limits`` / ``dedup`` are False (precip_read applies its own obs_max when it loads)."""
     import pandas as pd
     import vtb.media as vm
 
@@ -98,10 +100,12 @@ def obs_at(var, valid, box):
     df = fs[0].to_dataframe().rename(columns={"value_0": "obs", "latitude": "lat", "longitude": "lon"})
     df = df.dropna(subset=["obs"])
     df["lon"] = ((df["lon"] + 180.0) % 360.0) - 180.0
-    lo, hi = LIMITS.get(var, LIMITS.get(param))
-    df = df[(df.obs >= lo) & (df.obs <= hi)]
+    if limits:
+        lo, hi = LIMITS.get(var, LIMITS.get(param))
+        df = df[(df.obs >= lo) & (df.obs <= hi)]
     df = df[(df.lat >= box[0]) & (df.lat <= box[1]) & (df.lon >= box[2]) & (df.lon <= box[3])]
-    df = df.drop_duplicates(subset=["stnid"])
+    if dedup:
+        df = df.drop_duplicates(subset=["stnid"])
     df.insert(0, "valid", valid.strftime("%Y%m%d%H"))
     return df[["valid", "lat", "lon", "stnid", "elevation", "obs"]]
 
@@ -143,14 +147,18 @@ def seeps_clim_at(valid, box):
                           forecast_lengths=[dt.timedelta(hours=0)])
     if len(fs) < 13:
         return pd.DataFrame()
-    base = fs[0].to_dataframe().rename(columns={"latitude": "lat", "longitude": "lon", "value_0": "p1"})
-    out = base[["stnid", "lat", "lon", "p1"]].copy()
-    out["t1"] = fs[1].to_dataframe()["value_0"].to_numpy()
-    out["t2"] = fs[3].to_dataframe()["value_0"].to_numpy()
-    for k in range(9):
-        f = fs[4 + k].to_dataframe()
-        assert (f.stnid.to_numpy() == base.stnid.to_numpy()).all(), "climatology fields not aligned by station"
-        out[f"s{k}"] = f["value_0"].to_numpy()
+    numbers = [int(x) for x in fs.header["number"]]
+    if numbers[:13] != list(range(13)):
+        raise ValueError(f"SEEPS climatology fields out of order: numbers {numbers}")
+
+    def field(k, name):  # one climatology field by station id (never by row position)
+        f = fs[k].to_dataframe().drop_duplicates(subset=["stnid"]).set_index("stnid")
+        return f["value_0"].rename(name)
+
+    base = fs[0].to_dataframe().drop_duplicates(subset=["stnid"]).rename(
+        columns={"latitude": "lat", "longitude": "lon", "value_0": "p1"}).set_index("stnid")[["lat", "lon", "p1"]]
+    out = base.join([field(1, "t1"), field(3, "t2")] + [field(4 + k, f"s{k}") for k in range(9)], how="inner")
+    out = out.reset_index()
     out["lon"] = ((out["lon"] + 180.0) % 360.0) - 180.0
     out = out[(out.lat >= box[0]) & (out.lat <= box[1]) & (out.lon >= box[2]) & (out.lon <= box[3])]
     out = out.drop_duplicates(subset=["stnid"])

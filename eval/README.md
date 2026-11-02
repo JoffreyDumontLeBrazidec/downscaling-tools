@@ -58,7 +58,10 @@ python -m eval.cli obs compare --a <run A>/evaluators/obs_points --b <run B>/eva
 ```
 
 `tc_obs` reads `tc_structure`'s `cases.csv` and compares each storm case with the IBTrACS best track and
-the operational HRES and ENS trackers; its cache comes from `obs fetch-tc` on Atos:
+the operational HRES and ENS trackers; its cache comes from `obs fetch-tc` on Atos. The anemoi IBTrACS
+zarr has no wind; when a local NOAA IBTrACS CSV is given (`--noaa-csv`), the best-track wind is the 10-minute
+equivalent USA_WIND x 0.93 (1-minute to 10-minute at sea, WMO guidance), or WMO_WIND where USA_WIND is
+missing, and the `wind_src` column says which:
 
 ```bash
 python3 -m eval.cli obs fetch-tc --storms franklin=4648,idalia=4654,lee=4660,margot=4661,nigel=4662,philippe=4667,tammy=4679 \
@@ -78,8 +81,11 @@ python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_im
 
 The lane keys are documented in each evaluator's docstring (`python -m eval.cli describe obs_points`).
 With 24 h tp and the SEEPS climatology in the cache (`--tp-periods 12,24 --seeps`), `obs_points` also
-scores 24 h SEEPS per member (quaver's climatology and categories), averaged over members. `obs_points` reproduces the A0 kit (`kits/20261102-obs-a0/score_a0.py`) exactly on the 30 seed-locked
-dates of 2023.
+scores 24 h SEEPS per member (quaver's climatology and categories), averaged over members. `obs_points` reproduces the A0 kit (`kits/20261102-obs-a0/score_a0.py`) exactly on real data: on the 30
+seed-locked dates of 2023 the CA300 and DB300 summaries (1,302 rows) and the DB300-CA300 paired table equal
+the kit's `out_v2` files with a maximum difference of 0 (recorded check, Jupiter:
+`/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/accept_stage1.txt`). The unit test
+`test_matches_the_a0_kit` repeats the comparison of the formulas on random data.
 
 `--opt BLOCK.KEY=VALUE` (on `evaluate`, `run`, `predict` and `judge`) sets one key of a lane
 block for one call, for example `--opt shape.box=north_atlantic`.

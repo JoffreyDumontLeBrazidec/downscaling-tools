@@ -134,3 +134,17 @@ def test_fetch_sums_the_two_steps_ending_at_valid(tmp_path):
         np.testing.assert_allclose(ds["tp"][0, :], 1.0)
         np.testing.assert_allclose(ds["tp"][1, :], 2.0 + 3.0)
         np.testing.assert_allclose(ds["lon"][:], [-10.0, 30.0, 10.0])
+
+
+def test_points_with_a_missing_field_value_leave_every_row(setup):
+    tmp, pred, cfg = setup
+    path = pred / "predictions_20230101_step012.nc"
+    la, _ = _grid()
+    inside = np.flatnonzero((la >= 25) & (la <= 60))[:50]
+    with nc.Dataset(str(path), "a") as d:
+        d["y_pred"][0, 1, inside, 0] = np.nan  # one member missing at 50 points
+    out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "o3", run_label="X")
+    df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
+    q = df[(df.date == "20230101") & (df.lead == 12) & (df.region == "25-60N")]
+    assert set(q.row) == {"model", "input", "truth"} and q.n.nunique() == 1
+    assert q.n.iloc[0] == int(((la >= 25) & (la <= 60)).sum()) - 50 and np.isfinite(q.fcrps).all()
