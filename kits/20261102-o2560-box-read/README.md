@@ -105,7 +105,46 @@ Not in this kit: the global fccc23df box-cut reference (it needs 4-GPU sharded o
 box or these dates; not cheap), the shape (elongation and rotation) evaluator, and the TC storm evaluator (no tropical
 cyclone in the box in these dates).
 
-## Jobs (to submit after the review and the go)
+## Read submitted 2 Nov 2026 09:36:40 UTC (hand-off for the thread that reads the results)
+
+Submitted on Jupiter with `scripts/submit_all.sh` under Joffrey's go; at 10:00 UTC all 25 jobs were PENDING (Priority or
+Dependency), none started. Ids (also in `state/jobs.txt` on Jupiter; `state/SUBMITTED` blocks a second submission):
+
+| Lead | A100 prediction | B24 prediction | B50 prediction | Scoring (afterany on the three) |
+|---|---|---|---|---|
+| +12 h | 2647798 | 2647799 | 2647800 | 2647801 |
+| +24 h | 2647802 | 2647803 | 2647804 | 2647805 |
+| +36 h | 2647806 | 2647807 | 2647808 | 2647809 |
+| +48 h | 2647810 | 2647811 | 2647812 | 2647813 |
+| +60 h | 2647814 | 2647815 | 2647816 | 2647817 |
+| +72 h | 2647818 | 2647819 | 2647820 | 2647821 |
+
+Final job (zoom maps, summary tables, judge): 2647822, afterany on the six scorings. Each prediction job: one node of
+4 GH200, 120 draws, about 2-3 h of wall at 60-88 s per draw, log ends `[o25p] rc=0 ... holds 12 of 12 files` or
+`[o25p] FAIL`. Each scoring job ends `O2560_SCORE_DONE` or `O2560_SCORE_FAIL` (it fails at once if a row has fewer than 12
+files; rerun it by hand with `sbatch --job-name=o25s_L<LLL> kit/score.sbatch <lead>` after the missing prediction is redone
+with `sbatch --job-name=o25p_<row>_L<LLL> kit/predict.sbatch <row> <lead>`, which skips the files already complete).
+The final job ends `O2560_FINAL_DONE`.
+
+Progress check (from the Mac):
+
+    ssh ac6-100 'ssh jupiter "squeue -u \$USER -o \"%.10i %.18j %.8T %.10M %R\" | grep o25; sacct -X -n -j $(seq -s, 2647798 2647822) -o JobID,JobName%18,State,Elapsed; grep -h \"rc=\|DONE\|FAIL\" /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/logs/o25*-26478*.out"'
+
+Time per draw: `grep "DRAW case.*rank=0 " logs/o25p_*-26478*.out`.
+
+What to read when o25_final lands, under `/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/`:
+- spectra first (rule 14, wind speed and tp first): `pairs/L<LLL>/spectra_box.md` and `spectra_europe.md` (residual and
+  full-field amplitude ratios per bin for A100, B24, B50; IN full; target 1 from 125 km to 31 km; below 15.6 km model only);
+- the tp tail: `pairs/L<LLL>/tail.md` (pooled p99, p99.9, p99.99, member-max mean, against the truth, with SE over dates);
+- zoom maps: `maps/L024/*.png`, `maps/L072/*.png` and `maps/L0*/cases.json` (Alps date; deepest low, storm only below 990 hPa);
+- scores: `pairs/L<LLL>/paired.md` (fair CRPS, RMSE, spread per row and IN; paired A100-B24, A100-B50, B50-B24 and each
+  row minus IN with SE over 12 dates), `pairs/L<LLL>/ratio.csv` (corrected spread/RMSE pooled over dates with the 95 %
+  bootstrap interval), `summary/summary_{box,europe,alps}.md` and `summary/summary_scores.csv` (all leads);
+- `judge/<pair>_L<LLL>.log` and `judge/<pair>_L<LLL>/` (rule 32 v2; never run on o2560 before, a failure is information).
+Every number goes with its sample size: 12 dates x 10 members per lead.
+
+## Jobs (as prepared before the review; the commands used)
+
 
 1. Smoke: `ssh ac6-100 'ssh jupiter sbatch /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/kit/smoke.sbatch'`
    (1 node of 4 GH200, at most 2.5 h; outputs `outputs/o2560_box_read_20261102/smoke_<jobid>/`). Rows on 20241101: B24 at +24 and
