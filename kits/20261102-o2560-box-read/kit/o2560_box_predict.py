@@ -175,6 +175,62 @@ def file_complete(path: Path, n_members: int) -> bool:
         return False
 
 
+def init_distributed(use_cuda: bool):
+    """From the GL512 kit (agent-work/20261030-gl512-100k-wide/kit/gl512_predict.py, itself from h9p1_box_predict.py): one
+    model_comm_group over the job's SLURM tasks. The o2560 full box does not fit one GH200 in inference (smoke 2645083:
+    out of memory at 88 GiB in the decoder's node MLP), so the model is sharded over the ranks, as in training. A one-task
+    run gets a one-rank group (the sharding paths need a group object)."""
+    import torch
+    import torch.distributed as dist
+    world = int(os.environ.get("SLURM_NTASKS", "1")) if use_cuda else 1
+    rank = int(os.environ.get("SLURM_PROCID", "0")) if use_cuda else 0
+    local_rank = int(os.environ.get("SLURM_LOCALID", "0")) if use_cuda else 0
+    if not use_cuda:
+        return None, 0, 0, 1
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1"); os.environ.setdefault("MASTER_PORT", "29594")
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=world, rank=rank)
+    return dist.new_group(ranks=list(range(world))), rank, local_rank, world
+
+
+class GlobalNoise:
+    """From the GL512 kit, unchanged in logic. While active, a 5-D torch.randn whose grid axis (-2) has this rank's shard size
+    draws the FULL box field (n_grid points) and returns this rank's contiguous slice (the torch.split order of
+    shard_tensor). The code draws the initial noise per grid shard, so without this the same seed on several ranks would
+    repeat one noise block; with it, the noise of a draw is the field a one-GPU run draws with that seed, whatever the
+    number of ranks. Records the float64 sum and sum of squares of each full field drawn."""
+
+    def __init__(self, n_grid: int, world: int, rank: int):
+        from anemoi.models.distributed.balanced_partition import get_balanced_partition_sizes
+        self.n_grid, self.world, self.rank = n_grid, world, rank
+        self.sizes = list(get_balanced_partition_sizes(n_grid, world))
+        self.off = int(sum(self.sizes[:rank]))
+        self.full, self.other = [], 0
+
+    def _randn(self, *size, **kw):
+        import torch
+        shp = tuple(size[0]) if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)) else tuple(size)
+        if self.world > 1 and len(shp) == 5 and int(shp[-2]) == self.sizes[self.rank]:
+            z = self._orig(shp[:-2] + (self.n_grid,) + shp[-1:], **kw)
+            zd = z.double()
+            self.full.append((float(zd.sum().item()), float((zd * zd).sum().item())))
+            return z.narrow(-2, self.off, int(shp[-2])).contiguous()
+        self.other += 1
+        return self._orig(*size, **kw)
+
+    def __enter__(self):
+        import torch
+        self.full, self.other = [], 0
+        self._orig = torch.randn
+        torch.randn = self._randn
+        return self
+
+    def __exit__(self, *exc):
+        import torch
+        torch.randn = self._orig
+        return False
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s", stream=sys.stdout)
     mode = os.environ.get("MODE", "dry")
@@ -238,14 +294,11 @@ def main():
     dm = trainer.datamodule
     lm = trainer.model
     use_cuda = mode in ("predict", "smoke")
-    device = torch.device("cuda:0") if use_cuda else torch.device("cpu")
-    mcg = None
-    if use_cuda:   # one-rank process group, as the training run has (the sharding paths need a group object)
-        import torch.distributed as dist
-        os.environ.setdefault("MASTER_ADDR", "127.0.0.1"); os.environ.setdefault("MASTER_PORT", "29594")
-        torch.cuda.set_device(0)
-        dist.init_process_group(backend="nccl", init_method="env://", world_size=1, rank=0)
-        mcg = dist.new_group(ranks=[0])
+    mcg, rank, local_rank, world = init_distributed(use_cuda)
+    is_main = rank == 0
+    device = torch.device(f"cuda:{local_rank}") if use_cuda else torch.device("cpu")
+    LOG.info("rank %d of %d (local %d), device %s; the model is sharded over the %d ranks of the model_comm_group", rank, world,
+             local_rank, device, world)
 
     t0 = time.time()
     ckpt_sha = sha256_file(ckpt)
@@ -331,16 +384,17 @@ def main():
         batch = {k: v.unsqueeze(0).to(device) for k, v in sample.items() if k in ("in_lres", "in_hres", "out_hres")}
         truth = batch["out_hres"][0, 0, 0].float().cpu().numpy()
         y = np.stack([truth[:, n2i_out_data[v]] for v in states], axis=-1).astype(np.float64)
-        xfull = np.asarray(in_full[idx][:, 0, :], dtype=np.float64)
-        xi = np.full_like(y, np.nan)
-        for j, v in enumerate(states):
-            if v in in_idx:
-                xi[:, j] = M @ xfull[in_idx[v]]
-            elif v in ("tp", "cp"):
-                xi[:, j] = M @ od.get(hdate, lead, v)
-        xi, xi_neg = clip_precip(xi, states)
-        if not np.isfinite(xi).all():
-            raise SystemExit(f"FATAL: x_interp not finite for {hdate} +{lead}: {[s for j, s in enumerate(states) if not np.isfinite(xi[:, j]).all()]}")
+        if is_main:   # the input reference: rank 0 only (it writes the file)
+            xfull = np.asarray(in_full[idx][:, 0, :], dtype=np.float64)
+            xi = np.full_like(y, np.nan)
+            for j, v in enumerate(states):
+                if v in in_idx:
+                    xi[:, j] = M @ xfull[in_idx[v]]
+                elif v in ("tp", "cp"):
+                    xi[:, j] = M @ od.get(hdate, lead, v)
+            xi, xi_neg = clip_precip(xi, states)
+            if not np.isfinite(xi).all():
+                raise SystemExit(f"FATAL: x_interp not finite for {hdate} +{lead}: {[s for j, s in enumerate(states) if not np.isfinite(xi[:, j]).all()]}")
         cseeds = case_seeds(hdate, lead, n_mem)
         if mode == "dry":
             ti, tpo = states.index("tp"), states.index("tp")
@@ -353,22 +407,46 @@ def main():
                                 tp_mean_input_mm=1000 * float(xi[:, tpo].mean()), seeds=cseeds))
             continue
         preds = []
-        LOG.info("SEEDS case=%s lead=%d %s", hdate, lead, cseeds)
-        for s in cseeds:
+        if is_main:
+            LOG.info("SEEDS case=%s lead=%d %s", hdate, lead, cseeds)
+        for s in cseeds:   # the same seed on every rank; GlobalNoise makes one box-wide noise field of it
             torch.manual_seed(s); np.random.seed(s % (2**32)); random.seed(s)
             torch.cuda.manual_seed_all(s)
             t1 = time.time()
-            with torch.inference_mode():
+            gn = GlobalNoise(lat.size, world, rank)
+            with torch.inference_mode(), gn:
                 pred = lm.model.predict_step({k: batch[k] for k in ("in_lres", "in_hres")}, model_comm_group=mcg, gather_out=True,
                                              **({"lead_hours": torch.tensor([float(lead)], device=device)} if emit_lead else {}),
                                              noise_scheduler_params=PW_SCHED, sampler_params=PW_SAMPLER)
             pt = pred["out_hres"] if isinstance(pred, dict) else pred
+            if world > 1:
+                import torch.distributed as dist
+                if len(gn.full) != 1:
+                    raise SystemExit(f"FATAL: rank {rank}: {len(gn.full)} full-field noise draws in one member (want 1), "
+                                     f"{gn.other} other randn calls")
+                pd = pt[0, 0, 0].double()
+                mine = torch.tensor([gn.full[0][0], gn.full[0][1], float(pd.sum().item()), float((pd * pd).sum().item()),
+                                     float(gn.other)], dtype=torch.float64, device=device)
+                allr = [torch.zeros_like(mine) for _ in range(world)]
+                dist.all_gather(allr, mine, group=mcg)
+                allr = torch.stack(allr).cpu().numpy()
+                same = bool((allr == allr[0]).all())
+                if is_main:
+                    LOG.info("RANKCHECK case=%s lead=%d seed=%d noise sum/sumsq %s output sum/sumsq %s other randn %s identical on "
+                             "%d ranks: %s", hdate, lead, s, allr[0, :2].tolist(), allr[0, 2:4].tolist(), allr[:, 4].tolist(), world, same)
+                if not same:
+                    raise SystemExit(f"FATAL: noise or gathered output differ across ranks for {hdate} +{lead} seed {s}")
             p = pt[0, 0, 0].float().cpu().numpy()
+            if p.shape[0] != lat.size:
+                raise SystemExit(f"FATAL: gathered output grid {p.shape} vs {lat.size}")
             fin = bool(np.isfinite(p).all())
             n_draws += 1; n_finite += int(fin)
-            preds.append(np.stack([p[:, n2i_out_model[v]] for v in states], axis=-1))
-            LOG.info("DRAW case=%s lead=%d seed=%d %.1fs finite=%s peak_alloc_GiB=%.2f peak_reserved_GiB=%.2f", hdate, lead, s,
-                     time.time() - t1, fin, torch.cuda.max_memory_allocated(device) / 2**30, torch.cuda.max_memory_reserved(device) / 2**30)
+            if is_main:
+                preds.append(np.stack([p[:, n2i_out_model[v]] for v in states], axis=-1))
+            LOG.info("DRAW case=%s lead=%d seed=%d %.1fs finite=%s rank=%d peak_alloc_GiB=%.2f peak_reserved_GiB=%.2f", hdate, lead, s,
+                     time.time() - t1, fin, rank, torch.cuda.max_memory_allocated(device) / 2**30, torch.cuda.max_memory_reserved(device) / 2**30)
+        if not is_main:
+            continue
         yp, yp_neg = clip_precip(np.stack(preds), states)
         for j, v in enumerate(states):
             lo, hi = SANE[v]
@@ -389,7 +467,7 @@ def main():
                       precip_clipped_pred=json.dumps(yp_neg), precip_clipped_input=json.dumps(xi_neg),
                       precip_note="tp and cp in m per 6 h window ending at the lead (store accumulations; no de-accumulation); "
                                   "negative values clipped to 0 before writing", init_date=f"{hdate}T00",
-                      lead_step_hours=lead, box="E2 o2560 10-70N 80W-40E (no crop)", complete="yes"))
+                      lead_step_hours=lead, box="E2 o2560 10-70N 80W-40E (no crop)", model_ranks=world, complete="yes"))
         records.append(dict(hdate=hdate, lead=lead, idx=idx, fake=fake, file=name, seeds=cseeds))
         (outdir / f"records_{os.environ.get('SLURM_JOB_ID', 'local')}.json").write_text(json.dumps(records, indent=1))
         LOG.info("WROTE %s", outdir / name)

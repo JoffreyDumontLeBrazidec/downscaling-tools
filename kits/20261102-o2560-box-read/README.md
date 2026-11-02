@@ -149,20 +149,36 @@ ensemble reads a corrected spread/RMSE within 0.02 of 1 for every variable (unde
 above 1.2), tp percentiles, member maxima and the 10 m wind speed scores match values computed by hand, rows with
 different dates are refused, the box_spectra runner reads the layout, and the spectra table puts every value in its column.
 
-Not tested before a GPU job: memory and time per draw on one GH200 with chunking 16, and whether heads sharding with a
-one-rank group runs on GPU (the smoke tests both).
+Not tested before a GPU job: memory and time per draw with the model sharded over 4 (and 2) GH200, and the RANKCHECK
+agreement across ranks (the second smoke tests them).
 
 Note for the reviewer: B's inference files (2.46 GB) hold 48 more pickled tensors than A's (2.13 GB; 691 against 643
 zip entries). They are not in the state dict (both load strictly into the same model), so they are attributes of the
 pickled model object, most likely cached graph or sharding tensors of B's two-GPU layout. The predictor loads only
 `state_dict()` into a model built from the shared r9 graph files, so they do not enter the read.
 
+## One GH200 is not enough: the model is sharded over 4 (smoke 2645083, 2 Nov 2026)
+
+The first smoke (Jupiter job 2645083, 08:30-08:36 UTC, FAILED 1:0, MaxRSS 828 MB on the batch step) ran out of GPU memory
+on the first draw of every row: "Tried to allocate 24.78 GiB ... this process has 89.33 GiB memory in use", in the node
+MLP of a mapper block (`block.py:1007`, 3,248,042 o2560 points x 2,048 hidden units x 4 bytes). The inference chunking
+does not cover that MLP. No draw, seed check or comparison ran. Training needed 2 GH200 per model for the full box too.
+
+The predictor therefore runs the model sharded over the ranks of one node, the route of the GL512 kit
+(`agent-work/20261030-gl512-100k-wide/kit/gl512_predict.py`, the same DB model class, read successfully on 4 GH200 with the
+global o1280 grid of 6.6 million points): every rank reads the sample, the model_comm_group spans the job's ranks, and
+`GlobalNoise` draws the full box-wide noise field with the case seed and keeps each rank's slice, so the noise of a draw
+does not depend on the number of ranks. A RANKCHECK line per draw checks that the noise and the gathered output are
+identical on every rank. Rank 0 computes the input reference and writes the file. Prediction jobs take one node of
+4 GH200. The second smoke also runs B24 on 2 ranks: if 2 GH200 suffice and cost fewer GPU-hours per draw, the read can use
+2; the seed check requires the 2-rank and 4-rank draws to agree to float level.
+
 ## Cost (estimate, the smoke measures it)
 
 Forward-only inference of this model on the full box is unmeasured. From training (1.99 s per fwd+bwd step on 2 GH200),
-a 59-call draw is guessed at 60-120 s on one GH200: 3 rows x 6 leads x 12 dates x 10 members = 2,160 draws = about
-36-72 GH200-h for the predictions (each job 2-4 h for its 120 draws, wall 6 h), plus CPU scoring. Disk: about 1.77 GB
-per file, 216 files = about 382 GB under `/e/data1`. All twelve leads would double both.
+a 59-call draw on 4 GH200 is guessed at 30-60 s: 3 rows x 6 leads x 12 dates x 10 members = 2,160 draws = about
+72-144 GH200-h for the predictions (each job 1-2 h of wall for its 120 draws, wall limit 6 h), plus CPU scoring.
+Disk: about 1.77 GB per file, 216 files = about 382 GB under `/e/data1`. All twelve leads would double both.
 
 ## Caveats a reader needs
 
@@ -172,5 +188,4 @@ per file, 216 files = about 382 GB under `/e/data1`. All twelve leads would doub
   for 2-5 % score gaps). Every number carries its n.
 - Training forecasts from late October reach into the first validation days by valid time (31 Oct +72 h is valid 3 Nov);
   they are different forecasts of overlapping weather.
-- The inference memory and time per draw on one GH200 are not measured until the smoke runs; chunking 16 is the guess
-  (training needed 2 GPUs per model for the full box, with gradients).
+- One GH200 per model ran out of memory (smoke 2645083); the read shards the model over 4 GH200 (see above).
