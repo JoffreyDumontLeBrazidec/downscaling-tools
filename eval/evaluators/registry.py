@@ -207,6 +207,12 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "pressure, wind profile, radius of maximum wind, wind radii, vorticity and "
         "asymmetry?",
     ),
+    Evaluator(
+        "obs_points", DIAGNOSTIC, False,
+        "How good is the model ensemble against surface station observations (2 m temperature, 10 m "
+        "wind speed, sea-level pressure and 12 h precipitation), in fair CRPS, spread/skill, rank "
+        "histograms and precipitation tail scores, next to the input, the truth and HRES as single fields?",
+    ),
     # ----------------------------------------------------------------- retired
     Evaluator(
         "spectra", RETIRED, False,

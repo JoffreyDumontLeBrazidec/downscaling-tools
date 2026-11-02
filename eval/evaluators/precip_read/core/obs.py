@@ -17,36 +17,9 @@ import datetime as dt
 
 import numpy as np
 
-from eval.evaluators.precip_read.core.metrics import fair_crps
-
-R_EARTH_KM = 6371.0
-
-
-def _xyz(lat, lon):
-    la, lo = np.radians(lat), np.radians(lon)
-    return np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], -1)
-
-
-def load_obs(path, obs_max: float = 300.0):
-    import pandas as pd
-
-    obs = pd.read_csv(path, dtype={"valid": str})
-    n_bad = int(((obs.obs < 0) | (obs.obs > obs_max)).sum())
-    return obs[(obs.obs >= 0) & (obs.obs <= obs_max)], n_bad
-
-
-class StationMatcher:
-    """Nearest grid point of each station, on one fixed grid."""
-
-    def __init__(self, lat, lon):
-        from scipy.spatial import cKDTree
-
-        self.lat, self.lon = np.asarray(lat), np.asarray(lon)
-        self.tree = cKDTree(_xyz(self.lat, self.lon))
-
-    def match(self, slat, slon, max_km: float):
-        dist, idx = self.tree.query(_xyz(np.asarray(slat), np.asarray(slon)))
-        return idx, dist * R_EARTH_KM <= max_km
+# One station implementation for every evaluator: the matcher, the loader and the scores live in obs_points.
+from eval.evaluators.obs_points.core.scores import fair_crps
+from eval.evaluators.obs_points.core.stations import R_EARTH_KM, StationMatcher, load_obs  # noqa: F401
 
 
 def point_metrics(f, ref, ens=None) -> dict:
@@ -92,27 +65,23 @@ def station_rows(obs, matcher, *, date, step, truth, inp, ens, regions, max_km=1
 
 
 def fetch(dates, leads, period_h, box, out):
-    """STVL station tp ending at date + lead, inside box [lat0, lat1, lon0, lon1]."""
+    """STVL station tp ending at date + lead, inside box [lat0, lat1, lon0, lon1] (obs_points' fetch, one file)."""
     import pandas as pd
-    import vtb.media as vm
 
+    from eval.evaluators.obs_points.core.fetch import obs_at, require_atos
+
+    require_atos("precip_read obs fetch")
+    var = "tp" if int(period_h) == 12 else f"tp{int(period_h)}"
     frames = []
     for d in dates:
         t0 = dt.datetime.strptime(d, "%Y%m%d")
         for h in leads:
             v = t0 + dt.timedelta(hours=int(h))
-            fs = vm.stvl_retrieve(table="observation", parameter="tp", period=dt.timedelta(hours=period_h),
-                                  reference_datetimes=[v.strftime("%Y-%m-%dT%H:%M:%S")],
-                                  forecast_lengths=[dt.timedelta(hours=0)])
-            if len(fs) == 0:
+            df = obs_at(var, v, box)
+            if df.empty:
                 print("no observations", v, flush=True)
                 continue
-            df = fs[0].to_dataframe().rename(columns={"value_0": "obs", "latitude": "lat", "longitude": "lon"})
-            df = df.dropna(subset=["obs"])
-            df["lon"] = ((df["lon"] + 180.0) % 360.0) - 180.0
-            df = df[(df.lat >= box[0]) & (df.lat <= box[1]) & (df.lon >= box[2]) & (df.lon <= box[3])]
-            df.insert(0, "valid", v.strftime("%Y%m%d%H"))
-            frames.append(df[["valid", "lat", "lon", "stnid", "elevation", "obs"]])
+            frames.append(df)
             print(v, len(df), "stations, max", df.obs.max(), flush=True)
     pd.concat(frames).to_csv(out, index=False)
 

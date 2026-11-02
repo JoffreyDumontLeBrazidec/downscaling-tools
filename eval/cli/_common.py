@@ -34,6 +34,7 @@ GROUP_TITLES = {
     "pipeline": "Pipeline (predict, evaluate, rank)",
     "comparison": "Comparison across runs",
     "tc_tracks": "Tropical cyclone tracks",
+    "observations": "Observations (reference caches, runs compared against observations)",
     "figures": "Figures",
     "maintenance": "Maintenance",
     "retired": "Retired (each prints where the tool went and exits with status 1)",

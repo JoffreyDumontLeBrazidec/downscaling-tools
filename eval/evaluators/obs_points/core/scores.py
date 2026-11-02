@@ -45,29 +45,50 @@ def rank_counts(ens: np.ndarray, obs: np.ndarray, seed: int = 31) -> np.ndarray:
     return np.bincount(rank, minlength=m + 1)
 
 
-def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=()) -> dict:
+def _wmean(x, w):
+    return float(np.mean(x)) if w is None else float(np.sum(w * x))
+
+
+def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=None) -> dict:
     """Ensemble scores of one sample of stations. Single fields go in as ens of shape (1, n):
-    fair CRPS is then the MAE and the spread is 0, so they stay on the same columns, labelled single field."""
+    fair CRPS is then the MAE and the spread is 0, so they stay on the same columns, labelled single field.
+
+    Headline columns: fcrps, spread (mean member SD, ddof 1), spread_rms (root of the mean member variance),
+    ssr_corrected = spread_rms / rmse_mean * sqrt((M + 1) / M), and per threshold t the fair twCRPS, the fair
+    Brier score and the observed exceedance count n_obs_gt<t>. Secondary (deterministic) columns: bias,
+    rmse_mean, mae_mean, corr_mean of the ensemble mean, mae_member. ``weights`` (summing to one, e.g.
+    quaver's station-density weights) turn every station mean into a weighted mean; counts stay counts.
+    """
     ens = np.asarray(ens, np.float64)
     obs = np.asarray(obs, np.float64)
+    w = None if weights is None else np.asarray(weights, np.float64) / np.sum(weights)
     m = ens.shape[0]
     mean = ens.mean(0)
     d = mean - obs
-    rmse = float(np.sqrt((d ** 2).mean()))
-    spread_rms = float(np.sqrt(ens.var(0, ddof=1).mean())) if m > 1 else 0.0
+    rmse = float(np.sqrt(_wmean(d ** 2, w)))
+    spread_rms = float(np.sqrt(_wmean(ens.var(0, ddof=1), w))) if m > 1 else 0.0
+    if w is None:
+        corr = float(np.corrcoef(mean, obs)[0, 1]) if mean.std() > 0 and obs.std() > 0 else np.nan
+    else:
+        a, b = mean - np.sum(w * mean), obs - np.sum(w * obs)
+        den = np.sqrt(np.sum(w * a * a) * np.sum(w * b * b))
+        corr = float(np.sum(w * a * b) / den) if den > 0 else np.nan
     out = {
         "n": int(obs.size), "members": int(m),
-        "fcrps": float(fair_crps(ens, obs).mean()),
+        "fcrps": _wmean(fair_crps(ens, obs), w),
+        "spread": _wmean(ens.std(0, ddof=1), w) if m > 1 else 0.0,
         "spread_rms": spread_rms,
         "ssr_corrected": spread_rms / rmse * np.sqrt((m + 1) / m) if m > 1 and rmse > 0 else np.nan,
-        "bias": float(d.mean()),
-        "rmse_mean": rmse,
-        "mae_mean": float(np.abs(d).mean()),
-        "mae_member": float(np.abs(ens - obs[None]).mean()),
-        "corr_mean": float(np.corrcoef(mean, obs)[0, 1]) if mean.std() > 0 and obs.std() > 0 else np.nan,
     }
     for t in thresholds:
         out[f"n_obs_gt{t:g}"] = int((obs > t).sum())
-        out[f"twcrps{t:g}"] = float(fair_twcrps(ens, obs, t).mean())
-        out[f"brier{t:g}"] = float(fair_brier(ens, obs, t).mean())
+        out[f"twcrps{t:g}"] = _wmean(fair_twcrps(ens, obs, t), w)
+        out[f"brier{t:g}"] = _wmean(fair_brier(ens, obs, t), w)
+    out.update({
+        "bias": _wmean(d, w),
+        "rmse_mean": rmse,
+        "mae_mean": _wmean(np.abs(d), w),
+        "mae_member": _wmean(np.abs(ens - obs[None]).mean(0), w),
+        "corr_mean": corr,
+    })
     return out

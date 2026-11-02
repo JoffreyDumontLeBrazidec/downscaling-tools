@@ -23,6 +23,7 @@ command.
 | pipeline | `run`, `predict`, `prepare`, `evaluate`, `judge`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
+| observations | `obs fetch`, `obs compare` |
 | figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
 | retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
@@ -36,6 +37,29 @@ python -m eval.cli judge --lane o320_o1280 --host jupiter \
     --run h9dm_nm50=<run>/predictions --reference h9dm_100k=<ref>/predictions \
     --output-dir <read_dir> --weights "EMA-10000 / EMA-10000"
 ```
+
+### Scores against observations (`obs`, `obs_points`)
+
+Observation references are fetched once on Atos into small cache directories (CSV plus a JSON
+manifest), copied to the cluster that holds the predictions, and read by diagnostic evaluators. Ensemble
+scores are the headline everywhere (fair CRPS, corrected spread/skill, rank histograms, fair twCRPS and
+fair Brier for precipitation); input, truth and HRES are scored on the same samples and labelled
+"single field"; deterministic scores stay as extra CSV columns.
+
+```bash
+# Atos, module python3 (vtb is not in the eval venv); reads only, never writes to FDB
+module load python3 vtb ecmwf-toolbox; export TMPDIR=<a folder you own>
+python3 -m eval.cli obs fetch --dates 20230101,20230111 --leads 12,24,36,48,60,72 \
+    --vars 2t,10ff,msl,tp --tp-periods 12,24 --box 9,71,-81,41 --out <station cache>
+# any cluster, eval venv: station scores of one run, then two runs paired by date
+python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_points \
+    --predictions-dir <dir with every lead> --run-label CA300 --output-dir <run dir>
+python -m eval.cli obs compare --a <run A>/evaluators/obs_points --b <run B>/evaluators/obs_points --out <dir>
+```
+
+The lane keys are documented in each evaluator's docstring (`python -m eval.cli describe obs_points`).
+`obs_points` reproduces the A0 kit (`kits/20261102-obs-a0/score_a0.py`) exactly on the 30 seed-locked
+dates of 2023.
 
 `--opt BLOCK.KEY=VALUE` (on `evaluate`, `run`, `predict` and `judge`) sets one key of a lane
 block for one call, for example `--opt shape.box=north_atlantic`.

@@ -44,3 +44,32 @@ precip_read:
     europe_fronts: "European frontal rain, +24 h: truth, input and CA300"
   map_members: [0, 1, 2]
   bootstrap: 2000
+
+# Station observations (added 2026-11-02): ensemble scores of the run at STVL stations (fair CRPS,
+# spread/skill, rank histograms, tp twCRPS and fair Brier), next to input, truth and HRES as single fields.
+# Cache: `python3 -m eval.cli obs fetch` on Atos (module python3 + vtb), copied to Jupiter.
+# Run:   python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_points \
+#          --predictions-dir <dir of predictions_<date>_step<NNN>.nc, all leads> --run-label CA300
+# Two runs, paired by date: python -m eval.cli obs compare --a <runA>/evaluators/obs_points \
+#          --b <runB>/evaluators/obs_points --out <dir>
+obs_points:
+  cache:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-a0/obs
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-a0/obs
+  vars: [2t, 10ff, msl, tp]
+  regions:
+    all: null
+    europe: [35.0, 75.0, -12.5, 42.5]
+    40-70N: [40.0, 70.01, -180.0, 180.0]
+    25-40N: [25.0, 40.0, -180.0, 180.0]
+    10-25N: [10.0, 25.0, -180.0, 180.0]
+  height_classes:
+    all_dz<100m: [0.0, 100.0]
+    all_dz>=300m: [300.0, 100000.0]
+  thresholds: [5, 10, 20]      # mm per 12 h
+  radii: [0, 18, 36]           # km, tp disc means; 0 = nearest grid point
+  max_km: 15.0
+  lapse_rate: 0.0065           # K/m, quaver
+  min_stations: 30
+  weighting: none              # or station_density (quaver's kernel)
+  plot_regions: [all, europe]
