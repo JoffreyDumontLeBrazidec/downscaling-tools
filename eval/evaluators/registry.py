@@ -213,6 +213,12 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "wind speed, sea-level pressure and 12 h precipitation), in fair CRPS, spread/skill, rank "
         "histograms and precipitation tail scores, next to the input, the truth and HRES as single fields?",
     ),
+    Evaluator(
+        "tc_obs", DIAGNOSTIC, False,
+        "Are the model's tropical cyclones where the IBTrACS best track puts them, and as deep, judged "
+        "as an ensemble (fair CRPS of central pressure, member position error, spread) next to the truth, "
+        "the input and the operational HRES and ENS trackers?",
+    ),
     # ----------------------------------------------------------------- retired
     Evaluator(
         "spectra", RETIRED, False,

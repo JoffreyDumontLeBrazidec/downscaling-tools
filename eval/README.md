@@ -23,7 +23,7 @@ command.
 | pipeline | `run`, `predict`, `prepare`, `evaluate`, `judge`, `scoreboard` |
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
-| observations | `obs fetch`, `obs compare` |
+| observations | `obs fetch`, `obs fetch-tc`, `obs compare` |
 | figures | `zoom_maps` |
 | maintenance | `prepml-cleanup`, `config` |
 | retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
@@ -38,7 +38,7 @@ python -m eval.cli judge --lane o320_o1280 --host jupiter \
     --output-dir <read_dir> --weights "EMA-10000 / EMA-10000"
 ```
 
-### Scores against observations (`obs`, `obs_points`)
+### Scores against observations (`obs`, `obs_points`, `tc_obs`)
 
 Observation references are fetched once on Atos into small cache directories (CSV plus a JSON
 manifest), copied to the cluster that holds the predictions, and read by diagnostic evaluators. Ensemble
@@ -55,6 +55,16 @@ python3 -m eval.cli obs fetch --dates 20230101,20230111 --leads 12,24,36,48,60,7
 python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only obs_points \
     --predictions-dir <dir with every lead> --run-label CA300 --output-dir <run dir>
 python -m eval.cli obs compare --a <run A>/evaluators/obs_points --b <run B>/evaluators/obs_points --out <dir>
+```
+
+`tc_obs` reads `tc_structure`'s `cases.csv` and compares each storm case with the IBTrACS best track and
+the operational HRES and ENS trackers; its cache comes from `obs fetch-tc` on Atos:
+
+```bash
+python3 -m eval.cli obs fetch-tc --storms franklin=4648,idalia=4654,lee=4660,margot=4661,nigel=4662,philippe=4667,tammy=4679 \
+    --dates 20230822,20230829,20230909,20230919,20230930,20231021 --out <tc cache>
+python -m eval.cli evaluate --lane o320_o1280_e2_tp --host jupiter --only tc_obs \
+    --predictions-dir <dir> --run-label CA300 --output-dir <run dir>
 ```
 
 The lane keys are documented in each evaluator's docstring (`python -m eval.cli describe obs_points`).

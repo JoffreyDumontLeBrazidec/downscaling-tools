@@ -126,9 +126,10 @@ def _fmt(x, se=None, digits=3):
 def write_summary_md(summ, pr, meta, path, *, region="all"):
     """Headline tables (ensemble scores first) for one region, one block per variable and variant."""
     label = meta.get("run_label") or "model"
+    unit_name = meta.get("sample_unit", "stations")
     leads = sorted(set(summ.lead))
-    lines = [f"# obs_points: {label} against station observations", "",
-             f"Region `{region}`. Mean over dates of the per-date station mean; SE over dates in brackets. "
+    lines = [f"# {meta.get('evaluator', 'obs_points')}: {label} against {meta.get('reference', 'station observations')}", "",
+             f"Region `{region}`. Mean over dates of the per-date mean over {unit_name}; SE over dates in brackets. "
              f"`model` is the {max(meta.get('members') or [0])}-member ensemble; `input`, `truth` and `hres` are single "
              "fields (their fair CRPS is the mean absolute error and their spread is zero). Deterministic columns "
              "(bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
@@ -154,7 +155,7 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
                 tag = row if row == "model" else f"{row} (single field)"
                 lines.append(f"| {tag} | {name} | " + " | ".join(cells) + " |")
         nn = q[q.row == "model"].set_index("lead")
-        lines.append("| stations per date | | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
+        lines.append(f"| {unit_name} per date | | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
                                                         for l in leads) + " |")
         for c in sorted([c for c in q.columns if c.startswith("n_obs_gt") and not c.endswith("_se")
                              and q[c].notna().any()],
@@ -177,10 +178,11 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
 def write_compare_md(tab, meta, path, *, region="all"):
     """Paired run comparison, headline metrics only, for one region."""
     la, lb, row = meta["label_a"], meta["label_b"], meta["row"]
-    lines = [f"# obs_points: {la} minus {lb} ({row} rows), paired by date", "",
-             f"Region `{region}`. Per date the station-mean score of {la} minus that of {lb}; mean over dates, SE over "
-             f"dates in brackets, and wNN/MM = dates on which {la} is better. Negative is better for {la} on every "
-             "score shown. These are paired differences on the same stations and dates, not a verdict on their own.",
+    unit_name = meta.get("sample_unit", "stations")
+    lines = [f"# {la} minus {lb} ({row} rows), paired by date", "",
+             f"Region `{region}`. Per date the mean score over {unit_name} of {la} minus that of {lb}; mean over dates, "
+             f"SE over dates in brackets, and wNN/MM = dates on which {la} is better. Negative is better for {la} on every "
+             f"score shown. These are paired differences on the same {unit_name} and dates, not a verdict on their own.",
              f"Checks: {json.dumps(meta.get('checks', {}))}", ""]
     if tab.empty:
         Path(path).write_text("\n".join(lines + ["No common rows."]) + "\n")
@@ -198,7 +200,7 @@ def write_compare_md(tab, meta, path, *, region="all"):
                 if l in qq.index else "" for l in leads) + " |")
         nn = q.drop_duplicates("lead").set_index("lead")
         if "mean_n" in nn:
-            lines.append("| stations per date | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
+            lines.append(f"| {unit_name} per date | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
                                                              for l in leads) + " |")
         lines.append("")
     Path(path).write_text("\n".join(lines) + "\n")

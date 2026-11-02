@@ -53,9 +53,10 @@ precip_read:
 # Two runs, paired by date: python -m eval.cli obs compare --a <runA>/evaluators/obs_points \
 #          --b <runB>/evaluators/obs_points --out <dir>
 obs_points:
+  # 30 seed-locked dates of 2023, leads 12-72 h, box 9-71 N 81 W-41 E; manifest in cache_meta.json
   cache:
-    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-a0/obs
-    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-a0/obs
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
   vars: [2t, 10ff, msl, tp]
   regions:
     all: null
@@ -73,3 +74,14 @@ obs_points:
   min_stations: 30
   weighting: none              # or station_density (quaver's kernel)
   plot_regions: [all, europe]
+
+# Tropical cyclones against the IBTrACS best track and the operational HRES/ENS trackers (added 2026-11-02).
+# Needs tc_structure's cases.csv (default <run>/evaluators/tc_structure/cases.csv; set tc_obs.cases otherwise).
+# Cache: python3 -m eval.cli obs fetch-tc (Atos). Storms: franklin=4648 idalia=4654 lee=4660 margot=4661
+# nigel=4662 philippe=4667 tammy=4679; dates 20230822 20230829 20230909 20230919 20230930 20231021.
+tc_obs:
+  cache:
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/tc_2023_v1
+    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/tc_2023_v1
+  only_storm_ok: true
+  max_gap_h: 6

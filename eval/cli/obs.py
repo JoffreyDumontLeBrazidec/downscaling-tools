@@ -3,6 +3,9 @@
     obs fetch     Atos only. Station observations from STVL (2t, 10ff, msl, 12 h and 24 h tp) with the
                   model orography heights and HRES at the stations, for the obs_points evaluator. Run it
                   with the module python3 (``module load python3 vtb ecmwf-toolbox``), not the eval venv.
+    obs fetch-tc  Atos only. Tropical cyclone references for the tc_obs evaluator: IBTrACS best-track rows of
+                  the configured storms (anemoi zarr; a NOAA IBTrACS CSV too when a local path is given) and
+                  the ECMWF operational tracker (HRES and ENS) for the given dates, decoded from MARS BUFR.
     obs compare   Any cluster. Paired comparison of two obs_points results (run A minus run B), date by
                   date: mean difference, SE over dates and date wins, as paired_runs.csv, paired_runs.md
                   and figures.
@@ -30,6 +33,15 @@ def register(subparsers) -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="Station observation cache from STVL (Atos only).",
                        description=station_fetch.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     station_fetch.add_args(f)
+
+    t = sub.add_parser("fetch-tc", help="Tropical cyclone reference cache: IBTrACS and the ECMWF tracker (Atos only).")
+    t.add_argument("--storms", required=True,
+                   help="Comma-separated event=IBTrACS-id pairs, event names as in tc_structure (franklin=4648,...).")
+    t.add_argument("--dates", required=True, help="Comma-separated YYYYMMDD forecast dates (00 UTC) for the tracker.")
+    t.add_argument("--streams", default="oper,enfo", help="Tracker streams (default oper,enfo).")
+    t.add_argument("--ibtracs-zarr", default=None, help="anemoi IBTrACS zarr (default: the ai-ml dataset on /ec/ai).")
+    t.add_argument("--noaa-csv", default=None, help="Optional local NOAA IBTrACS CSV (adds best-track wind). Never downloaded.")
+    t.add_argument("--out", required=True, help="Cache directory (created).")
 
     c = sub.add_parser("compare", help="Paired comparison of two obs_points results (A minus B).")
     c.add_argument("--a", required=True, help="obs_points results directory of run A (holds scores_per_date.csv).")
@@ -61,7 +73,9 @@ def _compare(args) -> None:
         tab, checks = compare_runs(read(a_dir), read(b_dir), row=args.row)
         tab.to_csv(out / "paired_runs.csv", index=False)
         meta = {"a": str(a_dir), "b": str(b_dir), "label_a": la, "label_b": lb, "row": args.row, "checks": checks,
-                "members": [meta_a.get("members"), meta_b.get("members")]}
+                "members": [meta_a.get("members"), meta_b.get("members")],
+                "evaluator": meta_a.get("evaluator", "obs_points"), "where": meta_a.get("where", "at stations"),
+                "sample_unit": meta_a.get("sample_unit", "stations")}
         (out / "compare_meta.json").write_text(json.dumps(meta, indent=2))
         write_compare_md(tab, meta, out / "paired_runs.md")
         for k, v in checks.items():
@@ -76,6 +90,15 @@ def run(args: argparse.Namespace) -> None:
         from eval.evaluators.obs_points.core.fetch import run_from_args
         out = run_from_args(args)
         print(f"station observation cache written: {out}")
+    elif args.obs_cmd == "fetch-tc":
+        from eval.evaluators.obs_points.core.fetch import require_atos
+        from eval.evaluators.tc_obs.core.reference import IBTRACS_ZARR, fetch_tc
+        require_atos("obs fetch-tc")
+        storms = dict(kv.split("=") for kv in args.storms.split(","))
+        out = fetch_tc({k.strip().lower(): int(v) for k, v in storms.items()}, args.dates.split(","), args.out,
+                       zarr_path=args.ibtracs_zarr or IBTRACS_ZARR, noaa_csv=args.noaa_csv,
+                       streams=tuple(args.streams.split(",")))
+        print(f"tropical cyclone reference cache written: {out}")
     elif args.obs_cmd == "compare":
         _compare(args)
 

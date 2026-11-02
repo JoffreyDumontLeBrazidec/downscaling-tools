@@ -18,7 +18,13 @@ ROW_ROLE = {"model": "model", "truth": "truth", "input": "input", "hres": "basel
 ROW_OFFSET = {"model": 0.0, "truth": -1.5, "input": 1.5, "hres": 3.0}
 VAR_TITLE = {"2t": "2 m temperature", "10ff": "10 m wind speed", "msl": "Mean sea-level pressure",
              "tp": "12 h precipitation"}
-VARIANT_TITLE = {"raw": "nearest grid point", "lapse": "nearest grid point, lapse-rate height correction"}
+VARIANT_TITLE = {"raw": "nearest grid point", "lapse": "nearest grid point, lapse-rate height correction",
+                 "imerg": "IMERG Final V07B on the same O1280 points"}
+
+
+def _words(meta):
+    """(where, unit) wording of the reference: stations by default; obs_imerg sets its own in run_meta.json."""
+    return meta.get("where", "at stations"), meta.get("sample_unit", "stations")
 
 
 def _row_label(row, run_label):
@@ -59,6 +65,7 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
     from eval.plotting import eval_style, save_figure
 
     run_label = meta.get("run_label") or "model"
+    where, unit_name = _words(meta)
     s = summ[(summ["var"] == var) & (summ.variant == variant) & (summ.radius_km == radius)]
     regions = [r for r in regions if r in set(s.region)]
     if not regions:
@@ -80,7 +87,7 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
                     for row in ("model", "truth", "input", "hres"):
                         if row in set(q.row):
                             _series(ax, q, key, row, run_label, leads)
-                    ax.set_title(f"{reg}: {nd} dates, ~{ns:,.0f} stations per date", fontsize=10.5)
+                    ax.set_title(f"{reg}: {nd} dates, ~{ns:,.0f} {unit_name} per date", fontsize=10.5)
                 elif key == "ssr_corrected":
                     _series(ax, q, key, "model", run_label, leads)
                     ax.axhline(1.0, color="#0b0b0b", lw=1, ls="--")
@@ -109,9 +116,9 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
         h, lab = axes[0, 0].get_legend_handles_labels()
         fig.legend(h, lab, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 0.95), fontsize=9.5)
         rad = f", mean over a {radius:g} km disc" if radius else ""
-        fig.suptitle(f"{VAR_TITLE.get(var, var)} at stations ({VARIANT_TITLE.get(variant, variant)}{rad}): "
+        fig.suptitle(f"{VAR_TITLE.get(var, var)} {where} ({VARIANT_TITLE.get(variant, variant)}{rad}): "
                      f"{run_label}", fontweight="bold")
-        _footer(fig, "Mean over dates of the per-date station mean; bands and bars are one standard error over dates. "
+        _footer(fig, f"Mean over dates of the per-date mean over {unit_name}; bands and bars are one standard error over dates. "
                 "A single field's fair CRPS is its mean absolute error, so the ensemble is lower partly by "
                 "construction.\nSpread/skill = sqrt(mean member variance) / RMSE of the ensemble mean x sqrt((M+1)/M); "
                 "1 is a calibrated ensemble. Numbers by the paired differences: dates on which the model is better.")
@@ -120,11 +127,12 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
         return save_figure(fig, Path(results_dir) / f"obs_{var}_{variant}{tag}_scores", close=True)
 
 
-def plot_tail(results_dir, summ, meta, radius, region="all"):
+def plot_tail(results_dir, summ, meta, radius, region="all", stem=None):
     import matplotlib.pyplot as plt
     from eval.plotting import eval_style, save_figure
 
     run_label = meta.get("run_label") or "model"
+    where, unit_name = _words(meta)
     s = summ[(summ["var"] == "tp") & (summ.radius_km == radius) & (summ.region == region)]
     thr = sorted({c[8:] for c in s.columns if c.startswith("n_obs_gt") and not c.endswith("_se")
                   and s[c].notna().any()}, key=float)
@@ -152,20 +160,21 @@ def plot_tail(results_dir, summ, meta, radius, region="all"):
         h, lab = axes[0, 0].get_legend_handles_labels()
         fig.legend(h, lab, loc="upper center", ncol=4, bbox_to_anchor=(0.5, 0.94), fontsize=9.5)
         rad = f", {radius:g} km disc" if radius else ""
-        fig.suptitle(f"12 h precipitation tail at stations ({region}{rad}): {run_label}, {nd} dates, "
-                     f"~{ns:,.0f} stations per date", fontweight="bold")
+        fig.suptitle(f"12 h precipitation tail {where} ({region}{rad}): {run_label}, {nd} dates, "
+                     f"~{ns:,.0f} {unit_name} per date", fontweight="bold")
         _footer(fig, "Fair threshold-weighted CRPS above t = fair CRPS of max(x, t); fair Brier score of exceeding t. "
                 "Lower is better. Few observed exceedances make the tail scores noisy: read them with the counts.")
         fig.tight_layout(rect=(0, 0.03, 1, 0.88))
         tag = f"_r{radius:g}km" if radius else ""
-        return save_figure(fig, Path(results_dir) / f"obs_tp_tail{tag}", close=True)
+        return save_figure(fig, Path(results_dir) / (stem or f"obs_tp_tail{tag}"), close=True)
 
 
-def plot_rank_hist(results_dir, ranks, meta, var, variant, region="all"):
+def plot_rank_hist(results_dir, ranks, meta, var, variant, region="all", stem=None):
     import matplotlib.pyplot as plt
     from eval.plotting import eval_style, save_figure
 
     run_label = meta.get("run_label") or "model"
+    where, unit_name = _words(meta)
     q = ranks[(ranks["var"] == var) & (ranks.variant == variant) & (ranks.radius_km == 0) & (ranks.region == region)
               & (ranks.row == "model")]
     if q.empty:
@@ -181,17 +190,17 @@ def plot_rank_hist(results_dir, ranks, meta, var, variant, region="all"):
             ax = axes[0, j]
             ax.bar(np.arange(m + 1), c / c.sum(), color="#d62728", alpha=0.8, width=0.85)
             ax.axhline(1.0 / (m + 1), color="#0b0b0b", lw=1, ls="--")
-            ax.set_title(f"+{lead} h: {qq.date.nunique()} dates,\n{int(c.sum()):,} station values", fontsize=9.5)
+            ax.set_title(f"+{lead} h: {qq.date.nunique()} dates,\n{int(c.sum()):,} values", fontsize=9.5)
             ax.set_xlabel("Rank of the observation")
             if j == 0:
                 ax.set_ylabel("Frequency")
-        fig.suptitle(f"Rank histograms at stations, {VAR_TITLE.get(var, var)} ({VARIANT_TITLE.get(variant, variant)}, "
-                     f"{region}): {run_label}, {m} members, ~{q.n.mean():,.0f} stations per date", fontweight="bold",
+        fig.suptitle(f"Rank histograms {where}, {VAR_TITLE.get(var, var)} ({VARIANT_TITLE.get(variant, variant)}, "
+                     f"{region}): {run_label}, {m} members, ~{q.n.mean():,.0f} {unit_name} per date", fontweight="bold",
                      fontsize=11)
         _footer(fig, "Dashed line: the flat histogram of a calibrated ensemble. U shape = too little spread or a bias "
-                "at the stations (observation error and representativeness also widen the outer bins). Ties broken at random.")
+                f"{where} (observation error and representativeness also widen the outer bins). Ties broken at random.")
         fig.tight_layout(rect=(0, 0.04, 1, 0.88))
-        return save_figure(fig, Path(results_dir) / f"obs_rank_hist_{var}_{variant}", close=True)
+        return save_figure(fig, Path(results_dir) / (stem or f"obs_rank_hist_{var}_{variant}"), close=True)
 
 
 def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, **kwargs):
@@ -226,6 +235,7 @@ def plot_compare(out_dir, tab, meta, region="all"):
     if tab.empty:
         return []
     la, lb = meta["label_a"], meta["label_b"]
+    where, unit_name = _words(meta)
     t = tab[(tab.region == region) & (tab.radius_km == 0)]
     panels = [(v, var_, "fcrps") for (v, var_), _ in t.groupby(["var", "variant"], sort=False)]
     panels += [("tp", "raw", m) for m in sorted(set(t[t["var"] == "tp"].metric))
@@ -245,14 +255,14 @@ def plot_compare(out_dir, tab, meta, region="all"):
             ax.axhline(0.0, color="#0b0b0b", lw=1)
             name = "fair CRPS" if met == "fcrps" else tail_name(met)
             ns = q["mean_n"].mean() if "mean_n" in q else np.nan
-            ax.set_title(f"{v} {var_}: {name}\n{int(q['dates'].max())} dates, ~{ns:,.0f} stations", fontsize=9.5)
+            ax.set_title(f"{v} {var_}: {name}\n{int(q['dates'].max())} dates, ~{ns:,.0f} {unit_name}", fontsize=9.5)
             _lead_axis(ax, leads)
             ax.set_xlabel("Lead time (h)")
             unit = "" if met.startswith("brier") else f" ({VAR_UNITS.get(v, '')})"
             ax.set_ylabel(f"{la} - {lb}{unit}")
         for ax in list(axes.flat)[len(panels):]:
             ax.set_visible(False)
-        fig.suptitle(f"{la} minus {lb} at stations ({meta['row']} rows, {region}), paired by date", fontweight="bold")
+        fig.suptitle(f"{la} minus {lb} {where} ({meta['row']} rows, {region}), paired by date", fontweight="bold")
         _footer(fig, f"Below zero = {la} better. Bars: one SE over dates. Labels: dates on which {la} is better. "
                 "Ensemble scores only; deterministic differences are in paired_runs.csv.")
         fig.tight_layout(rect=(0, 0.03, 1, 0.94))
