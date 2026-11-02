@@ -36,6 +36,7 @@ REGIONS = {"all": None, "europe": (35, 75, -12.5, 42.5), "40-70N": (40, 70.01, -
            "25-40N": (25, 40, -180, 180), "10-25N": (10, 25, -180, 180)}
 MAX_KM, R_EARTH, LAPSE = 15.0, 6371.0, 0.0065
 RADII_KM = (0.0, 18.0, 36.0)
+TP_THRESHOLDS = (5.0, 10.0, 20.0)  # mm per 12 h: tail twCRPS and fair Brier (earthkit note, docs 19cac67)
 PAIRS = [("truth", "input"), ("DB300", "CA300"), ("CA300", "input"), ("DB300", "input"), ("CA300", "truth"),
          ("DB300", "truth"), ("hres", "truth"), ("hres", "input")]
 
@@ -91,6 +92,24 @@ def scores(f, ref, ens=None):
         r.update(crps=float(fair_crps(ens, ref).mean()), member_mae=float(np.abs(ens - ref[None]).mean()),
                  spread=float(ens.std(0, ddof=1).mean()), ssr_corr=spread / rmse * np.sqrt((m + 1) / m) if rmse > 0 else np.nan)
     return r
+
+
+def tail_scores(f, ref, ens=None):
+    """Fair threshold-weighted CRPS above t (= fair CRPS of max(x, t)) and fair Brier of exceeding t.
+    One field: twCRPS = MAE of max(f, t), Brier = (1[f > t] - o)^2. Counts of observed exceedances travel with them."""
+    out = {}
+    for t in TP_THRESHOLDS:
+        o = (ref > t).astype(np.float64)
+        out[f"n_obs_gt{t:g}"] = int(o.sum())
+        if ens is None:
+            out[f"twcrps{t:g}"] = float(np.abs(np.maximum(f, t) - np.maximum(ref, t)).mean())
+            out[f"brier{t:g}"] = float((((f > t).astype(np.float64) - o) ** 2).mean())
+        else:
+            m = ens.shape[0]
+            out[f"twcrps{t:g}"] = float(fair_crps(np.maximum(ens, t), np.maximum(ref, t)).mean())
+            p = (ens > t).mean(0)
+            out[f"brier{t:g}"] = float(((p - o) ** 2 - p * (1 - p) / (m - 1)).mean())
+    return out
 
 
 def region_masks(la, lo):
@@ -177,8 +196,9 @@ def main():
                             for k, x in vv.items():
                                 ens = x[:, m] if x.ndim == 2 else None
                                 f = ens.mean(0) if ens is not None else x[m]
+                                extra = tail_scores(f, ov[m], ens) if v == "tp" else {}
                                 rows.append(dict(var=v, variant=corr_tag, radius_km=r, region=reg, lead=lead,
-                                                 date=date, row=k, **scores(f, ov[m], ens)))
+                                                 date=date, row=k, **scores(f, ov[m], ens), **extra))
                 # tp window audit (b), truth and input, nearest point
                 if v == "tp":
                     op = obs[v][obs[v].valid == prev]
@@ -199,14 +219,15 @@ def main():
 def summarise(df, win, out):
     keys = ["var", "variant", "radius_km", "region", "lead"]
     cols = ["bias", "mae", "member_mae", "rmse", "corr", "crps", "spread", "ssr_corr"]
+    cols += [c for c in df.columns if c.startswith(("twcrps", "brier", "n_obs_gt"))]
     g = df.groupby(keys + ["row"])
     s = g[cols].mean().join(g[cols].sem().add_suffix("_se")).join(g["n"].mean().rename("mean_n")).join(g.size().rename("dates"))
     s.reset_index().to_csv(out / "a0_summary.csv", index=False)
     # paired differences over dates
     prs = []
-    wide = df.pivot_table(index=keys + ["date"], columns="row", values=["mae", "rmse", "corr", "crps"])
+    wide = df.pivot_table(index=keys + ["date"], columns="row", values=["mae", "rmse", "corr", "crps"] + [c for c in df.columns if c.startswith(("twcrps", "brier"))])
     for a, b in PAIRS:
-        for met in ("mae", "rmse", "corr", "crps"):
+        for met in ["mae", "rmse", "corr", "crps"] + [c for c in df.columns if c.startswith(("twcrps", "brier"))]:
             if (met, a) not in wide.columns or (met, b) not in wide.columns:
                 continue
             d = (wide[(met, a)] - wide[(met, b)]).dropna()
