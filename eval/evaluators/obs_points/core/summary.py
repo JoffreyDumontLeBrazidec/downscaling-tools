@@ -158,7 +158,8 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
                     continue
                 cells = [_fmt(qq.loc[l, key], qq.loc[l, f"{key}_se"]) if l in qq.index else "" for l in leads]
                 tag = row if row == "model" else f"{row} (single field)"
-                lines.append(f"| {tag} | {name} | " + " | ".join(cells) + " |")
+                label = "SEEPS" if key == "seeps" and row != "model" else name
+                lines.append(f"| {tag} | {label} | " + " | ".join(cells) + " |")
         nn = q[q.row == "model"].set_index("lead")
         lines.append(f"| {unit_name} per date | | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
                                                         for l in leads) + " |")
