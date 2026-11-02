@@ -1,0 +1,198 @@
+{
+ "built_utc": "2026-11-02T07:21:22Z",
+ "files": {
+  "A100_ema10000": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/ckpt/A100k/inference-ema10000-anemoi-by_step-epoch_198-step_100000.ckpt",
+   "sha256": "53ef84ac6966e1ba031acddee9b4284c66f1fb608804cf4fac1cdcbd8a693f2a",
+   "bytes": 2130211040
+  },
+  "A100_raw_inference": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/ckpt/A100k/inference-anemoi-by_step-epoch_198-step_100000.ckpt",
+   "sha256": "0ed9a2dec8a357bbd2007166c4caa144cdc3ea7d5305056f29c9b9512769725b",
+   "bytes": 2130203150
+  },
+  "B24_ema10000": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-ema10000-anemoi-by_step-epoch_036-step_024000.ckpt",
+   "sha256": "f28008653ffa502910c52f2da4c68d14470f7e88c1993ab71d878a7b8714f60f",
+   "bytes": 2463846351
+  },
+  "B24_raw_inference": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-anemoi-by_step-epoch_036-step_024000.ckpt",
+   "sha256": "5f044f3010b1e529cd3831848501353c4d3911182f18aa267b6490534f73ef99",
+   "bytes": 2463837966
+  },
+  "B50_ema10000": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-ema10000-anemoi-by_step-epoch_076-step_050000.ckpt",
+   "sha256": "e12bef9f7a867dea8d5c447f3937134d9bb34ac409b6d20644660afd047bcf22",
+   "bytes": 2463846351
+  },
+  "B50_raw_inference": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-anemoi-by_step-epoch_076-step_050000.ckpt",
+   "sha256": "fcc6f4ec53faac6fb55da73915b8512f690b69b0050f735d090523aeee23fd55",
+   "bytes": 2463837966
+  },
+  "config_read": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_read.yaml",
+   "sha256": "a6eb3db61108cc7e51f85c910b9994577737ade498395d3f7c617d0759d1ced3",
+   "bytes": 23778
+  },
+  "config_B_chain": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/configs/db_o2560_e2_50k_v2.yaml",
+   "sha256": "a6eb3db61108cc7e51f85c910b9994577737ade498395d3f7c617d0759d1ced3",
+   "bytes": 23778
+  },
+  "config_A_chain_AG": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_crop_100k_AG.yaml",
+   "sha256": "4b87aff59d6cef0af7a1b3cabeb70270b2ae62170441a3c4a5a6570922714a5e",
+   "bytes": 23874
+  },
+  "asset_combined_m600_r9.pt": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/combined_m600_r9.pt",
+   "sha256": "11cf8f5e686fe608a6c252a292fa2b55dcbc193c5d1d2f4ef6c005eca1401d9d",
+   "bytes": 906234375
+  },
+  "asset_europe_e2_o2560_m600r9rm_graph_in_hres.pt": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_in_hres.pt",
+   "sha256": "84e590026584a408874e52b3029a69b41b832dfd9296faca169f3c23a412b62f",
+   "bytes": 431340809
+  },
+  "asset_europe_e2_o2560_m600r9rm_graph_in_lres.pt": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_in_lres.pt",
+   "sha256": "ed45a7d0ca6e257ffa86eae568a83af4b156ac7ca1cd8a4578482911116aec18",
+   "bytes": 158175689
+  },
+  "asset_europe_e2_o2560_m600r9rm_graph_out_hres.pt": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_out_hres.pt",
+   "sha256": "c9c79c72d611b6175c9b99ce42fc74cdb7349e8f579905fe5602f7503810ace2",
+   "bytes": 444333305
+  },
+  "asset_r9_summary.json": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/r9_summary.json",
+   "sha256": "4bd2c7e97173c136572dd3dc3124630cc5a45b32ffa6443b66611f02fa82bfd7",
+   "bytes": 3014
+  },
+  "asset_grid-o1280-europe_e2_10_70N_80W_40E_halo1p5.npz": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/grid-o1280-europe_e2_10_70N_80W_40E_halo1p5.npz",
+   "sha256": "18ec55ce16bce68b29e9438abb0c20d084626eca3deb11ee715307547d557afc",
+   "bytes": 14019068
+  },
+  "asset_grid-o2560-europe_e2_10_70N_80W_40E.npz": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/grid-o2560-europe_e2_10_70N_80W_40E.npz",
+   "sha256": "6af2c00d61c6f4e721efec07c846ff566e7589c199423fa8bee2ab6343752502",
+   "bytes": 51969196
+  },
+  "asset_interpol_O1280_to_O2560_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O1280_to_O2560_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz",
+   "sha256": "876739e13e1d5e443898edb25f3aa3ee63e68498917ad6e3e19b208108e1066b",
+   "bytes": 69559555
+  },
+  "asset_interpol_O2560_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O2560_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz",
+   "sha256": "2ce2277f66f1291e424945ba783650f076091e1ebda46e5f6e5f6799b07e3d0a",
+   "bytes": 18981034
+  }
+ },
+ "a100_atos_source_sha256_ema10000": "53ef84ac6966e1ba031acddee9b4284c66f1fb608804cf4fac1cdcbd8a693f2a",
+ "code": {
+  "A100": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/code/anemoi-core-4ad32838c",
+   "head": "4ad32838c0cee47d41cef97924dd32a93a56c3e3",
+   "clean": true
+  },
+  "B24_B50": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/code/anemoi-core",
+   "head": "20ba15241ca68606dd8613461042bee407108326",
+   "clean": true
+  },
+  "anemoi_datasets": {
+   "path": "/e/home/jusers/dumontlebrazidec1/jupiter/dev/anemoi-datasets-hres-precip-ru",
+   "head": "870fb9bc36bd59a7b09420f80192645a12ebf7e2",
+   "clean": true
+  },
+  "downscaling_tools_scoring": {
+   "path": "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/dstools/downscaling-tools",
+   "head": "4e659c3320ae0b5c9eca8867cb1ee4dfd2c188d6",
+   "clean": true
+  }
+ },
+ "gh200_hours": {
+  "A100": 234.1,
+  "B24": 229.9,
+  "B50": 477.0
+ },
+ "dates": [
+  "20241101",
+  "20241102",
+  "20241103",
+  "20241104",
+  "20241105",
+  "20241106",
+  "20241107",
+  "20241108",
+  "20241109",
+  "20241110",
+  "20241111",
+  "20241112"
+ ],
+ "leads_default": [
+  12,
+  24,
+  36,
+  48,
+  60,
+  72
+ ],
+ "leads_possible": [
+  6,
+  12,
+  18,
+  24,
+  30,
+  36,
+  42,
+  48,
+  54,
+  60,
+  66,
+  72
+ ],
+ "members": 10,
+ "seed_base": 1234,
+ "seed_formula": "numpy SeedSequence([base, yyyymmdd, lead_h, member]).generate_state(1, uint32)",
+ "seed_check": {
+  "(1234,20230101,12,0)": 4097385291,
+  "(1234,20230101,12,1)": 2762430685
+ },
+ "sampler": {
+  "schedule_type": "experimental_piecewise",
+  "num_steps": 30,
+  "sigma_max": 100000.0,
+  "sigma_transition": 10.0,
+  "sigma_min": 0.03,
+  "high_schedule_type": "exponential",
+  "low_schedule_type": "karras",
+  "num_steps_high": 10,
+  "num_steps_low": 20,
+  "rho": 7.0,
+  "sampler": "heun",
+  "S_churn": 0.0,
+  "S_min": 0.75,
+  "S_max": 100000.0,
+  "S_noise": 1.05
+ },
+ "outputs": [
+  "10u",
+  "10v",
+  "2d",
+  "2t",
+  "msl",
+  "skt",
+  "tcw",
+  "cp",
+  "tp",
+  "z_500",
+  "t_850"
+ ],
+ "inference_num_chunks": 16,
+ "out_root": "/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102"
+}
