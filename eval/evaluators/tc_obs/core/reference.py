@@ -29,6 +29,7 @@ import numpy as np
 CACHE_VERSION = 1
 KT = 0.514444
 USA_1MIN_TO_10MIN = 0.93
+NMILE_KM = 1.852
 IBTRACS_ZARR = "/ec/ai/project/ai-ml/datasets/dop-file-1980-2025-v1-ibtracs.zarr"
 # Column order of the anemoi IBTrACS zarr: __date (days since 1970), __time (s), __latitude, __longitude (0..360),
 # storm (numeric id), date_time, obsvalue_pmsl_0 (Pa), then derived columns.
@@ -61,28 +62,42 @@ def read_ibtracs_zarr(path, storms: dict):
 
 
 def read_noaa_csv(path, events, season: int | None = None):
-    """Rows of a NOAA IBTrACS CSV (two header lines) for storms named like ``events`` (case-insensitive)."""
+    """Best-track rows of a NOAA NCEI IBTrACS v04 CSV (``ibtracs.<basin|last3years|ALL>.list.v04r01.csv``) for
+    the storms named like ``events`` (case-insensitive) in ``season``.
+
+    The file has a row of column names and then a row of units (skipped); a missing value is a single space;
+    TRACK_TYPE 'main' rows only (not the provisional or spur tracks); LON is -180..180; times are kept to the
+    minute (3-hourly interpolated rows and off-synoptic landfall rows included). Units: winds in knots, RMW in
+    nautical miles, pressures in hPa. Output: wind_ms = USA_WIND x 0.93 (1-minute to 10-minute sustained at
+    sea, WMO guidance) x 0.514444, or WMO_WIND x 0.514444 where USA_WIND is missing (``wind_src`` says which);
+    pmin_hpa = USA_PRES, or WMO_PRES where missing; rmw_km = USA_RMW x 1.852. A name that matches more than
+    one storm (SID) in the season is an error."""
     import pandas as pd
 
-    x = pd.read_csv(path, skiprows=[1], low_memory=False, keep_default_na=False)
+    x = pd.read_csv(path, skiprows=[1], low_memory=False, keep_default_na=False, dtype=str)
     x["NAME"] = x["NAME"].astype(str).str.strip().str.lower()
     x = x[x.NAME.isin([e.lower() for e in events])]
     if season is not None:
         x = x[pd.to_numeric(x["SEASON"], errors="coerce") == season]
+    if "TRACK_TYPE" in x:
+        x = x[x["TRACK_TYPE"].str.strip() == "main"]
+    sids = x.groupby("NAME")["SID"].nunique()
+    if (sids > 1).any():
+        raise ValueError(f"IBTrACS names matching several storms in season {season}: "
+                         f"{x[x.NAME.isin(sids[sids > 1].index)].groupby('NAME').SID.unique().to_dict()}")
 
     def num(col):
-        return pd.to_numeric(x[col], errors="coerce") if col in x else pd.Series(np.nan, index=x.index)
+        return pd.to_numeric(x[col].str.strip(), errors="coerce") if col in x else pd.Series(np.nan, index=x.index)
 
     usa, wmo = num("USA_WIND"), num("WMO_WIND")
-    # USA_WIND is a 1-minute sustained wind: x 0.93 gives the 10-minute equivalent (WMO guideline at sea).
-    # WMO_WIND (the reporting agency's own averaging) is used only where USA_WIND is missing.
     wind = (usa * USA_1MIN_TO_10MIN).where(usa.notna(), wmo) * KT
     wind_src = np.where(usa.notna(), "usa_wind_1min_x0.93", np.where(wmo.notna(), "wmo_wind", ""))
     pres = num("USA_PRES").fillna(num("WMO_PRES"))
-    t = pd.to_datetime(x["ISO_TIME"])
-    return pd.DataFrame({"event": x.NAME, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H"),
+    t = pd.to_datetime(x["ISO_TIME"].str.strip())
+    return pd.DataFrame({"event": x.NAME, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H%M"),
                          "lat": num("LAT"), "lon": _wrap(num("LON")), "pmin_hpa": pres, "wind_ms": wind,
-                         "wind_src": wind_src, "source": "noaa_ibtracs_csv"}).reset_index(drop=True)
+                         "wind_src": wind_src, "rmw_km": num("USA_RMW") * NMILE_KM,
+                         "source": "noaa_ibtracs_csv"}).reset_index(drop=True)
 
 
 def decode_tracker(bufr_path):
@@ -187,23 +202,37 @@ def fetch_tc(storms: dict, dates, out, *, zarr_path=IBTRACS_ZARR, noaa_csv=None,
 
 
 def best_track_at(bt, event, when, *, max_gap_h: float = 6.0):
-    """Best-track position, pressure and wind of ``event`` at ``when`` (datetime): exact fix, or linear
+    """Best-track position, pressure, wind and RMW of ``event`` at ``when`` (datetime): exact fix, or linear
     interpolation in time between the two fixes around it when they are at most ``max_gap_h`` apart.
-    Prefers the NOAA rows when both sources are present. Returns a dict or None."""
-    import pandas as pd
-
+    The NOAA rows are used first; the anemoi zarr rows only when the NOAA rows give nothing. Returns a dict
+    (with ``source``) or None."""
     b = bt[bt.event.str.lower() == event.lower()]
     if b.empty:
         return None
-    if (b.source == "noaa_ibtracs_csv").any():
-        b = b[b.source == "noaa_ibtracs_csv"]
-    t = pd.to_datetime(b.time.astype(str), format="%Y%m%d%H")
+    sources = ["noaa_ibtracs_csv"] + sorted(set(b.source) - {"noaa_ibtracs_csv"}) if "source" in b else [None]
+    for src in sources:
+        r = _fix_at(b if src is None else b[b.source == src], when, max_gap_h)
+        if r is not None:
+            return {**r, "source": src}
+    return None
+
+
+def _fix_at(b, when, max_gap_h):
+    import pandas as pd
+
+    if b.empty:
+        return None
+    t = pd.to_datetime(b.time.astype(str).str.ljust(12, "0"), format="%Y%m%d%H%M")  # YYYYMMDDHH or ...HHMM
     b = b.assign(_t=t).sort_values("_t").drop_duplicates("_t")
+
+    def get(r, k):
+        return r[k] if k in r and r[k] is not None else np.nan
+
     exact = b[b._t == when]
     if len(exact):
         r = exact.iloc[0]
-        return {"lat": r.lat, "lon": r.lon, "pmin_hpa": r.pmin_hpa, "wind_ms": r.wind_ms,
-                "wind_src": r.get("wind_src", ""), "interpolated": False}
+        return {"lat": r.lat, "lon": r.lon, "pmin_hpa": r.pmin_hpa, "wind_ms": get(r, "wind_ms"),
+                "wind_src": r.get("wind_src", ""), "rmw_km": get(r, "rmw_km"), "interpolated": False}
     before, after = b[b._t < when], b[b._t > when]
     if before.empty or after.empty:
         return None
@@ -213,9 +242,9 @@ def best_track_at(bt, event, when, *, max_gap_h: float = 6.0):
         return None
     w = (when - r0._t).total_seconds() / 3600.0 / gap
     dlon = ((r1.lon - r0.lon + 180.0) % 360.0) - 180.0
-    return {"lat": r0.lat + w * (r1.lat - r0.lat), "lon": float(_wrap(r0.lon + w * dlon)),
-            "pmin_hpa": r0.pmin_hpa + w * (r1.pmin_hpa - r0.pmin_hpa),
-            "wind_ms": r0.wind_ms + w * (r1.wind_ms - r0.wind_ms), "wind_src": r0.get("wind_src", ""),
+    lin = lambda k: get(r0, k) + w * (get(r1, k) - get(r0, k))  # noqa: E731
+    return {"lat": r0.lat + w * (r1.lat - r0.lat), "lon": float(_wrap(r0.lon + w * dlon)), "pmin_hpa": lin("pmin_hpa"),
+            "wind_ms": lin("wind_ms"), "wind_src": r0.get("wind_src", ""), "rmw_km": lin("rmw_km"),
             "interpolated": True}
 
 
@@ -224,7 +253,7 @@ def load_cache(cache_dir):
     import pandas as pd
 
     cache_dir = Path(cache_dir)
-    bt = pd.read_csv(cache_dir / "best_track.csv", dtype={"time": str, "storm_id": str})
+    bt = pd.read_csv(cache_dir / "best_track.csv", dtype={"time": str, "storm_id": str, "wind_src": str})
     trackers = {}
     for p in sorted(cache_dir.glob("tracker_*_*.csv")):
         _, stream, date = p.stem.split("_")

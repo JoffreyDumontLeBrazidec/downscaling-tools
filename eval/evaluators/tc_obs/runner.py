@@ -10,7 +10,7 @@ import numpy as np
 
 from eval.evaluators.obs_points.core.scores import fair_crps
 from eval.evaluators.obs_points.core.stations import resolve_cache
-from eval.evaluators.tc_obs.core.reference import HRES_MEMBER, best_track_at, load_cache
+from eval.evaluators.tc_obs.core.reference import HRES_MEMBER, best_track_at, load_cache, read_noaa_csv
 
 LOG = logging.getLogger(__name__)
 
@@ -34,7 +34,17 @@ def mean_centre(lat, lon):
     return float(np.degrees(np.arctan2(z, np.hypot(x, y)))), float(np.degrees(np.arctan2(y, x)))
 
 
-def case_scores(pmin, lat, lon, bt, wind=None) -> dict:
+def _scalar_scores(x, ref, name) -> dict:
+    """fair CRPS (absolute error for one value) and mean error of the finite values of x against ref."""
+    x = np.asarray(x, np.float64)
+    x = x[np.isfinite(x)]
+    if not x.size or not np.isfinite(ref):
+        return {}
+    return {f"{name}_crps": float(fair_crps(x[:, None], np.array([ref]))[0]), f"{name}_err": float(x.mean() - ref),
+            f"{name}_members": int(x.size)}
+
+
+def case_scores(pmin, lat, lon, bt, wind=None, rmw=None) -> dict:
     """Scores of one row (an ensemble of M centres, or one centre) against the best track of one case.
     pmin_crps is the fair CRPS of the members' central pressure (the absolute error for one value);
     pos_err_member_km the mean distance of the members' centres from the best track; pos_err_mean_km the
@@ -52,9 +62,11 @@ def case_scores(pmin, lat, lon, bt, wind=None) -> dict:
     if wind is not None:
         wind = np.asarray(wind, np.float64)
         out["wind_mean"] = float(np.nanmean(wind)) if np.isfinite(wind).any() else np.nan
-        if np.isfinite(bt.get("wind_ms", np.nan)) and np.isfinite(wind).all():
-            out["wind_crps"] = float(fair_crps(wind[:, None], np.array([bt["wind_ms"]]))[0])
-            out["wind_err"] = float(wind.mean() - bt["wind_ms"])
+        out.update(_scalar_scores(wind, bt.get("wind_ms", np.nan), "wind"))
+    if rmw is not None:
+        rmw = np.asarray(rmw, np.float64)
+        out["rmw_mean"] = float(np.nanmean(rmw)) if np.isfinite(rmw).any() else np.nan
+        out.update(_scalar_scores(rmw, bt.get("rmw_km", np.nan), "rmw"))
     return out
 
 
@@ -88,17 +100,20 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             continue
         base = {"event": event, "date": date, "lead": lead, "valid": valid.strftime("%Y%m%d%H"),
                 "bt_lat": b["lat"], "bt_lon": b["lon"], "bt_pmin_hpa": b["pmin_hpa"], "bt_wind_ms": b["wind_ms"],
-                "bt_interpolated": bool(b["interpolated"]), "bt_wind_src": b.get("wind_src", "")}
+                "bt_interpolated": bool(b["interpolated"]), "bt_wind_src": b.get("wind_src", ""),
+                "bt_rmw_km": b.get("rmw_km", np.nan), "bt_source": b.get("source")}
         sub = c[(c.event == event) & (c.date == date) & (c.lead == lead)]
         rows = {}
         mod = sub[(sub.field == "model") & (sub.found == 1) & np.isfinite(sub.pmin_hpa) & np.isfinite(sub.centre_lat)]
         if len(mod):
             rows["model"] = (mod.pmin_hpa, mod.centre_lat, mod.centre_lon,
-                             mod[wind_col] if wind_col in mod else None, mod.member, int((sub.field == "model").sum()))
+                             mod[wind_col] if wind_col in mod else None, mod.member, int((sub.field == "model").sum()),
+                             mod["rmw_km"] if "rmw_km" in mod else None)
         for f in ("truth", "input"):
             s = _single(sub[sub.field == f], log, f"{tag} {f}")
             if s is not None:
-                rows[f] = (s.pmin_hpa, s.centre_lat, s.centre_lon, s[wind_col] if wind_col in s else None, None, 1)
+                rows[f] = (s.pmin_hpa, s.centre_lat, s.centre_lon, s[wind_col] if wind_col in s else None, None, 1,
+                           s["rmw_km"] if "rmw_km" in s else None)
         for stream, row in (("oper", "hres"), ("enfo", "ens")):
             tr = trackers.get((stream, date))
             if tr is None:
@@ -116,9 +131,9 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             if t.empty:
                 log.append(f"WARN {tag}: no {row.upper()} row in the {stream} tracker for {event.upper()} at +{lead} h")
                 continue
-            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, int(storm[sel].member.nunique()))
-        for row, (p, la, lo, w, mem, n_tot) in rows.items():
-            sc = case_scores(p, la, lo, b, w)
+            rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, int(storm[sel].member.nunique()), None)
+        for row, (p, la, lo, w, mem, n_tot, rmw) in rows.items():
+            sc = case_scores(p, la, lo, b, w, rmw)
             out.append({**base, "row": row, "kind": ROW_KIND[row], "members_total": n_tot,
                         "found_frac": sc["n_found"] / n_tot if n_tot else np.nan, **sc})
             if mem is not None:
@@ -133,10 +148,11 @@ def summarise(df):
     """Mean and SE over cases per (lead, row), and pooled over leads (lead = 'all')."""
     import pandas as pd
 
-    cols = [c for c in SCORES + ("wind_crps", "wind_err", "pmin_mean", "n_found", "found_frac") if c in df.columns]
+    cols = [c for c in SCORES + ("wind_crps", "wind_err", "wind_mean", "rmw_crps", "rmw_err", "rmw_mean", "pmin_mean",
+                                 "n_found", "found_frac") if c in df.columns]
 
     def agg(g):
-        s = g[cols].mean().join(g[cols].sem().add_suffix("_se"))
+        s = g[cols].mean().join(g[cols].sem().add_suffix("_se")).join(g[cols].count().add_suffix("_cases"))
         return s.join(g.size().rename("cases")).join(g.date.nunique().rename("dates"))
 
     by = agg(df.groupby(["lead", "row", "kind"])).reset_index()
@@ -145,11 +161,13 @@ def summarise(df):
     return pd.concat([by.astype({"lead": str}), pooled], ignore_index=True)
 
 
-def paired(df, a="model", others=("truth", "input", "hres", "ens"), metrics=("pmin_crps", "pos_err_member_km")):
+def paired(df, a="model", others=("truth", "input", "hres", "ens"),
+           metrics=("pmin_crps", "pos_err_member_km", "wind_crps", "rmw_crps")):
     """Per case a - b, then mean, SE over cases, wins of a (lower is better), by lead and pooled."""
     import pandas as pd
 
-    w = df.pivot_table(index=["event", "date", "lead"], columns="row", values=list(metrics))
+    metrics = [m for m in metrics if m in df.columns and df[m].notna().any()]
+    w = df.pivot_table(index=["event", "date", "lead"], columns="row", values=metrics)
     out = []
     for b in others:
         for met in metrics:
@@ -163,6 +181,15 @@ def paired(df, a="model", others=("truth", "input", "hres", "ens"), metrics=("pm
                             "se": dd.sem() if dd.size > 1 else np.nan, "cases": int(dd.size),
                             "dates": int(dd.index.get_level_values("date").nunique()), "wins": int((dd < 0).sum())})
     return pd.DataFrame(out)
+
+
+def _first_file(spec) -> Path:
+    """A file path, or the first existing of a list or mapping of candidates (one per cluster)."""
+    cands = list(spec.values()) if isinstance(spec, dict) else ([spec] if isinstance(spec, (str, Path)) else list(spec))
+    for c in cands:
+        if Path(str(c)).expanduser().is_file():
+            return Path(str(c)).expanduser()
+    raise FileNotFoundError(f"tc_obs: no NOAA IBTrACS CSV found among {cands}")
 
 
 def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=None, overwrite: bool = False,
@@ -181,6 +208,14 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     cache_dir = resolve_cache(eval_config.get("cache"))
     bt, trackers, cache_meta = load_cache(cache_dir)
     cases = pd.read_csv(cases_path, dtype={"date": str})
+    noaa_path = None
+    if eval_config.get("noaa_csv"):
+        # the NOAA best track (with winds and RMW) read directly; it replaces any NOAA rows of the cache
+        noaa_path = _first_file(eval_config["noaa_csv"])
+        events = sorted(set(cases.event.astype(str)))
+        noaa = pd.concat([read_noaa_csv(noaa_path, events, season) for season in sorted({int(d[:4]) for d in cases.date})],
+                         ignore_index=True)
+        bt = pd.concat([bt[bt.source != "noaa_ibtracs_csv"], noaa], ignore_index=True)
     df, mem, log = score_cases(cases, bt, trackers, only_storm_ok=bool(eval_config.get("only_storm_ok", True)),
                                max_gap_h=float(eval_config.get("max_gap_h", 6.0)),
                                wind_col=str(eval_config.get("wind_col", "maxwind300_ms")))
@@ -195,6 +230,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     n_cases = int(df[["event", "date", "lead"]].drop_duplicates().shape[0])
     n_dates = int(df.date.nunique())
     meta = {"evaluator": "tc_obs", "run_label": label, "cases_csv": str(cases_path), "cache_dir": str(cache_dir),
+            "noaa_csv": str(noaa_path) if noaa_path else None,
+            "best_track_source": sorted(set(bt.source)) if "source" in bt else None,
             "cache_meta": cache_meta, "n_cases": n_cases, "n_dates": n_dates,
             "events": sorted(set(df.event)), "note": VERDICT_NOTE.format(n=n_cases, d=n_dates), "log": log}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
@@ -215,16 +252,22 @@ def write_summary_md(summ, pr, meta, path):
              f"Events: {', '.join(meta['events'])}.", ""]
     for key, name in (("pmin_crps", "Central pressure: fair CRPS (hPa)"), ("pmin_err", "Central pressure: mean error (hPa)"),
                       ("pos_err_member_km", "Centre position: mean member error (km)"),
-                      ("pos_spread_km", "Centre position: ensemble spread (km)")):
+                      ("pos_spread_km", "Centre position: ensemble spread (km)"),
+                      ("wind_crps", "Maximum 10 m wind: fair CRPS (m/s) against the best-track 10-minute wind"),
+                      ("wind_err", "Maximum 10 m wind: mean error (m/s)"),
+                      ("rmw_crps", "Radius of maximum wind: fair CRPS (km) against USA_RMW"),
+                      ("rmw_err", "Radius of maximum wind: mean error (km)")):
+        if key not in summ or summ[key].isna().all():
+            continue
         lines += [f"## {name}", "", "| row | " + " | ".join(("+" + l + " h") if l != "all" else "all leads"
                                                             for l in lead_order) + " |",
                   "|---|" + "---|" * len(lead_order)]
         for row in ("model", "ens", "truth", "input", "hres"):
             q = summ[summ.row == row].set_index("lead")
-            if q.empty or (key == "pos_spread_km" and row not in ("model", "ens")):
+            if q.empty or q[key].isna().all() or (key == "pos_spread_km" and row not in ("model", "ens")):
                 continue
-            cells = [f"{q.loc[l, key]:.1f} ({q.loc[l, key + '_se']:.1f}) n{int(q.loc[l, 'cases'])}" if l in q.index else ""
-                     for l in lead_order]
+            cells = [f"{q.loc[l, key]:.1f} ({q.loc[l, key + '_se']:.1f}) n{int(q.loc[l, key + '_cases'])}"
+                     if l in q.index and np.isfinite(q.loc[l, key]) else "" for l in lead_order]
             tag = row if ROW_KIND[row] == "ensemble" else f"{row} (single field)"
             lines.append(f"| {tag} | " + " | ".join(cells) + " |")
         lines.append("")

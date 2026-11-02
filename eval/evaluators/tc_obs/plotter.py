@@ -35,9 +35,17 @@ def plot_by_lead(results_dir, summ, meta):
     leads = sorted(set(s.lead))
     panels = [("pmin_crps", "Central pressure: fair CRPS (hPa)"), ("pmin_err", "Central pressure: mean error (hPa)"),
               ("pos_err_member_km", "Centre: mean member error (km)"), ("pos_spread_km", "Centre: ensemble spread (km)")]
+    for key, label in (("wind_crps", "Max 10 m wind: fair CRPS (m/s)"), ("wind_err", "Max 10 m wind: mean error (m/s)"),
+                       ("rmw_crps", "RMW: fair CRPS (km)")):
+        if key in s and s[key].notna().any():
+            panels.append((key, label))
     with eval_style():
-        fig, axes = plt.subplots(1, len(panels), figsize=(4.6 * len(panels), 4.0), squeeze=False)
-        for ax, (key, ylabel) in zip(axes[0], panels):
+        ncol = min(4, len(panels))
+        nrow = int(np.ceil(len(panels) / ncol))
+        fig, axes = plt.subplots(nrow, ncol, figsize=(4.6 * ncol, 4.0 * nrow), squeeze=False)
+        for ax in list(axes.flat)[len(panels):]:
+            ax.set_visible(False)
+        for ax, (key, ylabel) in zip(axes.flat, panels):
             for row in ("model", "ens", "truth", "input", "hres"):
                 q = s[s.row == row].set_index("lead").reindex(leads)
                 if q.empty or q[key].isna().all() or (key == "pos_spread_km" and row not in ("model", "ens")):
@@ -46,7 +54,7 @@ def plot_by_lead(results_dir, summ, meta):
                 st["linestyle"] = "-" if row in ("model", "ens") else "none"
                 ax.errorbar(np.array(leads) + OFFSET[row], q[key], yerr=q[f"{key}_se"], capsize=3,
                             label=_label(row, meta["run_label"]), **st)
-            if key == "pmin_err":
+            if key in ("pmin_err", "wind_err"):
                 ax.axhline(0, color="#0b0b0b", lw=1)
             ax.set_ylabel(ylabel)
             ax.set_xticks(leads)
@@ -57,11 +65,11 @@ def plot_by_lead(results_dir, summ, meta):
         h, lab = axes[0, 0].get_legend_handles_labels()
         fig.legend(h, lab, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.99), fontsize=9)
         fig.suptitle(f"{meta['run_label']} storms against the IBTrACS best track. {meta['note']}",
-                     fontweight="bold", y=0.86, fontsize=11)
+                     fontweight="bold", y=0.86 if nrow == 1 else 0.93, fontsize=11)
         fig.text(0.01, 0.0, "Mean over cases at each lead; bars one SE over cases (cases on the same date are not "
                  "independent). Model, truth and input from tc_structure on O1280; trackers on the operational grids.",
                  ha="left", va="top", fontsize=8.5, color="#52514e")
-        fig.tight_layout(rect=(0, 0.02, 1, 0.8))
+        fig.tight_layout(rect=(0, 0.02, 1, 0.8 if nrow == 1 else 0.9))
         return save_figure(fig, Path(results_dir) / "tc_obs_by_lead", close=True)
 
 

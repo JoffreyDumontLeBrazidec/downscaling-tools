@@ -107,7 +107,7 @@ def test_noaa_csv_reader(tmp_path):
     assert x.wind_ms.iloc[0] == pytest.approx(100 * 0.514444 * 0.93) and x.pmin_hpa.iloc[1] == 960
     assert x.wind_ms.iloc[1] == pytest.approx(80 * 0.514444)  # WMO_WIND only where USA_WIND is missing
     assert list(x.wind_src) == ["usa_wind_1min_x0.93", "wmo_wind"]
-    assert x.lon.iloc[1] == pytest.approx(-70.0) and x.time.iloc[0] == "2023083000"
+    assert x.lon.iloc[1] == pytest.approx(-70.0) and x.time.iloc[0] == "202308300000"
 
 
 def test_fetch_tc_refuses_off_atos(monkeypatch, tmp_path):
@@ -132,3 +132,43 @@ def test_hres_without_member_number_and_missing_hres_warns(tmp_path):
     out = tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "out2", run_label="X")
     log = json.loads((out / "run_meta.json").read_text())["log"]
     assert any(x.startswith("WARN") and "HRES" in x and "+48 h" in x for x in log)
+
+
+SAMPLE = __import__("pathlib").Path(__file__).parent / "data" / "ibtracs_v04r01_sample.csv"
+
+
+def test_noaa_csv_reader_on_real_lines():
+    """Seven verbatim lines of NOAA NCEI IBTrACS v04r01 (column names, units row, Franklin 2023 at 18, 21 and
+    00 UTC, Lee 2023, one provisional track): units row skipped, ' ' read as missing, main tracks only."""
+    x = read_noaa_csv(SAMPLE, ["franklin", "lee"], 2023)
+    assert list(x.event) == ["franklin"] * 3 + ["lee"]
+    f = x[x.time == "202308290000"].iloc[0]
+    assert (f.lat, f.lon, f.pmin_hpa) == (28.9, -71.1, 926.0) and f.storm_id == "2023232N13300"
+    assert f.wind_ms == pytest.approx(130 * 0.93 * 0.514444) and f.rmw_km == pytest.approx(5 * 1.852)
+    three_hourly = x[x.time == "202308282100"].iloc[0]  # WMO_* blank, USA_* filled
+    assert three_hourly.wind_src == "usa_wind_1min_x0.93" and three_hourly.wind_ms == pytest.approx(128 * 0.93 * 0.514444)
+    assert read_noaa_csv(SAMPLE, ["unnamed"], 2025).empty  # PROVISIONAL track left out
+    b = best_track_at(x, "franklin", pd.Timestamp("2023-08-28 22:30").to_pydatetime())
+    assert b["interpolated"] and b["pmin_hpa"] == pytest.approx((929 + 926) / 2) and b["rmw_km"] == pytest.approx(6.5 * 1.852)
+
+
+def test_noaa_csv_from_the_lane_gives_wind_and_rmw_scores(tmp_path):
+    cases, cache = _cases(tmp_path)
+    c = pd.read_csv(cases, dtype={"date": str})
+    c = c[c.lead == 24].assign(date="20230828", rmw_km=12.0)  # valid 2023-08-29 00 UTC: an exact NOAA fix
+    c.to_csv(cases, index=False)
+    for stream in ("oper", "enfo"):
+        tr = pd.read_csv(cache / f"tracker_{stream}_20230829.csv")
+        tr.to_csv(cache / f"tracker_{stream}_20230828.csv", index=False)
+    cfg = {"cache": str(cache), "cases": str(cases), "noaa_csv": {"jupiter": str(tmp_path / "none.csv"),
+                                                                  "atos": str(SAMPLE)}}
+    out = tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "out", run_label="X")
+    df = pd.read_csv(out / "cases_obs.csv", dtype={"date": str})
+    assert (df.bt_source == "noaa_ibtracs_csv").all() and (df.bt_pmin_hpa == 926).all()
+    truth = df[df.row == "truth"].iloc[0]
+    assert truth.wind_crps == pytest.approx(abs(30.2 - 130 * 0.93 * 0.514444), rel=1e-6)  # maxwind300 = 30 + 0.2
+    assert truth.rmw_err == pytest.approx(12.0 - 5 * 1.852)
+    assert {"wind_crps", "rmw_crps"} <= set(pd.read_csv(out / "paired.csv").metric)
+    md = (out / "summary.md").read_text()
+    assert "Maximum 10 m wind" in md and "Radius of maximum wind" in md
+    tc_obs.plot(out, {}, cfg)

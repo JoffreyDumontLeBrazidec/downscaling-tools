@@ -63,7 +63,10 @@ EVALUATOR_SPEC = {
         "rank_hist.csv: rank-histogram counts of the observation among the members, per date.",
         "summary.csv: mean and SE over dates of every score; paired.csv: paired differences between rows "
         "(mean, SE over dates, date wins).",
-        "summary.md, run_meta.json, obs_points_log.txt.",
+        "tp_window_check.csv / tp_window_summary.csv: the A0 accumulation-window audit (correlation of truth, input "
+        "and ensemble mean with the station tp of the window ending at valid time and of the window before; a WARN "
+        "line when the window before correlates better on average at a lead).",
+        "summary.md, run_meta.json (WARN lines, also for HRES tp that looks like metres), obs_points_log.txt.",
         "obs_<var>_<variant>[_r<km>km]_scores.png, obs_tp_tail[_r<km>km].png, obs_rank_hist_<var>_<variant>.png (plot).",
     ],
 }

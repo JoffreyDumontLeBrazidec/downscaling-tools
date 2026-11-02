@@ -61,7 +61,8 @@ python -m eval.cli obs compare --a <run A>/evaluators/obs_points --b <run B>/eva
 the operational HRES and ENS trackers; its cache comes from `obs fetch-tc` on Atos. The anemoi IBTrACS
 zarr has no wind; when a local NOAA IBTrACS CSV is given (`--noaa-csv`), the best-track wind is the 10-minute
 equivalent USA_WIND x 0.93 (1-minute to 10-minute at sea, WMO guidance), or WMO_WIND where USA_WIND is
-missing, and the `wind_src` column says which:
+missing, and the `wind_src` column says which. The lane key `tc_obs.noaa_csv` reads the CSV at run time; the
+radius of maximum wind is then also compared with USA_RMW:
 
 ```bash
 python3 -m eval.cli obs fetch-tc --storms franklin=4648,idalia=4654,lee=4660,margot=4661,nigel=4662,philippe=4667,tammy=4679 \

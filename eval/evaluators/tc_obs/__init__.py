@@ -23,7 +23,11 @@ Lane configuration (the ``tc_obs:`` block):
                  <run>/evaluators/tc_structure/cases.csv.
   only_storm_ok  Score only tc_structure's storm cases. Default true.
   max_gap_h      Largest gap between two best-track fixes to interpolate across. Default 6.
+  noaa_csv       A NOAA NCEI IBTrACS v04 CSV (or candidates per cluster), read at run time: its main-track
+                 rows (wind, USA_PRES, USA_RMW) come before the cache's best-track rows; the anemoi zarr rows
+                 are used only where the CSV has no fix near valid time.
   wind_col       tc_structure column compared with the best-track wind when there is one. Default maxwind300_ms.
+                 rmw_km is compared with USA_RMW (nautical miles x 1.852) when the CSV has it.
 Diagnostic only: no scoreboard row.
 """
 from eval.evaluators.base import no_score
