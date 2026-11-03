@@ -90,7 +90,9 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
                         if row in set(q.row):
                             _series(ax, q, key, row, run_label, leads)
                     if key == "fcrps":
-                        ax.set_title(f"{reg}: {nd} dates, ~{ns:,.0f} {unit_name} per date", fontsize=10.5)
+                        nl = q[q.row == "model"].set_index("lead").reindex(leads).mean_n.to_numpy(float)
+                        ax.set_title(f"{reg}: {nd} dates; {unit_name} per date, by lead:\n"
+                                     + ", ".join("-" if not np.isfinite(x) else f"{x:.0f}" for x in nl), fontsize=10)
                 elif key == "ssr_corrected":
                     _series(ax, q, key, "model", run_label, leads)
                     ax.axhline(1.0, color="#0b0b0b", lw=1, ls="--")
@@ -105,10 +107,18 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
                         x = np.array(leads, float) + 1.5 * (k - 1)
                         ax.errorbar(x, pp["mean"], yerr=pp["se"], color=colour, marker="o", ls="none", capsize=3,
                                     label=f"{run_label} minus {pair.split('-')[1]}")
-                        for xx, yy, w, d in zip(x, pp["mean"], pp["wins"], pp["dates"]):
-                            if np.isfinite(yy):
+                        # win counts beside the left and right markers and above the middle bar, so they do not overlap
+                        for xx, yy, se, w, d in zip(x, pp["mean"], pp["se"], pp["wins"], pp["dates"]):
+                            if not np.isfinite(yy):
+                                continue
+                            if k == 1:
+                                top = yy + (se if np.isfinite(se) else 0.0)
+                                ax.annotate(f"{int(w)}/{int(d)}", (xx, top), textcoords="offset points", xytext=(0, 3),
+                                            ha="center", va="bottom", fontsize=7, color=colour)
+                            else:
                                 ax.annotate(f"{int(w)}/{int(d)}", (xx, yy), textcoords="offset points",
-                                            xytext=(4, 4), fontsize=7, color=colour)
+                                            xytext=(-5 if k == 0 else 5, 0), ha="right" if k == 0 else "left",
+                                            va="center", fontsize=7, color=colour)
                     ax.axhline(0.0, color="#0b0b0b", lw=1)
                     ax.legend(fontsize=8, loc="best")
                 if j == 0:
@@ -153,7 +163,8 @@ def plot_tail(results_dir, summ, meta, radius, region="all", stem=None):
                         _series(ax, s, key, row, run_label, leads)
                 ax.set_ylabel(tail_name(key) + (" (mm)" if key.startswith("twcrps") else ""))
                 if i == 0:
-                    ax.set_title(f"> {t} mm\nobserved exceedances per date, by lead: "
+                    exc = "IMERG" if meta.get("evaluator") == "obs_imerg" else "observed"
+                    ax.set_title(f"> {t} mm\n{exc} exceedances per date, by lead:\n"
                                  + ", ".join(f"{n:.0f}" for n in nobs.to_numpy(float)), fontsize=9.5)
                 else:
                     _lead_axis(ax, leads)
