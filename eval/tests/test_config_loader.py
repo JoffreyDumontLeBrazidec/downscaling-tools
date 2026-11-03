@@ -485,6 +485,19 @@ def test_flow_map_pairs_share_dates():
         assert load_lane(run)["predict"]["dates"] == load_lane(ref)["predict"]["dates"]
 
 
+def test_e2_flowmap_pw30_lane():
+    run = load_lane("o320_o1280_e2_flowmap")["predict"]
+    pw30 = load_lane("o320_o1280_e2_flowmap_pw30")["predict"]
+    assert pw30["dates"] == run["dates"] and pw30["steps"] == run["steps"] and pw30["members"] == run["members"]
+    assert pw30["input_source"] == run["input_source"]
+    assert pw30["sampler"] == {
+        "schedule_type": "experimental_piecewise", "num_steps": 30, "sigma_max": 100000.0,
+        "sigma_transition": 10.0, "sigma_min": 0.03, "high_schedule_type": "exponential",
+        "low_schedule_type": "karras", "num_steps_high": 10, "num_steps_low": 20, "rho": 7.0,
+        "sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.0, "S_noise": 1.05,
+    }
+
+
 def test_flow_map_num_steps_by_opt():
     import argparse
 
