@@ -91,6 +91,9 @@ def register(subparsers) -> argparse.ArgumentParser:
                    help="Comma-separated evaluators (or 'zoom_maps') not to run; the read says so.")
     p.add_argument("--weights", default=None,
                    help="Weights of the two runs, e.g. 'EMA-10000 / raw' (not recorded in the files).")
+    p.add_argument("--note", action="append", default=None, metavar="TEXT",
+                   help="A sentence about the instrument the files do not record, printed in the read's "
+                        "header (repeatable), e.g. that every member shares one input.")
     p.add_argument("--no-scale-split", action="store_true", default=False,
                    help="Score the full field only (no large/fine split at 400 km in part 4).")
     p.add_argument("--overwrite", action="store_true", default=False,
@@ -699,7 +702,8 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
 
 
 def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, maps: dict,
-                 domain: str, weights: str | None, out_dir: Path, commit: str) -> str:
+                 domain: str, weights: str | None, out_dir: Path, commit: str,
+                 notes: list[str] | None = None) -> str:
     run, ref = arms["run"], arms["reference"]
     fr, ff = run["facts"], ref["facts"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -724,6 +728,8 @@ def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, map
         warnings.append("the member counts differ")
     for w in warnings:
         head.append(f"WARNING: {w}.")
+    for n in notes or []:
+        head.append(f"Instrument note: {n.rstrip('.')}.")
     head += [f"Written by `eval.cli judge` (downscaling-tools {commit}); every output is under `{out_dir}`.", ""]
     body = (part_structure(arms, maps, shape_box, step) + [""] + part_spectra(arms) + [""]
             + part_extremes(arms, step) + [""] + part_scores(arms, step, domain))
@@ -807,7 +813,7 @@ def run(args: argparse.Namespace, session) -> None:
 
     text = compose_read(arms, step=step, dates=dates, shape_box=shape_box, maps=maps,
                         domain=args.score_domain, weights=args.weights, out_dir=out_dir,
-                        commit=_git_commit())
+                        commit=_git_commit(), notes=args.note)
     read_path = out_dir / "read.md"
     read_path.write_text(text)
     (out_dir / "judge_status.json").write_text(json.dumps(

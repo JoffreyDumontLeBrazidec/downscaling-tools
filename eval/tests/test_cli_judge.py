@@ -49,6 +49,15 @@ def test_read_warns_on_unequal_instruments(tmp_path):
     assert "different point sets" in text and "sampler settings" in text
 
 
+def test_read_prints_instrument_notes(tmp_path):
+    arms = {"member": 1, "run": _arm(tmp_path, "a", 1_200_000), "reference": _arm(tmp_path, "b", 1_200_000)}
+    note = "the bundles hold the control forecast only: the 10 members are 10 seeds of one input."
+    text = judge.compose_read(arms, step=24, dates=["20230226"], shape_box="e2", maps={}, domain="europe",
+                              weights="EMA-2000 / EMA-2000", out_dir=tmp_path, commit="abc", notes=[note])
+    head = text.split("### 1.")[0]
+    assert "Instrument note: the bundles hold the control forecast only: the 10 members are 10 seeds of one input." in head
+
+
 @pytest.mark.parametrize("lat,lon,box", [
     ([10.0, 70.0], [280.0, 40.0], "north_atlantic"),     # E2 file, 0..360 longitudes
     ([-89.9, 89.9], [0.0, 359.9], "north_atlantic"),     # global file
