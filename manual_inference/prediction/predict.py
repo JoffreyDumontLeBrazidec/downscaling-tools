@@ -344,7 +344,8 @@ def load_objects(
                 return bsd, gss
             _core._before_sampling = _before_sampling_bf16
     graph_data = inference_model.graph_data
-    datamodule = get_datamodule(config_for_datamodule, graph_data)
+    task = (checkpoint.get("hyper_parameters") or {}).get("task") if isinstance(checkpoint, dict) else None
+    datamodule = get_datamodule(config_for_datamodule, graph_data, task=task)
     return inference_model, datamodule, dir_exp, name_exp
 
 
