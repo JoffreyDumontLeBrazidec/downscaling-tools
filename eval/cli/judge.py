@@ -442,7 +442,7 @@ def part_rotation(run: dict, ref: dict, step: int) -> list[str]:
 
 
 def part_spectra(arms: dict) -> list[str]:
-    from eval.evaluators.box_spectra.runner import read_bins
+    from eval.evaluators.box_spectra.runner import TARGET_NOTE, read_bins
 
     run, ref = arms["run"], arms["reference"]
     pa, pb = run["eval"] / "box_spectra" / "bins.csv", ref["eval"] / "box_spectra" / "bins.csv"
@@ -454,8 +454,8 @@ def part_spectra(arms: dict) -> list[str]:
     rows_a = [r for r in read_bins(pa) if r["scope"] == "all"]
     rows_b = {(r["variable"], r["bin_centre_km"]): r for r in read_bins(pb) if r["scope"] == "all"}
     lines.append(f"Amplitude ratio to the truth per bin (rule 14), full field and residual, box {meta['box']}, "
-                 f"{meta['method']} sampling; aligned part = coherence x full-field ratio. Target 1 from 125 to 31 km; "
-                 f"below 31 km model against model only. All variables and per-date rows: `{pa}`, `{pb}`.")
+                 f"{meta['method']} sampling; aligned part = coherence x full-field ratio; "
+                 f"{meta.get('target_note', TARGET_NOTE)}. All variables and per-date rows: `{pa}`, `{pb}`.")
     for var in SPECTRA_TABLE_VARS:
         sub = [r for r in rows_a if r["variable"] == var and 15.0 <= float(r["bin_centre_km"]) <= 600.0]
         if not sub:

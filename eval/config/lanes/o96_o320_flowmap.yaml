@@ -37,3 +37,10 @@ predict:
     sigma_max: 80.0       # start sigma
     sigma_min: 0.0
     sampler: "jumps"
+
+# Per-bin spectra on this lane (added 2026-11-03): box_spectra reads the grid from the files, but
+# the o320 truth and the o96 input are four times coarser than on o320 -> o1280, so the o1280
+# target band (125 to 31 km) of the default note does not apply. By the same four-grid-spacing
+# reading, O96 resolves down to about 400 km and O320 down to about 125 km.
+box_spectra:
+  target_note: "lane o96 -> o320: the o1280 band (125 to 31 km) does not apply; by four grid spacings the O96 input resolves down to about 400 km and the O320 truth down to about 125 km, so the target is 1 from about 400 km to 125 km and the bins below about 125 km are near the truth's grid scale"
