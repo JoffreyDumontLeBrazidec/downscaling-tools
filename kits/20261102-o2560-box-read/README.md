@@ -105,6 +105,16 @@ Not in this kit: the global fccc23df box-cut reference (it needs 4-GPU sharded o
 box or these dates; not cheap), the shape (elongation and rotation) evaluator, and the TC storm evaluator (no tropical
 cyclone in the box in these dates).
 
+## Read LANDED (checked 3 Nov 2026 05:59 UTC, after the Jupiter maintenance): all 25 jobs COMPLETED 0:0
+
+Predictions 10:39-12:34 UTC on 2 Nov (1 h 53 min each, 12 of 12 files per row and lead, 53.9 s per draw on 4 GH200,
+about 49 GB per GPU in nvidia-smi; about 136 GH200-h in all); scorings 15:36-17:11 UTC (O2560_SCORE_DONE for all six
+leads); final 18:52 UTC 2 Nov to 00:28 UTC 3 Nov (zoom maps, SUMMARY_DONE, 12 judge runs rc=0, O2560_FINAL_DONE).
+Nothing died in the maintenance, nothing was resubmitted. Predictions use 356 GB. A compact extract of the results
+(spectra at six bins, tp tail, scores with paired SE, ratios) is `checks/results_extract_20261103.txt`, made by
+`scripts/extract_results.py`. The judge's structure, spectra and extremes verdicts read TODO and its tc_structure finds
+no storm in these dates; its score table with rule-32 labels is the usable part.
+
 ## Read submitted 2 Nov 2026 09:36:40 UTC (hand-off for the thread that reads the results)
 
 Submitted on Jupiter with `scripts/submit_all.sh` under Joffrey's go; at 10:00 UTC all 25 jobs were PENDING (Priority or
