@@ -1,0 +1,10 @@
+# The 8 ensemble-mean rain cases of docs support/20261102_boss_tp_plots (ens_mean_cases.py)
+# region date lead lat lon half_lon half_lat
+europe 20231031 24 42.425 19.163 5.0 3.5
+europe 20230829 48 44.956 14.651 5.0 3.5
+europe 20230111 12 36.450 29.021 5.0 3.5
+south  20230930 24 16.344 -55.095 3.0 3.0
+europe 20230527 36 35.677 29.653 5.0 3.5
+europe 20231031 72 44.183 10.427 5.0 3.5
+south  20230909 36 21.406 -59.602 3.0 3.0
+south  20230808 48 11.705 -2.496 3.0 3.0
