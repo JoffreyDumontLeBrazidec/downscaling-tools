@@ -12,9 +12,13 @@ base: o320_o1280
 # Comparison row: o320_o1280_e2_flowmap_edm30 (the parent EDM checkpoint, 30 Karras steps
 # from sigma 80, churn off, 59 calls), same dates, leads, members and rule-31 seeds.
 #
-# Predict (the E2 checkpoint predicts on its own box grid; bundles are the E2 bundles):
+# Predict (the E2 checkpoint predicts on its own box grid). There are no E2 bundles: the inputs
+# and the truth come from the E2 v4 zarr TEST split through the checkpoint's own datamodule
+# (predict.input_source below; eval/config/predict_input.py). Flow-map runs read their EMA-2000
+# weights, the EDM row its EMA-10000 weights (predict.ema, inference-<ema>-<name> next to the
+# base checkpoint):
 #   python -m eval.cli predict --lane o320_o1280_e2_flowmap --host jupiter \
-#     --checkpoint <flow-map ckpt> --bundle-dir <E2 bundles> --output-dir <run dir>
+#     --checkpoint <flow-map base ckpt> --opt predict.ema=ema2000 --output-dir <run dir>
 # Read, one lead at a time (rule 24), against the EDM row:
 #   python -m eval.cli judge --lane o320_o1280_e2_flowmap --host jupiter --step 24 \
 #     --run MF2=<run dir>/predictions --reference EDM30=<edm30 dir>/predictions --output-dir <read dir>
@@ -31,6 +35,11 @@ allowed_hosts:
   scoreboard: [atos_ac]
 
 predict:
+  # inputs and truth: the row of (date, lead) in the TEST split of the checkpoint's own E2
+  # datamodule, through the fake-hindcast mapping (no bundles; the config names the stores)
+  input_source:
+    type: zarr_split
+    split: test
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   steps: [12, 24, 48, 72]
   # The 30 dates of 2023 (00 UTC) of the E2 seed-locked wide reads (CA300 leads, DB300 vs

@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from eval.config.predict_input import InputSourceError, normalize_ema, normalize_input_source
 from manual_inference.prediction.sampler_spec import SamplerConfigError, is_flow_map, normalize_flow_map_sampler
 
 _CONFIG_DIR = Path(__file__).parent
@@ -204,6 +205,12 @@ def _validate_lane(config: dict[str, Any], path: Path) -> None:
             normalize_flow_map_sampler(sampler)
         except SamplerConfigError as exc:
             raise ConfigValidationError(f"{path}: 'predict.sampler': {exc}") from None
+    # predict.input_source (bundles | zarr_split) and predict.ema (eval/config/predict_input.py)
+    try:
+        normalize_input_source(predict.get("input_source"))
+        normalize_ema(predict.get("ema"))
+    except InputSourceError as exc:
+        raise ConfigValidationError(f"{path}: 'predict': {exc}") from None
 
     evaluator_groups = config["evaluator_groups"]
     if not isinstance(evaluator_groups, dict):

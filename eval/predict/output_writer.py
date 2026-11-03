@@ -29,11 +29,21 @@ def _sampler_summary(extra_args_json: str) -> str:
     return describe_sampler(cfg) if isinstance(cfg, dict) and cfg else ""
 
 
+def _weights_path(config: PredictionConfig) -> str:
+    # the file load_objects reads (manual_inference/prediction/predict.py inference_weights_name)
+    name = config.checkpoint_path.name
+    weights = f"inference-{config.ema}-{name}" if config.ema else f"inference-{name}"
+    return str(config.checkpoint_path.with_name(weights))
+
+
 def _metadata_from_ensemble(
     ensemble: EnsemblePrediction,
     config: PredictionConfig,
 ) -> PredictionMetadata:
     checkpoint_id = config.checkpoint_id or config.checkpoint_path.parent.name or config.checkpoint_path.stem
+    if config.ema:
+        # EMA weights are another model than the raw weights of the same step
+        checkpoint_id = f"{checkpoint_id}:{config.ema}"
     output_weather_states = [str(name) for name in ensemble.weather_states]
     return PredictionMetadata(
         init_date=ensemble.init_date,
@@ -44,6 +54,9 @@ def _metadata_from_ensemble(
         source_bundle_paths=list(ensemble.source_bundle_paths),
         sampling_config_json=config.extra_args_json,
         sampler_summary=_sampler_summary(config.extra_args_json),
+        checkpoint_weights=config.ema or "raw",
+        weights_path=_weights_path(config),
+        input_provenance=ensemble.input_provenance,
         validation_frequency=config.validation_frequency,
         output_weather_state_mode=config.output_weather_state_mode,
         output_weather_states=output_weather_states,
@@ -102,7 +115,8 @@ def write_predictions_file(
             member_ids=ensemble.member_ids,
             include_member_views=not config.slim_output,
             metadata=metadata,
-            source_bundle_paths=ensemble.source_bundle_paths,
+            # zarr_split route: no bundle; the input_* attributes say where the inputs came from
+            source_bundle_paths=ensemble.source_bundle_paths if ensemble.input_provenance is None else None,
         )
         if ensemble.draw_seeds is not None:
             # Rule 31: the file says which noise each member was drawn from.

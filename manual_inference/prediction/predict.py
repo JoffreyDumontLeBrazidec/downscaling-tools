@@ -262,6 +262,15 @@ def _resolve_ckpt_path(
 
 
 
+def inference_weights_name(name_ckpt: str, ema: str | None = None) -> str:
+    """File name of the weights loaded for base checkpoint ``name_ckpt``.
+
+    ``inference-<name>`` holds the raw weights; runs with EMA on also save
+    ``inference-<ema>-<name>`` (e.g. ``inference-ema2000-<name>``), the EMA weights of that step.
+    """
+    return f"inference-{ema}-{name_ckpt}" if ema else f"inference-{name_ckpt}"
+
+
 def load_objects(
     *,
     ckpt_path: str,
@@ -269,8 +278,17 @@ def load_objects(
     validation_frequency: str,
     precision: str,
     num_gpus_per_model_override: int | None = None,
+    ema: str | None = None,
 ):
     ckpt_path, dir_exp, name_exp, name_ckpt = _split_ckpt_path(ckpt_path)
+    # ema="ema2000" loads the EMA weights inference-ema2000-<name> instead of the raw ones;
+    # refused before the (slow) base checkpoint load when that file does not exist.
+    weights_path = os.path.join(dir_exp, name_exp, inference_weights_name(name_ckpt, ema))
+    if ema and not os.path.exists(weights_path):
+        raise FileNotFoundError(
+            f"EMA weights {ema!r} requested but {weights_path} does not exist "
+            "(this run may not save that EMA half-life at this step)."
+        )
     checkpoint, config_checkpoint = get_checkpoint(dir_exp, name_exp, name_ckpt)
     # Unified multi-ds: config is checkpoint-native. Inject local paths from env vars
     # (DATA_DIR/GRID_DIR/RESIDUAL_STATISTICS_DIR/INTER_MAT_DIR are resolved via the
@@ -289,7 +307,7 @@ def load_objects(
         config_for_datamodule.dataloader.read_group_size = int(num_gpus_per_model_override)
 
     inference_model = torch.load(
-        os.path.join(dir_exp, name_exp, "inference-" + name_ckpt),
+        weights_path,
         map_location=torch.device(device),
         weights_only=False,
     ).to(device)
