@@ -40,6 +40,8 @@ predict:
   input_source:
     type: zarr_split
     split: test
+  # the E2 box model runs on one GPU (the base lane's 4 is the global o1280 setting)
+  num_gpus_per_model: 1
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   steps: [12, 24, 48, 72]
   # The 30 dates of 2023 (00 UTC) of the E2 seed-locked wide reads (CA300 leads, DB300 vs
