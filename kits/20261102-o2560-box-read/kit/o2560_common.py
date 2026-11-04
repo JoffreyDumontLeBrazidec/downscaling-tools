@@ -142,7 +142,8 @@ def octahedral_ring_counts(lat: np.ndarray, lon: np.ndarray, n: int = O_N, check
 
 def area_weights(lat: np.ndarray, lon: np.ndarray, n: int = O_N, check: bool = True) -> np.ndarray:
     """Point area weight on the octahedral grid: cos(lat) / (points on the full ring). Summed over a full ring it is
-    cos(lat); summing cos(lat) per point instead would over-weight the high-latitude rings, which hold fewer points."""
+    cos(lat); cos(lat) per point instead over-weights the low latitudes, whose rings hold more points (E2 box: weighted
+    mean latitude 30.6 N instead of 35.5 N)."""
     return np.cos(np.deg2rad(lat)) / octahedral_ring_counts(lat, lon, n, check)
 
 
