@@ -92,6 +92,37 @@ def _to_member_point_weather(da: xr.DataArray, ds: xr.Dataset, *, label: str) ->
     return da.transpose("member", "grid_point_hres", "weather_state")
 
 
+def ring_area_weights(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Area weight of each point of a grid stored as latitude rings (reduced Gaussian such as O1280/O2560, or regular):
+    cos(lat) x the longitude spacing of the point's own ring. On a reduced grid the high-latitude rings hold fewer,
+    wider points (octahedral ring i: 4 i + 16 points), so cos(lat) per point alone over-weights them in an area mean
+    (o2560 box read review, 2 Nov 2026). The spacing is measured on the points given, so a box cut of a global grid
+    gets the same per-point weights as the global grid; on a regular grid every ring has the same spacing and the
+    weights reduce to cos(lat). A ring with a single point takes the spacing of the nearest ring that has two or more."""
+    lat = np.asarray(lat, dtype=np.float64).reshape(-1)
+    lon = np.mod(np.asarray(lon, dtype=np.float64).reshape(-1), 360.0)
+    rings, inv = np.unique(np.round(lat, 6), return_inverse=True)
+    order = np.lexsort((lon, inv))
+    inv_s, lon_s = inv[order], lon[order]
+    same = inv_s[1:] == inv_s[:-1]
+    d = np.diff(lon_s)
+    dlon = np.full(rings.size, np.nan)
+    starts = np.flatnonzero(np.r_[True, ~same])
+    ends = np.r_[starts[1:], inv_s.size]
+    for r, a, b in zip(inv_s[starts], starts, ends):
+        if b - a >= 2:
+            g = d[a:b - 1]
+            g = g[g > 1e-9]
+            if g.size:
+                dlon[r] = float(np.median(g))   # median: a box cut leaves one wide gap per ring
+    ok = np.isfinite(dlon)
+    if not ok.any():
+        return np.cos(np.deg2rad(lat))
+    if not ok.all():
+        dlon[~ok] = np.interp(rings[~ok], rings[ok], dlon[ok])
+    return np.cos(np.deg2rad(lat)) * dlon[inv]
+
+
 def _area_weights(ds: xr.Dataset, n_points: int) -> np.ndarray:
     def grid_point_values(da: xr.DataArray) -> np.ndarray | None:
         if da.size == n_points:
@@ -110,6 +141,9 @@ def _area_weights(ds: xr.Dataset, n_points: int) -> np.ndarray:
         lat_da = ds["lat_hres"]
         lat_vals = grid_point_values(lat_da)
         if lat_vals is not None:
+            lon_vals = grid_point_values(ds["lon_hres"]) if "lon_hres" in ds.variables else None
+            if lon_vals is not None:
+                return _normalize_weights(ring_area_weights(lat_vals, lon_vals))
             return _normalize_weights(np.cos(np.deg2rad(lat_vals)))
         if lat_da.ndim == 1 and "lon_hres" in ds.variables and ds["lon_hres"].ndim == 1:
             lat_grid, _ = xr.broadcast(lat_da, ds["lon_hres"])
