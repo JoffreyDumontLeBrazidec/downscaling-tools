@@ -110,15 +110,22 @@ def _point_area_weights(lat: np.ndarray, lon: np.ndarray | None) -> np.ndarray:
     if lon.size != lat.size:
         return coslat
     rings, inverse = np.unique(np.round(lat, 6), return_inverse=True)
+    # one sort by (ring, lon), then per-ring median of positive gaps: O(n log n), fine on global O2560 (6.6M points)
+    order = np.lexsort((lon, inverse))
+    ring_sorted = inverse[order]
+    gaps = np.diff(lon[order])
+    same = (ring_sorted[1:] == ring_sorted[:-1]) & (gaps > 1e-9)
+    g_ring = ring_sorted[1:][same]
+    g_val = gaps[same]
     dlon = np.full(rings.size, np.nan)
-    for i in range(rings.size):
-        lo = np.sort(lon[inverse == i])
-        if lo.size < 2:
-            continue
-        gaps = np.diff(lo)
-        gaps = gaps[gaps > 1e-9]
-        if gaps.size:
-            dlon[i] = float(np.median(gaps))
+    if g_val.size:
+        o2 = np.lexsort((g_val, g_ring))
+        g_ring, g_val = g_ring[o2], g_val[o2]
+        starts = np.flatnonzero(np.r_[True, g_ring[1:] != g_ring[:-1]])
+        counts = np.diff(np.r_[starts, g_ring.size])
+        lo = g_val[starts + (counts - 1) // 2]
+        hi = g_val[starts + counts // 2]
+        dlon[g_ring[starts]] = 0.5 * (lo + hi)
     ok = np.isfinite(dlon)
     if not ok.any():
         return coslat

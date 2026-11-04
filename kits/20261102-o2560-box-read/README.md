@@ -79,7 +79,7 @@ The 1-degree edge strip of the box IS excluded from every score below (points wi
 longitude spacing of every ring, so a wrong ring index fails instead of weighting silently. Note for Joffrey: the
 repository's `eval/evaluators/surface/core/compute.py:_area_weights` used cos(lat) per point, which over-weights the
 low latitudes (weighted mean latitude of the box 30.6 N instead of 35.5 N); fixed on downscaling-tools branch
-`claude/area-weights-ring` (4 Nov 2026), not in this kit's pinned scoring copy (4e659c3, used only by the judge).
+`claude/project-thread-35eulk (PR #16)` (4 Nov 2026), not in this kit's pinned scoring copy (4e659c3, used only by the judge).
 
 1. Per-bin amplitude spectra, full field and residual against the o2560 truth, and the input's ratio: `box_spectra` of
    downscaling-tools 4e659c3 at 0.035 degrees (the o2560 spacing), ws tp 10u 10v 2t msl, pooled over 12 dates x 10

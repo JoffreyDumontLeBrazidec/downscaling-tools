@@ -59,3 +59,22 @@ def test_area_weights_uses_lon_from_dataset():
     ds2 = xr.Dataset({"lat_hres": ("grid_point_hres", lat)})
     c = np.cos(np.deg2rad(lat))
     assert np.allclose(_area_weights(ds2, n), c / c.sum())
+
+
+def test_vectorised_ring_median_matches_loop_and_single_point_ring():
+    rng = np.random.default_rng(0)
+    lat, lon = octahedral(30)
+    keep = rng.random(lat.size) > 0.2
+    lat, lon = lat[keep], lon[keep]
+    lat = np.r_[lat, 89.99]; lon = np.r_[lon, 10.0]   # a ring with one point takes the nearest ring's spacing
+    w = _point_area_weights(lat, lon)
+    rings = np.unique(np.round(lat, 6))
+    for la in rings:
+        m = np.round(lat, 6) == la
+        lo = np.sort(np.mod(lon[m], 360)); g = np.diff(lo); g = g[g > 1e-9]
+        if g.size:
+            assert np.allclose(w[m], np.cos(np.deg2rad(lat[m])) * np.median(g))
+    near = rings[np.argmin(np.abs(rings[:-1] - 89.99))]
+    m = np.round(lat, 6) == near
+    lo = np.sort(lon[m]); g = np.diff(lo); g = g[g > 1e-9]
+    assert np.isclose(w[-1], np.cos(np.deg2rad(89.99)) * np.median(g))
