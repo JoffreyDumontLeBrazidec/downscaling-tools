@@ -28,7 +28,7 @@ def plot_pdfs(results_dir, meta, regions):
     names = {"imerg": "IMERG Final V07B", "truth": "Truth", "input": "Input (interpolated)",
              "model": f"{meta.get('run_label', 'model')} (all members)"}
     with eval_style():
-        fig, axes = plt.subplots(len(regions), len(ul), figsize=(3.3 * len(ul), 3.0 * len(regions)),
+        fig, axes = plt.subplots(len(regions), len(ul), figsize=(3.9 * len(ul), 3.0 * len(regions)),
                                  squeeze=False, sharex=True, sharey=True)
         for i, reg in enumerate(regions):
             for j, lead in enumerate(ul):

@@ -18,7 +18,7 @@ R_EARTH_KM = 6371.0
 ROW_KIND = {"model": "ensemble", "ens": "ensemble", "truth": "single field", "input": "single field",
             "hres": "single field"}
 SCORES = ("pmin_crps", "pmin_err", "pmin_mae", "pos_err_member_km", "pos_err_mean_km", "pos_spread_km")
-VERDICT_NOTE = "These are {n} storm cases on {d} dates: cases, not a verdict."
+VERDICT_NOTE = "These are {n} storm cases on {d} {dates}: cases, not a verdict."
 
 
 def gc_km(lat1, lon1, lat2, lon2):
@@ -242,7 +242,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "noaa_csv": str(noaa_path) if noaa_path else None,
             "best_track_source": sorted(set(bt.source)) if "source" in bt else None,
             "cache_meta": cache_meta, "n_cases": n_cases, "n_dates": n_dates,
-            "events": sorted(set(df.event)), "note": VERDICT_NOTE.format(n=n_cases, d=n_dates), "log": log}
+            "events": sorted(set(df.event)), "note": VERDICT_NOTE.format(n=n_cases, d=n_dates, dates="date" if n_dates == 1 else "dates"), "log": log}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
     write_summary_md(summ, pr, meta, output_dir / "summary.md")
     return output_dir
