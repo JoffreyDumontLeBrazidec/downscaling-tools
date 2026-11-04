@@ -306,3 +306,31 @@ def test_flow_map_note_flags_a_different_start_sigma():
     note = judge.flow_map_sampler_note(FLOW_MAP_JSON, EDM30_JSON.replace('"sigma_max": 80.0', '"sigma_max": 100000.0'))
     assert "start sigmas differ" in note
     assert judge.flow_map_sampler_note('{"num_steps": 30}', '{"num_steps": 40}') is None
+
+
+def test_draw_maps_skips_variables_the_files_lack(tmp_path, monkeypatch):
+    """A 2t-only run gets the 2t maps and no wind10m map; the missing wind no longer stops the read."""
+    import netCDF4 as nc
+
+    from eval.evaluators.zoom_maps.core import plot_member_wind_maps as pm
+
+    runs = {}
+    for lab in ("A", "B"):
+        d = tmp_path / lab
+        d.mkdir()
+        with nc.Dataset(str(d / "predictions_20230226_step024.nc"), "w") as ds:
+            ds.createDimension("weather_state", 1)
+            ws = ds.createVariable("weather_state", str, ("weather_state",))
+            ws[0] = "2t"
+        runs[lab] = d
+    drawn = []
+
+    def fake_run(args):
+        drawn.append((args.variable, args.field))
+        (tmp_path / "maps" / "alps" / f"x_{args.variable}_{args.field}.png").write_text("png")
+        return 0
+
+    monkeypatch.setattr(pm, "run", fake_run)
+    pngs, failure = judge.draw_maps(runs, tmp_path / "maps", date="20230226", step=24, member=1,
+                                    extent=[43.0, 49.0, 4.0, 16.0], tag="alps")
+    assert failure is None and drawn == [("2t", "value"), ("2t", "fine")] and len(pngs) == 2

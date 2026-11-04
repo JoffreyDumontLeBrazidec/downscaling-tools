@@ -58,6 +58,7 @@ SUMMARY = "Judge a run against its reference with the run-judging protocol and w
 PROTOCOL_EVALUATORS = ["shape", "tc_structure", "texture", "wind_extremes", "box_spectra",
                        "probabilistic"]
 MAP_VARIABLES = ["wind10m", "2t"]
+MAP_STATES = {"wind10m": ("10u", "10v"), "2t": ("2t",)}   # weather states each map variable needs
 MAP_FIELDS = ["value", "fine"]
 SPECTRA_TABLE_VARS = ["10u", "2t"]
 SCORE_VARS = ["10u", "10v", "10ff", "2t", "msl", "tp"]
@@ -334,12 +335,27 @@ def draw_maps(runs: dict[str, Path], out_dir: Path, *, date: str, step: int, mem
     missing = [lab for lab, d in runs.items() if not (d / f"predictions_{date}_step{step:03d}.nc").exists()]
     if missing:
         return [], f"no predictions_{date}_step{step:03d}.nc for {', '.join(missing)}"
+    import netCDF4
+
+    from eval.evaluators.box_spectra.runner import _decode_states
+
     lat_min, lat_max, lon_min, lon_max = extent
     box_dir = out_dir / tag
     box_dir.mkdir(parents=True, exist_ok=True)
     before = set(box_dir.glob("*.png"))
+    # a map variable is drawn only when every run's file carries its states (a 2t-only run has no wind10m map)
+    states = None
+    for d in runs.values():
+        with netCDF4.Dataset(str(d / f"predictions_{date}_step{step:03d}.nc")) as ds:
+            have = set(_decode_states(ds["weather_state"]))
+        states = have if states is None else states & have
+    variables = [v for v in MAP_VARIABLES if set(MAP_STATES[v]) <= states]
+    if not variables:
+        return [], f"the files carry none of the map variables {MAP_VARIABLES} (states {sorted(states)})"
+    if len(variables) < len(MAP_VARIABLES):
+        LOG.info("judge: zoom_maps %s: drawing %s only (the files carry %s)", tag, variables, sorted(states))
     try:
-        for var in MAP_VARIABLES:
+        for var in variables:
             for field in MAP_FIELDS:
                 argv = [a for lab, d in runs.items() for a in ("--run", f"{lab}={d}")]
                 argv += ["--date", date, "--step", str(step), "--member", str(member),
@@ -347,7 +363,7 @@ def draw_maps(runs: dict[str, Path], out_dir: Path, *, date: str, step: int, mem
                          "--region-tag", tag, "--variable", var, "--field", field,
                          "--output-dir", str(box_dir)]
                 zm_run(build_arg_parser().parse_args(argv))
-    except Exception as exc:  # noqa: BLE001 - reported in the read
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - reported in the read; zoom_maps exits on bad input
         return [], f"zoom_maps failed: {exc}"
     pngs = sorted(set(box_dir.glob("*.png")) - before) or sorted(box_dir.glob("*.png"))
     return [str(p) for p in pngs], None
