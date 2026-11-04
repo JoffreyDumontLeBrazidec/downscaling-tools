@@ -73,19 +73,44 @@ MIN_SPAN_DEG = 12.0
 # source points (for example the edge of a local domain) and are not drawn.
 MAX_EDGE_RATIO = 6.0
 
-DEFAULT_TITLES = {
-    "eefo": "Input (EEFO O320)",
-    "enfo": "Truth (operational ENFO O1280, same member number)",
-    "control": "Model, control arm (O1280)",
-    "guided": "Model, guided arm (O1280)",
-}
+def default_titles(lres: str = "O320", hres: str = "O1280") -> dict[str, str]:
+    """Preset panel titles; lres / hres name the input and output grids (O320 -> O1280 by default)."""
+    return {
+        "eefo": f"Input (EEFO {lres})",
+        "enfo": f"Truth (operational ENFO {hres}, same member number)",
+        "control": f"Model, control arm ({hres})",
+        "guided": f"Model, guided arm ({hres})",
+    }
 
 
-def default_title(key: str) -> str:
+DEFAULT_TITLES = default_titles()
+
+
+def default_title(key: str, hres: str = "O1280") -> str:
     """Panel title for a source key without an explicit --title."""
     if key.lower() == "model":
-        return "Model (O1280)"
-    return DEFAULT_TITLES.get(key, f"Model, {key} (O1280)")
+        return f"Model ({hres})"
+    return default_titles(hres=hres).get(key, f"Model, {key} ({hres})")
+
+
+def octahedral_name(n_points: int) -> str | None:
+    """'O<N>' when n_points is the size of a global octahedral grid (4 N (N + 9) points), else None
+    (a regional file, for example the E2 box, does not tell its grid by its size)."""
+    root = int(round((81 + int(n_points)) ** 0.5))
+    if root * root != 81 + int(n_points) or (root - 9) % 2:
+        return None
+    n = (root - 9) // 2
+    return f"O{n}" if n > 0 and 4 * n * (n + 9) == int(n_points) else None
+
+
+def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int) -> tuple[dict[str, str], str]:
+    """Titles of the panels and the output grid name. The grid names come from the file's point
+    counts when the file is global, else the O320 -> O1280 defaults; '{lres}' and '{hres}' in a
+    --title are replaced by them."""
+    lres = octahedral_name(n_lres) or "O320"
+    hres = octahedral_name(n_hres) or "O1280"
+    user = {k: v.replace("{lres}", lres).replace("{hres}", hres) for k, v in user_titles.items()}
+    return {**default_titles(lres, hres), **user}, hres
 
 # Renderable fields. Each entry fixes the source weather states, the filename
 # token and the fixed colour scale, so adding a field is a table entry rather
@@ -202,7 +227,9 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--title", action="append", default=[], metavar="KEY=TITLE",
-        help="Override the first title line for a panel key (defaults: eefo/enfo/control/guided presets, else KEY · O1280).",
+        help="Override the first title line for a panel key (defaults: eefo/enfo/control/guided presets, else "
+             "KEY with the output grid, read from a global file's size, else O1280). '{lres}' / '{hres}' in "
+             "TITLE become the input / output grid names.",
     )
     p.add_argument("--trajectory-npz", action="append", default=[], metavar="KEY=FILE",
                    help="Opt-in saved seeding_fields.npz comparison; repeat for three models, with target from the first.")
@@ -729,7 +756,8 @@ def run_member_grid(args: argparse.Namespace) -> int:
 
     runs = _parse_kv(args.run, "run")
     gribs = _parse_kv(args.grib, "grib")
-    titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
+    user_titles = _parse_kv(args.title, "title")
+    titles, hres = panel_titles(user_titles, 0, 0)
     if not runs:
         raise SystemExit("--members needs at least one --run panel (GRIB files hold one member).")
     if gribs:
@@ -757,6 +785,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
         if not members:
             members = here
         if i == 0:
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                DEFAULT_LRES_RES, here,
@@ -773,7 +802,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render_grid(
-            out_path=out_path, title=titles.get(key, default_title(key)),
+            out_path=out_path, title=titles.get(key, default_title(key, hres)),
             members=member_labels, values=values, date=args.date, time=args.time,
             step=args.step,
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
@@ -809,7 +838,8 @@ def run(args: argparse.Namespace) -> int:
 
     runs = _parse_kv(args.run, "run")
     gribs = _parse_kv(args.grib, "grib")
-    titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
+    user_titles = _parse_kv(args.title, "title")
+    titles, hres = panel_titles(user_titles, 0, 0)
     if not runs and not gribs:
         raise SystemExit("Nothing to plot: give at least one --run or --grib panel.")
     extent, box_line = resolve_extent(args)
@@ -826,6 +856,7 @@ def run(args: argparse.Namespace) -> int:
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
         if i == 0:
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                _field(_member_slice(ds["x"], args.member), states, spec), DEFAULT_LRES_RES))
@@ -849,7 +880,7 @@ def run(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render(
-            out_path=out_path, title=titles.get(key, default_title(key)),
+            out_path=out_path, title=titles.get(key, default_title(key, hres)),
             member=args.member, date=args.date, time=args.time, step=args.step,
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,
