@@ -94,9 +94,10 @@ def _to_member_point_weather(da: xr.DataArray, ds: xr.Dataset, *, label: str) ->
 
 def ring_area_weights(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
     """Area weight of each point of a grid stored as latitude rings (reduced Gaussian such as O1280/O2560, or regular):
-    cos(lat) x the longitude spacing of the point's own ring. On a reduced grid the high-latitude rings hold fewer,
-    wider points (octahedral ring i: 4 i + 16 points), so cos(lat) per point alone over-weights them in an area mean
-    (o2560 box read review, 2 Nov 2026). The spacing is measured on the points given, so a box cut of a global grid
+    cos(lat) x the longitude spacing of the point's own ring. On a reduced grid the rings near the equator hold more,
+    narrower points (octahedral ring i from the pole: 4 i + 16 points), so cos(lat) per point alone over-weights the low
+    latitudes in an area mean (o2560 box read review, 2 Nov 2026; on the E2 box 10-70 N the weighted mean latitude moves
+    from 30.6 to 35.5 N and the weight north of 35 N from 35 % to 48 %). The spacing is measured on the points given, so a box cut of a global grid
     gets the same per-point weights as the global grid; on a regular grid every ring has the same spacing and the
     weights reduce to cos(lat). A ring with a single point takes the spacing of the nearest ring that has two or more."""
     lat = np.asarray(lat, dtype=np.float64).reshape(-1)
