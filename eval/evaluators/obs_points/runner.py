@@ -14,6 +14,9 @@ from eval.evaluators.obs_points.core.stations import (
     StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache,
 )
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
+from eval.shared.provenance import (
+    ENSEMBLE_RULE, SINGLE_FIELD, ensemble_construction, is_single_input, members_differ, provenance,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -32,7 +35,12 @@ DEFAULT_RADII = (0.0, 18.0, 36.0)  # km, tp only; 0 = the nearest grid point
 LAPSE_RATE = 0.0065  # K/m, quaver
 MM = 1000.0
 
+# Kind of each row as it is written into the tables. The input and the truth are ensembles when the file carries
+# their members (x_interp_members / y_members, or a member axis on x_interp / y whose members differ, as the
+# ENS-member files of 4 Nov 2026 do); otherwise single fields, whose "fair CRPS" is the MAE of one field and is
+# not comparable with an ensemble's (audit 5 Nov 2026, D4; rule 34(e)). HRES (STVL) is always a single field.
 ROW_KIND = {"model": "ensemble", "input": "single field", "truth": "single field", "hres": "single field"}
+ENSEMBLE_KIND = {"input": "ensemble (input members)", "truth": "ensemble (truth members)"}
 
 
 def rank_seed(base: dict, row: str) -> int:
@@ -44,10 +52,37 @@ def rank_seed(base: dict, row: str) -> int:
     return zlib.crc32(key.encode())
 
 
-def read_fields(path, variables):
-    """lat, lon (-180..180), {var: {"truth": (n,), "input": (n,), "model": (M, n)}} in observation units:
-    2t K, 10ff m/s (from 10u/10v), msl Pa, tp mm (file metres x 1000, clipped at 0). Truth and input take
-    member 0 when they carry a member axis."""
+def file_provenance(ds, n_model: int) -> dict:
+    """What the prediction file says about its rows: the model ensemble's construction (file attributes
+    ``member_mode`` / ``competitor_row`` of the member kit, ``source_bundle`` of eval.cli predict, or whether the
+    per-member inputs differ) and which of the input and truth rows come as ensembles. ``ds`` is an open
+    netCDF4.Dataset."""
+    attrs = {k: ds.getncattr(k) for k in ds.ncattrs()}
+    n = ds["lat_hres"].size
+    ens, differ = {}, {}
+    for row, names in (("input", ("x_interp_members", "x_interp")), ("truth", ("y_members", "y"))):
+        differ[row] = None  # None: the file carries one field only (no member axis, or members fewer than M)
+        for name in names:
+            if name in ds.variables:
+                a = np.asarray(ds[name][0], np.float64).reshape(-1, n, len(ds.dimensions["weather_state"]))
+                if a.shape[0] == n_model and n_model > 1:
+                    differ[row] = members_differ(a)
+                break
+        ens[row] = bool(differ[row])
+    bundles = None
+    if "source_bundle" in ds.variables:
+        bundles = [str(b) for b in np.asarray(ds["source_bundle"][:]).reshape(-1)]
+    return {"attrs": attrs, "ensemble_rows": ens,
+            "model": ensemble_construction(attrs, n_model, input_members_differ=differ["input"],
+                                           source_bundles=bundles)}
+
+
+def read_fields(path, variables, *, ensembles: bool = True):
+    """lat, lon (-180..180), {var: {"truth": (n,) or (M, n), "input": (n,) or (M, n), "model": (M, n)}} in
+    observation units: 2t K, 10ff m/s (from 10u/10v), msl Pa, tp mm (file metres x 1000, clipped at 0), and the
+    file's provenance (``file_provenance``). The input and the truth come as ensembles when the file carries
+    their members (``x_interp_members`` / ``y_members``, or a member axis on ``x_interp`` / ``y`` with M members
+    that differ); with ``ensembles=False``, or otherwise, member 0 (the control)."""
     import netCDF4
 
     out = {}
@@ -57,13 +92,19 @@ def read_fields(path, variables):
         lat = np.asarray(ds["lat_hres"][:], np.float64)
         lon = np.asarray(ds["lon_hres"][:], np.float64)
         n = lat.size
+        prov = file_provenance(ds, int(ds["y_pred"].shape[1]))
+        if not ensembles:
+            prov["ensemble_rows"] = {"input": False, "truth": False}
+        src = {"model": "y_pred",
+               "input": "x_interp_members" if "x_interp_members" in ds.variables else "x_interp",
+               "truth": "y_members" if "y_members" in ds.variables else "y"}
 
-        def get(name, ch):
-            a = np.asarray(ds[name][0, ..., ws.index(ch)], np.float64).reshape(-1, n)
-            return a if name == "y_pred" else a[0]
+        def get(row, ch):
+            a = np.asarray(ds[src[row]][0, ..., ws.index(ch)], np.float64).reshape(-1, n)
+            return a if row == "model" or prov["ensemble_rows"].get(row) else a[0]
 
         def triple(ch):
-            return {"truth": get("y", ch), "input": get("x_interp", ch), "model": get("y_pred", ch)}
+            return {"truth": get("truth", ch), "input": get("input", ch), "model": get("model", ch)}
 
         for v in variables:
             if v == "10ff":
@@ -75,7 +116,16 @@ def read_fields(path, variables):
                 if v == "tp":
                     out[v] = {k: np.clip(a, 0.0, None) * MM for k, a in out[v].items()}
     lon = np.where(lon > 180.0, lon - 360.0, lon)
-    return lat, lon, out
+    return lat, lon, out, prov
+
+
+def row_kinds(prov: dict) -> dict:
+    """Row name -> kind written into the tables, for one file's provenance."""
+    kinds = dict(ROW_KIND)
+    for row, is_ens in prov.get("ensemble_rows", {}).items():
+        if is_ens:
+            kinds[row] = ENSEMBLE_KIND[row]
+    return kinds
 
 
 def _hres_at(hres, date, lead, o):
@@ -129,8 +179,8 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
         return []
     ov, opv = j.obs.to_numpy(np.float64), j.obs_prev.to_numpy(np.float64)
     out = []
-    for row, f in (("truth", fields["truth"]), ("input", fields["input"]), ("model", fields["model"].mean(0))):
-        x = f[idx]
+    for row, f in (("truth", fields["truth"]), ("input", fields["input"]), ("model", fields["model"])):
+        x = (f.mean(0) if f.ndim == 2 else f)[idx]
         if x.std() == 0 or ov.std() == 0 or opv.std() == 0:
             log.append(f"window audit skipped for {date} +{lead} h {row}: a constant series")
             continue
@@ -140,14 +190,18 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
     return out
 
 
-def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None, hres_pool=None):
+def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None, hres_pool=None,
+                kinds=None):
     """Rows of one variable, one date and one lead. The station sample is the intersection over rows
     (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations.
+    ``kinds`` (row -> kind, ``row_kinds``) labels each row; the input and truth rows are ensembles (M, n)
+    when the file carried their members, else single fields (n,).
     With ``seeps_clim`` (24 h tp) the sample is restricted to stations with a SEEPS climatology whose dry-day
     probability is in [0.1, 0.85) (quaver's seeps_filter), and every row gets a ``seeps`` column: SEEPS of
     each member at each station, averaged over members and stations."""
     import pandas as pd
 
+    kinds = kinds or ROW_KIND
     valid = (pd.Timestamp(date) + pd.Timedelta(hours=int(lead))).strftime("%Y%m%d%H")
     o = obs_v[obs_v.valid == valid]
     clim = None
@@ -209,7 +263,7 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                     extra = {}
                     if clim is not None:
                         extra["seeps"] = _wmean(seeps(ens, ov[m], clim[0][m], clim[1][m], clim[2][m]).mean(0), w)
-                    rows.append({**base, "row": k, "kind": ROW_KIND[k],
+                    rows.append({**base, "row": k, "kind": kinds[k],
                                  **ensemble_scores(ens, ov[m], thresholds, weights=w), **extra})
                     if ens.shape[0] > 1:
                         counts = rank_counts(ens, ov[m], seed=rank_seed(base, k))
@@ -233,6 +287,7 @@ def resolve_config(eval_config: dict) -> dict:
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
+        "competitor_ensembles": bool(eval_config.get("competitor_ensembles", True)),
         "seeps": bool(eval_config.get("seeps", True)),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
@@ -266,15 +321,21 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     members = set()
     stations = defaultdict(list)
     matcher = None
+    constructions, kinds_seen = set(), {}
     prev = {}  # tp of the previous lead of the same date, for the 24 h windows of SEEPS
     for p in preds:
-        lat, lon, fields = read_fields(p.path, [v for v in cfg["vars"] if v in obs])
+        lat, lon, fields, prov = read_fields(p.path, [v for v in cfg["vars"] if v in obs],
+                                             ensembles=cfg["competitor_ensembles"])
+        kinds = row_kinds(prov)
+        constructions.add(prov["model"])
+        for row, kind in kinds.items():
+            kinds_seen.setdefault(row, set()).add(kind)
         if matcher is None or not matcher.same_grid(lat, lon):
             matcher = StationMatcher(lat, lon)
         for v, f in fields.items():
             members.add(int(f["model"].shape[0]))
             r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,
-                                    hres_pool=hres_pool)
+                                    hres_pool=hres_pool, kinds=kinds)
             if v == "tp":
                 window += tp_window_check(f, obs[v], matcher, date=p.date, lead=p.step, cfg=cfg, log=log)
             rows += r
@@ -293,7 +354,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             if before is not None:
                 f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"]}
                 r, k, nst = score_valid("tp24", f24, obs["tp24"], None, matcher, date=p.date, lead=p.step,
-                                        cfg=cfg, seeps_clim=seeps_clim)
+                                        cfg=cfg, seeps_clim=seeps_clim, kinds=kinds)
                 rows += r
                 ranks += k
                 stations[f"tp24 +{p.step:03d}"].append(nst)
@@ -305,6 +366,23 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_points: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_points: no station sample reached min_stations; nothing scored")
+    if len(constructions) > 1:
+        log.append(f"WARN the files disagree on how the model ensemble was built: {sorted(constructions)}")
+    construction = sorted(constructions)[0]
+    if is_single_input(construction):
+        log.append(f"WARN model row = {construction}. {ENSEMBLE_RULE}")
+    for row, ks in kinds_seen.items():
+        if len(ks) > 1:
+            log.append(f"WARN row {row} is an ensemble in some files and a single field in others: {sorted(ks)}")
+    row_kind = {row: sorted(ks)[0] for row, ks in kinds_seen.items()}
+    competitor = {row: (ENSEMBLE_KIND[row] if row_kind[row].startswith("ensemble") else SINGLE_FIELD)
+                  for row in ("input", "truth") if row in row_kind}
+    if "hres" in set(r["row"] for r in rows):
+        competitor["hres"] = SINGLE_FIELD
+    for row in ("input", "truth"):
+        if competitor.get(row, "").startswith("single field"):
+            log.append(f"WARN the {row} row is a single field (the files carry no {row} members): its fair CRPS is "
+                       "the MAE of one field; compare it with the model's ensemble mean only (rule 34(e))")
 
     df = pd.DataFrame(rows)
     df.to_csv(output_dir / "scores_per_date.csv", index=False)
@@ -335,7 +413,21 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "config": {k: (list(v) if isinstance(v, tuple) else v) for k, v in cfg.items()},
         "members": sorted(members), "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}),
         "files": files, "stations_per_file": {k: v for k, v in sorted(stations.items())},
-        "rows": {k: ROW_KIND[k] for k in sorted(set(df.row))},
+        "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
+        "provenance": provenance(
+            verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest O1280 point "
+                            f"within {cfg['max_km']:g} km; 2t lapse {cfg['lapse_rate']:g} K/m on the 'lapse' variant)",
+            against_observations=True,
+            ensemble=construction, competitor_rows=competitor,
+            weight_form=("unweighted mean over stations" if cfg["weighting"] == "none"
+                         else "quaver station-density weights (weighted mean over stations)"),
+            spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
+                        "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M); SE = over dates",
+            domain_bounds={**cfg["regions"], **{k: f"|h_o1280 - h_station| in {v} m"
+                                                for k, v in cfg["height_classes"].items()}},
+            dates=sorted({p.date for p in preds}),
+            leads=sorted({p.step for p in preds}), members=sorted(members),
+        ),
         "warnings": log,
     }
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))

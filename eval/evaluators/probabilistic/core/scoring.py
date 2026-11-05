@@ -370,6 +370,29 @@ def _score_band(
     return out
 
 
+DOMAIN_BOUNDS = {"global": None, "all": None, "n.hem": [20.0, 90.0, -180.0, 180.0],
+                 "tropics": [-20.0, 20.0, -180.0, 180.0], "s.hem": [-90.0, -20.0, -180.0, 180.0],
+                 "europe": [35.0, 75.0, -25.0, 45.0]}
+
+
+def _construction(ds: xr.Dataset, n_members: int, x_in: xr.DataArray | None) -> str:
+    """How the file's members were made (``eval.shared.provenance.ensemble_construction``): from its attributes,
+    its per-member input bundles, or whether its input members differ."""
+    from eval.shared.provenance import ensemble_construction, members_differ
+
+    differ = None
+    if x_in is None and INPUT_VARIABLE in ds:
+        da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
+        if int(da.sizes["member"]) == n_members and n_members > 1:
+            differ = members_differ(np.asarray(da.values))
+    elif x_in is not None:
+        differ = members_differ(np.asarray(x_in.values)) if int(x_in.sizes["member"]) == n_members else None
+    bundles = None
+    if "source_bundle" in ds.variables:
+        bundles = [str(b) for b in np.asarray(ds["source_bundle"].values).reshape(-1)]
+    return ensemble_construction(dict(ds.attrs), n_members, input_members_differ=differ, source_bundles=bundles)
+
+
 def _input_members(ds: xr.Dataset, include_input: bool) -> tuple[xr.DataArray | None, dict[str, Any]]:
     """The low-resolution input members on the output grid, and a note for the summary."""
     if not include_input:
@@ -456,6 +479,7 @@ def compute_probabilistic_scores(
     missing_fields: set[str] = set()
     clipped_fields: set[str] = set()
     input_note: dict[str, Any] = {}
+    constructions: set[str] = set()
     operator: LowPassOperator | None = None
     operator_key: tuple | None = None
     n_members_seen: set[int] = set()
@@ -471,6 +495,7 @@ def compute_probabilistic_scores(
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
             x_in, note = _input_members(ds, include_input)
             input_note = input_note or note
+            constructions.add(_construction(ds, int(y_pred.sizes["member"]), x_in))
             ws_index = _weather_state_index(ds)
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
@@ -694,6 +719,34 @@ def compute_probabilistic_scores(
                                                  "false-drizzle and missed-rain rates"},
         "input_members": input_note,
         "headline_metrics": _headline_metrics(summary_rows, calibration_rows),
+        "provenance": _provenance(constructions, n_members, domain_names, spread_ddof,
+                                  sorted({str(p.date) for p in pred_files}),
+                                  sorted({int(p.step) for p in pred_files})),
     }
+    for line in payload["provenance"]["warnings"]:
+        LOG.warning("probabilistic: %s", line)
     summary_json.write_text(json.dumps(payload, indent=2, default=str) + "\n")
     return payload
+
+
+def _provenance(constructions: set[str], n_members: int, domain_names, spread_ddof: int, dates, steps) -> dict:
+    """The provenance block of this evaluator (audit 5 Nov 2026): gridded scores against the forecast target,
+    so diagnostic rows under rule 34, never the headline."""
+    from eval.shared.provenance import provenance
+
+    construction = sorted(constructions)[0] if constructions else "unknown"
+    extra = {}
+    if len(constructions) > 1:
+        extra["construction_conflict"] = sorted(constructions)
+    return provenance(
+        verifying_field="gridded forecast target y, member 0 (the control of the target ensemble) on the output "
+                        "grid: a forecast, NOT observations",
+        against_observations=False, ensemble=construction,
+        competitor_rows={"input": "input members' spread only (spread_input_rms); no input CRPS row here"},
+        weight_form="area per point = cos(lat) x longitude spacing of the point's ring (surface.core.compute."
+                    "_point_area_weights; an area_weight variable in the file takes precedence), normalised",
+        spread_form=f"spread = area-weighted mean of the member SD (ddof {int(spread_ddof)}); spread_rms = root of "
+                    "the pooled mean variance; spread_skill_ratio_corrected = spread_rms / rmse_ens_mean x "
+                    "sqrt((M+1)/M) from pooled moments over points and dates; SE = over dates",
+        domain_bounds={d: DOMAIN_BOUNDS.get(str(d).lower()) for d in domain_names},
+        dates=dates, leads=list(steps), members=[int(n_members)], **extra)

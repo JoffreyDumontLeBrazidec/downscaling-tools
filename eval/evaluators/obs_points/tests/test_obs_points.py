@@ -202,6 +202,82 @@ def test_run_writes_tables(two_runs):
     assert meta["run_label"] == "GOOD" and meta["members"] == [5] and meta["cache_dir"].endswith("cache")
     md = (out / "summary.md").read_text()
     assert "single field" in md and "fair CRPS" in md
+    # audit 5 Nov 2026: the file's rows carry no input or truth members, so the competitor rows are single fields
+    # and say so; the model members are draws from one input (x_interp has no member axis), so the provenance
+    # block and the log say "single-input draws"
+    prov = meta["provenance"]
+    assert prov["against_observations"] and prov["status"] == "headline"
+    assert prov["ensemble_construction"].startswith("single-input draws")
+    assert prov["competitor_rows"]["input"].startswith("single field")
+    assert any("single-input" in w or "ONE input" in w for w in prov["warnings"])
+    assert any("single field" in w for w in meta["warnings"])
+    assert prov["date_spacing"]["n_dates"] == 3 and not prov["date_spacing"]["consecutive"]
+    assert "Provenance" in md and "Verifying field: station observations" in md
+
+
+def _write_member_mode(path, date, step, *, members=5, seed=0, truth_members=False):
+    """A file of the ENS-member kind (4 Nov 2026): member k conditioned on input member k, x_interp_members with
+    the members, member_mode=pf; optionally y_members (the truth ensemble)."""
+    _write(path, date, step, noise=1.0, members=members, seed=seed)
+    rng = np.random.default_rng(seed + 7)
+    la, lo = _grid()
+    n = la.size
+    states = ["2t", "10u", "10v", "msl", "tp"]
+    t = _truth(la, lo, date, step)
+    scale = {"2t": 1.0, "10u": 1.0, "10v": 1.0, "msl": 100.0, "tp": 0.001}
+    with nc.Dataset(str(path), "r+") as d:
+        full = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
+        d.createVariable("x_interp_members", "f4", full)
+        for k in range(members):
+            d["x_interp_members"][0, k] = np.stack([t[s] + 0.5 * scale[s] * rng.standard_normal(n) for s in states], -1)
+        if truth_members:
+            d.createVariable("y_members", "f4", full)
+            for k in range(members):
+                d["y_members"][0, k] = np.stack([t[s] + 0.3 * scale[s] * rng.standard_normal(n) for s in states], -1)
+        d.setncattr("member_mode", "pf")
+        d.setncattr("seed_rule", "per_case")
+
+
+def test_input_and_truth_ensembles_are_scored_as_ensembles(tmp_path):
+    """Audit 5 Nov 2026 (D4, rule 34(e)): when the files carry the input members (x_interp_members) and the
+    truth members (y_members), those rows are scored as ensembles on the same stations (fair CRPS, spread, rank
+    counts), labelled so, and the model row is 'one draw per input member'."""
+    cache = _cache(tmp_path)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    for i, date in enumerate(DATES):
+        for step in STEPS:
+            _write_member_mode(pred / f"predictions_{date}_step{step:03d}.nc", date, step, seed=10 * i + step,
+                               truth_members=True)
+    cfg = {"cache": str(cache), "vars": ["2t", "msl"], "max_km": 100.0, "min_stations": 20, "radii": [0],
+           "regions": {"all": None}, "height_classes": {}}
+    out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "out", run_label="M")
+    df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
+    kinds = df.groupby("row").kind.first()
+    assert kinds["model"] == "ensemble" and kinds["hres"] == "single field"
+    assert kinds["input"] == "ensemble (input members)" and kinds["truth"] == "ensemble (truth members)"
+    ens = df[df.row.isin(["input", "truth"])]
+    assert (ens.members == 5).all() and (ens.spread > 0).all()
+    assert not np.allclose(ens.fcrps, ens.mae_mean)  # an ensemble's fair CRPS is not its mean's MAE
+    rk = pd.read_csv(out / "rank_hist.csv")
+    assert set(rk.row) == {"model", "input", "truth"}
+    meta = json.loads((out / "run_meta.json").read_text())
+    prov = meta["provenance"]
+    assert prov["ensemble_construction"].startswith("one draw per input member")
+    assert prov["competitor_rows"]["input"].startswith("ensemble") and prov["competitor_rows"]["truth"].startswith("ensemble")
+    assert not any("single-input" in w for w in prov["warnings"])
+    md = (out / "summary.md").read_text()
+    assert "input (ensemble)" in md and "truth (ensemble)" in md and "hres (single field)" in md
+    # the lapse variant applies the O320 height to every input member
+    lapse = df[(df["var"] == "2t") & (df.variant == "lapse") & (df.row == "input")]
+    assert len(lapse) == len(DATES) * len(STEPS)
+    # the opt-out scores the control fields as before
+    out2 = obs_points.run(pred, {}, {**cfg, "competitor_ensembles": False}, output_dir=tmp_path / "out2")
+    df2 = pd.read_csv(out2 / "scores_per_date.csv", dtype={"date": str})
+    assert set(df2[df2.row.isin(["input", "truth"])].kind) == {"single field"}
+    # the two-run comparison still pairs the model rows
+    tab, checks = compare_runs(df, df2)
+    assert checks["only_in_a"] == 0 and len(tab)
 
 
 def test_plot_from_saved_files_only(two_runs):
@@ -388,7 +464,7 @@ def test_tp_window_check(tmp_path, swap):
     pred = tmp_path / "pred"
     pred.mkdir()
     _write(pred / f"predictions_{date}_step{step:03d}.nc", date, step, noise=0.5, seed=1)
-    la, lo, f = read_fields(pred / f"predictions_{date}_step{step:03d}.nc", ["tp"])
+    la, lo, f, _ = read_fields(pred / f"predictions_{date}_step{step:03d}.nc", ["tp"])
     rng = np.random.default_rng(2)
     n_st = 95
     slat, slon = rng.uniform(31, 59, n_st), rng.uniform(-19, 19, n_st)

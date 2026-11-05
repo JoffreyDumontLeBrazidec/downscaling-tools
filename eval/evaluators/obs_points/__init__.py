@@ -40,10 +40,22 @@ Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
   weighting      none (plain station mean, the default) or station_density (quaver's Gaussian-kernel
                  station-density weights, eval/tools/obs_crps).
   seeps          Score 24 h SEEPS when the cache allows it. Default true.
+  competitor_ensembles
+                 Score the input and the truth as ensembles when the files carry their members
+                 (``x_interp_members`` / ``y_members``, or a member axis on ``x_interp`` / ``y`` whose members
+                 differ, as the ENS-member files of 4 Nov 2026 do). Default true. Otherwise, and with false,
+                 they are the control fields, labelled "single field": their fair CRPS is the MAE of one field
+                 and is compared with the ensemble mean only, never with an ensemble's fair CRPS (rule 34(e)).
   dates, steps   Restrict the files read (YYYYMMDD strings and lead hours).
   plot_regions   Regions drawn in the score figures. Default [all, europe].
 Diagnostic only: no scoreboard row. Point scores at stations penalise realistic but misplaced detail,
 and observation error widens the outer bins of the rank histograms.
+
+Provenance (audit 5 Nov 2026, rule 34(e)): ``run_meta.json`` carries a ``provenance`` block (verifying field,
+how the model ensemble was built from what the file says: one draw per input member, or generative draws from
+one input, which is a single-input diagnostic and not an ensemble; the kind of every competitor row; weight
+form; spread form; region bounds; date spacing) and ``summary.md`` prints it above the tables.
+``eval.cli evaluate`` collects the blocks of a run into ``evaluators/provenance.md``.
 """
 from eval.evaluators.base import no_score
 

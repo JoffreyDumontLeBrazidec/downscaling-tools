@@ -11,7 +11,9 @@
 - **`health/README.md`** — `python -m health audit <ckpt>`: how much of a checkpoint is dead or misused
   (zero-weight and gradient-dead units and heads, scale ladders, stream budget). Run it when a checkpoint lands
   and before any capacity claim; readings, not gates.
-- **`eval/README.md`** — the evaluation harness (`eval.cli`), and the lane-retirement convention.
+- **`eval/README.md`** — the evaluation harness (`eval.cli`), and the lane-retirement convention. Read
+  its "Before quoting a score" section before any number leaves a run: every run writes
+  `evaluators/provenance.md` (verifying field, ensemble construction, weights, spread form, domains, dates).
 - **`eval/config/lanes/README.md`** — how `base:` inheritance works and why the generated
   `_ladder_*` files are not tracked.
 - **Decisions, open work and prior verdicts live in `~/dev/docs`** on hpc-login — a separate

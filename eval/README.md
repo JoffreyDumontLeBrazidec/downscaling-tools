@@ -38,6 +38,33 @@ python -m eval.cli judge --lane o320_o1280 --host jupiter \
     --output-dir <read_dir> --weights "EMA-10000 / EMA-10000"
 ```
 
+### Before quoting a score (audit of 5 Nov 2026)
+
+Every `eval.cli evaluate` run writes `evaluators/provenance.md`: for each scorer, the verifying field, how
+the model ensemble was built, the kind of every competitor row, the area-weight form, the spread form, the
+domain bounds and the date spacing, with the warnings that belong next to the numbers. Quote a score with
+those six facts (docs `epics/misc/20261105_score_and_eval_computation_audit.md`, standing rule 34(e)):
+
+- **Verifying field.** `obs_points`, `obs_imerg` and `tc_obs` score against observations and are the
+  headline. `probabilistic`, `surface` and `spread_proxy` score against the forecast target (`y`, the
+  control member) and are diagnostics; `judge` labels its score table "vs the forecast target (not
+  observations)".
+- **Ensemble construction.** A model ensemble is one generative draw per input ensemble member (owner's
+  rule of 4 Nov 2026). Files with M draws from one input (same `source_bundle` for every member, or an
+  `x_interp` whose members are identical) are reported as "single-input draws" and warned about; their mean,
+  spread and CRPS are a diagnostic, not the model ensemble's.
+- **Competitor rows.** The input and the truth are scored as ensembles when the files carry their members
+  (`x_interp_members` / `y_members`, or a member axis on `x_interp` / `y`); otherwise they are single fields
+  whose "fair CRPS" is the MAE of one field: compare those with the ensemble mean only.
+- **Area weights.** Gridded means weight each point by cos(lat) x the longitude spacing of its ring
+  (`surface.core.compute._point_area_weights`, PR #16). cos(lat) per point on O320/O1280/O2560 points gave
+  35-45 N 46 % of the Europe weight instead of 37 %, and the tropics 47 % of the global weight instead of 34 %.
+  Scores computed before 5 Nov 2026 carry the old form; do not mix them with new ones.
+- **Spread form.** `spread` is the mean member SD; `spread_rms` the root of the pooled mean variance; the
+  corrected spread/skill uses `spread_rms` and sqrt((M+1)/M). Name the one you quote.
+- **Domains and dates.** Three "Europe" boxes exist (gridded 35-75 N 25 W-45 E; stations 35-75 N 12.5 W-42.5 E;
+  obs_imerg 35-60 N 12.5 W-40 E): give the bounds. Consecutive dates are flagged; their SE over dates is optimistic.
+
 ### Scores against observations (`obs`, `obs_points`, `tc_obs`, `obs_imerg`)
 
 Observation references are fetched once on Atos into small cache directories (CSV plus a JSON
