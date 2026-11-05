@@ -1,0 +1,29 @@
+dataloader.limit_batches.training: A=500 B=650
+diagnostics.check_val_every_n_epoch: A=2 B=1
+diagnostics.log.mlflow.run_name: A='db_o2560_crop_100k' B='db_o2560_e2_50k_v2'
+model.compile: A=[{'module': 'anemoi.models.layers.conv.GraphTransformerConv', 'options': {'dynamic': True}}, {'module': 'anemoi.models.layers.normalization.ConditionalLayerNorm', 'options': {'dynamic': True}}] B=[{'module': 'anemoi.models.layers.conv.GraphTransformerConv'}, {'module': 'anemoi.models.layers.normalization.ConditionalLayerNorm', 'options': {'dynamic': False}}]
+system.hardware.num_gpus_per_model: A=1 B=2
+system.hardware.num_nodes: A=2 B=4
+system.input.data: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/assets/' B='/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/'
+system.input.dataset_in_hres: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/hres_o2560.zarr' B='/e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/hres_o2560.zarr'
+system.input.dataset_in_lres: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/in_lres_o1280.zarr' B='/e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/in_lres_o1280.zarr'
+system.input.dataset_out_hres: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/hres_o2560.zarr' B='/e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/hres_o2560.zarr'
+system.input.graph: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/assets/graph/europe_e2_o2560_m600r9rm_graph.pt' B='/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph.pt'
+system.input.grids: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/assets/inter_mat/' B='/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/'
+system.input.residual_statistics: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/residuals_statistics/o2560_dict_6_72.npy' B='/e/data1/jureap-data/ecmwf/users/jdumont/anemoi/residuals_statistics/o2560_dict_6_72.npy'
+system.input.truncation: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/assets/inter_mat/interpol_O1280_to_O2560_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz' B='/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O1280_to_O2560_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz'
+system.input.truncation_inv: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/assets/inter_mat/interpol_O2560_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz' B='/e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O2560_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz'
+system.input.warm_start: A='/ec/res4/scratch/ecm5702/datasets/o1280_o2560_europe_e2/db300_raw_300k.ckpt' B='/e/data1/jureap-data/ecmwf/users/jdumont/outputs/checkpoint_nm50_box/donor_bound_e2/180b9eb507c841f380ab12d64d8b9fc3/anemoi-by_step-epoch_299-step_300000.ckpt'
+training.crop.enabled: A=True B='<absent>'
+training.crop.frac_lat: A=0.5 B='<absent>'
+training.crop.frac_lon: A=0.5 B='<absent>'
+training.crop.halo_km: A=400.0 B='<absent>'
+training.crop.n_lat: A=3 B='<absent>'
+training.crop.n_lon: A=3 B='<absent>'
+training.crop.sample: A='uniform' B='<absent>'
+training.crop.seed: A=None B='<absent>'
+training.lr.iterations: A=100000 B=50000
+training.max_steps: A=100000 B=50000
+training.recompile_limit: A=128 B=32
+27 keys differ, 0 in model/graph/data/split keys outside the allowed list
+CONFIG_COMPARE_PASS

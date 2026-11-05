@@ -1,0 +1,154 @@
+/e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds/lib/python3.12/site-packages/torch/__init__.py:1617: UserWarning: Please use the new API settings to control TF32 behavior, such as torch.backends.cudnn.conv.fp32_precision = 'tf32' or torch.backends.cuda.matmul.fp32_precision = 'ieee'. Old settings, e.g, torch.backends.cuda.matmul.allow_tf32 = True, torch.backends.cudnn.allow_tf32 = True, allowTF32CuDNN() and allowTF32CuBLAS() will be deprecated after Pytorch 2.9. Please see https://pytorch.org/docs/main/notes/cuda.html#tensorfloat-32-tf32-on-ampere-and-later-devices (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:80.)
+  _C._set_float32_matmul_precision(precision)
+2026-11-02 08:20:27,290 INFO    o2560_box_predict MODE dry row B50 step 50000 ckpt /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-ema10000-anemoi-by_step-epoch_076-step_050000.ckpt members 10 cases 1 [('20241112', 72)]
+2026-11-02 08:20:27,297 INFO    o2560_box_predict SEED_RULE per_case base 1234; check derive_draw_seed(1234, 20230101, 12, 0..1) = [4097385291, 2762430685] (expect [4097385291, 2762430685])
+2026-11-02 08:20:27,297 INFO    o2560_box_predict ANEMOI_INFERENCE_NUM_CHUNKS=16 TORCH_COMPILE_DISABLE=1
+2026-11-02 08:20:27,367 INFO    o2560_box_predict anemoi.datasets /e/home/jusers/dumontlebrazidec1/jupiter/dev/anemoi-datasets-hres-precip-ru/src/anemoi/datasets/__init__.py; anemoi.models /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/code/anemoi-core/models/src/anemoi/models/__init__.py; anemoi.training /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/code/anemoi-core/training/src/anemoi/training/__init__.py
+2026-11-02 08:20:32,112 INFO    o2560_box_predict config /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs/db_o2560_read.yaml sha256 a6eb3db61108cc7e51f85c910b9994577737ade498395d3f7c617d0759d1ced3 overrides ['config_validation=False', 'diagnostics.log.mlflow.enabled=False', 'diagnostics.log.tensorboard.enabled=False', 'diagnostics.log.wandb.enabled=False', 'diagnostics.enable_checkpointing=False', 'training.load_weights_only=False', 'training.transfer_learning=False', 'training.run_id=null', 'training.fork_run_id=null', 'training.ema.enabled=false', 'system.hardware.num_gpus_per_model=1', 'system.hardware.num_nodes=1', 'system.hardware.num_gpus_per_node=1', 'dataloader.read_group_size=1']
+2026-11-02 08:20:32,120 INFO    hydra_plugins.anemoi_searchpath.anemoi_searchpath_plugin Prepending current user directory (/tmp) to the search path.
+2026-11-02 08:20:32,120 INFO    hydra_plugins.anemoi_searchpath.anemoi_searchpath_plugin Search path is now: [provider=anemoi-cwd-searchpath-plugin, path=/tmp, provider=hydra, path=pkg://hydra.conf, provider=main, path=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/configs, provider=anemoi-package-searchpath-plugin, path=pkg://anemoi.training/config]
+2026-11-02 08:20:32,234 INFO    o2560_box_predict MODEL_FLAGS class anemoi.models.models.diffusiondownscaler_encoder_processor_decoder.AnemoiD2ModelEncProcDec preconditioning edm freeze_qk_gains True/True/True shard enc/dec heads/heads crop.enabled None graph /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph.pt
+2026-11-02 08:20:32,297 INFO    anemoi.training.train.train Skipping config validation.
+2026-11-02 08:20:32,297 INFO    anemoi.training.train.train Starting from checkpoint: True
+2026-11-02 08:20:32,297 INFO    anemoi.training.train.train Run id: 8b86fa84-6bed-40ff-8130-09a446c94b2b
+2026-11-02 08:20:32,298 INFO    anemoi.training.train.train Checkpoints path: {'root': PosixPath('/e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/_anemoi_output/checkpoint/8b86fa84-6bed-40ff-8130-09a446c94b2b'), 'every_n_epochs': 'anemoi-by_epoch-epoch_{epoch:03d}-step_{step:06d}', 'every_n_train_steps': 'anemoi-by_step-epoch_{epoch:03d}-step_{step:06d}', 'every_n_minutes': 'anemoi-by_time-epoch_{epoch:03d}-step_{step:06d}'}
+2026-11-02 08:20:32,298 INFO    anemoi.training.train.train Plots path: /e/data1/jureap-data/ecmwf/users/jdumont/outputs/o2560_box_read_20261102/_anemoi_output/plots/8b86fa84-6bed-40ff-8130-09a446c94b2b
+2026-11-02 08:20:32,369 INFO    anemoi.training.train.train Creating graph for dataset 'in_lres'
+2026-11-02 08:20:32,492 INFO    anemoi.training.train.train Loading graph data from /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_in_lres.pt
+2026-11-02 08:20:32,655 INFO    anemoi.training.train.train Creating graph for dataset 'in_hres'
+2026-11-02 08:20:32,656 INFO    anemoi.training.train.train Loading graph data from /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_in_hres.pt
+2026-11-02 08:20:32,720 INFO    anemoi.training.train.train Creating graph for dataset 'out_hres'
+2026-11-02 08:20:32,721 INFO    anemoi.training.train.train Loading graph data from /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph_out_hres.pt
+2026-11-02 08:20:32,787 INFO    anemoi.training.data.datamodule Initializing multi-dataset module with datasets: ['in_lres', 'in_hres', 'out_hres']
+2026-11-02 08:20:32,788 WARNING anemoi.training.data.datamodule Falling back rollout to: 0
+2026-11-02 08:20:32,790 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:33,059 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:33,171 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:33,276 INFO    anemoi.training.data.multidataset Timeincrement set to 1 for data with frequency, 3600, and timestep, 3600
+2026-11-02 08:20:33,276 INFO    anemoi.training.data.multidataset Dataset 'in_lres' has 5256 valid indices
+2026-11-02 08:20:33,277 INFO    anemoi.training.data.multidataset Dataset 'in_hres' has 5256 valid indices
+2026-11-02 08:20:33,279 INFO    anemoi.training.data.multidataset Dataset 'out_hres' has 5256 valid indices
+2026-11-02 08:20:33,279 INFO    anemoi.training.data.multidataset MultiDataset has 5256 valid indices after intersection.
+2026-11-02 08:20:33,279 INFO    anemoi.training.data.multidataset MultiDataset initialized with 3 datasets (in_lres, in_hres, out_hres), 5256 valid indices each
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'in_lres' - Number of variables: 37
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'in_lres' - Variables: ['10u', '10v', '2d', '2t', 'msl', 'q_1000', 'q_500', 'q_700', 'q_850', 'q_925', 'skt', 't_1000', 't_500', 't_700', 't_850', 't_925', 'tcw', 'u_1000', 'u_500', 'u_700', 'u_850', 'u_925', 'v_1000', 'v_500', 'v_700', 'v_850', 'v_925', 'w_1000', 'w_500', 'w_700', 'w_850', 'w_925', 'z_1000', 'z_500', 'z_700', 'z_850', 'z_925']
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'in_hres' - Number of variables: 11
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'in_hres' - Variables: ['cos_julian_day', 'cos_latitude', 'cos_local_time', 'cos_longitude', 'insolation', 'lsm', 'sin_julian_day', 'sin_latitude', 'sin_local_time', 'sin_longitude', 'z']
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'out_hres' - Number of variables: 11
+2026-11-02 08:20:33,280 INFO    anemoi.training.train.train Dataset 'out_hres' - Variables: ['10u', '10v', '2d', '2t', 'msl', 'skt', 'tcw', 'cp', 'tp', 'z_500', 't_850']
+2026-11-02 08:20:33,281 INFO    anemoi.training.train.train Dataset 'in_lres' - Total number of prognostic variables: 37
+2026-11-02 08:20:33,281 INFO    anemoi.training.train.train Dataset 'in_lres' - Total number of auxiliary variables: 0
+2026-11-02 08:20:33,281 INFO    anemoi.training.train.train Dataset 'in_hres' - Total number of prognostic variables: 3
+2026-11-02 08:20:33,281 INFO    anemoi.training.train.train Dataset 'in_hres' - Total number of auxiliary variables: 8
+2026-11-02 08:20:33,282 INFO    anemoi.training.train.train Dataset 'out_hres' - Total number of prognostic variables: 11
+2026-11-02 08:20:33,282 INFO    anemoi.training.train.train Dataset 'out_hres' - Total number of auxiliary variables: 0
+2026-11-02 08:20:33,282 INFO    anemoi.training.train.train Total GPU count / model group size: 1 - NB: the learning rate will be scaled by this factor!
+2026-11-02 08:20:33,282 INFO    anemoi.training.train.train Effective learning rate: 1.000e-04
+2026-11-02 08:20:35,741 WARNING anemoi.training.data.datamodule Falling back rollout to: 0
+2026-11-02 08:20:35,771 INFO    anemoi.training.data.downscalingdatamodule Loading residual statistics from /e/data1/jureap-data/ecmwf/users/jdumont/anemoi/residuals_statistics/o2560_dict_6_72.npy
+2026-11-02 08:20:35,772 INFO    anemoi.training.data.downscalingdatamodule Residual statistics loaded for out_hres (11 variables, lead_time=1h)
+2026-11-02 08:20:35,818 WARNING anemoi.models.preprocessing InputNormalizer: Using default method mean-std for all variables not specified in the config.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: cos_julian_day is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: cos_latitude is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: cos_local_time is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: cos_longitude is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: insolation is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: lsm is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: sin_julian_day is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: sin_latitude is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: sin_local_time is not normalized.
+2026-11-02 08:20:35,821 INFO    anemoi.models.preprocessing.normalizer Normalizing: sin_longitude is not normalized.
+2026-11-02 08:20:35,873 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Encoder datasets configured: ['out_hres']
+2026-11-02 08:20:35,873 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Decoder datasets configured: ['out_hres']
+2026-11-02 08:20:35,873 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Residual prediction pairs: {'out_hres': 'in_lres'}
+2026-11-02 08:20:35,886 INFO    anemoi.models.models.base All datasets have consistent hidden-to-hidden graph structures (required for shared processor)
+2026-11-02 08:20:35,886 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Building encoders for datasets: ['out_hres']
+2026-11-02 08:20:35,886 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Building decoders for datasets: ['out_hres']
+2026-11-02 08:20:36,134 INFO    anemoi.models.layers.utils Linear kernel: torch.nn.Linear.
+2026-11-02 08:20:36,135 INFO    anemoi.models.layers.utils LayerNorm kernel: anemoi.models.layers.normalization.ConditionalLayerNorm.
+2026-11-02 08:20:36,135 INFO    anemoi.models.layers.utils Activation kernel: torch.nn.GELU.
+2026-11-02 08:20:36,136 INFO    anemoi.models.layers.utils QueryNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,136 INFO    anemoi.models.layers.utils KeyNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,140 INFO    anemoi.models.layers.block GraphTransformerMapperBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,145 INFO    anemoi.models.layers.block GraphTransformerMapperBlock using triton graph attention backend.
+2026-11-02 08:20:36,221 INFO    anemoi.models.layers.utils Linear kernel: torch.nn.Linear.
+2026-11-02 08:20:36,221 INFO    anemoi.models.layers.utils LayerNorm kernel: anemoi.models.layers.normalization.ConditionalLayerNorm.
+2026-11-02 08:20:36,222 INFO    anemoi.models.layers.utils Activation kernel: torch.nn.GELU.
+2026-11-02 08:20:36,222 INFO    anemoi.models.layers.utils QueryNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,222 INFO    anemoi.models.layers.utils KeyNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,226 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,232 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,235 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,241 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,244 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,250 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,253 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,259 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,262 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,267 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,271 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,276 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,280 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,285 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,289 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,294 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,298 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,304 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,307 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,313 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,317 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,323 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,327 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,333 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,336 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,342 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,346 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,352 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,356 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,362 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,366 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,372 INFO    anemoi.models.layers.block GraphTransformerProcessorBlock using triton graph attention backend.
+2026-11-02 08:20:36,692 INFO    anemoi.models.layers.utils Linear kernel: torch.nn.Linear.
+2026-11-02 08:20:36,693 INFO    anemoi.models.layers.utils LayerNorm kernel: anemoi.models.layers.normalization.ConditionalLayerNorm.
+2026-11-02 08:20:36,693 INFO    anemoi.models.layers.utils Activation kernel: torch.nn.GELU.
+2026-11-02 08:20:36,694 INFO    anemoi.models.layers.utils QueryNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,694 INFO    anemoi.models.layers.utils KeyNorm kernel: anemoi.models.layers.normalization.AutocastLayerNorm.
+2026-11-02 08:20:36,699 INFO    anemoi.models.layers.block GraphTransformerMapperBlock: QK-norm parameters frozen (freeze_qk_gains)
+2026-11-02 08:20:36,705 INFO    anemoi.models.layers.block GraphTransformerMapperBlock using triton graph attention backend.
+2026-11-02 08:20:37,360 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Residual channels (out_hres ∩ in_lres): ['10u', '10v', '2d', '2t', 'msl', 'skt', 'tcw', 'z_500', 't_850']
+2026-11-02 08:20:37,360 INFO    anemoi.models.models.diffusiondownscaler_encoder_processor_decoder Direct-only prognostic channels (out_hres not in in_lres): ['cp', 'tp']
+2026-11-02 08:20:37,595 WARNING anemoi.training.train.tasks.base Dataset in_lres is skipped for loss & metric computation.
+2026-11-02 08:20:37,595 WARNING anemoi.training.train.tasks.base Dataset in_hres is skipped for loss & metric computation.
+2026-11-02 08:20:37,614 INFO    anemoi.training.train.tasks.base GraphModule with n_step_input=1 and n_step_output=1
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler Training noise: mixture 0.50 x LogNormal(0.693, 0.750) + 0.50 x LogNormal(1.000, 2.500)
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler Using residual/tendency pre-processor for out_hres normalization
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler Using residual/tendency post-processor for out_hres denormalization
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler direct_prediction: 'tp' → model_idx=8, data_idx=8
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler direct_prediction: 'cp' → model_idx=7, data_idx=7
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.tasks.diffusiondownscaler Registered direct_prediction buffers for out_hres: 2 vars
+2026-11-02 08:20:37,615 INFO    anemoi.training.train.train The following submodules will NOT be trained: []
+2026-11-02 08:20:39,076 INFO    o2560_box_predict weights /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/ckpt_root/168c43551e3a414ead0f39a25db7cf22/inference-ema10000-anemoi-by_step-epoch_076-step_050000.ckpt sha256 e12bef9f7a867dea8d5c447f3937134d9bb34ac409b6d20644660afd047bcf22 (1 s)
+2026-11-02 08:20:39,402 INFO    o2560_box_predict EMA load: 0 missing [], 0 unexpected []
+2026-11-02 08:20:41,290 INFO    o2560_box_predict EMA_VS_RAW 224 processor weight tensors, max |EMA - raw| over tensors: median 2.634e-02 max 1.492e-01 (0 would mean the EMA file holds raw weights)
+2026-11-02 08:20:41,307 INFO    o2560_box_predict weights loaded, fingerprint=1.246928e+03, training-mode modules: 0, model class AnemoiD2ModelEncProcDec
+2026-11-02 08:20:41,465 INFO    o2560_box_predict out_hres: 3248042 points, lat 10.00..69.97 lon -80.00..40.00
+2026-11-02 08:20:41,952 INFO    o2560_box_predict od store /e/data1/jureap-data/ecmwf/ai-ml/datasets/downscaling-od-fc-oper-0001-mars-o1280-2023-2024-24h-v1.zarr: 9000 rows, 6599680 points; box index by cache /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-o2560-box-read/cache/od_box_index.npy, 876159 points, max |dlat| 0.00e+00 |dlon| 0.00e+00
+2026-11-02 08:20:41,991 INFO    o2560_box_predict in_lres: 37 variables, 876159 points (matrix (3248042, 876159), sha256 876739e13e1d5e44)
+2026-11-02 08:20:41,991 WARNING anemoi.training.data.datamodule Falling back rollout to: 0
+2026-11-02 08:20:41,991 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:42,051 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:42,141 INFO    anemoi.training.data.dataset Creating NativeGridDataset...
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset Timeincrement set to 1 for data with frequency, 3600, and timestep, 3600
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset Dataset 'in_lres' has 144 valid indices
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset Dataset 'in_hres' has 144 valid indices
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset Dataset 'out_hres' has 144 valid indices
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset MultiDataset has 144 valid indices after intersection.
+2026-11-02 08:20:42,232 INFO    anemoi.training.data.multidataset MultiDataset initialized with 3 datasets (in_lres, in_hres, out_hres), 144 valid indices each
+2026-11-02 08:20:42,233 INFO    anemoi.training.data.multidataset NativeGridDataset.set_group_info(): global_rank 0, model_comm_group_id 0, model_comm_group_rank 0, model_comm_num_groups 1, reader_group_rank 0, sample_comm_group_id 0, sample_comm_num_groups 1
+2026-11-02 08:20:42,233 INFO    anemoi.training.data.multidataset Worker 0 (pid 2671623, global_rank 0, model comm group 0)  has low/high range 0 / 144
+2026-11-02 08:20:42,234 INFO    anemoi.training.data.multidataset Worker 0 (test, pid 2671623, base_seed 756000, sanity rnd 0.694953)
+2026-11-02 08:20:42,235 INFO    o2560_box_predict model outputs (model order) ['10u', '10v', '2d', '2t', 'msl', 'skt', 'tcw', 'cp', 'tp', 'z_500', 't_850']; saved ['10u', '10v', '2d', '2t', 'msl', 'skt', 'tcw', 'cp', 'tp', 'z_500', 't_850']
+2026-11-02 08:20:44,068 INFO    o2560_box_predict DRY case 20241112 +72: row 143 fake 1900-08-13T23:00:00; box mean tp truth 0.720 mm, input 0.723 mm; box max tp truth 107.6 mm input 105.5 mm; 2t mean truth 289.14 input 289.10; seeds [3301645226, 1712750393]; batch {'in_lres': (1, 1, 1, 876159, 37), 'in_hres': (1, 1, 1, 3248042, 11), 'out_hres': (1, 1, 1, 3248042, 11)}
+2026-11-02 08:20:44,087 INFO    o2560_box_predict TP_BY_LEAD +72 h: box-mean tp over 1 dates, truth 0.720 mm, input 0.723 mm (a 6 h window stays flat with lead; a total since the start grows about linearly)
+2026-11-02 08:20:44,087 INFO    o2560_box_predict DRY_DONE row=B50 1 cases
+[W1102 08:20:45.968443889 AllocatorConfig.cpp:28] Warning: PYTORCH_CUDA_ALLOC_CONF is deprecated, use PYTORCH_ALLOC_CONF instead (function operator())

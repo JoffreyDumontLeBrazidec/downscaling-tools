@@ -1,0 +1,960 @@
+data:
+  format: zarr
+  frequency: 1h
+  timestep: ${data.frequency}
+  datasets:
+    in_lres:
+      forcing: null
+      diagnostic: []
+      processors:
+        normalizer:
+          _target_: anemoi.models.preprocessing.normalizer.InputNormalizer
+          config:
+            default: mean-std
+            std: null
+            min-max: null
+            max: null
+            none: null
+    in_hres:
+      forcing:
+      - cos_latitude
+      - cos_longitude
+      - sin_latitude
+      - sin_longitude
+      - cos_julian_day
+      - cos_local_time
+      - sin_julian_day
+      - sin_local_time
+      diagnostic: []
+      processors:
+        normalizer:
+          _target_: anemoi.models.preprocessing.normalizer.InputNormalizer
+          config:
+            default: mean-std
+            std: null
+            min-max: null
+            max:
+            - z
+            none:
+            - cos_latitude
+            - cos_longitude
+            - sin_latitude
+            - sin_longitude
+            - cos_julian_day
+            - cos_local_time
+            - sin_julian_day
+            - sin_local_time
+            - insolation
+            - lsm
+    out_hres:
+      forcing: null
+      diagnostic: []
+      direct_prediction:
+      - tp
+      - cp
+      processors:
+        normalizer:
+          _target_: anemoi.models.preprocessing.normalizer.InputNormalizer
+          config:
+            default: mean-std
+            std:
+            - tp
+            - cp
+            min-max: null
+            max: null
+            none: null
+  num_features: null
+dataloader:
+  emit_lead_hours: false
+  prefetch_factor: 1
+  pin_memory: true
+  read_group_size: ${system.hardware.num_gpus_per_model}
+  num_workers:
+    training: 2
+    validation: 1
+    test: 1
+  batch_size:
+    training: 1
+    validation: 1
+    test: 1
+  limit_batches:
+    training: 650
+    validation: 18
+    test: 2
+  grid_indices:
+    datasets:
+      in_lres:
+        _target_: anemoi.training.data.grid_indices.FullGrid
+        nodes_name: data
+      in_hres:
+        _target_: anemoi.training.data.grid_indices.FullGrid
+        nodes_name: data
+      out_hres:
+        _target_: anemoi.training.data.grid_indices.FullGrid
+        nodes_name: data
+  steps:
+  - 6
+  - 12
+  - 18
+  - 24
+  - 30
+  - 36
+  - 42
+  - 48
+  - 54
+  - 60
+  - 66
+  - 72
+  training_date: 2024-10
+  valid_date: 2024-11
+  test_date: 2024-11
+  training:
+    start: 1900
+    end: 1910
+    datasets:
+      in_lres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_lres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              end: ${dataloader.training_date}
+          area: &id002
+          - 71.5
+          - -81.5
+          - 8.5
+          - 41.5
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - q_1000
+        - q_500
+        - q_700
+        - q_850
+        - q_925
+        - skt
+        - t_1000
+        - t_500
+        - t_700
+        - t_850
+        - t_925
+        - tcw
+        - u_1000
+        - u_500
+        - u_700
+        - u_850
+        - u_925
+        - v_1000
+        - v_500
+        - v_700
+        - v_850
+        - v_925
+        - w_1000
+        - w_500
+        - w_700
+        - w_850
+        - w_925
+        - z_1000
+        - z_500
+        - z_700
+        - z_850
+        - z_925
+      in_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              end: ${dataloader.training_date}
+          area: &id001
+          - 70
+          - -80
+          - 10
+          - 40
+          rename:
+            cos_solar_zenith_angle: insolation
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - cos_julian_day
+        - cos_latitude
+        - cos_local_time
+        - cos_longitude
+        - insolation
+        - lsm
+        - sin_julian_day
+        - sin_latitude
+        - sin_local_time
+        - sin_longitude
+        - z
+      out_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_out_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              end: ${dataloader.training_date}
+          area: *id001
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+        reorder:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+  validation_rollout: 0
+  validation:
+    start: 1900
+    end: 1910
+    datasets:
+      in_lres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_lres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.valid_date}
+              end: ${dataloader.valid_date}
+          area: *id002
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - q_1000
+        - q_500
+        - q_700
+        - q_850
+        - q_925
+        - skt
+        - t_1000
+        - t_500
+        - t_700
+        - t_850
+        - t_925
+        - tcw
+        - u_1000
+        - u_500
+        - u_700
+        - u_850
+        - u_925
+        - v_1000
+        - v_500
+        - v_700
+        - v_850
+        - v_925
+        - w_1000
+        - w_500
+        - w_700
+        - w_850
+        - w_925
+        - z_1000
+        - z_500
+        - z_700
+        - z_850
+        - z_925
+      in_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.valid_date}
+              end: ${dataloader.valid_date}
+          area: *id001
+          rename:
+            cos_solar_zenith_angle: insolation
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - cos_julian_day
+        - cos_latitude
+        - cos_local_time
+        - cos_longitude
+        - insolation
+        - lsm
+        - sin_julian_day
+        - sin_latitude
+        - sin_local_time
+        - sin_longitude
+        - z
+      out_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_out_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.valid_date}
+              end: ${dataloader.valid_date}
+          area: *id001
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+        reorder:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+  test:
+    start: 1900
+    end: 1910
+    datasets:
+      in_lres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_lres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.test_date}
+              end: ${dataloader.test_date}
+          area: *id002
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - q_1000
+        - q_500
+        - q_700
+        - q_850
+        - q_925
+        - skt
+        - t_1000
+        - t_500
+        - t_700
+        - t_850
+        - t_925
+        - tcw
+        - u_1000
+        - u_500
+        - u_700
+        - u_850
+        - u_925
+        - v_1000
+        - v_500
+        - v_700
+        - v_850
+        - v_925
+        - w_1000
+        - w_500
+        - w_700
+        - w_850
+        - w_925
+        - z_1000
+        - z_500
+        - z_700
+        - z_850
+        - z_925
+      in_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_in_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.test_date}
+              end: ${dataloader.test_date}
+          area: *id001
+          rename:
+            cos_solar_zenith_angle: insolation
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - cos_julian_day
+        - cos_latitude
+        - cos_local_time
+        - cos_longitude
+        - insolation
+        - lsm
+        - sin_julian_day
+        - sin_latitude
+        - sin_local_time
+        - sin_longitude
+        - z
+      out_hres:
+        dataset:
+          dataset:
+            dataset: ${system.input.dataset_out_hres}
+            fake_forecasts:
+              steps: ${dataloader.steps}
+              start: ${dataloader.test_date}
+              end: ${dataloader.test_date}
+          area: *id001
+        start: ${dataloader.training.start}
+        end: ${dataloader.training.end}
+        frequency: ${data.frequency}
+        select:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+        reorder:
+        - 10u
+        - 10v
+        - 2d
+        - 2t
+        - msl
+        - skt
+        - tcw
+        - cp
+        - tp
+        - z_500
+        - t_850
+diagnostics:
+  plot:
+    asynchronous: false
+    datashader: false
+    frequency:
+      batch: 999999
+      epoch: 999999
+    parameters:
+    - 2t
+    - 10u
+    - 10v
+    - sp
+    - msl
+    - tp
+    - cp
+    sample_idx: 0
+    precip_and_related_fields:
+    - tp
+    - cp
+    colormaps:
+      precip:
+        _target_: anemoi.training.utils.custom_colormaps.MatplotlibColormapClevels
+        clevels:
+        - '#ffffff'
+        - '#04e9e7'
+        - '#019ff4'
+        - '#0300f4'
+        - '#02fd02'
+        - '#01c501'
+        - '#008e00'
+        - '#fdf802'
+        - '#e5bc00'
+        - '#fd9500'
+        - '#fd0000'
+        - '#d40000'
+        - '#bc0000'
+        - '#f800fd'
+        variables: ${diagnostics.plot.precip_and_related_fields}
+    callbacks: []
+  callbacks: []
+  benchmark_profiler:
+    memory:
+      enabled: true
+      steps: 5
+      warmup: 2
+      extra_plots: false
+      trace_rank0_only: false
+    time:
+      enabled: true
+      verbose: false
+    speed:
+      enabled: true
+    system:
+      enabled: true
+    model_summary:
+      enabled: true
+    snapshot:
+      enabled: true
+      steps: 4
+      warmup: 0
+  debug:
+    anomaly_detection: false
+  enable_checkpointing: true
+  checkpoint:
+    every_n_minutes:
+      save_frequency: null
+      num_models_saved: 0
+    every_n_epochs:
+      save_frequency: null
+      num_models_saved: 0
+    every_n_train_steps:
+      save_frequency: 1000
+      num_models_saved: -1
+  log:
+    wandb:
+      enabled: false
+      offline: false
+      log_model: false
+      project: Anemoi
+      entity: example
+      gradients: false
+      parameters: false
+    tensorboard:
+      enabled: false
+    mlflow:
+      enabled: true
+      _target_: anemoi.training.diagnostics.mlflow.logger.AnemoiMLflowLogger
+      offline: true
+      authentication: true
+      tracking_uri: https://mlflow.ecmwf.int
+      experiment_name: downscaling
+      project_name: Anemoi
+      system: true
+      terminal: true
+      run_name: db_o2560_e2_50k_v2
+      on_resume_create_child: true
+      expand_hyperparams:
+      - config
+      http_max_retries: 35
+      max_params_length: 2000
+      save_dir: ${system.output.logs.mlflow}
+    interval: 1
+  enable_progress_bar: true
+  progress_bar:
+    _target_: pytorch_lightning.callbacks.TQDMProgressBar
+    refresh_rate: 1
+  check_val_every_n_epoch: 1
+  print_memory_summary: false
+system:
+  input:
+    data: /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/
+    grids: /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/
+    dataset_in_lres: /e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/in_lres_o1280.zarr
+    dataset_in_hres: /e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/hres_o2560.zarr
+    dataset_out_hres: /e/data1/jureap-data/ecmwf/users/jdumont/datasets/o1280_o2560_europe_e2/hres_o2560.zarr
+    residual_statistics: /e/data1/jureap-data/ecmwf/users/jdumont/anemoi/residuals_statistics/o2560_dict_6_72.npy
+    truncation_inv: /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O2560_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz
+    truncation: /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/inter_mat/interpol_O1280_to_O2560_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz
+    graph: /e/data1/jureap-data/ecmwf/users/jdumont/db_o2560_e2_50k_v2_20261030/assets/graph/europe_e2_o2560_m600r9rm_graph.pt
+    loss_matrices_path: null
+    warm_start: /e/data1/jureap-data/ecmwf/users/jdumont/outputs/checkpoint_nm50_box/donor_bound_e2/180b9eb507c841f380ab12d64d8b9fc3/anemoi-by_step-epoch_299-step_300000.ckpt
+  output:
+    root: ${oc.env:OUTPUT}
+    logs:
+      root: ${system.output.root}/logs/
+      wandb: ${system.output.logs.root}/wandb/
+      mlflow: ${system.output.logs.root}/mlflow/
+      tensorboard: ${system.output.logs.root}/tensorboard/
+    checkpoints:
+      root: ${system.output.root}/checkpoint/
+      every_n_epochs: anemoi-by_epoch-epoch_{epoch:03d}-step_{step:06d}
+      every_n_train_steps: anemoi-by_step-epoch_{epoch:03d}-step_{step:06d}
+      every_n_minutes: anemoi-by_time-epoch_{epoch:03d}-step_{step:06d}
+    plots: ${system.output.root}/plots/
+    profiler: ${system.output.root}/profiler/
+  hardware:
+    accelerator: auto
+    num_gpus_per_node: 4
+    num_nodes: 4
+    num_gpus_per_model: 2
+graph:
+  overwrite: false
+  data: data
+  hidden: hidden
+  nodes:
+    data:
+      node_builder:
+        _target_: anemoi.graphs.nodes.AnemoiDatasetNodes
+        dataset: null
+      attributes: ${graph.attributes.nodes}
+    hidden:
+      node_builder:
+        _target_: anemoi.graphs.nodes.TriNodes
+        resolution: 8
+      attributes: ${graph.attributes.nodes}
+  edges:
+  - source_name: data
+    target_name: hidden
+    edge_builders:
+    - _target_: anemoi.graphs.edges.CutOffEdges
+      cutoff_factor: 0.7
+      source_mask_attr_name: null
+      target_mask_attr_name: null
+    attributes: ${graph.attributes.edges}
+  - source_name: hidden
+    target_name: data
+    edge_builders:
+    - _target_: anemoi.graphs.edges.KNNEdges
+      num_nearest_neighbours: 3
+      source_mask_attr_name: null
+      target_mask_attr_name: null
+    attributes: ${graph.attributes.edges}
+  - source_name: hidden
+    target_name: hidden
+    edge_builders:
+    - _target_: anemoi.graphs.edges.MultiScaleEdges
+      x_hops: 1
+      scale_resolutions:
+      - 8
+      source_mask_attr_name: null
+      target_mask_attr_name: null
+    attributes: ${graph.attributes.edges}
+  attributes:
+    nodes:
+      area_weight:
+        _target_: anemoi.graphs.nodes.attributes.SphericalAreaWeights
+        norm: unit-max
+        fill_value: 0
+    edges:
+      edge_length:
+        _target_: anemoi.graphs.edges.attributes.EdgeLength
+        norm: unit-std
+      edge_dirs:
+        _target_: anemoi.graphs.edges.attributes.EdgeDirection
+        norm: unit-std
+  post_processors: []
+model:
+  num_channels: 512
+  cpu_offload: false
+  keep_batch_sharded: false
+  model:
+    _target_: anemoi.models.models.diffusiondownscaler_encoder_processor_decoder.AnemoiD2ModelEncProcDec
+    encoder_datasets:
+    - out_hres
+    decoder_datasets:
+    - out_hres
+    residual_prediction:
+      out_hres: in_lres
+    diffusion:
+      sigma_data: 1.0
+      noise_channels: 32
+      noise_cond_dim: 16
+      sigma_max: 100000.0
+      sigma_min: 0.02
+      rho: 7.0
+      log_normal_mean: 0.6931471805599453
+      log_normal_std: 0.75
+      log_normal_mixture:
+        weight: 0.5
+        mean: 1.0
+        std: 2.5
+      uncertainty_weighting:
+        enabled: false
+        num_channels: 32
+        max_period: 10000
+        warmup_steps: 0
+        logvar_clamp: 8.0
+        sigma_log_every: 1
+      noise_embedder:
+        _target_: anemoi.models.layers.diffusion.SinusoidalEmbeddings
+        num_channels: ${model.model.diffusion.noise_channels}
+        max_period: 1000
+      inference_defaults:
+        noise_scheduler:
+          schedule_type: karras
+          sigma_max: 100000.0
+          sigma_min: 0.0
+          rho: 7.0
+          num_steps: 80
+        diffusion_sampler:
+          sampler: heun
+          S_churn: 2.5
+          S_min: 0.75
+          S_max: 100000
+          S_noise: 1.05
+      preconditioning: edm
+  layer_kernels:
+    LayerNorm:
+      _target_: anemoi.models.layers.normalization.ConditionalLayerNorm
+      normalized_shape: ${model.num_channels}
+      condition_shape: 16
+      zero_init: true
+      autocast: false
+    Linear:
+      _target_: torch.nn.Linear
+    Activation:
+      _target_: torch.nn.GELU
+    QueryNorm:
+      _target_: anemoi.models.layers.normalization.AutocastLayerNorm
+      bias: false
+    KeyNorm:
+      _target_: anemoi.models.layers.normalization.AutocastLayerNorm
+      bias: false
+  processor:
+    _target_: anemoi.models.layers.processor.GraphTransformerProcessor
+    trainable_size: ${model.trainable_parameters.hidden2hidden}
+    sub_graph_edge_attributes: ${model.attributes.edges}
+    num_layers: 16
+    num_chunks: 16
+    mlp_hidden_ratio: 4
+    num_heads: 4
+    qk_norm: true
+    cpu_offload: ${model.cpu_offload}
+    gradient_checkpointing: true
+    layer_kernels: ${model.layer_kernels}
+    graph_attention_backend: triton
+    freeze_qk_gains: true
+  encoder:
+    _target_: anemoi.models.layers.mapper.GraphTransformerForwardMapper
+    trainable_size: ${model.trainable_parameters.data2hidden}
+    sub_graph_edge_attributes: ${model.attributes.edges}
+    num_chunks: 4
+    mlp_hidden_ratio: 4
+    num_heads: 4
+    qk_norm: true
+    cpu_offload: ${model.cpu_offload}
+    gradient_checkpointing: true
+    layer_kernels: ${model.layer_kernels}
+    shard_strategy: heads
+    graph_attention_backend: triton
+    freeze_qk_gains: true
+  decoder:
+    _target_: anemoi.models.layers.mapper.GraphTransformerBackwardMapper
+    trainable_size: ${model.trainable_parameters.hidden2data}
+    sub_graph_edge_attributes: ${model.attributes.edges}
+    num_chunks: 8
+    mlp_hidden_ratio: 4
+    num_heads: 4
+    initialise_data_extractor_zero: false
+    qk_norm: true
+    cpu_offload: ${model.cpu_offload}
+    gradient_checkpointing: true
+    layer_kernels: ${model.layer_kernels}
+    shard_strategy: heads
+    graph_attention_backend: triton
+    freeze_qk_gains: true
+  residual:
+    in_lres:
+      _target_: anemoi.models.layers.residual.InterpolationConnection
+      interpolation_file_path: ${system.input.truncation}
+      step: -1
+      autocast: false
+      row_normalize: false
+    in_hres:
+      _target_: anemoi.models.layers.residual.SkipConnection
+      step: -1
+    out_hres:
+      _target_: anemoi.models.layers.residual.SkipConnection
+      step: -1
+  output_mask:
+    _target_: anemoi.training.utils.masks.NoOutputMask
+  trainable_parameters:
+    data: 0
+    hidden: 0
+    data2hidden: 0
+    hidden2data: 0
+    hidden2hidden: 0
+  attributes:
+    edges:
+    - edge_length
+    - edge_dirs
+    nodes: []
+  compile:
+  - module: anemoi.models.layers.conv.GraphTransformerConv
+  - module: anemoi.models.layers.normalization.ConditionalLayerNorm
+    options:
+      dynamic: false
+  bounding: []
+training:
+  scalers:
+    datasets:
+      in_lres: {}
+      in_hres: {}
+      out_hres:
+        general_variable:
+          _target_: anemoi.training.losses.scalers.GeneralVariableLossScaler
+          weights:
+            default: 1
+            q: 0.7
+            t: 0.35
+            u: 0.525
+            v: 0.525
+            w: 0.7
+            z: 0.175
+            sp: 1.5
+            10u: 2.5
+            10v: 2.5
+            2d: 2
+            tp: 2
+            cp: 2
+            msl: 2
+            2t: 2
+            tcw: 1
+            skt: 0.5
+        nan_mask_weights:
+          _target_: anemoi.training.losses.scalers.NaNMaskScaler
+        stdev_tendency:
+          _target_: anemoi.training.losses.scalers.StdevTendencyScaler
+          timestep: ${data.timestep}
+        var_tendency:
+          _target_: anemoi.training.losses.scalers.VarTendencyScaler
+          timestep: ${data.timestep}
+        node_weights:
+          _target_: anemoi.training.losses.scalers.GraphNodeAttributeScaler
+          nodes_name: ${graph.data}
+          nodes_attribute_name: area_weight_ring2
+          norm: unit-sum
+        time_steps:
+          _target_: anemoi.training.losses.scalers.UniformTimeStepScaler
+          multistep_output: ${training.multistep_output}
+  run_id: null
+  fork_run_id: null
+  transfer_learning: true
+  load_weights_only: true
+  deterministic: false
+  precision: bf16-mixed
+  multistep_input: 1
+  multistep_output: 1
+  accum_grad_batches: 1
+  num_sanity_val_steps: 2
+  gradient_clip:
+    val: 1.0
+    algorithm: norm
+  swa:
+    enabled: false
+    lr: 0.0001
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: ${training.lr.rate}
+    weight_decay: 0.0
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+  model_task: anemoi.training.train.tasks.GraphDiffusionDownscaler
+  strategy:
+    _target_: anemoi.training.distributed.strategy.DDPGroupStrategy
+    num_gpus_per_model: ${system.hardware.num_gpus_per_model}
+    read_group_size: ${dataloader.read_group_size}
+  loss_gradient_scaling: false
+  training_loss:
+    datasets:
+      out_hres:
+        _target_: anemoi.training.losses.WeightedMSELoss
+        scalers:
+        - general_variable
+        - nan_mask_weights
+        - node_weights
+        ignore_nans: false
+  validation_metrics:
+    datasets:
+      in_lres: null
+      in_hres: null
+      out_hres:
+        mse:
+          _target_: anemoi.training.losses.MSELoss
+          scalers:
+          - node_weights
+          ignore_nans: true
+  training_approach: probabilistic_low_noise
+  variable_groups:
+    datasets:
+      in_lres:
+        default: sfc
+        pl:
+          param:
+          - q
+          - t
+          - u
+          - v
+          - w
+          - z
+      in_hres:
+        default: sfc
+        pl:
+          param:
+          - q
+          - t
+          - u
+          - v
+          - w
+          - z
+      out_hres:
+        default: sfc
+  metrics:
+    datasets:
+      in_lres: []
+      in_hres: []
+      out_hres:
+      - 10u
+      - 10v
+      - 2t
+      - msl
+      - tp
+  rollout:
+    start: 0
+    epoch_increment: 0
+    max: 0
+  max_epochs: null
+  max_steps: 50000
+  lr:
+    warmup: 1000
+    rate: 0.0001
+    iterations: 50000
+    min: 0.0001
+    schedule: constant
+  submodules_to_freeze: []
+  recompile_limit: 32
+  ema:
+    enabled: true
+    halflife_steps:
+    - 2000
+    - 10000
+    warmup: true
+    warmup_ratio: 0.2
+    device: cpu
+    update_every: 1
+    log_every: 1000
+  transfer_learning_extend_inputs: false
+  transfer_learning_extend_outputs: false
+  train_grown_entries: true
+  transfer_learning_select_by_name: true
+  update_ds_stats_on_ckpt_load:
+    states: true
+    tendencies: true
+config_validation: false
