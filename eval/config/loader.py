@@ -8,6 +8,9 @@ from typing import Any
 
 import yaml
 
+from eval.config.predict_input import InputSourceError, normalize_ema, normalize_input_source
+from manual_inference.prediction.sampler_spec import SamplerConfigError, is_flow_map, normalize_flow_map_sampler
+
 _CONFIG_DIR = Path(__file__).parent
 
 _LANE_REQUIRED_KEYS = {"predict", "evaluator_groups"}
@@ -79,6 +82,9 @@ def _warn_on_wholesale_sampler_replacement(
         base_keys = _sampler_keys(base_config)
         child_keys = _sampler_keys(child_config)
         if not base_keys or not child_keys:
+            return
+        # A flow-map block replaces an EDM block on purpose: the EDM keys must go.
+        if is_flow_map((child_config.get("predict") or {}).get("sampler")):
             return
         # Keys the child restores through `sampler_overrides` are not dropped.
         child_predict = child_config.get("predict")
@@ -191,6 +197,20 @@ def _validate_lane(config: dict[str, Any], path: Path) -> None:
             raise ConfigValidationError(
                 f"{path}: 'predict.{key}' must be a list of {element_name}, got {value!r}"
             )
+
+    sampler = predict.get("sampler")
+    if is_flow_map(sampler):
+        # flow-map block: no churn keys, no EDM keys, sampler "jumps" (sampler_spec.py)
+        try:
+            normalize_flow_map_sampler(sampler)
+        except SamplerConfigError as exc:
+            raise ConfigValidationError(f"{path}: 'predict.sampler': {exc}") from None
+    # predict.input_source (bundles | zarr_split) and predict.ema (eval/config/predict_input.py)
+    try:
+        normalize_input_source(predict.get("input_source"))
+        normalize_ema(predict.get("ema"))
+    except InputSourceError as exc:
+        raise ConfigValidationError(f"{path}: 'predict': {exc}") from None
 
     evaluator_groups = config["evaluator_groups"]
     if not isinstance(evaluator_groups, dict):

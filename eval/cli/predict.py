@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from eval.cli._bundles import _resolve_predict_input_root, _verify_predict_input_bundles
+from eval.config.predict_input import InputSourceError, normalize_ema, normalize_input_source
 from eval.cli._common import (
     LOG, Command, add_common_args, add_lane_override_args, add_prepare_args, add_prepml_args,
 )
@@ -39,6 +40,13 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
     """Run predictions via subprocess call to eval.predict.main."""
     mode = getattr(args, "mode", "manual")
     if mode == "prepml":
+        from manual_inference.prediction.sampler_spec import is_flow_map
+
+        if is_flow_map((lane_config.get("predict") or {}).get("sampler")):
+            raise SystemExit(
+                "predict: a flow_map sampler (jumps) runs in manual mode only; the prepml runner "
+                "knows only the EDM schedules. Drop --mode prepml."
+            )
         from eval.predict.prepml import prepml_predict
         input_root = _resolve_predict_input_root(
             args, lane_config, host_config, output_dir,
@@ -66,6 +74,12 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
 
     predict_cfg = lane_config["predict"]
     checkpoint = args.checkpoint
+    try:
+        # predict.input_source: bundles (default) or zarr_split; predict.ema: raw (default) or an EMA tag
+        input_source = normalize_input_source(predict_cfg.get("input_source"))
+        ema = normalize_ema(predict_cfg.get("ema"))
+    except InputSourceError as exc:
+        raise SystemExit(f"predict: {exc}") from None
 
     # Auto-resolve inference-* companion to base checkpoint for manual mode.
     # PrepML mode uses the inference checkpoint directly (handled above).
@@ -85,10 +99,20 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
                 f"{base_path}. Manual predict requires the base (non-inference) checkpoint."
             )
 
-    input_root = _resolve_predict_input_root(
-        args, lane_config, host_config, output_dir, prepare_bundles=True,
-    )
-    _verify_predict_input_bundles(lane_config, input_root)
+    if input_source is None:
+        input_root = _resolve_predict_input_root(
+            args, lane_config, host_config, output_dir, prepare_bundles=True,
+        )
+        _verify_predict_input_bundles(lane_config, input_root)
+    else:
+        # zarr_split: the checkpoint's own datamodule reads the split; no bundle is built,
+        # resolved or verified, and --bundle-dir / --source-grib-root are refused.
+        if getattr(args, "bundle_dir", None) or getattr(args, "source_grib_root", None):
+            raise SystemExit(
+                "predict: predict.input_source is zarr_split, which reads no bundle; drop --bundle-dir "
+                "and --source-grib-root (or set --opt predict.input_source=bundles)."
+            )
+        input_root = ""
 
     members_str = ",".join(str(m) for m in predict_cfg["members"])
     steps_str = ",".join(str(s) for s in predict_cfg["steps"])
@@ -109,9 +133,14 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
         "--members", members_str,
         "--steps", steps_str,
         "--dates", dates_str,
-        "--input-root", input_root,
         "--allow-existing-out-dir",
     ]
+    if input_source is None:
+        cmd += ["--input-root", input_root]
+    else:
+        cmd += ["--input-source-json", json.dumps(input_source)]
+    if ema:
+        cmd += ["--ema", ema]
     if bundle_pairs:
         cmd += ["--bundle-pairs", str(bundle_pairs)]
 

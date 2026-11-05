@@ -446,3 +446,87 @@ def test_bad_sampler_overrides_type_warns_and_keeps_inherited_sampler(
     assert config["predict"]["sampler"] == _BASE_SAMPLER
     assert "sampler_overrides" not in config["predict"]
     assert "must be a mapping" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- flow-map overlays
+
+FLOW_MAP_LANES = {
+    "o320_o1280_e2_flowmap": ("flow_map", 30),
+    "o320_o1280_e2_flowmap_edm30": ("karras", 30),
+    "o96_o320_flowmap": ("flow_map", 8),
+    "o96_o320_flowmap_edm30": ("karras", 8),
+}
+
+
+@pytest.mark.parametrize("lane", sorted(FLOW_MAP_LANES))
+def test_flow_map_overlays_load(lane, capsys):
+    schedule, n_dates = FLOW_MAP_LANES[lane]
+    config = load_lane(lane)
+    predict = config["predict"]
+    sampler = predict["sampler"]
+    assert sampler["schedule_type"] == schedule
+    assert predict["steps"] == [12, 24, 48, 72]
+    assert predict["members"] == list(range(1, 11))
+    assert len(predict["dates"]) == n_dates == len(set(predict["dates"]))
+    assert sampler["sigma_max"] == 80.0
+    if schedule == "flow_map":
+        assert sampler == {"schedule_type": "flow_map", "num_steps": 2, "sigma_max": 80.0,
+                           "sigma_min": 0.0, "sampler": "jumps"}
+        # the EDM keys of the base are dropped on purpose: no advisory
+        assert "replaces the base block wholesale" not in capsys.readouterr().err
+    else:
+        assert sampler == {"schedule_type": "karras", "num_steps": 30, "sigma_max": 80.0, "sigma_min": 0.03,
+                           "rho": 7.0, "sampler": "heun", "S_churn": 0.0}
+
+
+def test_flow_map_pairs_share_dates():
+    for run, ref in (("o320_o1280_e2_flowmap", "o320_o1280_e2_flowmap_edm30"),
+                     ("o96_o320_flowmap", "o96_o320_flowmap_edm30")):
+        assert load_lane(run)["predict"]["dates"] == load_lane(ref)["predict"]["dates"]
+
+
+def test_e2_flowmap_pw30_lane():
+    run = load_lane("o320_o1280_e2_flowmap")["predict"]
+    pw30 = load_lane("o320_o1280_e2_flowmap_pw30")["predict"]
+    assert pw30["dates"] == run["dates"] and pw30["steps"] == run["steps"] and pw30["members"] == run["members"]
+    assert pw30["input_source"] == run["input_source"]
+    assert pw30["sampler"] == {
+        "schedule_type": "experimental_piecewise", "num_steps": 30, "sigma_max": 100000.0,
+        "sigma_transition": 10.0, "sigma_min": 0.03, "high_schedule_type": "exponential",
+        "low_schedule_type": "karras", "num_steps_high": 10, "num_steps_low": 20, "rho": 7.0,
+        "sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.0, "S_noise": 1.05,
+    }
+
+
+def test_flow_map_num_steps_by_opt():
+    import argparse
+
+    from eval.cli._common import _build_lane_overrides
+
+    overrides = _build_lane_overrides(argparse.Namespace(opt=["sampler.num_steps=4"], steps="24"))
+    config = load_lane("o320_o1280_e2_flowmap", overrides=overrides)
+    assert config["predict"]["sampler"]["num_steps"] == 4
+    assert config["predict"]["sampler"]["sampler"] == "jumps"
+    assert config["predict"]["steps"] == [24]
+
+
+def test_flow_map_lane_rejects_churn_keys(tmp_path, monkeypatch):
+    import eval.config.loader as loader
+
+    (tmp_path / "lanes").mkdir()
+    bad = {
+        "predict": {"members": [1], "steps": [24], "dates": ["20230826"],
+                    "sampler": {"schedule_type": "flow_map", "num_steps": 2, "sigma_max": 80.0,
+                                "sampler": "jumps", "S_churn": 0.0}},
+        "evaluator_groups": {"default": ["tc"]},
+    }
+    (tmp_path / "lanes" / "bad.yaml").write_text(yaml.dump(bad))
+    monkeypatch.setattr(loader, "_CONFIG_DIR", tmp_path)
+    with pytest.raises(ConfigValidationError, match="churn"):
+        load_lane("bad")
+
+
+def test_flow_map_churn_by_opt_is_rejected():
+    with pytest.raises(ConfigValidationError, match="churn"):
+        load_lane("o320_o1280_e2_flowmap",
+                  overrides={"predict": {"sampler_overrides": {"S_churn": 2.5}}})

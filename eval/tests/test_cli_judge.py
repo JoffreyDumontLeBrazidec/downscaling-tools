@@ -49,6 +49,15 @@ def test_read_warns_on_unequal_instruments(tmp_path):
     assert "different point sets" in text and "sampler settings" in text
 
 
+def test_read_prints_instrument_notes(tmp_path):
+    arms = {"member": 1, "run": _arm(tmp_path, "a", 1_200_000), "reference": _arm(tmp_path, "b", 1_200_000)}
+    note = "the bundles hold the control forecast only: the 10 members are 10 seeds of one input."
+    text = judge.compose_read(arms, step=24, dates=["20230226"], shape_box="e2", maps={}, domain="europe",
+                              weights="EMA-2000 / EMA-2000", out_dir=tmp_path, commit="abc", notes=[note])
+    head = text.split("### 1.")[0]
+    assert "Instrument note: the bundles hold the control forecast only: the 10 members are 10 seeds of one input." in head
+
+
 @pytest.mark.parametrize("lat,lon,box", [
     ([10.0, 70.0], [280.0, 40.0], "north_atlantic"),     # E2 file, 0..360 longitudes
     ([-89.9, 89.9], [0.0, 359.9], "north_atlantic"),     # global file
@@ -270,3 +279,58 @@ def test_read_header_carries_the_seed_warning(tmp_path):
                               weights=None, out_dir=tmp_path, commit="abc")
     assert "WARNING: RULE 31, SEEDS: donor carries no per-draw seeds" in text
     assert "Seeds (rule 31): run seed_rule per_draw, base 1234" in text
+
+
+FLOW_MAP_JSON = ('{"num_steps": 2, "sampler": "jumps", "schedule_type": "flow_map", '
+                 '"sigma_max": 80.0, "sigma_min": 0.0}')
+EDM30_JSON = ('{"schedule_type": "karras", "num_steps": 30, "sigma_max": 80.0, "sigma_min": 0.03, '
+              '"rho": 7.0, "sampler": "heun", "S_churn": 0.0}')
+
+
+def test_sampler_line_flow_map():
+    assert judge.sampler_line({"sampling_config_json": FLOW_MAP_JSON}) == "jumps 2 from sigma 80 (flow_map)"
+
+
+def test_read_header_of_a_flow_map_run_against_its_edm_row(tmp_path):
+    arms = {"member": 1, "run": _arm(tmp_path, "mfx2t"), "reference": _arm(tmp_path, "edm30")}
+    arms["run"]["facts"]["sampling_config_json"] = FLOW_MAP_JSON
+    arms["reference"]["facts"]["sampling_config_json"] = EDM30_JSON
+    text = judge.compose_read(arms, step=24, dates=["20230226"], shape_box="e2", maps={},
+                              domain="europe", weights="EMA", out_dir=tmp_path, commit="abc")
+    assert "run jumps 2 from sigma 80 (flow_map)" in text
+    assert "sample differently by design" in text and "never compare unequal samplers" not in text
+    assert "start sigmas differ" not in text
+
+
+def test_flow_map_note_flags_a_different_start_sigma():
+    note = judge.flow_map_sampler_note(FLOW_MAP_JSON, EDM30_JSON.replace('"sigma_max": 80.0', '"sigma_max": 100000.0'))
+    assert "start sigmas differ" in note
+    assert judge.flow_map_sampler_note('{"num_steps": 30}', '{"num_steps": 40}') is None
+
+
+def test_draw_maps_skips_variables_the_files_lack(tmp_path, monkeypatch):
+    """A 2t-only run gets the 2t maps and no wind10m map; the missing wind no longer stops the read."""
+    import netCDF4 as nc
+
+    from eval.evaluators.zoom_maps.core import plot_member_wind_maps as pm
+
+    runs = {}
+    for lab in ("A", "B"):
+        d = tmp_path / lab
+        d.mkdir()
+        with nc.Dataset(str(d / "predictions_20230226_step024.nc"), "w") as ds:
+            ds.createDimension("weather_state", 1)
+            ws = ds.createVariable("weather_state", str, ("weather_state",))
+            ws[0] = "2t"
+        runs[lab] = d
+    drawn = []
+
+    def fake_run(args):
+        drawn.append((args.variable, args.field))
+        (tmp_path / "maps" / "alps" / f"x_{args.variable}_{args.field}.png").write_text("png")
+        return 0
+
+    monkeypatch.setattr(pm, "run", fake_run)
+    pngs, failure = judge.draw_maps(runs, tmp_path / "maps", date="20230226", step=24, member=1,
+                                    extent=[43.0, 49.0, 4.0, 16.0], tag="alps")
+    assert failure is None and drawn == [("2t", "value"), ("2t", "fine")] and len(pngs) == 2

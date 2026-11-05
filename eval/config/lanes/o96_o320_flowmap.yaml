@@ -1,0 +1,46 @@
+base: o96_o320
+
+# Flow-map runs (MeanFlow / iMF, warm-started from an EDM checkpoint) on the o96 -> o320
+# lane, read through eval.cli. They sample by a few jumps from sigma 80, not by an EDM
+# schedule (manual_inference/prediction/sampler_spec.py). Added 2026-11-02 (flow-map recap
+# note, section 21, item I1).
+#
+# Default row: 2 jumps from sigma 80 (2 network calls). The 1- and 4-jump rows are the same
+# lane with one key changed at call time, no extra file:
+#   --opt sampler.num_steps=1        (1 call)
+#   --opt sampler.num_steps=4        (4 calls)
+# Comparison row: o96_o320_flowmap_edm30 (the parent EDM checkpoint, 30 Karras steps from
+# sigma 80, churn off, 59 calls), same dates, leads, members and rule-31 seeds.
+#
+#   python -m eval.cli predict --lane o96_o320_flowmap --host <host> \
+#     --checkpoint <flow-map ckpt> --bundle-dir <2022 bundles> --output-dir <run dir>
+#   python -m eval.cli judge --lane o96_o320_flowmap --host <host> --step 24 \
+#     --run MF2=<run dir>/predictions --reference EDM30=<edm30 dir>/predictions --output-dir <read dir>
+#
+# Dates: the eight 2022 dates of the o96 -> o320 flow-map testbed (first-look reads, one
+# lead each there; here every date at every lead). No 30-date set exists for this lane yet;
+# the base lane's 2023 Idalia dates are not used. The base input_root holds 2023 bundles
+# only: pass --bundle-dir with bundles of these dates.
+#
+# Seeds: rule 31, unchanged (eval/predict/seeding.py).
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [12, 24, 48, 72]
+  dates: ["20220201", "20220404", "20220606", "20220718",
+          "20220819", "20220919", "20221021", "20221130"]
+  # This block REPLACES the base sampler wholesale (load_lane prints an advisory about the
+  # dropped EDM keys; that is intended: churn keys are refused with flow_map).
+  sampler:
+    schedule_type: "flow_map"
+    num_steps: 2          # jumps = network calls; 1 and 4 via --opt sampler.num_steps=N
+    sigma_max: 80.0       # start sigma
+    sigma_min: 0.0
+    sampler: "jumps"
+
+# Per-bin spectra on this lane (added 2026-11-03): box_spectra reads the grid from the files, but
+# the o320 truth and the o96 input are four times coarser than on o320 -> o1280, so the o1280
+# target band (125 to 31 km) of the default note does not apply. By the same four-grid-spacing
+# reading, O96 resolves down to about 400 km and O320 down to about 125 km.
+box_spectra:
+  target_note: "lane o96 -> o320: the o1280 band (125 to 31 km) does not apply; by four grid spacings the O96 input resolves down to about 400 km and the O320 truth down to about 125 km, so the target is 1 from about 400 km to 125 km and the bins below about 125 km are near the truth's grid scale"

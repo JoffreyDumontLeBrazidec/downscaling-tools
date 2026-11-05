@@ -76,3 +76,65 @@ def test_named_box_and_global_default():
     assert runner.resolve_box(None, lat, lon) == ([10.0, 70.0, -80.0, 40.0], "e2 (global file)")
     assert runner.resolve_box("north_atlantic", lat, lon)[0] == [35.0, 55.0, -45.0, -20.0]
     assert runner.resolve_box("36,44,-28,-17", lat, lon) == ([36.0, 44.0, -28.0, -17.0], "given")
+
+
+def _octahedral_rows(n_lat: int, lat_lo: float, lat_hi: float):
+    """Northern-hemisphere rows of the O<n_lat> octahedral grid (Gaussian latitudes, 4i + 20 points
+    on row i from the pole) between lat_lo and lat_hi; lon in [0, 360)."""
+    x, _ = np.polynomial.legendre.leggauss(2 * n_lat)
+    glat = np.sort(np.degrees(np.arcsin(x)))[::-1][:n_lat]
+    lats, lons = [], []
+    for i, lat in enumerate(glat):
+        if lat_lo <= lat <= lat_hi:
+            n = 4 * i + 20
+            lon = np.arange(n) * 360.0 / n
+            lats.append(np.full(n, lat))
+            lons.append(lon)
+    return np.concatenate(lats), np.concatenate(lons)
+
+
+def test_coarse_octahedral_grid_widens_the_pad():
+    """On O320 the rows near 70 N are ~1.2 deg apart in longitude: a 0.5 deg pad leaves corner points
+    of the E2 grid outside the hull (36 at 0.07 deg on the real o96 -> o320 files, 6 at 0.25 deg);
+    the sampler widens the pad and samples a linear field exactly."""
+    from scipy.spatial import Delaunay
+
+    from eval.evaluators.box_spectra.core.spectrum import Sampler
+
+    lat, lon = _octahedral_rows(320, 5.0, 75.0)
+    lon_c = runner._contiguous(lon, -80.0)
+    extent = (11.0, 69.0, -79.0, 39.0)
+    res = 0.25
+    gx, gy = np.arange(extent[2], extent[3] + 1e-9, res), np.arange(extent[0], extent[1] + 1e-9, res)
+    GX, GY = np.meshgrid(gx, gy)
+    pts = np.column_stack([GX.ravel(), GY.ravel()])
+    m = (lat >= extent[0] - 0.5) & (lat <= extent[1] + 0.5) & (lon_c >= extent[2] - 0.5) & (lon_c <= extent[3] + 0.5)
+    assert np.any(Delaunay(np.column_stack([lon_c[m], lat[m]])).find_simplex(pts) < 0)   # the old failure
+
+    smp = Sampler(lat, lon_c, extent, res)
+    assert smp.pad_deg > 0.5
+    field = 0.01 * lon_c + 0.02 * lat            # linear: barycentric sampling is exact
+    assert np.allclose(smp(field), 0.01 * GX + 0.02 * GY, atol=1e-9)
+
+
+def test_dense_grid_keeps_the_half_degree_pad():
+    from eval.evaluators.box_spectra.core.spectrum import Sampler
+
+    lat1 = np.arange(35.0, 45.0 + 1e-9, 0.08)
+    lon1 = np.arange(-30.0, -15.0 + 1e-9, 0.08)
+    LA, LO = np.meshgrid(lat1, lon1, indexing="ij")
+    smp = Sampler(LA.ravel(), LO.ravel(), (36.0, 44.0, -29.0, -16.0), 0.07)
+    assert smp.pad_deg == 0.5
+
+
+def test_target_note_from_lane_block(tmp_path):
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    _write(pred / "predictions_20230226_step024.nc", mode="truth")
+    out = box_spectra.run(pred, {}, {"variables": ["2t"], "target_note": "target 1 from 400 km to 125 km"},
+                          output_dir=tmp_path / "bs")
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["target_note"] == "target 1 from 400 km to 125 km" and meta["source_pad_deg"] == 0.5
+    assert "target 1 from 400 km to 125 km." in (out / "bins.md").read_text()
+    default = box_spectra.run(pred, {}, {"variables": ["2t"]}, output_dir=tmp_path / "bs0")
+    assert runner.TARGET_NOTE in (default / "bins.md").read_text()

@@ -200,3 +200,21 @@ def test_highpass_at_points_keeps_grid_scale_detail_and_removes_the_large_scale(
     assert np.corrcoef(fine[inner], checker[inner])[0, 1] > 0.99
     assert np.abs(fine[inner] - checker[inner]).max() < 0.05
 
+
+
+def test_grid_names_in_titles():
+    """Titles name the grids read from a global file's size (O96 -> O320 lane), not a fixed O1280."""
+    from eval.evaluators.zoom_maps.core import plot_member_wind_maps as pm
+
+    assert pm.octahedral_name(40_320) == "O96"
+    assert pm.octahedral_name(421_120) == "O320"
+    assert pm.octahedral_name(6_599_680) == "O1280"
+    assert pm.octahedral_name(123_456) is None            # a regional file (E2 box) keeps the defaults
+    titles, hres = pm.panel_titles({"MF4": "MF4 ({hres})"}, 40_320, 421_120)
+    assert hres == "O320"
+    assert titles["eefo"] == "Input (EEFO O96)" and "ENFO O320" in titles["enfo"]
+    assert titles["MF4"] == "MF4 (O320)"
+    assert pm.default_title("EDM30", hres) == "Model, EDM30 (O320)"
+    titles, hres = pm.panel_titles({}, 7_000, 300_000)
+    assert hres == "O1280" and titles == pm.DEFAULT_TITLES
+    assert pm.default_title("model") == "Model (O1280)"

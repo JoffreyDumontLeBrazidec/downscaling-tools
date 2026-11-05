@@ -1,4 +1,4 @@
-"""CLI entry point for modular bundle-based prediction generation."""
+"""CLI entry point for modular prediction generation, from bundles or from a zarr split."""
 
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ from .model_loader import load_inference_model
 from .output_writer import prediction_output_path, write_predictions_file
 from .types import BundleKey, PredictionConfig
 
+from eval.config.predict_input import InputSourceError, normalize_ema, normalize_input_source
+from manual_inference.prediction.sampler_spec import SamplerConfigError, normalize_sampler_json
+
 
 def parse_int_list(raw: str) -> list[int]:
     """Parse a comma-separated list of integers."""
@@ -41,8 +44,30 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate 25 predictions_YYYYMMDD_stepXXX.nc files from bundle inputs."
     )
-    parser.add_argument("--input-root", required=True)
+    parser.add_argument(
+        "--input-root",
+        default="",
+        help="Bundle directory. Required unless --input-source-json selects the zarr_split route.",
+    )
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--input-source-json",
+        default="",
+        help=(
+            "Where the inputs come from (eval/config/predict_input.py). Empty or 'bundles': bundles "
+            "under --input-root. '{\"type\":\"zarr_split\",\"split\":\"test\"}': the row of each "
+            "date/step in that split of the checkpoint's own datamodule, read through the fake-hindcast "
+            "mapping; no bundle is read."
+        ),
+    )
+    parser.add_argument(
+        "--ema",
+        default="",
+        help=(
+            "EMA weights to load, e.g. ema2000: inference-ema2000-<name> next to the base checkpoint "
+            "instead of inference-<name> (raw weights). Refused when that file is missing."
+        ),
+    )
     parser.add_argument(
         "--input-root-mode",
         choices=["auto", "lane_canonical_root", "rebuilt_truth_bundle_root"],
@@ -169,6 +194,18 @@ def _write_manifest(manifest_path: Path, rows: list[tuple[str, int, int, str, st
         writer.writerows(rows)
 
 
+def _zarr_split_pairs(config: PredictionConfig) -> list[tuple[str, int]]:
+    """(date, step) cases of the zarr_split route: --bundle-pairs if given, else dates x steps."""
+    if config.bundle_pairs:
+        pairs = []
+        for token in config.bundle_pairs.split(","):
+            if token.strip():
+                date, _, step = token.strip().partition(":")
+                pairs.append((date.strip(), int(step)))
+        return pairs
+    return [(date, int(step)) for date in config.dates for step in config.steps]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the modular predictions workflow."""
 
@@ -178,6 +215,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--allow-missing-target is no longer supported in the new stack. "
             "Bundles must include target_hres_* so y is always present."
         )
+    # A flow-map block (schedule_type flow_map) is checked and written in its canonical form,
+    # so the files record exactly what predict_step received; EDM blocks pass unchanged.
+    try:
+        args.extra_args_json = normalize_sampler_json(args.extra_args_json, warn=True)
+    except SamplerConfigError as exc:
+        raise SystemExit(f"--extra-args-json: {exc}") from None
+    try:
+        input_source = normalize_input_source(args.input_source_json)
+        ema = normalize_ema(args.ema)
+    except InputSourceError as exc:
+        raise SystemExit(f"--input-source-json / --ema: {exc}") from None
+    if input_source is None and not args.input_root:
+        raise SystemExit("--input-root is required for bundle inputs (or pass --input-source-json).")
 
     input_dir = Path(args.input_root)
     out_dir = Path(args.out_dir)
@@ -217,18 +267,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         dates=[token.strip() for token in args.dates.split(",") if token.strip()],
         bundle_pairs=args.bundle_pairs,
         local_scope_json=args.local_scope_json,
+        input_source=input_source,
+        ema=ema,
     )
 
-    recursive = config.input_root_mode != "lane_canonical_root"
-    bundle_map = discover_bundles(config.input_dir, recursive=recursive)
-    if not bundle_map:
-        raise SystemExit(f"No bundle files found in {config.input_dir}")
-    date_step_pairs = resolve_date_step_pairs(
-        bundle_map,
-        config.dates,
-        config.steps,
-        config.bundle_pairs,
-    )
+    if config.input_source is None:
+        recursive = config.input_root_mode != "lane_canonical_root"
+        bundle_map = discover_bundles(config.input_dir, recursive=recursive)
+        if not bundle_map:
+            raise SystemExit(f"No bundle files found in {config.input_dir}")
+        date_step_pairs = resolve_date_step_pairs(
+            bundle_map,
+            config.dates,
+            config.steps,
+            config.bundle_pairs,
+        )
+    else:
+        # zarr_split: every case is a row of the split; a missing row is refused when it is looked up
+        bundle_map = None
+        date_step_pairs = _zarr_split_pairs(config)
     if config.bundle_pairs and initial_global_rank == 0:
         dates_used = sorted({date for date, _ in date_step_pairs})
         steps_used = sorted({step for _, step in date_step_pairs})
@@ -238,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     required = [BundleKey(date, step, member) for date, step in date_step_pairs for member in config.members]
-    missing = [key for key in required if key not in bundle_map]
+    missing = [key for key in required if bundle_map is not None and key not in bundle_map]
     if missing:
         preview = ", ".join(f"{item.date}/step{item.step}/mem{item.member}" for item in missing[:15])
         raise SystemExit(f"Missing {len(missing)} required bundle(s). First missing: {preview}")
@@ -261,6 +318,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             global_rank=global_rank,
             timeout_seconds=config.rank0_write_wait_seconds,
         )
+        zarr_source = None
+        if config.input_source is not None:
+            from .zarr_split import ZarrSplitSource
+
+            zarr_source = ZarrSplitSource(datamodule, config.input_source["split"])
+            for date, step in date_step_pairs:  # refuse a missing row before the first draw
+                zarr_source.find_row(date, step)
         for date, step in date_step_pairs:
             out_path = prediction_output_path(config.output_dir, date, step)
             try:
@@ -279,6 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_weather_state_mode=config.output_weather_state_mode,
                     output_weather_states=config.output_weather_states,
                     keep_outputs=(global_rank == 0),
+                    zarr_source=zarr_source,
                 )
                 if config.local_scope_json:
                     ensemble = apply_local_output_scope(ensemble, config.local_scope_json)
@@ -291,7 +356,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise
             if global_rank == 0:
                 done_files += 1
-                for member, bundle_path in zip(config.members, ensemble.source_bundle_paths):
+                if zarr_source is None:
+                    sources = ensemble.source_bundle_paths
+                else:
+                    sources = [zarr_source.label(date, step)] * len(config.members)
+                for member, bundle_path in zip(config.members, sources):
                     manifest_rows.append((date, step, member, bundle_path, str(out_path)))
                 print(f"[{done_files}/{total_files}] wrote {out_path}")
 
