@@ -552,6 +552,37 @@ def score_labels(a: dict, b: dict, pa: dict, pb: dict) -> dict:
     return out
 
 
+def _score_provenance_lines(ra: Path, rb: Path, label_a: str, label_b: str) -> list[str]:
+    """The label every gridded score table carries (audit 5 Nov 2026, rule 34): these scores are against the
+    forecast target, not observations, and the file's ensemble construction is named for both arms. Files that
+    hold M generative draws from one input are called what they are: a single-input diffusion diagnostic."""
+    from eval.shared.provenance import is_single_input
+
+    def construction(path: Path) -> str:
+        f = path / "probabilistic_summary.json"
+        if not f.exists():
+            return "not recorded (older evaluator output)"
+        try:
+            return str(json.loads(f.read_text()).get("provenance", {}).get("ensemble_construction")
+                       or "not recorded (older evaluator output)")
+        except (json.JSONDecodeError, OSError):
+            return "not recorded"
+
+    ca, cb = construction(ra), construction(rb)
+    lines = ["Gridded fair CRPS, spread and RMSE **vs the forecast target (not observations)**: diagnostic rows "
+             "under rule 34; the headline scores of a read are `obs_points` / `obs_imerg` / `tc_obs` against "
+             "observations, with the input and target ensembles as competitor rows.",
+             f"Ensemble construction: {label_a} = {ca}; {label_b} = {cb}."]
+    for lab, c in ((label_a, ca), (label_b, cb)):
+        if is_single_input(c):
+            lines.append(f"WARNING: {lab} is a **single-input diffusion diagnostic** (generative draws from one "
+                         "input): its mean, spread and CRPS are not those of a model ensemble (one draw per "
+                         "input member, 4 Nov 2026 rule) and must not be presented as such.")
+    if ca != cb:
+        lines.append("WARNING: the two arms were not built the same way; their scores are not comparable.")
+    return lines
+
+
 def _ratio_cell(row: dict) -> str:
     """Corrected spread/RMSE with its bootstrap interval over dates, when the CSV has one."""
     value = _fmt(row.get("spread_skill_ratio_corrected"), 3)
@@ -566,7 +597,7 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
 
     run, ref = arms["run"], arms["reference"]
     ra, rb = run["eval"] / "probabilistic", ref["eval"] / "probabilistic"
-    lines = ["### 4. Scores"]
+    lines = ["### 4. Scores", "", *_score_provenance_lines(ra, rb, run["label"], ref["label"]), ""]
     a, b = _calibration(ra, step, domain), _calibration(rb, step, domain)
     if not (a and b):
         # an older evaluator output has only summary_by_lead.csv: the old table, no labels

@@ -270,3 +270,24 @@ def test_read_header_carries_the_seed_warning(tmp_path):
                               weights=None, out_dir=tmp_path, commit="abc")
     assert "WARNING: RULE 31, SEEDS: donor carries no per-draw seeds" in text
     assert "Seeds (rule 31): run seed_rule per_draw, base 1234" in text
+
+
+def test_score_provenance_lines_label_the_table(tmp_path):
+    """Audit 5 Nov 2026: the judge's score table says 'vs the forecast target (not observations)' and names each
+    arm's ensemble construction; single-input draws are called a single-input diffusion diagnostic."""
+    import json
+
+    from eval.cli.judge import _score_provenance_lines
+
+    ra, rb = tmp_path / "a", tmp_path / "b"
+    ra.mkdir()
+    rb.mkdir()
+    (ra / "probabilistic_summary.json").write_text(json.dumps(
+        {"provenance": {"ensemble_construction": "one draw per input member (input + generative variability)"}}))
+    (rb / "probabilistic_summary.json").write_text(json.dumps(
+        {"provenance": {"ensemble_construction": "single-input draws: 10 generative draws from one input field"}}))
+    lines = _score_provenance_lines(ra, rb, "A", "B")
+    text = "\n".join(lines)
+    assert "not observations" in text and "A = one draw per input member" in text
+    assert "B is a **single-input diffusion diagnostic**" in text and "not built the same way" in text
+    assert "not recorded" in "\n".join(_score_provenance_lines(tmp_path / "none", ra, "X", "A"))

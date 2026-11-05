@@ -104,6 +104,13 @@ def test_probabilistic_evaluator_writes_outputs(tmp_path: Path) -> None:
     assert {r["band"] for r in cal} == {"full"}
     r = next(r for r in cal if r["weather_state"] == "2t" and r["domain"] == "global")
     assert r["n_members"] == "3" and r["n_dates"] == "2" and r["n_points_total"] == "8"
+    # audit 5 Nov 2026: the payload says what the scores are against and how the members were built
+    payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
+    prov = payload["provenance"]
+    assert not prov["against_observations"] and prov["status"].startswith("diagnostic")
+    assert "ring" in prov["weight_form"] and prov["domain_bounds"]["n.hem"] == [20.0, 90.0, -180.0, 180.0]
+    assert prov["date_spacing"]["n_dates"] == 2 and prov["date_spacing"]["consecutive"]
+    assert any("not observations" in w for w in prov["warnings"])
     # members at -1, 0, +1 around the truth: variance 1, error 0 (ratio undefined), fair CRPS exactly 0
     assert r["spread_rms"] == "1.0" and float(r["crps_mean"]) > 0 and float(r["fcrps_mean"]) == 0.0
     with (out_dir / "rank_histograms.csv").open(newline="") as f:

@@ -22,7 +22,10 @@ Lane configuration (the ``obs_imerg:`` block):
   min_points   A region is scored on a date only with at least this many valid IMERG points. Default 1000.
   dates, steps Restrict the files read.
   plot_regions Regions drawn. Default the first two regions.
-Diagnostic only: no scoreboard row.
+  competitor_ensembles
+               As in obs_points: the input and truth rows are ensembles when the files carry their members
+               (default true); otherwise single fields, labelled so (rule 34(e)).
+Diagnostic only: no scoreboard row. ``run_meta.json`` carries the provenance block (see obs_points).
 """
 from eval.evaluators.base import no_score
 

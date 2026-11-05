@@ -385,6 +385,60 @@ def _consolidate_plots(output_dir: Path) -> None:
     lean_layout.project_lean_layout(output_dir)
 
 
+PROVENANCE_FILES = {
+    "obs_points": "run_meta.json", "obs_imerg": "run_meta.json", "probabilistic": "probabilistic_summary.json",
+}
+
+
+def write_run_provenance(output_dir: Path) -> Path | None:
+    """``<output_dir>/evaluators/provenance.md``: the provenance block of every evaluator that wrote one
+    (verifying field, ensemble construction, area weights, spread form, domain bounds, date spacing and the
+    warnings that go with the numbers). Audit of 5 Nov 2026, rule 34(e): quote a score from here, not from
+    memory. Best-effort: never raises."""
+    try:
+        from eval.shared.provenance import provenance_lines
+
+        root = output_dir / "evaluators"
+        blocks = []
+        for name, fname in PROVENANCE_FILES.items():
+            f = root / name / fname
+            if not f.exists():
+                continue
+            try:
+                block = json.loads(f.read_text()).get("provenance")
+            except (json.JSONDecodeError, OSError):
+                continue
+            if block:
+                blocks.append((name, block))
+        if not blocks:
+            return None
+        lines = ["# Provenance of the scores of this run", "",
+                 "Before any number from this run is quoted, its table has to name the verifying field, the "
+                 "ensemble construction, the area-weight form, the spread form, the domain bounds and the date "
+                 "spacing (docs `epics/misc/20261105_score_and_eval_computation_audit.md`; standing rule 34(e)). "
+                 "Headline scores are the ones against observations; gridded scores against the forecast target "
+                 "are diagnostics.", ""]
+        headline = [n for n, b in blocks if b.get("against_observations")]
+        diagnostic = [n for n, b in blocks if not b.get("against_observations")]
+        lines.append(f"Headline (against observations): {', '.join(headline) or 'none in this run'}. "
+                     f"Diagnostic (vs forecast target): {', '.join(diagnostic) or 'none'}.")
+        if not headline:
+            lines.append("WARNING: this run has no score against observations; nothing here is a headline score "
+                         "(rule 34). Run `obs_points` (and `obs_imerg`, `tc_obs`) before presenting it.")
+        for name, block in blocks:
+            lines += ["", f"## {name}", ""] + provenance_lines(block)
+        out = root / "provenance.md"
+        out.write_text("\n".join(lines) + "\n")
+        for name, block in blocks:
+            for w in block.get("warnings", []):
+                LOG.warning("provenance %s: %s", name, w)
+        LOG.info("Wrote %s", out)
+        return out
+    except Exception:
+        LOG.warning("Could not write the run provenance (non-fatal)", exc_info=True)
+        return None
+
+
 def run(args: argparse.Namespace, session) -> None:
     predictions_dir = Path(args.predictions_dir)
     evaluators_run = _run_evaluators(
@@ -398,6 +452,7 @@ def run(args: argparse.Namespace, session) -> None:
     # C2: record completion FIRST (always), then consolidate plots (non-fatal).
     _update_effective_config_completion(session.output_dir, evaluators_run)
     _consolidate_plots(session.output_dir)
+    write_run_provenance(session.output_dir)
 
 
 COMMANDS = (Command("evaluate", "pipeline", SUMMARY, register, run, needs_lane=True),)

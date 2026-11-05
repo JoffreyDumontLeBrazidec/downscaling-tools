@@ -11,16 +11,15 @@ from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import ensemble_scores, rank_counts
 from eval.evaluators.obs_points.core.stations import resolve_cache, wrap_lon
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
-from eval.evaluators.obs_points.runner import rank_seed
+from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, rank_seed, read_fields, row_kinds
 from eval.evaluators.precip_read.core.metrics import EDGES
-from eval.evaluators.precip_read.runner import read_tp
+from eval.shared.provenance import ENSEMBLE_RULE, SINGLE_FIELD, is_single_input, provenance
 
 LOG = logging.getLogger(__name__)
 
 DEFAULT_REGIONS = {"25-60N": [25.0, 60.0, -80.0, 40.0], "europe": [35.0, 60.0, -12.5, 40.0],
                    "25-40N": [25.0, 40.0, -80.0, 40.0], "40-60N": [40.0, 60.0, -80.0, 40.0]}
 DEFAULT_THRESHOLDS = (5.0, 10.0, 20.0)
-ROW_KIND = {"model": "ensemble", "input": "single field", "truth": "single field"}
 WHERE = "against IMERG"
 
 
@@ -59,9 +58,12 @@ class Imerg:
                              f"({self.lat.size} points, same order expected)")
 
 
-def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_points=1000):
+def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_points=1000, kinds=None):
     """Rows, rank rows and histogram counts of one file against one IMERG field. A point is used only where
-    IMERG and every field (all members, input, truth) are finite, so every row is scored on the same points."""
+    IMERG and every field (all members, input, truth) are finite, so every row is scored on the same points.
+    ``kinds`` labels each row (ensemble or single field; the input and truth are ensembles when the file carries
+    their members, see ``obs_points.runner.read_fields``)."""
+    kinds = kinds or ROW_KIND
     ok = np.isfinite(ref)
     for x in fields.values():
         ok &= np.isfinite(x).all(0) if x.ndim == 2 else np.isfinite(x)
@@ -75,7 +77,7 @@ def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_po
         hist[reg] = {"imerg": np.histogram(r, EDGES)[0]}
         for k, x in fields.items():
             ens = x[:, m] if x.ndim == 2 else x[m][None]
-            rows.append({**base, "row": k, "kind": ROW_KIND[k], **ensemble_scores(ens, r, thresholds)})
+            rows.append({**base, "row": k, "kind": kinds[k], **ensemble_scores(ens, r, thresholds)})
             hist[reg][k] = sum(np.histogram(e, EDGES)[0] for e in ens)
             if ens.shape[0] > 1:
                 ranks.append({**base, "row": k, "members": int(ens.shape[0]), "n": int(m.sum()),
@@ -101,6 +103,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     if not preds:
         raise FileNotFoundError(f"No prediction files to read in {predictions_dir}")
     rows, ranks, log, files, members = [], [], [], [], set()
+    constructions, kinds_seen = set(), {}
+    var = str(eval_config.get("var", "tp"))
     H = {}
     for p in preds:
         valid = (pd.Timestamp(p.date) + pd.Timedelta(hours=p.step)).strftime("%Y%m%d%H")
@@ -108,12 +112,19 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         if ref is None:
             log.append(f"WARN no IMERG field for {valid} ({p.date} +{p.step} h)")
             continue
-        lat, lon, y, xi, yp = read_tp(p.path, str(eval_config.get("var", "tp")))
+        lat, lon, fields, prov = read_fields(p.path, [var], ensembles=bool(eval_config.get("competitor_ensembles", True)))
+        if var not in fields:
+            raise ValueError(f"{p.path}: no channel {var!r}")
+        f = fields[var]  # tp in mm, clipped at 0 (read_fields); 2t etc. would be in observation units
+        kinds = row_kinds(prov)
+        constructions.add(prov["model"])
+        for row, kind in kinds.items():
+            kinds_seen.setdefault(row, set()).add(kind)
         imerg.check_grid(lat, lon)
-        members.add(int(yp.shape[0]))
-        r, k, h = score_file({"model": yp, "input": xi, "truth": y}, ref, lat, lon, regions=regions,
-                             thresholds=thresholds, date=p.date, lead=p.step,
-                             min_points=int(eval_config.get("min_points", 1000)))
+        members.add(int(f["model"].shape[0]))
+        r, k, h = score_file({"model": f["model"], "input": f["input"], "truth": f["truth"]}, ref, lat, lon,
+                             regions=regions, thresholds=thresholds, date=p.date, lead=p.step,
+                             min_points=int(eval_config.get("min_points", 1000)), kinds=kinds)
         rows += r
         ranks += k
         for reg, d in h.items():
@@ -124,6 +135,18 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_imerg: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_imerg: nothing scored (no IMERG field for any file?)")
+    construction = sorted(constructions)[0]
+    if len(constructions) > 1:
+        log.append(f"WARN the files disagree on how the model ensemble was built: {sorted(constructions)}")
+    if is_single_input(construction):
+        log.append(f"WARN model row = {construction}. {ENSEMBLE_RULE}")
+    row_kind = {row: sorted(ks)[0] for row, ks in kinds_seen.items()}
+    competitor = {row: (ENSEMBLE_KIND[row] if row_kind[row].startswith("ensemble") else SINGLE_FIELD)
+                  for row in ("input", "truth") if row in row_kind}
+    for row in ("input", "truth"):
+        if competitor.get(row, "").startswith("single field"):
+            log.append(f"WARN the {row} row is a single field (the files carry no {row} members): its fair CRPS is "
+                       "the MAE of one field; compare it with the model's ensemble mean only (rule 34(e))")
     df = pd.DataFrame(rows)
     df.to_csv(output_dir / "scores_per_date.csv", index=False)
     pd.DataFrame(ranks).to_csv(output_dir / "rank_hist.csv", index=False)
@@ -141,7 +164,19 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "imerg_file": str(imerg_path), "imerg_attrs": {k: str(imerg.ds.getncattr(k)) for k in imerg.ds.ncattrs()},
             "regions": regions, "thresholds": list(thresholds), "members": sorted(members),
             "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}), "files": files,
-            "config": {"weighting": "none (O1280 points, nearly equal area)"}, "warnings": log}
+            "config": {"weighting": "none (O1280 points, nearly equal area)"},
+            "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
+            "provenance": provenance(
+                verifying_field=f"IMERG Final V07B {imerg.accum_h} h precipitation on the same O1280 points "
+                                f"({imerg_path.name}); satellite estimate, not a station observation",
+                against_observations=True, ensemble=construction, competitor_rows=competitor,
+                weight_form="unweighted mean over O1280 points (within 25-60 N the point areas differ by under "
+                            "10 %, so no ring weights)",
+                spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
+                            "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M); SE = over dates",
+                domain_bounds=regions, dates=sorted({p.date for p in preds}),
+                leads=sorted({p.step for p in preds}), members=sorted(members)),
+            "warnings": log}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
     write_summary_md(summ, pr, meta, output_dir / "summary.md", region=next(iter(regions)))
     for line in log:

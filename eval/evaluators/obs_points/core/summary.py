@@ -134,18 +134,29 @@ def _fmt(x, se=None, digits=3):
 
 def write_summary_md(summ, pr, meta, path, *, region="all"):
     """Headline tables (ensemble scores first) for one region, one block per variable and variant."""
+    from eval.shared.provenance import provenance_lines
+
     label = meta.get("run_label") or "model"
     unit_name = meta.get("sample_unit", "stations")
     leads = sorted(set(summ.lead))
+    kinds = dict(meta.get("rows") or {})
+    rows_present = [r for r in ("input", "truth", "hres") if r in set(summ.row)]
+    ens_rows = [r for r in rows_present if str(kinds.get(r, "")).startswith("ensemble")]
+    single_rows = [r for r in rows_present if r not in ens_rows]
     lines = [f"# {meta.get('evaluator', 'obs_points')}: {label} against {meta.get('reference', 'station observations')}", "",
              f"Region `{region}`. Mean over dates of the per-date mean over {unit_name}; SE over dates in brackets. "
-             f"`model` is the {max(meta.get('members') or [0])}-member ensemble; "
-             + ", ".join(f"`{r}`" for r in ("input", "truth", "hres") if r in set(summ.row))
-             + " are single fields (their fair CRPS is the mean absolute error and their spread is zero). Deterministic "
-             "columns (bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
+             f"`model` is the {max(meta.get('members') or [0])}-member ensemble"
+             + (" ({})".format(meta["provenance"]["ensemble_construction"]) if meta.get("provenance") else "") + "; "
+             + (", ".join(f"`{r}`" for r in ens_rows) + " are ensembles on the same stations; " if ens_rows else "")
+             + (", ".join(f"`{r}`" for r in single_rows)
+                + " are single fields (their fair CRPS is the mean absolute error of one field and their spread is "
+                  "zero: compare them with the ensemble mean, never with an ensemble's fair CRPS). " if single_rows else "")
+             + "Deterministic columns (bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
              f"Dates: {len(meta.get('dates', []))}. Reference: `{meta.get('cache_dir') or meta.get('imerg_file')}`. "
              "Weighting: "
              f"{meta.get('config', {}).get('weighting', 'none')}.", ""]
+    if meta.get("provenance"):
+        lines += provenance_lines(meta["provenance"]) + [""]
     s = summ[summ.region == region]
     for (v, var_, r), q in s.groupby(["var", "variant", "radius_km"], sort=False):
         unit = VAR_UNITS.get(v, "")
@@ -161,12 +172,13 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
             qq = q[q.row == row].set_index("lead")
             if qq.empty:
                 continue
+            is_ens = row == "model" or row in ens_rows
             for key, name in mets:
-                if row != "model" and key in ("ssr_corrected", "spread"):
+                if not is_ens and key in ("ssr_corrected", "spread"):
                     continue
                 cells = [_fmt(qq.loc[l, key], qq.loc[l, f"{key}_se"]) if l in qq.index else "" for l in leads]
-                tag = row if row == "model" else f"{row} (single field)"
-                label = "SEEPS" if key == "seeps" and row != "model" else name
+                tag = row if row == "model" else (f"{row} (ensemble)" if is_ens else f"{row} (single field)")
+                label = "SEEPS" if key == "seeps" and not is_ens else name
                 lines.append(f"| {tag} | {label} | " + " | ".join(cells) + " |")
         nn = q[q.row == "model"].set_index("lead")
         lines.append(f"| {unit_name} per date | | " + " | ".join(f"{nn.loc[l, 'mean_n']:.0f}" if l in nn.index else ""
