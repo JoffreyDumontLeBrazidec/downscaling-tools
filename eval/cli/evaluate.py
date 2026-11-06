@@ -176,6 +176,45 @@ def _declared_evaluators(
     return declared
 
 
+# Evaluators that leave the box-edge strip out of every number on a regional grid (or read no field), so the
+# slot-head edge artefact (docs ablation note s21) cannot reach their output.
+EDGE_STRIP_SAFE = frozenset({"probabilistic", "box_spectra", "obs_points", "obs_imerg", "describe", "mlflow",
+                             "sigma_loss"})
+_EDGE_SCAN_CACHE: dict[str, dict] = {}
+
+
+def _edge_artefact_gate(predictions_dir: Path, output_dir: Path) -> dict:
+    """Scan the predictions once for the slot-head box-edge artefact; write ``edge_artefact.json`` in the run dir.
+
+    Set EVAL_ALLOW_EDGE_ARTEFACT=1 to run every evaluator anyway (the outputs are then contaminated at the edge)."""
+    import os
+
+    from eval.shared.edge_strip import scan_edge_artefact
+
+    key = str(Path(predictions_dir).resolve())
+    if key not in _EDGE_SCAN_CACHE:
+        try:
+            _EDGE_SCAN_CACHE[key] = scan_edge_artefact(Path(predictions_dir))
+        except Exception as exc:  # noqa: BLE001 - a scan failure must not block the eval
+            LOG.warning("edge-artefact scan failed (non-fatal): %s", exc)
+            _EDGE_SCAN_CACHE[key] = {"checked": 0, "artefact": False, "detail": f"scan failed: {exc}"}
+    res = dict(_EDGE_SCAN_CACHE[key])
+    res["allowed_by_env"] = os.environ.get("EVAL_ALLOW_EDGE_ARTEFACT", "") == "1"
+    if res.get("artefact"):
+        LOG.warning(
+            "BOX-EDGE ARTEFACT in %s: %s. Only the strip-safe evaluators %s run%s (docs ablation note s21).",
+            predictions_dir, res.get("detail"), sorted(EDGE_STRIP_SAFE),
+            "; EVAL_ALLOW_EDGE_ARTEFACT=1 is set, so every evaluator runs and edge numbers are CONTAMINATED"
+            if res["allowed_by_env"] else "",
+        )
+        try:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            (Path(output_dir) / "edge_artefact.json").write_text(json.dumps(res, indent=2) + "\n")
+        except OSError:
+            LOG.warning("could not write edge_artefact.json", exc_info=True)
+    return res
+
+
 def _run_evaluators(
     predictions_dir: Path,
     lane_config: dict,
@@ -191,6 +230,7 @@ def _run_evaluators(
     """Run selected evaluators on existing predictions. Returns list of evaluators that ran."""
     evaluators_run: list[str] = []
     failures: list[str] = []
+    edge = {"artefact": False} if plot_only else _edge_artefact_gate(predictions_dir, output_dir)
 
     for name in evaluators:
         if evaluator_registry.is_retired(name):
@@ -200,6 +240,13 @@ def _run_evaluators(
             LOG.warning(
                 "Skipping unknown evaluator '%s'. Valid: %s", name, ALL_EVALUATORS
             )
+            continue
+
+        if edge.get("artefact") and not edge.get("allowed_by_env") and name not in EDGE_STRIP_SAFE:
+            detail = (f"box-edge artefact in the predictions ({edge.get('detail')}); '{name}' does not leave the "
+                      "edge strip out. Set EVAL_ALLOW_EDGE_ARTEFACT=1 to run it anyway (docs ablation note s21).")
+            LOG.warning("Skipping evaluator '%s': %s", name, detail)
+            _write_evaluator_status(output_dir, name, "skipped", detail=detail)
             continue
 
         mismatch = _host_mismatch(name)
