@@ -149,11 +149,13 @@ def _default_paths() -> dict[str, str]:
         "up_matrix": os.path.join(inter, "interpol_O320_to_O1280_linear.mat.npz"),
         "down_matrix": os.path.join(inter, "interpol_o1280_to_o320_linear.mat.npz"),
         "residual_stats": os.path.join(resid, "o1280_dict_0_72.npy"),
-        "forcings_zarr": (
+        "forcings_zarr": os.environ.get(
+            "O1280_FORCINGS_ZARR",
             "/home/mlx/ai-ml/datasets/"
-            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr"
+            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr",
         ),
-        "knn_cache": "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz",
+        "knn_cache": os.environ.get("O1280_KNN32_FILE",
+                                    "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz"),
     }
 
 
@@ -595,6 +597,32 @@ def _read_member(var, member_index: int) -> np.ndarray:
     return arr
 
 
+def _regional_embedding(lat_f, lon_f, static: dict, up, down, tol_deg: float = 1e-3):
+    """Map a regional file (e.g. the E2 Europe box) onto the global forcings grid.
+
+    Returns (gidx, valid): gidx[i] is the global index of file point i; valid marks the
+    global points whose fine part, zonal successor and nearest neighbour depend only on
+    box points (the box indicator survives the O1280->O320->O1280 round trip at > 0.999,
+    and nxt / nn are inside the box). Statistics are taken on valid points only.
+    """
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(_unit_vectors(static["lat"], static["lon"]))
+    d, gidx = tree.query(_unit_vectors(lat_f, lon_f), k=1, workers=-1)
+    chord_tol = 2.0 * np.sin(np.deg2rad(tol_deg) / 2.0)
+    if float(d.max()) > chord_tol:
+        raise RuntimeError(
+            f"regional file points are not on the forcings grid (max offset {float(d.max()):.2e} chord)")
+    n = static["lat"].size
+    inbox = np.zeros(n, dtype=bool)
+    inbox[gidx] = True
+    smooth = np.asarray(up @ (down @ inbox.astype(np.float64)))
+    valid = inbox & (smooth > 0.999) & inbox[static["nxt"]]
+    nn = static["nn"]
+    valid &= inbox[nn] if nn.ndim == 1 else inbox[nn].all(axis=1)
+    return gidx.astype(np.int64), valid
+
+
 def _lonlat_match(lat_a, lon_a, lat_b, lon_b, tol_deg: float = 1e-3) -> bool:
     if lat_a.shape != lat_b.shape:
         return False
@@ -804,6 +832,7 @@ def run(
     noise_mean = {s: {k: noise_ref[s][k]["mean"] for k in DELTA_STATS} for s in strata_order}
 
     samples: list[dict[str, Any]] = []
+    region_embed = None
     for file_path in files:
         m = _FILE_RE.search(file_path.name)
         date, step = (m.group(1), int(m.group(2))) if m else ("", -1)
@@ -820,7 +849,15 @@ def run(
                 LOG.warning("texture: %s lacks states %s; skipping them", file_path.name, absent)
             lat_f = np.asarray(ds.variables["lat_hres"][:]).reshape(-1)
             lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)
-            if not _lonlat_match(lat_f, lon_f, static["lat"], static["lon"]):
+            regional = lat_f.size != n_points
+            if regional:
+                if "x_interp" not in ds.variables:
+                    raise RuntimeError(f"{file_path.name}: regional file without x_interp")
+                if region_embed is None:
+                    region_embed = _regional_embedding(lat_f, lon_f, static, up, down)
+                    LOG.info("texture: regional file, %d points, %d valid interior points",
+                             lat_f.size, int(region_embed[1].sum()))
+            elif not _lonlat_match(lat_f, lon_f, static["lat"], static["lon"]):
                 raise RuntimeError(
                     f"{file_path.name}: lat/lon_hres do not match the forcings grid "
                     f"({lat_f.size} vs {n_points} points); the evaluator relies on identical point order"
@@ -831,7 +868,20 @@ def run(
                 t_mem = time.time()
                 yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)
                 yt = np.asarray(_read_member(ds.variables["y"], member_index))
-                xx = np.asarray(_read_member(ds.variables["x"], member_index))
+                if regional:
+                    # embed into the global grid; outside the box is NaN and excluded below
+                    gidx = region_embed[0]
+                    xi = np.asarray(_read_member(ds.variables["x_interp"], member_index))
+
+                    def _embed(a):
+                        g = np.full((n_points, a.shape[1]), np.nan, dtype=np.float64)
+                        g[gidx] = a
+                        return g
+
+                    yp, yt, xi = _embed(yp), _embed(yt), _embed(xi)
+                    xx = None
+                else:
+                    xx = np.asarray(_read_member(ds.variables["x"], member_index))
                 t_read = time.time() - t_mem
                 for state in states:
                     si = idx_of.get(state)
@@ -842,26 +892,30 @@ def run(
                         # No input counterpart: the interpolated driver is identically zero
                         # and the residual is the raw field. Truth from the GRIB if given.
                         x_interp = 0.0
-                        if precip_truth_tpl:
+                        if precip_truth_tpl and not regional:
                             y_state = _read_precip_truth(
                                 precip_truth_tpl.format(date=date), int(lead), lat_f, lon_f, state,
                             )
                         else:
                             y_state = np.asarray(yt[:, si], dtype=np.float64)
                     else:
-                        x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
+                        x_interp = (xi[:, si] if regional
+                                    else up @ np.asarray(xx[:, si], dtype=np.float64))
                         y_state = np.asarray(yt[:, si], dtype=np.float64)
                     r_t = (y_state - x_interp) / sd
                     r_m = (yp[:, si] - x_interp) / sd
                     finite = np.isfinite(r_t) & np.isfinite(r_m)
+                    if regional:
+                        finite &= region_embed[1]
                     all_finite = bool(finite.all())
-                    if not all_finite:
+                    if not all_finite and not regional:
                         LOG.warning(
                             "texture: %s member %s %s has %d non-finite points; excluded",
                             file_path.name, member_label, state, int((~finite).sum()),
                         )
-                        r_t = np.where(finite, r_t, 0.0)
-                        r_m = np.where(finite, r_m, 0.0)
+                    if not all_finite:
+                        r_t = np.where(np.isfinite(r_t), r_t, 0.0)
+                        r_m = np.where(np.isfinite(r_m), r_m, 0.0)
                     arrs_t = _texture_arrays(r_t, up, down, static["nxt"], static["nn"])
                     arrs_m = _texture_arrays(r_m, up, down, static["nxt"], static["nn"])
                     for stratum in strata_order:

@@ -61,10 +61,16 @@ from scipy.spatial import cKDTree
 WORK = "/home/ecm5702/agent-work/20260916-shape-instrument"
 MATCHED = "/home/ecm5702/agent-work/20260915-matched-feature-draws/outputs"
 SEEDREP = "/home/ecm5702/scratch/eval/o320_o1280_ft400k_gmass_wsweep_20260822/seedrep_5date"
-STATS = "/home/ecm5702/hpcperm/data/residuals_statistics/o1280_dict_0_72.npy"
-KNN = "/home/ecm5702/scratch/agent-work/20260901-sigma-scale-map/o1280_knn128.npz"
-IM = "/home/ecm5702/hpcperm/data/inter_mat"
-FORC = "/home/mlx/ai-ml/datasets/downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr"
+# Host overrides (Jupiter has none of the Atos paths): the same variables as the host files
+# (RESIDUAL_STATISTICS_DIR, INTER_MAT_DIR) plus O1280_KNN128_FILE and O1280_FORCINGS_ZARR.
+STATS = os.path.join(os.environ.get("RESIDUAL_STATISTICS_DIR",
+                                    "/home/ecm5702/hpcperm/data/residuals_statistics"),
+                     "o1280_dict_0_72.npy")
+KNN = os.environ.get("O1280_KNN128_FILE",
+                     "/home/ecm5702/scratch/agent-work/20260901-sigma-scale-map/o1280_knn128.npz")
+IM = os.environ.get("INTER_MAT_DIR", "/home/ecm5702/hpcperm/data/inter_mat").rstrip("/")
+FORC = os.environ.get("O1280_FORCINGS_ZARR",
+                      "/home/mlx/ai-ml/datasets/downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr")
 DONOR_MASKCACHE = "/home/ecm5702/agent-work/20260914-audit-branch-review/outputs/condmean_box_masks.npz"
 LOCAL_MASKCACHE = f"{WORK}/outputs/box_masks.npz"
 GEOMCACHE = f"{WORK}/outputs/box_geometry.npz"

@@ -194,6 +194,28 @@ def _build_box(lat: np.ndarray, lon180: np.ndarray, box, radii_km, adj_km: float
     }
 
 
+def _clip_boxes_to_extent(boxes: dict, lat: np.ndarray, lon180: np.ndarray, radii_km) -> dict:
+    """On a regional grid, shrink each box so that its padding stays inside the data.
+
+    A core point closer to the edge of the data than the largest radius would see a
+    truncated disk. Boxes left empty (e.g. the tropical Atlantic on the Europe box)
+    are dropped and logged.
+    """
+    pad_deg = float(max(radii_km)) / 111.0 + 0.5
+    lat0, lat1 = float(lat.min()) + pad_deg, float(lat.max()) - pad_deg
+    lon0, lon1 = float(lon180.min()) + pad_deg, float(lon180.max()) - pad_deg
+    out: dict[str, list[float]] = {}
+    for name, (a, b, c, d) in boxes.items():
+        box = [max(a, lat0), min(b, lat1), max(c, lon0), min(d, lon1)]
+        if box[0] >= box[1] or box[2] >= box[3]:
+            LOG.info("wind_extremes: box %s outside the regional data extent, dropped", name)
+            continue
+        if box != [a, b, c, d]:
+            LOG.info("wind_extremes: box %s clipped to %s (regional grid)", name, box)
+        out[name] = box
+    return out
+
+
 def _connected_patch(values: np.ndarray, adjacency, seed: int, threshold: float) -> int:
     """Size of the connected set of points above threshold that contains seed."""
     if values[seed] < threshold:
@@ -455,19 +477,31 @@ def run(
             lon = np.asarray(ds.variables["lon_hres"][:]).reshape(-1).astype(np.float64)
             lon180 = np.where(np.mod(lon, 360.0) > 180.0, np.mod(lon, 360.0) - 360.0,
                               np.mod(lon, 360.0))
+            # Regional files (e.g. the E2 Europe box, 814,810 of the 6,599,680 O1280 points)
+            # cannot use the global O320->O1280 matrix on their O320 halo x: the input is then
+            # the file's own x_interp (the lane's interpolation, exported by eval.predict), and
+            # the point area is that of the full grid the matrix maps to.
+            regional = up.shape[0] != lat.size
+            if regional and "x_interp" not in ds.variables:
+                raise RuntimeError(
+                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}, "
+                    "and no x_interp to fall back on")
             if point_area_km2 is None:
-                point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
+                point_area_km2 = float(SPHERE_AREA_KM2 / (up.shape[0] if regional else lat.size))
             if not box_static:
+                if regional:
+                    boxes = _clip_boxes_to_extent(boxes, lat, lon180, radii_km)
+                    if not boxes:
+                        raise RuntimeError(
+                            f"{file_path.name}: no wind_extremes box lies inside the data extent")
                 for name, box in boxes.items():
                     t_box = time.time()
                     box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
-                    up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
+                    up_box[name] = (None if regional
+                                    else up[box_static[name]["padded_idx"]].tocsr())
                     LOG.info("wind_extremes: box %s built in %.1fs (%d core, %d padded points)",
                              name, time.time() - t_box, box_static[name]["n_core"],
                              box_static[name]["n_padded"])
-            if up.shape[0] != lat.size:
-                raise RuntimeError(
-                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
@@ -477,8 +511,9 @@ def run(
                 yp_v = _read_component(ds.variables["y_pred"], member_index, cv)
                 yt_u = _read_component(ds.variables["y"], member_index, cu)
                 yt_v = _read_component(ds.variables["y"], member_index, cv)
-                xx_u = _read_component(ds.variables["x"], member_index, cu)
-                xx_v = _read_component(ds.variables["x"], member_index, cv)
+                xsrc = ds.variables["x_interp" if regional else "x"]
+                xx_u = _read_component(xsrc, member_index, cu)
+                xx_v = _read_component(xsrc, member_index, cv)
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
@@ -486,7 +521,8 @@ def run(
                     fields_padded = {
                         "model": np.hypot(yp_u[padded], yp_v[padded]),
                         "truth": np.hypot(yt_u[padded], yt_v[padded]),
-                        "input": np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v),
+                        "input": (np.hypot(xx_u[padded], xx_v[padded]) if regional
+                                  else np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v)),
                     }
                     entry: dict[str, Any] = {
                         "file": file_path.name, "date": date, "step": int(lead),
