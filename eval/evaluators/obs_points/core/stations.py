@@ -49,19 +49,25 @@ def wrap_lon(lon):
 class StationMatcher:
     """Nearest grid point of each station on one fixed grid (quaver's ``nearestpoint``)."""
 
-    def __init__(self, lat, lon):
+    def __init__(self, lat, lon, edge_deg: float | None = None):
         from scipy.spatial import cKDTree
+
+        from eval.shared.edge_strip import DEFAULT_BOX_EDGE_DEG, box_edge_mask
 
         self.lat, self.lon = np.asarray(lat), wrap_lon(lon)
         self.tree = cKDTree(xyz(self.lat, self.lon))
+        # stations whose nearest grid point lies in the box-edge strip of a regional grid are dropped
+        # (slot-head edge artefact, docs ablation note s21); a global grid keeps every point
+        self.edge_deg = DEFAULT_BOX_EDGE_DEG if edge_deg is None else float(edge_deg)
+        self.inside = box_edge_mask(self.lat, self.lon, self.edge_deg)
 
     def same_grid(self, lat, lon) -> bool:
         return self.lat.size == np.size(lat) and np.allclose(self.lat, lat) and np.allclose(self.lon, wrap_lon(lon))
 
     def match(self, slat, slon, max_km: float):
-        """Index of the nearest grid point and a mask of the stations within ``max_km`` of it."""
+        """Index of the nearest grid point and a mask of the stations within ``max_km`` of it and outside the edge strip."""
         dist, idx = self.tree.query(xyz(np.asarray(slat), np.asarray(slon)))
-        return idx, dist * R_EARTH_KM <= max_km
+        return idx, (dist * R_EARTH_KM <= max_km) & self.inside[idx]
 
     def discs(self, idx, radius_km: float):
         """For each matched grid point, the grid points within ``radius_km`` of it (disc means)."""
