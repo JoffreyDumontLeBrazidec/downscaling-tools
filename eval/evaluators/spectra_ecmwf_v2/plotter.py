@@ -18,8 +18,8 @@ def plot(
     """Build the spectra PDFs for this run.
 
     `spectra_ecmwf_grid.png` / `.pdf` is the standard figure (eval.plotting.spectra_grid):
-    every variable in one figure, the mean power spectrum of truth, input and model above and
-    the power ratio to the truth below. Two more files are written side by side. `spectra_ecmwf.pdf` holds the
+    every variable in one figure, the amplitude spectrum of truth, input and model above and
+    the amplitude ratio to the truth below. Two more files are written side by side. `spectra_ecmwf.pdf` holds the
     mean power spectra (the square of the stored amplitudes, in the
     variable's display unit squared), with the model, truth and input
     curves on log-log axes. `spectra_ecmwf_ratio.pdf` holds the same model
@@ -80,8 +80,8 @@ def plot(
     truth_label = eval_config.get("truth_label", "truth")
     input_label = eval_config.get("input_label", "input")
 
-    # The standard figure (owner, 9 Nov 2026): all variables in one figure, power spectrum
-    # above and power ratio to truth below, truth / input / model.
+    # The standard figure (owner, 9 Nov 2026): all variables in one figure, amplitude spectrum
+    # above and amplitude ratio to truth below, truth / input / model.
     try:
         written = build_spectra_grid(
             pred_amp_dir,

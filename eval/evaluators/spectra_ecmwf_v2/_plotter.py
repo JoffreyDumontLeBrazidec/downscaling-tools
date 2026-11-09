@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from eval.plotting import AXIS, FigureBook, eval_style, role_style, variable_spec  # noqa: E402
-from eval.plotting.spectra_grid import Curve, plot_spectra_grid, ratio_to_reference  # noqa: E402
+from eval.plotting.spectra_grid import Curve, plot_spectra_grid, ratio_to_reference, rms_amplitude  # noqa: E402
 from eval.plotting.spec_helpers import (  # noqa: E402
     add_wavelength_axis,
     amplitude_in_display,
@@ -547,13 +547,13 @@ def build_pdf_ecmwf_ratio(
 
 
 # ---------------------------------------------------------------------------
-# Standard grid figure: every variable in one figure, power above, ratio to truth below
+# Standard grid figure: every variable in one figure, amplitude above, ratio to truth below
 # ---------------------------------------------------------------------------
 
-def _mean_power(amp_dir: Path | None, param_name: str):
-    """(wavenumbers, mean power in display units squared, curve files), or None.
+def _rms_amplitude(amp_dir: Path | None, param_name: str):
+    """(wavenumbers, amplitude in display units, curve files), or None.
 
-    Power is averaged as power (mean of the squared amplitudes over the curves).
+    Averaged as power over the curves, then square-rooted (as box_spectra does).
     """
     if amp_dir is None:
         return None
@@ -561,7 +561,7 @@ def _mean_power(amp_dir: Path | None, param_name: str):
     if got is None:
         return None
     wvn, stack, files = got
-    return wvn, (amplitude_in_display(param_name, stack) ** 2).mean(axis=0), files
+    return wvn, rms_amplitude((amplitude_in_display(param_name, stack) ** 2).mean(axis=0)), files
 
 
 def build_spectra_grid(
@@ -584,13 +584,13 @@ def build_spectra_grid(
     for param_dir in sorted(d for d in Path(pred_amp_dir).iterdir()
                             if d.is_dir() and list(d.glob("ampl_*.npy"))):
         pname = param_dir.name
-        model = _mean_power(pred_amp_dir, pname)
+        model = _rms_amplitude(pred_amp_dir, pname)
         if model is None:
             continue
         curves = []
         for role, name, src in (("truth", truth_label, truth_amp_dir),
                                 ("input", input_label, input_amp_dir)):
-            got = _mean_power(src, pname)
+            got = _rms_amplitude(src, pname)
             if got is not None:
                 curves.append(Curve(_role_label(role, name), got[0], got[1], role=role))
                 counts.setdefault(role, _sample_note(got[2]))
@@ -599,8 +599,8 @@ def build_spectra_grid(
         panels[pname] = curves
     if not panels:
         return []
-    foot = ("Mean power spectra (power averaged over curves, display unit squared); "
-            "ratio = power / truth power. Curves per variable: "
+    foot = ("Spectral amplitude (display unit; power averaged over curves, then square root); "
+            "ratio = amplitude / truth amplitude. Curves per variable: "
             + "; ".join(f"{k} {v}" for k, v in counts.items()) + ".")
     return plot_spectra_grid(panels, out_stem, title=title, footnote=foot)
 

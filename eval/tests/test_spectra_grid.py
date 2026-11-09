@@ -17,8 +17,8 @@ from eval.plotting.spectra_grid import (
 
 def _curve(role, scale=1.0, n=640):
     wvn = np.arange(0, n + 1, dtype=float)
-    power = scale * (1.0 + wvn) ** -3.0
-    return Curve(role.capitalize(), wvn, power, role=role)
+    amp = scale * (1.0 + wvn) ** -1.5
+    return Curve(role.capitalize(), wvn, amp, role=role)
 
 
 def test_order_follows_the_reference_figure_by_any_spelling():
@@ -26,9 +26,9 @@ def test_order_follows_the_reference_figure_by_any_spelling():
     assert got == ["tcc", "tp", "ws", "2t", "msl", "z_500", "foo"]
 
 
-def test_ratio_is_one_on_identical_curves_and_scales_with_power():
+def test_ratio_scales_with_amplitude():
     c = _curve("truth")
-    wvn, ratio = ratio_to_reference(c.wavenumber, 2.0 * c.power, c.wavenumber, c.power)
+    wvn, ratio = ratio_to_reference(c.wavenumber, 2.0 * c.amplitude, c.wavenumber, c.amplitude)
     assert wvn.min() > 0
     np.testing.assert_allclose(ratio, 2.0)
 
@@ -94,8 +94,8 @@ def test_box_spectra_grid_from_bins_csv(tmp_path):
         w.writerows(rows)
     panels = grid_panels([{k: str(v) for k, v in r.items()} for r in rows])
     truth, inp, model = panels["ws"]
-    np.testing.assert_allclose(model.power / truth.power, 0.81)
-    np.testing.assert_allclose(inp.power / truth.power, 0.25)
+    np.testing.assert_allclose(model.amplitude / truth.amplitude, 0.9)
+    np.testing.assert_allclose(inp.amplitude / truth.amplitude, 0.5)
     assert np.all(np.diff(truth.wavenumber) > 0)
     written = plot_grid(tmp_path)
     assert {p.name for p in written} == {"box_spectra_grid.png", "box_spectra_grid.pdf"}

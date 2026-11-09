@@ -20,8 +20,8 @@ EVALUATOR_SPEC = {
         "and the residual, full-field and input ratios, coherence, aligned part.",
         "bins.md: the pooled per-bin table.",
         "box_spectra_ladder.png: the ratios against the wavelength ladder (written by plot).",
-        "box_spectra_grid.png/.pdf: the standard spectra figure, truth / input / model power and "
-        "power ratio to truth per variable (written by plot).",
+        "box_spectra_grid.png/.pdf: the standard spectra figure, truth / input / model amplitude and "
+        "amplitude ratio to truth per variable (written by plot).",
         "run_meta.json: box, grid, files and members used.",
     ],
 }

@@ -36,7 +36,8 @@ CURVES = [("ratio_resid", MODEL_COLOR, "-", "predicted residual / true residual"
 def grid_panels(rows: list[dict]) -> dict:
     """Curves of the standard spectra figure from the pooled bins.csv rows.
 
-    Power per bin = amplitude squared (display unit), placed at the equivalent total wavenumber
+    Amplitude per bin (display unit, as stored: sqrt of the power averaged over draws), placed at
+    the equivalent total wavenumber
     40030 km / bin centre so that the figure reads like the spherical-harmonic one. Truth, the
     interpolated input (the input ensemble when the predictions hold one draw per input member)
     and the model.
@@ -51,13 +52,13 @@ def grid_panels(rows: list[dict]) -> dict:
         sub = sorted((r for r in rows if r["variable"] == var), key=lambda r: -float(r["bin_centre_km"]))
         wvn = wavelength_to_wavenumber([float(r["bin_centre_km"]) for r in sub])
 
-        def power(col):
+        def amp(col):
             vals = np.array([float(r[col]) if r[col] not in ("", "nan") else np.nan for r in sub])
-            return amplitude_in_display(var, vals) ** 2
+            return amplitude_in_display(var, vals)
 
-        panels[var] = [Curve("Truth", wvn, power("amp_truth_full"), role="truth"),
-                       Curve("Input (interpolated)", wvn, power("amp_interp"), role="input"),
-                       Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, power("amp_pred_full"), role="model")]
+        panels[var] = [Curve("Truth", wvn, amp("amp_truth_full"), role="truth"),
+                       Curve("Input (interpolated)", wvn, amp("amp_interp"), role="input"),
+                       Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, amp("amp_pred_full"), role="model")]
     return panels
 
 
@@ -71,8 +72,8 @@ def plot_grid(results_dir, *, output_dir=None, title=None):
     rows = [r for r in read_bins(path) if r["scope"] == "all"]
     if not rows:
         return []
-    foot = ("Box FFT power per wavelength bin (amplitude squared, display unit squared), placed at "
-            "total wavenumber 40030 km / wavelength; ratio = power / truth power.")
+    foot = ("Box FFT amplitude per wavelength bin (display unit), placed at total wavenumber "
+            "40030 km / wavelength; ratio = amplitude / truth amplitude (rule 14 full-field ratio).")
     return plot_spectra_grid(grid_panels(rows), Path(output_dir or results_dir) / "box_spectra_grid",
                              title=title, footnote=foot)
 

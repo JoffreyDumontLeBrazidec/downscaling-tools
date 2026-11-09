@@ -1,4 +1,4 @@
-"""The standard spectra figure: one column per variable, power spectrum above, ratio below.
+"""The standard spectra figure: one column per variable, amplitude spectrum above, ratio below.
 
 This is the layout of the ECMWF / anemoi spectra figure the owner chose on 9 Nov 2026 as the
 one standard spectra plot of ``eval.cli``:
@@ -6,14 +6,14 @@ one standard spectra plot of ``eval.cli``:
 * one panel per variable, at most four per row, in the order of ``STANDARD_ORDER``
   (total cloud cover, 6 h precipitation, 10 m wind speed, 2 m temperature, mean sea level
   pressure, 500 hPa geopotential, total column water, 850 hPa v-wind) and then the rest;
-* top: power against total wavenumber on log-log axes, wavelength in km on a top axis;
+* top: spectral amplitude against total wavenumber on log-log axes, wavelength in km on a top axis;
 * below: each curve divided by the truth curve, log axis from 0.3 to 3, a line at one;
 * few curves per panel: truth, input ensemble and model (rule: at most three).
 
 Curves keep the house role colours of ``eval.plotting.roles`` (truth black, model red,
-input blue dashed). Values are POWER (square of the stored spectral amplitude, in the
-variable's display unit squared), averaged over curves as power, and the ratio is a power
-ratio. Both evaluators feed it: ``spectra_ecmwf_v2`` (spherical harmonics of global fields,
+input blue dashed). Values are spectral AMPLITUDES in the variable's display unit (the
+quantity of standing rule 14 and of every amplitude ratio quoted in the notes), and the ratio
+is an amplitude ratio; feeders average over curves as power and take the square root. Both evaluators feed it: ``spectra_ecmwf_v2`` (spherical harmonics of global fields,
 total wavenumber up to the truncation) and ``box_spectra`` (FFT of a box, its wavelength bins
 placed at the equivalent total wavenumber 40030 km / wavelength).
 """
@@ -38,17 +38,13 @@ RATIO_LIM = (0.3, 3.0)
 RATIO_TICKS = (0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0)
 NCOLS = 4
 
-_SQUARED = {"hPa": "hPa²", "Pa": "Pa²", "K": "K²", "dam": "dam²", "mm": "mm²", "m": "m²",
-            "m s⁻¹": "m² s⁻²", "m s-1": "m² s⁻²", "kg m⁻²": "kg² m⁻⁴", "%": "%²"}
-
-
 @dataclass
 class Curve:
-    """One mean spectrum: ``power`` at ``wavenumber`` (both 1-D, same length)."""
+    """One mean spectrum: ``amplitude`` at ``wavenumber`` (both 1-D, same length)."""
 
     label: str
     wavenumber: np.ndarray
-    power: np.ndarray
+    amplitude: np.ndarray
     role: str = "model"             # truth | model | input | baseline | reference
     style: dict = field(default_factory=dict)
 
@@ -119,9 +115,9 @@ def wavelength_to_wavenumber(wavelength_km) -> np.ndarray:
     return EARTH_CIRCUMFERENCE_KM / np.asarray(wavelength_km, dtype=float)
 
 
-def power_unit(variable: str) -> str:
-    unit = variable_spec(variable).unit or ""
-    return _SQUARED.get(unit, f"({unit})²" if unit else "")
+def rms_amplitude(power_mean) -> np.ndarray:
+    """Amplitude of a mean power: ``sqrt(mean over curves of amplitude²)``."""
+    return np.sqrt(np.asarray(power_mean, dtype=float))
 
 
 def plot_spectra_grid(
@@ -162,20 +158,20 @@ def plot_spectra_grid(
             truth = next((cv for cv in curves if cv.role == "truth"), None)
 
             for cv in curves:
-                m = (np.asarray(cv.wavenumber) > 0) & np.isfinite(cv.power) & (np.asarray(cv.power) > 0)
-                (line,) = ax.plot(np.asarray(cv.wavenumber)[m], np.asarray(cv.power)[m],
+                m = (np.asarray(cv.wavenumber) > 0) & np.isfinite(cv.amplitude) & (np.asarray(cv.amplitude) > 0)
+                (line,) = ax.plot(np.asarray(cv.wavenumber)[m], np.asarray(cv.amplitude)[m],
                                   label=cv.label, **cv.line_kwargs())
                 handles.setdefault(cv.label, line)
                 if truth is not None and cv is not truth:
-                    got = ratio_to_reference(cv.wavenumber, cv.power, truth.wavenumber, truth.power)
+                    got = ratio_to_reference(cv.wavenumber, cv.amplitude, truth.wavenumber, truth.amplitude)
                     if got is not None:
                         axr.plot(got[0], got[1], **cv.line_kwargs())
 
-            unit = power_unit(var)
+            unit = variable_spec(var).unit or ""
             ax.set_title(panel_title(var), fontsize=11)
             ax.set_xscale("log")
             ax.set_yscale("log")
-            ax.set_ylabel(f"power ({unit})" if unit else "power", fontsize=9)
+            ax.set_ylabel(f"amplitude ({unit})" if unit else "amplitude", fontsize=9)
             ax.tick_params(labelbottom=False, labelsize=8)
             ax.grid(True, which="major", color="0.9", linewidth=0.5)
             sec = add_wavelength_axis(ax)
