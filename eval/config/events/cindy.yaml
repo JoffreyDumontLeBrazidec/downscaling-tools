@@ -1,0 +1,15 @@
+name: cindy
+full_name: "Tropical Storm Cindy (IBTrACS 2023173N10320)"
+# o2560 Europe-Atlantic box lane (E2 box 10-70 N, 80 W-40 E; this box stays inside the 1-degree edge strip).
+# Not scoring-eligible: selected by name (tc_structure events list), boxes may overlap (Bret/Cindy);
+# use with best_track_cache so the first guess is anchored on the IBTrACS position.
+lat_min: 11.0
+lat_max: 30.0
+lon_min: -70.0
+lon_max: -25.0
+dates: ["19", "20", "21", "22", "23", "24", "25", "26"]
+analysis_dates: []
+year: "2023"
+month: "06"
+pressure_threshold: 1013.25
+scoring_eligible: false

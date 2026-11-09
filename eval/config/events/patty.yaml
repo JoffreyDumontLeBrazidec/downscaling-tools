@@ -1,0 +1,15 @@
+name: patty
+full_name: "Subtropical Storm Patty (IBTrACS 2024306N39319)"
+# o2560 Europe-Atlantic box lane (E2 box 10-70 N, 80 W-40 E; this box stays inside the 1-degree edge strip).
+# Not scoring-eligible: selected by name (tc_structure events list), boxes may overlap (Bret/Cindy);
+# use with best_track_cache so the first guess is anchored on the IBTrACS position.
+lat_min: 28.0
+lat_max: 52.0
+lon_min: -50.0
+lon_max: -5.0
+dates: ["01", "02", "03", "04", "05"]
+analysis_dates: []
+year: "2024"
+month: "11"
+pressure_threshold: 1013.25
+scoring_eligible: false

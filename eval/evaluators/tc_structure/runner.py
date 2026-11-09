@@ -13,6 +13,25 @@ valid times, never member against member. For the same reason the first guess th
 keeps every centre search on the right storm is taken from the truth ENSEMBLE MEAN
 msl (its minimum inside the event box, refined like any centre), and the centre
 displacement of every member of every field is its distance to that first guess.
+With ``first_guess_field: input`` the first guess is taken from the INPUT ensemble
+mean instead: the storm is judged at the input position, which also works on dates
+with no truth (a missing or all-NaN field is recorded as not found).
+
+Best-track anchor. With ``best_track_cache`` (a tc_obs cache directory, written by
+``eval.cli obs fetch-tc``; event names as in its best_track.csv) the first guess of
+every (date, lead) is searched within ``best_track_search_km`` (300 km) of the
+IBTrACS position at valid time instead of being tracked from the deepest low; a
+(date, lead) with no best-track fix (none within 6 h) is not a storm case, and the
+``storm_max_pmin_hpa`` threshold is not applied (the best track says a storm is
+there; weak storms such as Bret or Don stay in). The edge strip is excluded by the
+event box itself.
+
+Member pairing. When the prediction files hold one generative draw per input
+member (model member k driven by input member k, the project's ensemble
+definition), ``summary.json`` also carries ``paired.model_minus_input``: the mean
+over (date, lead, member) of model member k minus input member k, both found,
+with date-clustered errors. This is the per-member change the downscaling makes
+to the storm it was given.
 
 The first guess is followed as a track along the leads of each initial date. At
 the first lead with a storm it is the deepest low of the truth ensemble-mean msl in
@@ -143,12 +162,16 @@ def _read_region(path: Path, events, margin_deg: float):
         s0, s1 = min(iu, iv, ip), max(iu, iv, ip) + 1
         out = {"lat": lat_r[sel], "lon": lon_r[sel], "n_file_points": int(lat.size),
                "attrs": {k: str(d.getncattr(k)) for k in d.ncattrs()}}
+        nmem = int(d["y_pred"].shape[1])
         for fname, var in FIELDS:
+            if var not in d.variables:
+                out[fname] = np.full((nmem, sel.size, 3), np.nan)
+                continue
             blk = np.asarray(d[var][0, :, i0:i1, s0:s1], dtype=np.float32)[:, sel, :]
             arr = np.stack([blk[..., iu - s0], blk[..., iv - s0], blk[..., ip - s0]], axis=-1)
             del blk
             arr = arr.astype(np.float64)
-            med = float(np.median(arr[0, :, 2]))
+            med = float(np.nanmedian(arr[0, :, 2])) if np.isfinite(arr[0, :, 2]).any() else 0.0
             if med > 5000.0:          # Pa -> hPa
                 arr[..., 2] /= 100.0
             out[fname] = arr
@@ -167,7 +190,8 @@ def _fmt(v):
 
 def measure_file(path: Path, ymd: int, step: int, events, params: StructureParams, *,
                  arm: str, storm_edge_km: float, storm_max_pmin_hpa: float,
-                 track_km_per_24h: float = 900.0, track=None, members=None):
+                 track_km_per_24h: float = 900.0, track=None, members=None,
+                 first_guess_field: str = "truth", best_track=None, bt_search_km: float = 300.0):
     """All case rows (and profiles) of one prediction file.
 
     ``track`` maps an event name to the first-guess state left by the previous lead
@@ -181,7 +205,9 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
     if data is None:
         return rows, profiles, track
     lat, lon = data["lat"], data["lon"]
-    nmem = data["truth"].shape[0]
+    if first_guess_field not in ("truth", "input"):
+        raise ValueError(f"tc_structure: first_guess_field must be truth or input, not {first_guess_field!r}")
+    nmem = data["model"].shape[0]
     ks = list(range(nmem)) if members is None else list(members)
     for ev in events:
         bbox = _bbox_tuple(ev)
@@ -190,29 +216,49 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
         if not ev_mask.any():
             LOG.warning("tc_structure: %s has no points in the %s box; skipped", path.name, ev.name)
             continue
-        truth_mean = data["truth"][:, :, 2].mean(axis=0)
+        fg_mean = data[first_guess_field][:, :, 2].mean(axis=0)
         fg_params = replace(params, box_edge_km=storm_edge_km)
         state = track.get(ev.name)
-        if state == "lost":
+        anchor = None
+        if best_track is not None:
+            import datetime as _dt
+            when = _dt.datetime.strptime(f"{ymd:08d}", "%Y%m%d") + _dt.timedelta(hours=int(step))
+            from eval.evaluators.tc_obs.core.reference import best_track_at
+            anchor = best_track_at(best_track, ev.name, when)
+        if best_track is not None and anchor is None:
+            fg = {"found": False, "reason": "no best-track fix within 6 h of the valid time",
+                  "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
+        elif best_track is not None:
+            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox,
+                             first_guess=(float(anchor["lat"]), float(anchor["lon"])),
+                             params=replace(fg_params, search_km=bt_search_km))
+            if not fg["found"] and fg["reason"]:
+                fg["reason"] = "best-track anchor: " + fg["reason"]
+        elif state == "lost":
             fg = {"found": False, "reason": "storm lost at an earlier lead of this date",
                   "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
         elif state is None:
             # first lead with a storm: the deepest closed low of the truth ensemble mean
-            fg = find_centre(lat, lon, truth_mean, ev_mask, bbox=bbox, params=fg_params)
+            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, params=fg_params)
         else:
             # follow the first-guess track: the truth ensemble-mean low within the
             # distance a storm can travel since the previous lead
             plat, plon, pstep = state
             radius = track_km_per_24h * max(int(step) - int(pstep), 1) / 24.0
-            fg = find_centre(lat, lon, truth_mean, ev_mask, bbox=bbox, first_guess=(plat, plon),
+            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, first_guess=(plat, plon),
                              params=replace(fg_params, search_km=radius))
             if not fg["found"] and fg["reason"]:
                 fg["reason"] = "first-guess track: " + fg["reason"]
-        storm_ok = bool(fg["found"] and fg["pmin_hpa"] <= storm_max_pmin_hpa)
+        if not np.isfinite(fg_mean[ev_mask]).all():
+            fg = {"found": False, "reason": f"{first_guess_field} field missing or not finite in the box",
+                  "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
+        storm_ok = bool(fg["found"] and (best_track is not None or fg["pmin_hpa"] <= storm_max_pmin_hpa))
         fg_reason = "" if storm_ok else (fg["reason"] or
-                                         f"truth ensemble-mean Pmin {fg['pmin_hpa']:.1f} hPa "
+                                         f"{first_guess_field} ensemble-mean Pmin {fg['pmin_hpa']:.1f} hPa "
                                          f"> {storm_max_pmin_hpa} hPa")
-        if storm_ok:
+        if best_track is not None:
+            pass
+        elif storm_ok:
             track[ev.name] = (fg["lat"], fg["lon"], int(step))
         elif state is not None:
             track[ev.name] = "lost"
@@ -221,13 +267,18 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
             for k in ks:
                 msl = arr[k, :, 2]
                 row = {c: "" for c in CASE_COLS}
+                finite = bool(np.isfinite(msl[ev_mask]).all())
                 row.update(arm=arm, event=ev.name, date=f"{ymd:08d}", lead=int(step), field=fname,
                            member=int(k), storm_ok=int(storm_ok), found=0,
-                           box_min_hpa=float(msl[ev_mask].min()),
+                           box_min_hpa=float(msl[ev_mask].min()) if finite else np.nan,
                            fg_lat=fg["lat"], fg_lon=fg["lon"], fg_pmin_hpa=fg["pmin_hpa"],
                            file=str(path))
                 if not storm_ok:
                     row["reason"] = "no storm case: " + fg_reason
+                    rows.append(row)
+                    continue
+                if not finite:
+                    row["reason"] = "field missing or not finite in the box"
                     rows.append(row)
                     continue
                 c = find_centre(lat, lon, msl, ev_mask, bbox=bbox,
@@ -296,9 +347,27 @@ def aggregate(rows: list[dict], bands: dict, n_boot: int, seed: int,
                         s: boot_mean_diff([r["date"] for r in A], _num(A, s),
                                           [r["date"] for r in B], _num(B, s), n_boot, seed)
                         for s in SCORES}
+            b_out["paired"] = _paired(per_field, n_boot, seed)
             ev_out[band] = b_out
         out["events"][ev] = ev_out
     return out
+
+
+def _paired(per_field: dict, n_boot: int, seed: int) -> dict:
+    """Model member k minus input member k at the same (date, lead), both found."""
+    inp = {(r["date"], int(r["lead"]), int(r["member"])): r for r in per_field.get("input", [])}
+    pairs = [(r, inp[key]) for r in per_field.get("model", [])
+             if (key := (r["date"], int(r["lead"]), int(r["member"]))) in inp]
+    if not pairs:
+        return {}
+    dates = [m["date"] for m, _ in pairs]
+    res = {"n_pairs": len(pairs), "n_dates": len(set(dates))}
+    for s in SCORES:
+        d = np.array([(float(m[s]) if m[s] not in ("", None) else np.nan)
+                      - (float(i[s]) if i[s] not in ("", None) else np.nan) for m, i in pairs])
+        ok = np.isfinite(d)
+        res[s] = boot_mean([x for x, o in zip(dates, ok) if o], d[ok], n_boot, seed) if ok.any() else {}
+    return {"model_minus_input": res}
 
 
 def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=None,
@@ -312,6 +381,13 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     storm_edge_km = float(eval_config.get("storm_edge_km", 50.0))
     storm_max_pmin = float(eval_config.get("storm_max_pmin_hpa", 1005.0))
     track_speed = float(eval_config.get("track_km_per_24h", 900.0))
+    fg_field = str(eval_config.get("first_guess_field", "truth"))
+    bt_cache = eval_config.get("best_track_cache")
+    best_track = None
+    if bt_cache:
+        from eval.evaluators.tc_obs.core.reference import load_cache
+        best_track = load_cache(bt_cache)[0]
+    bt_search_km = float(eval_config.get("best_track_search_km", 300.0))
     n_boot = int(eval_config.get("n_boot", DEFAULT_N_BOOT))
     seed = int(eval_config.get("seed", DEFAULT_SEED))
     bands = eval_config.get("lead_bands") or DEFAULT_BANDS
@@ -344,7 +420,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         r, p, tracks[ymd] = measure_file(
             Path(path), ymd, step, evs, params, arm=arm, storm_edge_km=storm_edge_km,
             storm_max_pmin_hpa=storm_max_pmin, track_km_per_24h=track_speed,
-            track=tracks.get(ymd))
+            track=tracks.get(ymd), first_guess_field=fg_field, best_track=best_track,
+            bt_search_km=bt_search_km)
         base = len(rows)
         rows += r
         profs += [(base + i, vt) for i, vt in p]
@@ -369,6 +446,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "files": [str(f[0]) for f in files], "events": [e.name for e in events],
         "params": asdict(params), "storm_edge_km": storm_edge_km,
         "storm_max_pmin_hpa": storm_max_pmin, "track_km_per_24h": track_speed,
+        "first_guess_field": fg_field, "best_track_cache": str(bt_cache or ""),
+        "best_track_search_km": bt_search_km,
         "n_boot": n_boot, "seed": seed,
         "seconds": time.time() - t0,
     }

@@ -1,0 +1,15 @@
+name: january2023
+full_name: "Unnamed subtropical storm, January 2023 (IBTrACS 2023015N36289)"
+# o2560 Europe-Atlantic box lane (E2 box 10-70 N, 80 W-40 E; this box stays inside the 1-degree edge strip).
+# Not scoring-eligible: selected by name (tc_structure events list), boxes may overlap (Bret/Cindy);
+# use with best_track_cache so the first guess is anchored on the IBTrACS position.
+lat_min: 25.0
+lat_max: 52.0
+lon_min: -79.0
+lon_max: -40.0
+dates: ["12", "13", "14", "15", "16", "17", "18"]
+analysis_dates: []
+year: "2023"
+month: "01"
+pressure_threshold: 1013.25
+scoring_eligible: false
