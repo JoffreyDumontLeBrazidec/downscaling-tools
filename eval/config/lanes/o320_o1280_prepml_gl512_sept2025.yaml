@@ -1,0 +1,99 @@
+# o320_o1280_prepml_gl512_sept2025 -- September-2025 prepml month for GL512 (2026-11-09).
+#
+# Checkpoint: run db_global_512_300k (MLflow run 7bb77ac91f5f444e9132cd133713c0c3), EMA-2000
+# inference export at step 318000, supplied on the CLI as always:
+#   /home/ecm5702/perm/checkpoints/o320_o1280/7bb77ac91f5f444e9132cd133713c0c3/inference-ema2000-anemoi-by_step-epoch_317-step_318000.ckpt
+# Trained on JUPITER with anemoi-core fork 18a5415a (branch claude/project-thread-o4995j):
+# AnemoiD2ModelEncProcDec, 512 channels, EDM preconditioning, freeze_qk_gains, fixed Triton gt.py
+# (upstream bbca1748 port), surface-only outputs with tp and cp as direct predictions, O320 input
+# (eefh cf in training) plus O1280 forcings, num_gpus_per_model 4.
+#
+# The checkpoint pickles classes of that fork, so prepml must run it on the sandbox
+# ~/hpcperm/sandbox/20261109-gl512-prepml (anemoi-core worktree pinned at 18a5415a) through the wrap
+# gl512-20261109-prepml-wrap. That wrap also carries two runner patches (site/gl512_runner_patches.py):
+#   1. the sampler keys reach the model as noise_scheduler_params / sampler_params dicts. Without it
+#      the 18a5415a interface drops num_steps_high / num_steps_low and the piecewise schedule silently
+#      becomes 15/15 instead of 10/20;
+#   2. standing rule 31: each draw is seeded with derive_draw_seed(base, init date, lead, member-1),
+#      base = ANEMOI_BASE_SEED or 756, and the initial noise is one global O1280 field sliced per rank.
+#
+# Everything else follows o320_o1280_prepml_pw30_season_ft400k_ctrl (same parent, same env, ecflow gpu
+# limit 2, spectra blocks restated for the September-2025 window). The ONE deliberate sampler change is
+# S_churn 0: the 30-step churn-off piecewise EDM sampler of the GL512 read kit on Jupiter
+# (agent-work/20261030-gl512-100k-wide/kit/gl512_predict.py, PW_SCHED + PW_SAMPLER), i.e. 59 denoiser
+# calls per draw (Heun, 30 steps, Euler last step).
+#
+# Owner 2026-11-09: lead 0-360 h at 24 h steps (prepml also writes step 0, trap P5), members 1-10 of
+# eefo pf O320 from MARS (one draw per input member), 00 UTC 2025-09-01 .. 2025-09-30, output FDB
+# class rd stream enfo type pf.
+#
+# NOTE: the lane loader merges only two levels deep, so predict.env and predict.sampler REPLACE the
+# base blocks wholesale and are restated here in full.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360]
+  dates: ["20250901", "20250902", "20250903", "20250904", "20250905", "20250906", "20250907", "20250908",
+          "20250909", "20250910", "20250911", "20250912", "20250913", "20250914", "20250915", "20250916",
+          "20250917", "20250918", "20250919", "20250920", "20250921", "20250922", "20250923", "20250924",
+          "20250925", "20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 4
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+
+prepml:
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261109-prepml-wrap
+  # Owner 2026-08-22: at most 2 concurrent model tasks for every o320->o1280 prepml lane.
+  ecflow:
+    limits:
+      gpu: 2
+  platform:
+    gpu:
+      time: "0-06:00"
+
+# spectra_ecmwf_v2 and spectra_ecmwf: copied from o320_o1280_prepml_pw30_season_ft400k_ctrl (the
+# September-2025 driver bundles humberto_20250926_20250930, complete-grid v2 and pole-masked v1 as its
+# control; see the comments there). Restated in full because the loader merges two levels deep.
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
+  input_template_grib: "/home/ecm5702/hpcperm/data/o1280-template.grib"
+
+spectra_ecmwf:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
