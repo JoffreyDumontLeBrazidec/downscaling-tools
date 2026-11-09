@@ -3,6 +3,7 @@
 # what it does is read from the run's checkpoint folder, never from a variable given to sbatch.
 #
 #   source "$CHAIN_TOOLS/chain_segment.sh"
+#   chain_store_guard --config "$CONFIG"              # exits 49 if a store named by the config lost chunk files
 #   chain_resolve "$CKPT_ROOT" "$END_STEP"           # exits 0 if done or stopped, 3 if the state is ambiguous
 #   chain_next "$CKPT_ROOT"                          # optional: queue this job file again, afterany this job
 #   if [[ $CHAIN_ACTION == fresh ]]; then start=( <the body's donor or fork overrides> )
@@ -78,6 +79,19 @@ chain_next() {
     "$CHAIN_PY" "$CHAIN_TOOLS/chain_state.py" log --root "$root" "next NOT submitted: sbatch failed" || true
   fi
   return 0
+}
+
+# Refuse the segment (exit 49) when a zarr store it reads has lost chunk or metadata files: purged scratch files
+# read back as the fill value (zeros) without any error (Atos purge of 9 Nov 2026). Arguments go to
+# `store_guard.py check`: store paths and/or `--config <yaml>`. Listings only, no chunk is read.
+# STORE_GUARD_ALLOW_INCOMPLETE=1 downgrades the refusal to a warning (timing smokes only).
+chain_store_guard() {
+  "$CHAIN_PY" "$CHAIN_TOOLS/store_guard.py" check --quiet "$@"
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "[chain] segment refused: incomplete input store (store_guard exit $rc); nothing trained" >&2
+    exit "$rc"
+  fi
 }
 
 # The anemoi overrides of a full resume of CHAIN_RUN_ID (weights, optimiser, step, EMA, scheduler).
