@@ -81,6 +81,18 @@ def _single(rows, log, tag):
     return rows.iloc[:1]
 
 
+def tracker_name(event: str) -> str:
+    """Storm name to match in the operational tracker: the event yaml's tracker_name, else the event name."""
+    try:
+        from eval.evaluators.tc.core.events import EVENTS
+        ev = EVENTS.get(event)
+        if ev is not None and ev.tracker_name:
+            return ev.tracker_name
+    except Exception:
+        pass
+    return event
+
+
 def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_col="maxwind300_ms"):
     """(case rows, member rows, log) for every storm case of a tc_structure cases.csv frame."""
     import pandas as pd
@@ -132,7 +144,7 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             if tr is None:
                 log.append(f"WARN {tag}: no {stream} tracker file for {date}")
                 continue
-            storm = tr[tr.name.astype(str).str.upper() == event.upper()]
+            storm = tr[tr.name.astype(str).str.upper() == tracker_name(event).upper()]
             if row == "hres":
                 # HRES is member 52; a message without a member number decodes as -1: take the single member then
                 present = set(storm.member)

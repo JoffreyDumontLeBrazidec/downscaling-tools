@@ -255,3 +255,9 @@ def test_decode_tracker_on_an_empty_answer(tmp_path):
     p.write_bytes(b"")
     df = decode_tracker(p)
     assert df.empty and "msl_hpa" in df.columns
+
+
+def test_box_event_matches_the_tracker_by_tracker_name():
+    from eval.evaluators.tc_obs.runner import tracker_name
+    assert tracker_name("humberto_e2") == "HUMBERTO"
+    assert tracker_name("franklin") == "franklin"
