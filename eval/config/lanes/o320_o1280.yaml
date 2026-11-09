@@ -156,8 +156,8 @@ sigma:
   num_gpus_per_model: 4
 
 evaluator_groups:
-  default: [tc, spectra_ecmwf_v2, surface, region_plot]
-  diagnostics: [mlflow, tp_maps]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot, tp_maps]
+  diagnostics: [mlflow]
 
 resource_profiles:
   predict:

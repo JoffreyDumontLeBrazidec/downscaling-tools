@@ -49,5 +49,5 @@ precip_events:
   rank_by: truth
 
 evaluator_groups:
-  default: [tc, spectra_ecmwf_v2, surface, region_plot]
-  diagnostics: [precip_dist, precip_events, tp_maps, mlflow]
+  default: [tc, spectra_ecmwf_v2, surface, region_plot, tp_maps]
+  diagnostics: [precip_dist, precip_events, mlflow]

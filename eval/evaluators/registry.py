@@ -113,6 +113,11 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "lane's fixed regions?",
     ),
     Evaluator(
+        "tp_maps", STANDARD, False,
+        "What does the model's precipitation look like over the whole map and through the "
+        "lead times, next to the truth, in the owner's map-video style?",
+    ),
+    Evaluator(
         "probabilistic", STANDARD, False,
         "How good is the model ensemble as a probabilistic forecast, measured by "
         "CRPS, spread and ensemble-mean error per variable and region?",
@@ -152,11 +157,6 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "precip_dist", DIAGNOSTIC, False,
         "Does the distribution of the model's precipitation values match the truth's "
         "at each lead time?",
-    ),
-    Evaluator(
-        "tp_maps", DIAGNOSTIC, False,
-        "What does the model's precipitation look like over the whole map and through the "
-        "lead times, next to the truth, in the owner's map-video style?",
     ),
     Evaluator(
         "precip_events", DIAGNOSTIC, False,

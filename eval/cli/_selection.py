@@ -20,6 +20,11 @@ def add_evaluator_filter_args(parser: argparse.ArgumentParser) -> None:
         help="Run the lane's default group plus its diagnostics group.",
     )
     parser.add_argument(
+        "--no-tp-maps", action="store_true", default=False,
+        help="Do not add the tp_maps evaluator (the map-video stills and videos of tp), which otherwise "
+             "joins every selection that holds a tp evaluator (precip_*).",
+    )
+    parser.add_argument(
         "--stages", default=None,
         help=(
             "Comma-separated stage names passed to every selected evaluator as "
@@ -48,6 +53,20 @@ def _with_prepml_fdb_evaluators(evaluators: list[str], args: argparse.Namespace)
         if name not in out:
             out.append(name)
     return out
+
+
+# Selecting any of these means "we are looking at tp": the tp maps come with them (owner, 9 Nov 2026).
+TP_EVALUATORS = ("precip_read", "precip_dist", "precip_events", "precip_scores")
+
+
+def _with_tp_maps(evaluators: list[str], args: argparse.Namespace) -> list[str]:
+    """Add ``tp_maps`` to a selection that studies tp, on every path (``--only`` too); ``--no-tp-maps`` opts out."""
+    if getattr(args, "no_tp_maps", False):
+        return [e for e in evaluators if e != "tp_maps"]
+    if "tp_maps" in evaluators or not any(e in TP_EVALUATORS for e in evaluators):
+        return evaluators
+    LOG.info("tp evaluator selected: adding tp_maps (map stills and videos); --no-tp-maps to skip")
+    return [*evaluators, "tp_maps"]
 
 
 def _drop_retired_from_lane_group(evaluators: list[str], group: str) -> list[str]:
@@ -103,7 +122,7 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
                 f"Unknown evaluator(s) in --only: {unknown}. "
                 f"Valid evaluators: {ALL_EVALUATORS}"
             )
-        return requested
+        return _with_tp_maps(requested, args)
 
     default_group = _drop_retired_from_lane_group(
         list(evaluator_groups.get("default", [])), "default"
@@ -117,6 +136,6 @@ def _resolve_evaluators(args: argparse.Namespace, lane_config: dict) -> list[str
         for e in diag_group:
             if e not in combined:
                 combined.append(e)
-        return _with_prepml_fdb_evaluators(combined, args)
+        return _with_tp_maps(_with_prepml_fdb_evaluators(combined, args), args)
 
-    return _with_prepml_fdb_evaluators(default_group, args)
+    return _with_tp_maps(_with_prepml_fdb_evaluators(default_group, args), args)
