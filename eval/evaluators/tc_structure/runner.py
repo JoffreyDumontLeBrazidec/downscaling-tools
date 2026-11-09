@@ -163,12 +163,24 @@ def _read_region(path: Path, events, margin_deg: float):
         out = {"lat": lat_r[sel], "lon": lon_r[sel], "n_file_points": int(lat.size),
                "attrs": {k: str(d.getncattr(k)) for k in d.ncattrs()}}
         nmem = int(d["y_pred"].shape[1])
+        out["input_source"] = "x_interp"
         for fname, var in FIELDS:
+            if fname == "input" and "x_interp_members" in d.variables:
+                # member prediction files: the input ensemble, member k = the input that drove model member k
+                var = "x_interp_members"
+                out["input_source"] = var
             if var not in d.variables:
                 out[fname] = np.full((nmem, sel.size, 3), np.nan)
                 continue
-            blk = np.asarray(d[var][0, :, i0:i1, s0:s1], dtype=np.float32)[:, sel, :]
-            arr = np.stack([blk[..., iu - s0], blk[..., iv - s0], blk[..., ip - s0]], axis=-1)
+            if d[var].ndim == 3:
+                # (sample, point, state): one input shared by every member
+                blk = np.asarray(d[var][0, i0:i1, s0:s1], dtype=np.float32)[sel, :]
+                blk = np.broadcast_to(blk[None], (nmem,) + blk.shape)
+                if fname == "input":
+                    out["input_source"] = var + " (single field broadcast)"
+            else:
+                blk = np.asarray(d[var][0, :, i0:i1, s0:s1], dtype=np.float32)[:, sel, :]
+            arr = np.stack([blk[..., iu - s0], blk[..., iv - s0], blk[..., ip - s0]], axis=-1).copy()
             del blk
             arr = arr.astype(np.float64)
             med = float(np.nanmedian(arr[0, :, 2])) if np.isfinite(arr[0, :, 2]).any() else 0.0
@@ -176,6 +188,17 @@ def _read_region(path: Path, events, margin_deg: float):
                 arr[..., 2] /= 100.0
             out[fname] = arr
     return out
+
+
+def _input_source(path) -> str:
+    import netCDF4 as nc
+
+    with nc.Dataset(path) as d:
+        if "x_interp_members" in d.variables:
+            return "x_interp_members (input ensemble, member k drives model member k)"
+        if "x_interp" in d.variables and d["x_interp"].ndim == 3:
+            return "x_interp (single input broadcast to every member)"
+        return "x_interp"
 
 
 def _fmt(v):
@@ -439,6 +462,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
 
     summary = aggregate(rows, bands, n_boot, seed, params.pressure_ref_hpa)
     summary["arm"] = arm
+    summary["input_source"] = _input_source(files[0][0])
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=float) + "\n")
     meta = {
         "evaluator": "tc_structure", "git_commit": _git_commit(), "arm": arm,
@@ -446,6 +470,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "files": [str(f[0]) for f in files], "events": [e.name for e in events],
         "params": asdict(params), "storm_edge_km": storm_edge_km,
         "storm_max_pmin_hpa": storm_max_pmin, "track_km_per_24h": track_speed,
+        "input_source": _input_source(files[0][0]),
         "first_guess_field": fg_field, "best_track_cache": str(bt_cache or ""),
         "best_track_search_km": bt_search_km,
         "n_boot": n_boot, "seed": seed,

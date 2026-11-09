@@ -228,3 +228,30 @@ def test_ens_found_fraction_counts_members_that_lost_the_storm(tmp_path):
     ens = pd.read_csv(out / "cases_obs.csv").query("row == 'ens'")
     assert (ens.members_total == 51).all() and (ens.n_found == 39).all()
     assert ens.found_frac.iloc[0] == pytest.approx(39 / 51)
+
+
+def test_input_members_that_differ_are_an_ensemble_row(tmp_path):
+    """Member prediction files: input member k drove model member k, so the input is an ensemble (fair CRPS)."""
+    cases, cache = _cases(tmp_path)
+    df = pd.read_csv(cases)
+    m = df.field == "input"
+    df.loc[m, "pmin_hpa"] += 0.5 * df.loc[m, "member"]
+    df.to_csv(cases, index=False)
+    out = tc_obs.run(tmp_path, {}, {"cache": str(cache), "cases": str(cases)}, output_dir=tmp_path / "out",
+                     run_label="X")
+    inp = pd.read_csv(out / "cases_obs.csv").query("row == 'input'")
+    assert (inp.kind == "ensemble").all() and (inp.n_found == 5).all()
+    p = df[m & (df.lead == 24)].pmin_hpa.to_numpy()
+    bt = 980 - 0.2 * 24
+    fair = np.abs(p - bt).mean() - np.abs(p[:, None] - p[None, :]).sum() / (2 * 5 * 4)
+    assert inp[inp.lead == 24].pmin_crps.iloc[0] == pytest.approx(fair)
+    assert "| input |" in (out / "summary.md").read_text()
+
+
+def test_decode_tracker_on_an_empty_answer(tmp_path):
+    pytest.importorskip("eccodes")
+    from eval.evaluators.tc_obs.core.reference import decode_tracker
+    p = tmp_path / "empty.bufr"
+    p.write_bytes(b"")
+    df = decode_tracker(p)
+    assert df.empty and "msl_hpa" in df.columns

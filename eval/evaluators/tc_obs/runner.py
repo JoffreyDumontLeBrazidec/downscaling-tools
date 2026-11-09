@@ -112,7 +112,17 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             rows["model"] = (mod.pmin_hpa, mod.centre_lat, mod.centre_lon,
                              mod[wind_col] if wind_col in mod else None, mod.member, int((sub.field == "model").sum()),
                              mod["rmw_km"] if "rmw_km" in mod else None)
+        kinds = {}
+        inp = sub[(sub.field == "input") & (sub.found == 1) & np.isfinite(sub.pmin_hpa) & np.isfinite(sub.centre_lat)]
+        if len(inp) > 1 and inp.pmin_hpa.max() - inp.pmin_hpa.min() > 0.01:
+            # member prediction files: the input is an ensemble (input member k drove model member k)
+            rows["input"] = (inp.pmin_hpa, inp.centre_lat, inp.centre_lon,
+                             inp[wind_col] if wind_col in inp else None, inp.member,
+                             int((sub.field == "input").sum()), inp["rmw_km"] if "rmw_km" in inp else None)
+            kinds["input"] = "ensemble"
         for f in ("truth", "input"):
+            if f in rows:
+                continue
             s = _single(sub[sub.field == f], log, f"{tag} {f}")
             if s is not None:
                 rows[f] = (s.pmin_hpa, s.centre_lat, s.centre_lon, s[wind_col] if wind_col in s else None, None, 1,
@@ -141,7 +151,7 @@ def score_cases(cases, bt, trackers, *, only_storm_ok=True, max_gap_h=6.0, wind_
             rows[row] = (t.msl_hpa, t.lat, t.lon, t.wind_ms, t.member, n_tot, None)
         for row, (p, la, lo, w, mem, n_tot, rmw) in rows.items():
             sc = case_scores(p, la, lo, b, w, rmw)
-            out.append({**base, "row": row, "kind": ROW_KIND[row], "members_total": n_tot,
+            out.append({**base, "row": row, "kind": kinds.get(row, ROW_KIND[row]), "members_total": n_tot,
                         "found_frac": sc["n_found"] / n_tot if n_tot else np.nan, **sc})
             if mem is not None:
                 d = gc_km(la, lo, b["lat"], b["lon"])
@@ -275,18 +285,21 @@ def write_summary_md(summ, pr, meta, path):
                   "|---|" + "---|" * len(lead_order)]
         for row in ("model", "ens", "truth", "input", "hres"):
             q = summ[summ.row == row].set_index("lead")
-            if q.empty or q[key].isna().all() or (key == "pos_spread_km" and row not in ("model", "ens")):
+            kind = q["kind"].iloc[0] if (not q.empty and "kind" in q) else ROW_KIND[row]
+            if q.empty or q[key].isna().all() or (key == "pos_spread_km" and kind != "ensemble"):
                 continue
             cells = [f"{q.loc[l, key]:.1f} ({q.loc[l, key + '_se']:.1f}) n{int(q.loc[l, key + '_cases'])}"
                      if l in q.index and np.isfinite(q.loc[l, key]) else "" for l in lead_order]
-            tag = row if ROW_KIND[row] == "ensemble" else f"{row} (single field)"
+            tag = row if kind == "ensemble" else f"{row} (single field)"
             lines.append(f"| {tag} | " + " | ".join(cells) + " |")
         lines.append("")
     lines += ["## Members that found the storm (fraction of members; the ensemble scores above use only these)", "",
               "| row | " + " | ".join(("+" + l + " h") if l != "all" else "all leads" for l in lead_order) + " |",
               "|---|" + "---|" * len(lead_order)]
-    for row in ("model", "ens"):
+    for row in ("model", "ens", "input"):
         q = summ[summ.row == row].set_index("lead")
+        if row == "input" and (q.empty or "kind" not in q or (q["kind"] != "ensemble").all()):
+            continue
         if len(q) and "found_frac" in q:
             lines.append(f"| {row} | " + " | ".join(f"{q.loc[l, 'found_frac']:.2f}" if l in q.index else ""
                                                    for l in lead_order) + " |")

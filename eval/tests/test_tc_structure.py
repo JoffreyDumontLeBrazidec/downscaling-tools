@@ -244,7 +244,9 @@ def test_runner_input_first_guess_best_track_and_pairing(tmp_path):
             ws[i] = s
         dims = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
         d.createVariable("y_pred", "f4", dims)[:] = y
-        d.createVariable("x_interp", "f4", dims)[:] = x
+        # member prediction files: x_interp is the single HRES input, x_interp_members the input ensemble
+        d.createVariable("x_interp", "f4", ("sample", "grid_point_hres", "weather_state"))[:] = x[:, 0] + 500.0
+        d.createVariable("x_interp_members", "f4", dims)[:] = x
     cache = tmp_path / "tc_cache"
     cache.mkdir()
     (cache / "best_track.csv").write_text(
@@ -265,6 +267,10 @@ def test_runner_input_first_guess_best_track_and_pairing(tmp_path):
     paired = json.load(open(out / "summary.json"))["events"]["franklin"]["24"]["paired"]["model_minus_input"]
     assert paired["n_pairs"] == nm
     assert abs(paired["pmin_hpa"]["value"] + 2.0) < 0.3
+    inp = [r for r in rows if r["field"] == "input"]
+    assert [round(float(r["pmin_hpa"]) - float(inp[0]["pmin_hpa"]), 1) for r in inp] == [0.0, 0.5, 1.0]
+    meta = json.load(open(out / "run_meta.json"))
+    assert meta["input_source"].startswith("x_interp_members")
 
 
 def test_best_track_case_without_fix_is_not_a_storm(tmp_path):
