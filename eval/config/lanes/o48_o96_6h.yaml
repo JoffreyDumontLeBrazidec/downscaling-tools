@@ -50,4 +50,4 @@ precip_events:
 
 evaluator_groups:
   default: [tc, spectra_ecmwf_v2, surface, region_plot]
-  diagnostics: [precip_dist, precip_events, mlflow]
+  diagnostics: [precip_dist, precip_events, tp_maps, mlflow]

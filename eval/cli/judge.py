@@ -7,7 +7,7 @@ read in the owner's order 1) physical structure 2) spectra 3) extremes 4) scores
 1. runs the protocol's evaluators on both prediction directories, each into
    ``<output-dir>/<label>/evaluators/<name>/`` (finished evaluators are skipped on a rerun):
    ``shape`` (on one box both runs hold), ``tc_structure``, ``texture``, ``wind_extremes``,
-   ``box_spectra``, ``probabilistic``, and ``precip_dist`` when the run predicts ``tp``;
+   ``box_spectra``, ``probabilistic``, and ``precip_dist`` and ``tp_maps`` when the run predicts ``tp``;
 2. draws the fixed ``zoom_maps``: the Alps box (43-49 N, 4-16 E) on the Alps case and the storm
    box (12 degrees around the truth's msl minimum) on the storm case, the run and the reference
    side by side, wind10m and 2t, value and fine part;
@@ -259,12 +259,13 @@ def lane_for_arm(lane_config: dict, *, step: int, dates: list[str], shape_box: s
         cfg[name] = dict(cfg.get(name) or {})
         return cfg[name]
 
-    for name in PROTOCOL_EVALUATORS + ["precip_dist"]:
+    for name in PROTOCOL_EVALUATORS + ["precip_dist", "tp_maps"]:
         b = block(name)
         b["steps"] = [step]
         if dates:
             b["dates"] = list(dates)
     block("shape")["box"] = shape_box
+    block("tp_maps")["dates"] = list(dates or [])[:3]  # stills of three cases are enough for the read
     score_vars = [v for v in SCORE_VARS if v in states or (v == "10ff" and "10u" in states)]
     block("probabilistic").setdefault("weather_states", score_vars)
     probabilistic = block("probabilistic")
@@ -777,6 +778,8 @@ def run(args: argparse.Namespace, session) -> None:
     names = [n for n in PROTOCOL_EVALUATORS if n not in skip]
     if "tp" in facts[run_label].get("states", []) and "precip_dist" not in skip:
         names.append("precip_dist")
+    if "tp" in facts[run_label].get("states", []) and "tp_maps" not in skip:
+        names.append("tp_maps")
     arms = {"member": args.member}
     for role, lab, d in (("run", run_label, run_dir), ("reference", ref_label, ref_dir)):
         lane = lane_for_arm(session.lane_config, step=step, dates=dates, shape_box=shape_box,

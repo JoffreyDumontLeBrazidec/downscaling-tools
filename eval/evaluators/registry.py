@@ -154,6 +154,11 @@ _ENTRIES: tuple[Evaluator, ...] = (
         "at each lead time?",
     ),
     Evaluator(
+        "tp_maps", DIAGNOSTIC, False,
+        "What does the model's precipitation look like over the whole map and through the "
+        "lead times, next to the truth, in the owner's map-video style?",
+    ),
+    Evaluator(
         "precip_events", DIAGNOSTIC, False,
         "What do the model and the truth look like at the heaviest precipitation "
         "events of the window?",

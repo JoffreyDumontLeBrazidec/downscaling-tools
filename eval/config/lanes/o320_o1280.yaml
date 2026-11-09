@@ -157,7 +157,7 @@ sigma:
 
 evaluator_groups:
   default: [tc, spectra_ecmwf_v2, surface, region_plot]
-  diagnostics: [mlflow]
+  diagnostics: [mlflow, tp_maps]
 
 resource_profiles:
   predict:
