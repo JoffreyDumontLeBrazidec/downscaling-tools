@@ -7,10 +7,12 @@ image) and fast. Precipitation is drawn in discrete classes with white below the
 
 Two palettes exist for these classes:
 
-* ``rain`` (default): the house colour map for precipitation, cmocean ``rain`` (rule 25,
+* ``classes`` (default): the blue-green-yellow-red-purple classes of the corrector video frame
+  Joffrey showed on 9 Nov 2026 (colours measured on that frame's colour bar). He chose this look
+  for map videos ("very good and intuitive", 9 Nov 2026 10:51 UTC): an exception to rule 25 for
+  this tool only.
+* ``rain``: the house colour map for precipitation figures, cmocean ``rain`` (rule 25,
   ``eval.plotting.variables.precip_cmap``), sampled once per class.
-* ``reference``: the blue-green-yellow-red-purple classes of the corrector video frame that
-  was shown on 9 Nov 2026 (colours measured on that frame's colour bar).
 
 Other variables use their house colour map from ``eval.plotting.variables`` on a fixed range.
 """
@@ -77,13 +79,13 @@ class Palette:
         return cmap, Normalize(self.vmin, self.vmax), None
 
 
-def tp_palette(style: str = "rain", levels=TP_LEVELS_MM, label: str = "precipitation (mm)") -> Palette:
+def tp_palette(style: str = "classes", levels=TP_LEVELS_MM, label: str = "precipitation (mm)") -> Palette:
     """Discrete precipitation palette: white below ``levels[0]``, one colour per class, an over colour."""
     levels = np.asarray(levels, dtype=np.float64)
     n_classes = levels.size - 1
-    if style == "reference":
+    if style in ("classes", "reference"):
         if n_classes != len(REFERENCE_TP_RGB):
-            raise ValueError("the reference palette has 12 classes; use the default levels")
+            raise ValueError("the classes palette has 12 classes; use the default levels")
         rows = [(255, 255, 255), *REFERENCE_TP_RGB, REFERENCE_TP_OVER]
     elif style == "rain":
         from eval.plotting.variables import precip_cmap
@@ -95,7 +97,7 @@ def tp_palette(style: str = "rain", levels=TP_LEVELS_MM, label: str = "precipita
         rows += [tuple(int(round(255 * c)) for c in cmap(p)[:3]) for p in pos]
         rows.append(tuple(int(round(255 * c)) for c in cmap(1.0)[:3]))
     else:
-        raise ValueError(f"unknown precipitation palette {style!r} (rain or reference)")
+        raise ValueError(f"unknown precipitation palette {style!r} (classes or rain)")
     return Palette(lut=np.asarray(rows, dtype=np.uint8), levels=levels, extend="max", label=label)
 
 

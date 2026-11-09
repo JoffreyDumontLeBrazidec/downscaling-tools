@@ -126,10 +126,10 @@ class FrameComposer:
     palette: object
     panel_titles: list[str] = field(default_factory=list)
     geography: dict | None = None
-    coast_px: float = 0.9
-    border_px: float = 0.6
-    coast_rgb: str = "#2b2b2b"
-    border_rgb: str = "#8a8a8a"
+    coast_px: float = 0.8
+    border_px: float = 0.5
+    coast_rgb: str = "#4d4d4d"
+    border_rgb: str = "#a0a0a0"
 
     def __post_init__(self):
         import matplotlib

@@ -55,8 +55,9 @@ def _parser() -> argparse.ArgumentParser:
                    help="box instead of the globe (degrees)")
     p.add_argument("--central-lon", type=float, default=0.0, help="centre longitude of a global map")
     p.add_argument("--grid", help="native grid, e.g. O1280 (needed only when the file is a crop)")
-    p.add_argument("--palette", default="rain", choices=("rain", "reference"),
-                   help="tp classes: rain = house cmocean rain (rule 25, default); reference = the 9 Nov frame")
+    p.add_argument("--palette", default="classes", choices=("classes", "rain", "reference"),
+                   help="tp colours: classes = blue-green-yellow-red-purple of the 9 Nov frame (default, "
+                        "the owner's choice for videos); rain = house cmocean rain (rule 25); reference = classes")
     p.add_argument("--accum-hours", type=int, help="tp accumulation window for the title (default: 12 h "
                    "for O1280, 6 h for O2560)")
     p.add_argument("--vmin", type=float)

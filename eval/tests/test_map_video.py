@@ -77,7 +77,7 @@ def test_regular_grid_shapes():
     assert (lat.size, lon.size) == (1801, 3600) and lat[0] == 90 and lon[0] == -180
 
 
-@pytest.mark.parametrize("style", ["rain", "reference"])
+@pytest.mark.parametrize("style", ["classes", "rain", "reference"])
 def test_tp_palette_classes(style):
     pal = tp_palette(style)
     levels = np.asarray(TP_LEVELS_MM)
