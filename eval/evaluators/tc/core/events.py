@@ -25,6 +25,7 @@ class TCEvent:
     analysis_dates: list[str]  # YYYYMMDD strings
     bbox: BoundingBox  # Evaluation crop box — must NOT overlap with other scoring events
     scoring_eligible: bool = True  # False for combined events like franklin_idalia
+    base_dates: tuple = ()  # optional YYYYMMDD list; when set it replaces year/month/dates (events across months)
 
 
 def _event_from_cfg(cfg: dict) -> TCEvent:
@@ -45,6 +46,7 @@ def _event_from_cfg(cfg: dict) -> TCEvent:
             west=float(cfg["lon_min"]),
         ),
         scoring_eligible=bool(cfg.get("scoring_eligible", True)),
+        base_dates=tuple(str(d) for d in cfg.get("base_dates", []) or []),
     )
 
 

@@ -307,3 +307,11 @@ def test_best_track_case_without_fix_is_not_a_storm(tmp_path):
     rows = list(csv.DictReader(open(out / "cases.csv")))
     assert rows and all(r["storm_ok"] == "0" for r in rows)
     assert "best-track" in rows[0]["reason"]
+
+
+def test_event_base_dates_cross_a_month():
+    from eval.evaluators.tc.core.events import EVENTS
+    from eval.evaluators.tc.core.loading_predictions import select_prediction_files_for_event
+    e = EVENTS["imelda_e2"]
+    got = select_prediction_files_for_event([("a", 20250930, 24), ("b", 20251004, 48), ("c", 20251104, 24)], e)
+    assert [g[0] for g in got] == ["a", "b"]

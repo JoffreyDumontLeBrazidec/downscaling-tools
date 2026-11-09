@@ -31,8 +31,13 @@ def select_prediction_files_for_event(
     """Filter prediction files to those matching an event's year/month/dates."""
     selected: list[tuple[Path, int, int]] = []
     allowed_days = {int(day) for day in event.dates}
+    full = set(getattr(event, "base_dates", ()) or ())
     for path, ymd, step in pred_files:
         ymd_s = f"{ymd:08d}"
+        if full:
+            if ymd_s in full:
+                selected.append((path, ymd, step))
+            continue
         if ymd_s[:4] != event.year or ymd_s[4:6] != event.month:
             continue
         if int(ymd_s[6:8]) in allowed_days:

@@ -1,0 +1,16 @@
+name: erin_e2
+full_name: "Hurricane Erin (IBTrACS 2025223N17337)"
+# o2560 Europe-Atlantic box lane (E2 box less the 1-degree strip: 11-69 N, 79 W-39 E). Box = in-box best-track
+# fixes +- 4 degrees, clipped. Not scoring-eligible; selected by name with best_track_cache (NOAA rows by SID).
+# base_dates (YYYYMMDD) replaces year/month/dates for file selection, so events may cross a month.
+lat_min: 12.0
+lat_max: 64.0
+lon_min: -78.0
+lon_max: -15.0
+dates: ["08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26"]
+base_dates: ["20250808", "20250809", "20250810", "20250811", "20250812", "20250813", "20250814", "20250815", "20250816", "20250817", "20250818", "20250819", "20250820", "20250821", "20250822", "20250823", "20250824", "20250825", "20250826"]
+analysis_dates: []
+year: "2025"
+month: "08"
+pressure_threshold: 1013.25
+scoring_eligible: false

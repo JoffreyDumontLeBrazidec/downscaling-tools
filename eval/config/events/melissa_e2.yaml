@@ -1,0 +1,16 @@
+name: melissa_e2
+full_name: "Hurricane Melissa (IBTrACS 2025294N14290)"
+# o2560 Europe-Atlantic box lane (E2 box less the 1-degree strip: 11-69 N, 79 W-39 E). Box = in-box best-track
+# fixes +- 4 degrees, clipped. Not scoring-eligible; selected by name with best_track_cache (NOAA rows by SID).
+# base_dates (YYYYMMDD) replaces year/month/dates for file selection, so events may cross a month.
+lat_min: 11.0
+lat_max: 51.0
+lon_min: -79.0
+lon_max: -47.0
+dates: ["19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31"]
+base_dates: ["20251019", "20251020", "20251021", "20251022", "20251023", "20251024", "20251025", "20251026", "20251027", "20251028", "20251029", "20251030", "20251031"]
+analysis_dates: []
+year: "2025"
+month: "10"
+pressure_threshold: 1013.25
+scoring_eligible: false
