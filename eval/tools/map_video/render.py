@@ -156,7 +156,14 @@ def load_geography(cache: Path | None, scale: str = "50m") -> dict[str, list[np.
         shp = next((d / "shapefiles/natural_earth" / cat / name.format(scale=scale) for d in _cartopy_data_dirs()
                     if (d / "shapefiles/natural_earth" / cat / name.format(scale=scale)).exists()), None)
         # a cached Natural Earth shapefile is read directly (works without cartopy); else cartopy downloads it
-        geo[kind] = read_shp_polylines(shp) if shp is not None else natural_earth_lines(kind, scale)
+        if shp is not None:
+            geo[kind] = read_shp_polylines(shp)
+            continue
+        try:
+            geo[kind] = natural_earth_lines(kind, scale)
+        except Exception as exc:  # no cartopy, or no network to download Natural Earth
+            print(f"WARNING: no {kind} lines ({type(exc).__name__}: {exc}); pass --geography <npz>", flush=True)
+            geo[kind] = []
     if cache is not None:
         Path(cache).parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(cache, **{f"{k}_{i:05d}": a.astype(np.float32)

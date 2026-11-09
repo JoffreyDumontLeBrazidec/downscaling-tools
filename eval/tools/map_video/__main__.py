@@ -8,7 +8,7 @@ member 0, global at 0.1 degrees (3600 x 1801, a 3840 x 2160 frame), 4 frames per
 
 Examples
 --------
-Global 6 h precipitation of member 0, 0.1 degrees, 4K::
+Global precipitation of member 0, 0.1 degrees, 4K::
 
     python -m eval.tools.map_video run/predictions_20230829_step*.nc --out tp.mp4 --poster tp.png
 
@@ -39,18 +39,20 @@ from .render import FrameComposer, Layout, Mp4Writer, load_geography
 ACCUM_BY_GRID = {1280: 12, 2560: 6}  # tp window of the 9 km (12 h) and 4 km (6 h) lane stores
 
 
-def _parser() -> argparse.ArgumentParser:
+def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
+    """The flags of the renderer; ``eval.cli map_video`` inherits them (``add_help=False``)."""
     p = argparse.ArgumentParser(prog="python -m eval.tools.map_video", description=__doc__.split("\n\n")[0],
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+                                formatter_class=argparse.RawDescriptionHelpFormatter, add_help=add_help)
     p.add_argument("files", nargs="+", type=Path, help="prediction files, one per (base date, lead)")
-    p.add_argument("--out", type=Path, required=True, help="output .mp4")
+    p.add_argument("--out", type=Path, help="output .mp4 (omit to write only --poster / --stills-dir)")
     p.add_argument("--poster", type=Path, help="also write one frame as PNG (see --poster-index)")
     p.add_argument("--poster-index", type=int, default=0, help="which real frame the poster is (default 0)")
     p.add_argument("--variable", default="tp", help="tp (default), 10ff, 2t, msl, ... (weather_state name)")
-    p.add_argument("--sources", default="pred", help="comma list of pred, input, truth (one panel each)")
+    p.add_argument("--sources", default="pred", help="comma list of pred, input, truth (one panel each), or "
+                   "auto: pred, plus input and truth when the first file holds a non-empty field for them")
     p.add_argument("--member", type=int, default=0, help="ensemble member position (default 0)")
     p.add_argument("--sample", type=int, default=0)
-    p.add_argument("--res", type=float, default=0.1, help="output grid spacing in degrees (default 0.1)")
+    p.add_argument("--res", type=float, help="output grid spacing in degrees (default 0.1 global, 0.05 on a crop)")
     p.add_argument("--extent", type=float, nargs=4, metavar=("W", "E", "S", "N"),
                    help="box instead of the globe (degrees)")
     p.add_argument("--central-lon", type=float, default=0.0, help="centre longitude of a global map")
@@ -74,7 +76,8 @@ def _parser() -> argparse.ArgumentParser:
                    "if missing); default: cartopy Natural Earth 50m")
     p.add_argument("--no-geography", action="store_true")
     p.add_argument("--ffmpeg", help="ffmpeg executable")
-    p.add_argument("--frames-dir", type=Path, help="also write every frame as PNG here")
+    p.add_argument("--frames-dir", type=Path, help="also write every frame (time-interpolated ones too) as PNG")
+    p.add_argument("--stills-dir", type=Path, help="write one PNG per input file here: <variable>_<init>_+<lead>h.png")
     return p
 
 
@@ -96,15 +99,24 @@ def _title(args, f: fr.FrameFile, member: str, grid_name: str, shape, *, valid_o
 
 
 def main(argv=None) -> int:
-    args = _parser().parse_args(argv)
-    sources = [s.strip() for s in args.sources.split(",") if s.strip()]
-    bad = [s for s in sources if s not in fr.SOURCE_VARS]
-    if bad:
-        raise SystemExit(f"unknown source(s) {bad}; use pred, input, truth")
+    return render(build_arg_parser().parse_args(argv))
 
+
+def render(args: argparse.Namespace) -> int:
+    """Render what ``args`` asks for (the parsed flags of ``build_arg_parser``)."""
+    if not (args.out or args.poster or args.stills_dir or args.frames_dir):
+        raise SystemExit("nothing to write: give --out, --poster, --stills-dir or --frames-dir")
     files = fr.scan(args.files, sample=args.sample)
     if not files:
         raise SystemExit("no files")
+    if args.sources.strip() == "auto":
+        sources = auto_sources(files[0].path, args.variable, member=args.member, sample=args.sample)
+        print(f"sources (auto): {','.join(sources)}", flush=True)
+    else:
+        sources = [s.strip() for s in args.sources.split(",") if s.strip()]
+    bad = [s for s in sources if s not in fr.SOURCE_VARS]
+    if bad:
+        raise SystemExit(f"unknown source(s) {bad}; use pred, input, truth")
     print(f"{len(files)} frames: {files[0].valid:%Y-%m-%d %H} .. {files[-1].valid:%Y-%m-%d %H} UTC", flush=True)
 
     lat_s, lon_s = fr.read_coords(files[0].path)
@@ -125,6 +137,8 @@ def main(argv=None) -> int:
         args.extent = (float(lon_c.min()), float(lon_c.max()), float(lat_s.min()), float(lat_s.max()))
         print(f"crop of {grid.name}: extent {tuple(round(v, 2) for v in args.extent)}", flush=True)
 
+    if args.res is None:
+        args.res = 0.1 if whole else 0.05
     span_lon = 360.0 if args.extent is None else (args.extent[1] - args.extent[0]) % 360.0 or 360.0
     min_res = span_lon / max(1.0, (args.max_width - 200) / len(sources))
     if args.res < min_res - 1e-9:
@@ -156,14 +170,16 @@ def main(argv=None) -> int:
     member = fr.member_label(files[0].path, args.member)
     print(f"frame {layout.width} x {layout.height}, {len(sources)} panel(s)", flush=True)
 
-    writer = Mp4Writer(args.out, layout.width, layout.height, args.fps, crf=args.crf, chroma=args.chroma,
-                       ffmpeg=args.ffmpeg)
-    if args.frames_dir:
-        args.frames_dir.mkdir(parents=True, exist_ok=True)
+    writer = (Mp4Writer(args.out, layout.width, layout.height, args.fps, crf=args.crf, chroma=args.chroma,
+                        ffmpeg=args.ffmpeg) if args.out else None)
+    for d in (args.frames_dir, args.stills_dir):
+        if d:
+            d.mkdir(parents=True, exist_ok=True)
     from PIL import Image
 
     def emit(img: np.ndarray, k: int, poster: bool):
-        writer.write(img)
+        if writer is not None:
+            writer.write(img)
         if args.frames_dir:
             Image.fromarray(img).save(args.frames_dir / f"frame_{k:04d}.png")
         if poster and args.poster:
@@ -196,14 +212,34 @@ def main(argv=None) -> int:
                 k += 1
         img = comp.compose(cur, _title(args, f, member, grid.name, interp.shape))
         emit(img, k, i == args.poster_index)
+        if args.stills_dir:
+            Image.fromarray(img).save(args.stills_dir / f"{args.variable}_{f.init:%Y%m%d%H}_+{f.step:03d}h.png")
         k += 1
         prev = (f, cur)
         print(f"  {i + 1}/{len(files)} {f.path.name} ({time.time() - t0:.0f} s)", flush=True)
-    for _ in range(int(round(args.hold * args.fps))):
-        writer.write(img)
-    writer.close()
-    print(f"wrote {args.out} ({k} frames + hold)", flush=True)
+    if writer is not None:
+        for _ in range(int(round(args.hold * args.fps))):
+            writer.write(img)
+        writer.close()
+        print(f"wrote {args.out} ({k} frames + hold)", flush=True)
     return 0
+
+
+def auto_sources(path: Path, variable: str, *, member: int = 0, sample: int = 0) -> list[str]:
+    """``pred``, then ``input`` and ``truth`` when ``path`` holds a finite, not all-zero field for them.
+
+    The 9 km lane's input carries no tp (exactly 0) and some global files hold an all-NaN truth tp,
+    so a fixed three-panel layout would draw empty panels.
+    """
+    out = ["pred"]
+    for source in ("input", "truth"):
+        try:
+            v = fr.read_field(path, source, variable, member=member, sample=sample)
+        except KeyError:
+            continue
+        if np.isfinite(v).any() and np.nanmax(np.abs(v)) > 0:
+            out.insert(0, source) if source == "input" else out.append(source)
+    return out
 
 
 if __name__ == "__main__":
