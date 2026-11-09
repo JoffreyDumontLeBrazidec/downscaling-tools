@@ -20,6 +20,19 @@ R_EARTH_KM = 6371.0
 # quaver's toss.yaml hard limits; tp in mm per accumulation window.
 LIMITS = {"2t": (173.0, 333.0), "10ff": (0.0, 100.0), "msl": (80000.0, 110000.0), "tp": (0.0, 300.0),
           "tp24": (0.0, 300.0)}
+# quaver's toss.yaml analysis-departure limits (filter toss_with_analysis): |obs - analysis at the nearest
+# grid point| above these is a gross error. Units K, m/s, Pa. tp has no analysis check.
+ANL_DEP_MAX = {"2t": 30.0, "10ff": 40.0, "msl": 1000.0}
+
+
+def analysis_departure_ok(obs_frame, var):
+    """Mask of rows that pass quaver's analysis-departure check; all True when the cache has no ``an`` column
+    (caches written before 9 Nov 2026) or the variable has no limit."""
+    lim = ANL_DEP_MAX.get(var)
+    if lim is None or "an" not in obs_frame.columns:
+        return np.ones(len(obs_frame), bool)
+    an = obs_frame["an"].to_numpy(np.float64)
+    return ~np.isfinite(an) | (np.abs(obs_frame["obs"].to_numpy(np.float64) - an) <= lim)
 
 
 def xyz(lat, lon):
@@ -79,7 +92,8 @@ def resolve_cache(cache) -> Path:
 
 
 def load_cache(cache_dir, variables) -> tuple[dict, dict, dict]:
-    """(obs per var, hres per var, cache_meta) from a cache directory; quaver hard limits applied again."""
+    """(obs per var, hres per var, cache_meta) from a cache directory; quaver hard limits applied again, and
+    quaver's analysis-departure check where the cache carries the analysis (``an`` column)."""
     import pandas as pd
 
     cache_dir = Path(cache_dir)
@@ -90,7 +104,8 @@ def load_cache(cache_dir, variables) -> tuple[dict, dict, dict]:
             continue
         o = pd.read_csv(p, dtype={"valid": str, "stnid": str})
         lo, hi = LIMITS.get(v, (-np.inf, np.inf))
-        obs[v] = o[(o.obs >= lo) & (o.obs <= hi)]
+        o = o[(o.obs >= lo) & (o.obs <= hi)]
+        obs[v] = o[analysis_departure_ok(o, v)]
         h = cache_dir / f"hres_{v}.csv"
         if h.exists():
             hres[v] = pd.read_csv(h, dtype={"date": str, "stnid": str})

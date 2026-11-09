@@ -531,3 +531,20 @@ def test_hres_metres_rule():
     assert not hres_tp_in_metres(dry, dry) and not hres_tp_in_metres(dry / 1000.0, dry)
     mostly_dry = np.r_[np.zeros(50), [5.0, 12.0]]  # a dry median does not make correct mm HRES look like metres
     assert not hres_tp_in_metres(mostly_dry * 0.8, mostly_dry)
+
+
+def test_analysis_departure_check_matches_quaver_toss(tmp_path):
+    """quaver toss_with_analysis: |obs - an| <= 30 K / 40 m/s / 1000 Pa kept; caches without 'an' untouched."""
+    from eval.evaluators.obs_points.core.stations import analysis_departure_ok, load_cache
+
+    o = pd.DataFrame({"valid": ["2024110112"] * 4, "lat": [41.1, 50, 51, 52], "lon": [23.2, 0, 1, 2],
+                      "stnid": ["a", "b", "c", "d"], "elevation": [50.0] * 4,
+                      "obs": [90840.0, 101000.0, 101500.0, 100000.0], "an": [101200.0, 101100.0, 100500.0, np.nan]})
+    assert analysis_departure_ok(o, "msl").tolist() == [False, True, True, True]
+    assert analysis_departure_ok(o.drop(columns="an"), "msl").all()
+    assert analysis_departure_ok(o, "tp").all()
+    w = pd.DataFrame({"obs": [80.0, 5.0], "an": [3.0, 4.0]})
+    assert analysis_departure_ok(w, "10ff").tolist() == [False, True]
+    o.to_csv(tmp_path / "obs_msl.csv", index=False)
+    obs, _, _ = load_cache(tmp_path, ["msl"])
+    assert obs["msl"].stnid.tolist() == ["b", "c", "d"]

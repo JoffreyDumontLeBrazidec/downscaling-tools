@@ -25,7 +25,12 @@ Writes into <cache dir>:
                   parameters, rows per file and stations per valid time; a later fetch into the same directory
                   adds its files and merges its entries into the manifest
 Filters: quaver toss hard limits (2t 173-333 K, 10ff 0-100 m/s, msl 800-1100 hPa, tp 0-300 mm), one report per
-station and time. No analysis gross-error check.
+station and time, and quaver's analysis-departure check (toss_with_analysis): the operational analysis
+(od oper an, O1280) at valid time is read at the nearest grid point and stored as column ``an`` of obs_<var>.csv
+(2t, 10ff, msl); rows with |obs - an| above 30 K, 40 m/s or 1000 Pa are dropped at fetch and again at load
+(``stations.ANL_DEP_MAX``). quaver does not height-correct the analysis 2t before this check; neither do we.
+``--add-analysis`` adds the ``an`` column to an existing cache in place (caches before 9 Nov 2026 lack it:
+on 1-12 Nov 2024 they kept 68-89 msl reports near 91,000 Pa and a 63-97 m/s wind station per lead).
 """
 import argparse
 import datetime as dt
@@ -36,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.evaluators.obs_points.core.stations import LIMITS, xyz
+from eval.evaluators.obs_points.core.stations import ANL_DEP_MAX, LIMITS, analysis_departure_ok, xyz
 
 CACHE_VERSION = 1
 G = 9.80665
@@ -72,6 +77,78 @@ def orography(out, grid, log):
     lat, lon = f.geography.latitudes(), f.geography.longitudes()
     lon = ((np.asarray(lon) + 180.0) % 360.0) - 180.0
     return cKDTree(xyz(np.asarray(lat), lon)), f.to_numpy().ravel() / G
+
+
+def analysis_fields(out, valid, log, grid="O1280"):
+    """The operational analysis (od oper an) at ``valid``: {var: values} for 2t, 10ff, msl on ``grid``,
+    retrieved once per valid time into <out>/analysis/ (what quaver's toss_with_analysis reads)."""
+    d = out / "analysis"; d.mkdir(exist_ok=True)
+    path = d / f"an_{valid:%Y%m%d%H}_{grid}.grib"
+    if not path.exists():
+        req = ("retrieve,\n  class=od, expver=0001, stream=oper, type=an, levtype=sfc,\n"
+               f"  date={valid:%Y%m%d}, time={valid:%H}00, step=0,\n  param=2t/10u/10v/msl, grid={grid},\n"
+               f"  target=\"{path}\"\n")
+        subprocess.run(["mars"], input=req, text=True, check=True)
+        log.append(f"analysis {valid:%Y%m%d%H}: retrieved {path}")
+    import earthkit.data as ekd
+    fl = ekd.from_source("file", str(path)).to_fieldlist()
+    by = {f.metadata("shortName"): f.to_numpy().ravel() for f in fl}
+    missing = {"2t", "10u", "10v", "msl"} - set(by)
+    if missing:
+        raise ValueError(f"analysis {path}: missing {sorted(missing)}")
+    return {"2t": by["2t"], "10ff": np.hypot(by["10u"], by["10v"]), "msl": by["msl"]}
+
+
+def add_analysis_column(obs, var, out, tree, log):
+    """Add column ``an`` (analysis at the nearest O1280 point, valid time of the row) to an obs frame of a
+    variable with an analysis-departure limit; other variables are returned unchanged."""
+    if var not in ANL_DEP_MAX or not len(obs):
+        return obs
+    obs = obs.copy()
+    obs["an"] = np.nan
+    idx = tree.query(xyz(obs.lat.to_numpy(), obs.lon.to_numpy()))[1]
+    for v in sorted(obs["valid"].astype(str).unique()):
+        rows = (obs["valid"].astype(str) == v).to_numpy()
+        an = analysis_fields(out, dt.datetime.strptime(v, "%Y%m%d%H"), log)[var]
+        obs.loc[rows, "an"] = an[idx[rows]]
+    return obs
+
+
+def drop_gross(obs, var, log, tag):
+    keep = analysis_departure_ok(obs, var)
+    n = int((~keep).sum())
+    if n:
+        log.append(f"analysis check {var} {tag}: dropped {n} of {len(obs)} reports "
+                   f"(|obs - an| > {ANL_DEP_MAX[var]})"); print(log[-1], flush=True)
+    return obs[keep]
+
+
+def add_analysis(out, variables):
+    """Add the ``an`` column to the obs files of an existing cache and drop the gross errors, in place."""
+    import pandas as pd
+
+    out = Path(out); log, dropped = [], {}
+    tree = orography(out, "O1280", log)[0]
+    for var in variables:
+        p = out / f"obs_{var}.csv"
+        if var not in ANL_DEP_MAX or not p.exists():
+            continue
+        o = pd.read_csv(p, dtype={"valid": str, "stnid": str})
+        n0 = len(o)
+        o = drop_gross(add_analysis_column(o.drop(columns=["an"], errors="ignore"), var, out, tree, log),
+                       var, log, "existing cache")
+        dropped[var] = n0 - len(o)
+        o.to_csv(p, index=False, float_format="%.4f")
+    with open(out / "fetch_log.txt", "a") as f:
+        f.write("\n".join(log) + "\n")
+    mp = out / "cache_meta.json"
+    meta = json.loads(mp.read_text()) if mp.exists() else {}
+    meta["analysis_check"] = {"source": "od oper an O1280 at valid time, nearest point", "limits": ANL_DEP_MAX,
+                              "added": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                              "dropped_existing": {**meta.get("analysis_check", {}).get("dropped_existing", {}),
+                                                   **dropped}}
+    mp.write_text(json.dumps(meta, indent=2))
+    return dropped
 
 
 def _stvl_param(var):
@@ -175,7 +252,7 @@ def valid_hours(var, leads):
     return list(range(lo, max(leads) + 1, 12))
 
 
-def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
+def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True):
     import pandas as pd
 
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
@@ -197,6 +274,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
         p = xyz(obs.lat.to_numpy(), obs.lon.to_numpy())
         for g, (tree, h) in trees.items():
             obs[f"h_{g.lower()}"] = h[tree.query(p)[1]]
+        if an_check:
+            obs = drop_gross(add_analysis_column(obs, var, out, trees["O1280"][0], log), var, log, "fetch")
         obs.to_csv(out / f"obs_{var}.csv", index=False, float_format="%.4f")
         rows[f"obs_{var}.csv"] = int(len(obs))
         if not hres or var == "tp24":
@@ -232,6 +311,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
         "created": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "host": socket.gethostname(),
         "dates": list(dates), "leads": list(leads), "vars": list(variables), "box": list(box),
         "limits": {v: LIMITS[v] for v in variables if v in LIMITS},
+        "analysis_check": None if not an_check else {"source": "od oper an O1280 at valid time, nearest point",
+                                                     "limits": {v: ANL_DEP_MAX[v] for v in variables if v in ANL_DEP_MAX}},
         "stvl": None if not variables else {
             "observation": {"table": "observation", "forecast_lengths_h": [0], "reference_datetimes": "valid time",
                             "period_h": {v: _stvl_param(v)[1] for v in variables if _stvl_param(v)[1]}},
@@ -251,7 +332,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
         meta["vars"] = sorted(set(old.get("vars", [])) | set(meta["vars"]))
         meta["history"] = old.get("history", [{k: old.get(k) for k in ("created", "host", "dates", "leads", "vars")}])
         meta["history"].append(this)
-        for k in ("stvl", "seeps_climatology", "orography"):
+        for k in ("stvl", "seeps_climatology", "orography", "analysis_check"):
             if k not in meta or meta[k] is None:
                 meta[k] = old.get(k)
         meta["dates"] = sorted(set(old.get("dates", [])) | set(meta["dates"]))
@@ -261,7 +342,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False):
 
 
 def add_args(ap):
-    ap.add_argument("--dates", required=True, help="comma-separated YYYYMMDD (00 UTC runs)")
+    ap.add_argument("--dates", help="comma-separated YYYYMMDD (00 UTC runs); required unless --add-analysis")
     ap.add_argument("--leads", default="12,24,36,48,60,72")
     ap.add_argument("--vars", default="2t,10ff,msl,tp")
     ap.add_argument("--tp-periods", default="12", help="tp accumulations in hours: 12 gives tp, 24 adds tp24 (SEEPS)")
@@ -269,6 +350,10 @@ def add_args(ap):
     ap.add_argument("--no-hres", action="store_true", help="skip HRES at the stations")
     ap.add_argument("--seeps", action="store_true",
                     help="also fetch the SEEPS station climatology (24 h windows ending at date + 24..max lead)")
+    ap.add_argument("--no-an-check", action="store_true",
+                    help="skip quaver's analysis-departure check (no od oper an retrieval, no 'an' column)")
+    ap.add_argument("--add-analysis", action="store_true",
+                    help="only add the 'an' column to the obs files already in --out and drop the gross errors")
     ap.add_argument("--out", required=True, help="cache directory (created)")
 
 
@@ -284,8 +369,13 @@ def variables_from_args(a):
 
 def run_from_args(a):
     require_atos()
+    if a.add_analysis:
+        return add_analysis(a.out, variables_from_args(a))
+    if not a.dates:
+        raise SystemExit("obs fetch: --dates is required")
     return fetch_cache(a.dates.split(","), [int(x) for x in a.leads.split(",")], variables_from_args(a),
-                       [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres, seeps=a.seeps)
+                       [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres, seeps=a.seeps,
+                       an_check=not a.no_an_check)
 
 
 def main(argv=None):
