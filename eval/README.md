@@ -24,7 +24,7 @@ command.
 | comparison | `evolution` |
 | tropical cyclone tracks | `tctracker`, `tccompare` |
 | observations | `obs fetch`, `obs fetch-tc`, `obs fetch-imerg`, `obs compare` |
-| figures | `zoom_maps` |
+| figures | `zoom_maps`, `spectra` (the standard spectra quick look: `python -m eval.cli spectra <read or predictions> --out DIR [--steps 24 48 72]`) |
 | maintenance | `prepml-cleanup`, `config` |
 | retired | `membermaps` (renamed `zoom_maps`), `report`, `videogen`: each prints where the tool went and exits with status 1 |
 
