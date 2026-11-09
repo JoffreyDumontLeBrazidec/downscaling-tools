@@ -61,7 +61,10 @@ def _parse_init(ds, path: Path, sample: int) -> datetime:
 def _parse_step(ds, path: Path) -> int:
     if "lead_step_hours" in ds:
         try:
-            return int(np.asarray(ds["lead_step_hours"].values).reshape(-1)[0])
+            raw = np.asarray(ds["lead_step_hours"].values).reshape(-1)[0]
+            if np.issubdtype(np.asarray(raw).dtype, np.timedelta64):   # xarray decodes units "hours"
+                return int(raw / np.timedelta64(1, "h"))
+            return int(raw)
         except Exception:
             pass
     for key in ("step", "lead_time", "lead_hours", "step_hours"):

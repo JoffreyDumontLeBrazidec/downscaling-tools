@@ -112,3 +112,27 @@ def test_cli_writes_video_from_prediction_files(tmp_path):
     rc = main([str(p) for p in sorted(tmp_path.glob("*.nc"))]
               + ["--out", str(out), "--poster", str(poster), "--res", "1", "--no-geography", "--tween", "1"])
     assert rc == 0 and out.stat().st_size > 0 and poster.stat().st_size > 0
+
+
+def test_lead_step_hours_decoded_as_timedelta(tmp_path):
+    xr = pytest.importorskip("xarray")
+    from eval.tools.map_video.frames import scan
+
+    ds = xr.Dataset({"lead_step_hours": ((), 24, {"units": "hours"}),
+                     "init_date": ((), "2025-09-26T00:00:00")})
+    ds.to_netcdf(tmp_path / "predictions_20250926_step024.nc")
+    (f,) = scan([tmp_path / "predictions_20250926_step024.nc"])
+    assert f.step == 24 and f.init.day == 26
+
+
+def test_shapefile_reader_roundtrip(tmp_path):
+    from eval.tools.map_video.render import read_shp_polylines
+
+    pts = np.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+    parts = np.array([0], "<i4")
+    content = (np.int32(3).tobytes() + np.zeros(4, "<f8").tobytes() + np.int32(1).tobytes()
+               + np.int32(3).tobytes() + parts.tobytes() + pts.astype("<f8").tobytes())
+    rec = (1).to_bytes(4, "big") + (len(content) // 2).to_bytes(4, "big") + content
+    (tmp_path / "x.shp").write_bytes(b"\0" * 100 + rec)
+    (line,) = read_shp_polylines(tmp_path / "x.shp")
+    np.testing.assert_array_equal(line, pts)

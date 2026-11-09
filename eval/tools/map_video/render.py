@@ -69,9 +69,16 @@ def _axes_rect(fig_w: int, fig_h: int, rect) -> list[float]:
     return [x0 / fig_w, 1.0 - (y0 + h) / fig_h, w / fig_w, h / fig_h]
 
 
-def _canvas_rgba(fig) -> np.ndarray:
+def _canvas_rgba(fig, shape: tuple[int, int] | None = None, fill: int = 0) -> np.ndarray:
+    """The rendered figure as RGBA, cropped or padded with ``fill`` to ``shape`` = (h, w) if given."""
     fig.canvas.draw()
-    return np.asarray(fig.canvas.buffer_rgba()).copy()
+    img = np.asarray(fig.canvas.buffer_rgba()).copy()
+    if shape is None or img.shape[:2] == tuple(shape):
+        return img
+    out = np.full(tuple(shape) + (4,), fill, dtype=np.uint8)
+    h, w = min(shape[0], img.shape[0]), min(shape[1], img.shape[1])
+    out[:h, :w] = img[:h, :w]
+    return out
 
 
 def wrap_lines(lines: list[np.ndarray], west: float) -> np.ndarray:
@@ -101,6 +108,40 @@ def natural_earth_lines(kind: str, scale: str = "50m") -> list[np.ndarray]:
     return out
 
 
+_NE_FILES = {"coast": ("physical", "ne_{scale}_coastline.shp"),
+             "borders": ("cultural", "ne_{scale}_admin_0_boundary_lines_land.shp")}
+
+
+def read_shp_polylines(path) -> list[np.ndarray]:
+    """Polylines of an ESRI shapefile (shape types 3 and 13) with plain numpy, no cartopy or GDAL."""
+    data = Path(path).read_bytes()
+    out, pos = [], 100
+    while pos + 8 <= len(data):
+        length = int.from_bytes(data[pos + 4:pos + 8], "big") * 2
+        rec = data[pos + 8:pos + 8 + length]
+        pos += 8 + length
+        if len(rec) < 44 or int.from_bytes(rec[0:4], "little") not in (3, 13):
+            continue
+        n_parts = int.from_bytes(rec[36:40], "little")
+        n_pts = int.from_bytes(rec[40:44], "little")
+        parts = np.frombuffer(rec, "<i4", n_parts, 44)
+        pts = np.frombuffer(rec, "<f8", 2 * n_pts, 44 + 4 * n_parts).reshape(n_pts, 2)
+        for a, b in zip(parts, list(parts[1:]) + [n_pts]):
+            out.append(pts[a:b].copy())
+    return out
+
+
+def _cartopy_data_dirs() -> list[Path]:
+    dirs = [Path.home() / ".local/share/cartopy"]
+    try:
+        import cartopy
+
+        dirs.insert(0, Path(cartopy.config["data_dir"]))
+    except Exception:
+        pass
+    return dirs
+
+
 def load_geography(cache: Path | None, scale: str = "50m") -> dict[str, list[np.ndarray]]:
     """Coastline and border polylines: from an ``.npz`` cache if given and present, else cartopy.
 
@@ -110,7 +151,12 @@ def load_geography(cache: Path | None, scale: str = "50m") -> dict[str, list[np.
     if cache is not None and Path(cache).exists():
         z = np.load(cache)
         return {k: [z[n] for n in sorted(z.files) if n.startswith(k + "_")] for k in ("coast", "borders")}
-    geo = {"coast": natural_earth_lines("coast", scale), "borders": natural_earth_lines("borders", scale)}
+    geo = {}
+    for kind, (cat, name) in _NE_FILES.items():
+        shp = next((d / "shapefiles/natural_earth" / cat / name.format(scale=scale) for d in _cartopy_data_dirs()
+                    if (d / "shapefiles/natural_earth" / cat / name.format(scale=scale)).exists()), None)
+        # a cached Natural Earth shapefile is read directly (works without cartopy); else cartopy downloads it
+        geo[kind] = read_shp_polylines(shp) if shp is not None else natural_earth_lines(kind, scale)
     if cache is not None:
         Path(cache).parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(cache, **{f"{k}_{i:05d}": a.astype(np.float32)
@@ -173,7 +219,7 @@ class FrameComposer:
         cb.ax.tick_params(labelsize=font_pt * 0.85, length=0.3 * L.font_px * PT_PER_PX * 2)
         cb.outline.set_linewidth(0.6)
         cb.set_label(self.palette.label, fontsize=font_pt * 0.95)
-        img = _canvas_rgba(fig)[..., :3]
+        img = _canvas_rgba(fig, (L.height, L.width), fill=255)[..., :3]
         plt.close(fig)
         return img
 
@@ -204,7 +250,7 @@ class FrameComposer:
                         lw=self.coast_px * PT_PER_PX, solid_capstyle="round", antialiased=True)
             ax.set_xlim(west, east)
             ax.set_ylim(south, north)
-        rgba = _canvas_rgba(fig)
+        rgba = _canvas_rgba(fig, (L.height, L.width))
         plt.close(fig)
         return rgba
 
@@ -220,7 +266,10 @@ class FrameComposer:
         fig.text(x_left, 0.5, title, ha="left", va="center", fontsize=L.font_px * PT_PER_PX)
         img = _canvas_rgba(fig)[..., :3]
         plt.close(fig)
-        return img
+        # Matplotlib can round the canvas one pixel short of figsize * dpi: crop or pad to (h, w)
+        out = np.full((h, w, 3), 255, dtype=np.uint8)
+        out[: min(h, img.shape[0]), : min(w, img.shape[1])] = img[:h, :w]
+        return out
 
     def compose(self, fields: list[np.ndarray], title: str) -> np.ndarray:
         """RGB uint8 frame (height, width, 3) from one regular-grid field per panel."""

@@ -175,6 +175,14 @@ def main(argv=None) -> int:
     t0 = time.time()
     for i, f in enumerate(files):
         cur = [field(f, s) for s in sources]
+        if i == 0:
+            for s_name, v in zip(sources, cur):
+                finite = np.isfinite(v)
+                if not finite.any():
+                    print(f"WARNING: {s_name} {args.variable} is all NaN in {f.path.name} (empty panel)", flush=True)
+                elif np.nanmax(np.abs(v)) == 0:
+                    print(f"WARNING: {s_name} {args.variable} is exactly 0 everywhere in {f.path.name} "
+                          "(the input of the 9 km lane carries no tp)", flush=True)
         if prev is not None and args.tween > 0:
             pf, pfields = prev
             same_run = pf.init == f.init
