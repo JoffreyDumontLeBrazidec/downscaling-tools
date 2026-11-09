@@ -17,7 +17,9 @@ def plot(
 ) -> Path:
     """Build the spectra PDFs for this run.
 
-    Two files are written side by side. `spectra_ecmwf.pdf` holds the
+    `spectra_ecmwf_grid.png` / `.pdf` is the standard figure (eval.plotting.spectra_grid):
+    every variable in one figure, the mean power spectrum of truth, input and model above and
+    the power ratio to the truth below. Two more files are written side by side. `spectra_ecmwf.pdf` holds the
     mean power spectra (the square of the stored amplitudes, in the
     variable's display unit squared), with the model, truth and input
     curves on log-log axes. `spectra_ecmwf_ratio.pdf` holds the same model
@@ -27,7 +29,7 @@ def plot(
     without them. Each PDF also gets one PNG per page in
     `spectra_ecmwf_pages/` and `spectra_ecmwf_ratio_pages/`.
     """
-    from ._plotter import build_pdf_ecmwf_ratio, build_pdf_ecmwf_with_references
+    from ._plotter import build_pdf_ecmwf_ratio, build_pdf_ecmwf_with_references, build_spectra_grid
 
     results_dir = Path(results_dir)
     output_dir = Path(output_dir) if output_dir else results_dir
@@ -77,6 +79,23 @@ def plot(
             )
     truth_label = eval_config.get("truth_label", "truth")
     input_label = eval_config.get("input_label", "input")
+
+    # The standard figure (owner, 9 Nov 2026): all variables in one figure, power spectrum
+    # above and power ratio to truth below, truth / input / model.
+    try:
+        written = build_spectra_grid(
+            pred_amp_dir,
+            output_dir / "spectra_ecmwf_grid",
+            truth_amp_dir=truth_amp_dir,
+            input_amp_dir=input_amp_dir,
+            truth_label=truth_label,
+            input_label=input_label,
+            model_label=eval_config.get("model_label", "model"),
+            title=eval_config.get("title"),
+        )
+        LOG.info("spectra_ecmwf: wrote standard grid figure: %s", written)
+    except (FileNotFoundError, ValueError) as exc:
+        LOG.warning("spectra_ecmwf grid plotter: %s", exc)
 
     out_pdf = output_dir / "spectra_ecmwf.pdf"
     try:

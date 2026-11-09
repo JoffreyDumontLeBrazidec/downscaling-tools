@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 from eval.plotting import AXIS, FigureBook, eval_style, role_style, variable_spec  # noqa: E402
+from eval.plotting.spectra_grid import Curve, plot_spectra_grid, ratio_to_reference  # noqa: E402
 from eval.plotting.spec_helpers import (  # noqa: E402
     add_wavelength_axis,
     amplitude_in_display,
@@ -383,49 +384,8 @@ def _default_score_wavenumber_min() -> float | None:
     return float(SPECTRA_SCORE_WAVENUMBER_MIN_EXCLUSIVE)
 
 
-def _ratio_to_reference(
-    num_wvn: np.ndarray,
-    num_amp: np.ndarray,
-    den_wvn: np.ndarray,
-    den_amp: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Divide one spectrum by another over the wavenumbers they share.
-
-    Both curves are first restricted to strictly positive wavenumbers and
-    strictly positive amplitudes, since the ratio is drawn on log axes. The
-    denominator is then interpolated onto the numerator wavenumbers in
-    log-log space and the two are divided pointwise. When the two grids
-    already coincide, which is the normal case because total wavenumbers are
-    integers, that interpolation returns the stored values unchanged; it only
-    does real work when the driver was truncated differently from the target.
-    Returns (wavenumbers, ratio), or None when there is no usable overlap.
-    """
-    num_wvn = np.asarray(num_wvn, dtype=float)
-    num_amp = np.asarray(num_amp, dtype=float)
-    den_wvn = np.asarray(den_wvn, dtype=float)
-    den_amp = np.asarray(den_amp, dtype=float)
-    if num_wvn.shape != num_amp.shape or den_wvn.shape != den_amp.shape:
-        return None
-
-    n_ok = np.isfinite(num_wvn) & np.isfinite(num_amp) & (num_wvn > 0) & (num_amp > 0)
-    d_ok = np.isfinite(den_wvn) & np.isfinite(den_amp) & (den_wvn > 0) & (den_amp > 0)
-    if int(n_ok.sum()) < 2 or int(d_ok.sum()) < 2:
-        return None
-
-    nwvn, namp = num_wvn[n_ok], num_amp[n_ok]
-    dwvn, damp = den_wvn[d_ok], den_amp[d_ok]
-    order = np.argsort(dwvn)
-    dwvn, damp = dwvn[order], damp[order]
-
-    lo = max(float(nwvn.min()), float(dwvn.min()))
-    hi = min(float(nwvn.max()), float(dwvn.max()))
-    keep = (nwvn >= lo) & (nwvn <= hi)
-    if int(keep.sum()) < 2:
-        return None
-    nwvn, namp = nwvn[keep], namp[keep]
-
-    den_here = np.exp(np.interp(np.log(nwvn), np.log(dwvn), np.log(damp)))
-    return nwvn, namp / den_here
+# Shared with the standard grid figure (eval.plotting.spectra_grid); kept under the old name.
+_ratio_to_reference = ratio_to_reference
 
 
 def _ratio_ylim(series: list[np.ndarray]) -> tuple[float, float]:
@@ -584,6 +544,65 @@ def build_pdf_ecmwf_ratio(
             pages += 1
 
     return pages
+
+
+# ---------------------------------------------------------------------------
+# Standard grid figure: every variable in one figure, power above, ratio to truth below
+# ---------------------------------------------------------------------------
+
+def _mean_power(amp_dir: Path | None, param_name: str):
+    """(wavenumbers, mean power in display units squared, curve files), or None.
+
+    Power is averaged as power (mean of the squared amplitudes over the curves).
+    """
+    if amp_dir is None:
+        return None
+    got = _load_curve_stack(amp_dir, param_name)
+    if got is None:
+        return None
+    wvn, stack, files = got
+    return wvn, (amplitude_in_display(param_name, stack) ** 2).mean(axis=0), files
+
+
+def build_spectra_grid(
+    pred_amp_dir: Path,
+    out_stem: Path,
+    *,
+    truth_amp_dir: Path | None = None,
+    input_amp_dir: Path | None = None,
+    truth_label: str = "truth",
+    input_label: str = "input",
+    model_label: str = "model",
+    title: str | None = None,
+) -> list[Path]:
+    """The standard spectra figure (eval.plotting.spectra_grid) of one run: truth, input, model.
+
+    Returns the written PNG and PDF paths (empty when no variable has model curves).
+    """
+    panels: dict[str, list[Curve]] = {}
+    counts: dict[str, str] = {}
+    for param_dir in sorted(d for d in Path(pred_amp_dir).iterdir()
+                            if d.is_dir() and list(d.glob("ampl_*.npy"))):
+        pname = param_dir.name
+        model = _mean_power(pred_amp_dir, pname)
+        if model is None:
+            continue
+        curves = []
+        for role, name, src in (("truth", truth_label, truth_amp_dir),
+                                ("input", input_label, input_amp_dir)):
+            got = _mean_power(src, pname)
+            if got is not None:
+                curves.append(Curve(_role_label(role, name), got[0], got[1], role=role))
+                counts.setdefault(role, _sample_note(got[2]))
+        curves.append(Curve(_role_label("model", model_label), model[0], model[1], role="model"))
+        counts.setdefault("model", _sample_note(model[2]))
+        panels[pname] = curves
+    if not panels:
+        return []
+    foot = ("Mean power spectra (power averaged over curves, display unit squared); "
+            "ratio = power / truth power. Curves per variable: "
+            + "; ".join(f"{k} {v}" for k, v in counts.items()) + ".")
+    return plot_spectra_grid(panels, out_stem, title=title, footnote=foot)
 
 
 # ---------------------------------------------------------------------------
