@@ -39,13 +39,15 @@ class FrameFile:
 
 
 def _parse_init(ds, path: Path, sample: int) -> datetime:
-    if "date" in ds:
+    for key in ("init_date", "date"):
+        if key not in ds:
+            continue
         try:
-            raw = np.asarray(ds["date"].values).reshape(-1)[sample]
+            raw = np.asarray(ds[key].values).reshape(-1)[sample]
             if np.issubdtype(np.asarray(raw).dtype, np.datetime64):
                 return datetime.utcfromtimestamp(raw.astype("datetime64[s]").astype(int))
             text = str(raw.decode() if isinstance(raw, bytes) else raw)
-            m = _DATE_RE.search(text.replace("-", ""))
+            m = _DATE_RE.search(text.replace("-", "").replace(" ", "T"))
             if m:
                 return datetime.strptime(m.group(1) + (m.group(2) or "00"), "%Y%m%d%H")
         except Exception:
@@ -57,6 +59,11 @@ def _parse_init(ds, path: Path, sample: int) -> datetime:
 
 
 def _parse_step(ds, path: Path) -> int:
+    if "lead_step_hours" in ds:
+        try:
+            return int(np.asarray(ds["lead_step_hours"].values).reshape(-1)[0])
+        except Exception:
+            pass
     for key in ("step", "lead_time", "lead_hours", "step_hours"):
         if key in getattr(ds, "attrs", {}):
             return int(ds.attrs[key])
