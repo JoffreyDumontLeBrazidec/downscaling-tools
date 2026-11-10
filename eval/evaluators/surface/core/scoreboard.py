@@ -67,12 +67,32 @@ def load_x_interp_surface_metrics(
     predictions_dir: Path,
     *,
     truth_std_by_variable: dict[str, float] | None = None,
+    native_input: bool = True,
 ) -> dict[str, Any]:
-    from eval.evaluators.surface.core.compute import process_predictions_dir
+    """Surface MSE of the INPUT against the target (the no-downscaling row). Rule 41: the input is the native
+    ``x`` at the nearest native point of each output point when the files carry it; ``x_interp`` (name kept for
+    the callers) only without ``x`` or with ``native_input`` off, with a warning. ``input_source`` says which."""
+    import logging
 
+    import xarray as xr
+
+    from eval.evaluators.surface.core.compute import process_predictions_dir
+    from eval.shared.native_input import SOURCE_NATIVE, has_native_input, interp_source, warn_fallback
+
+    first = sorted(Path(predictions_dir).glob("predictions_*.nc"))
+    native = False
+    if native_input and first:
+        with xr.open_dataset(first[0], cache=False) as ds0:
+            native = has_native_input(ds0)
+    if native:
+        input_source = SOURCE_NATIVE
+    else:
+        input_source = interp_source("x_interp", "native_input: false" if not native_input
+                                     else "no native x in the file")
+        warn_fallback(logging.getLogger(__name__), "surface input row", input_source)
     metrics = process_predictions_dir(
         predictions_dir,
-        prediction_var="x_interp",
+        prediction_var="x" if native else "x_interp",
         truth_var="y",
     )
     variables = metrics.get("variables", {})
@@ -96,6 +116,7 @@ def load_x_interp_surface_metrics(
         "truth_std_by_variable": local_truth_std,
         "variables": variables,
         "source_path": str(predictions_dir),
+        "input_source": input_source,
     }
 
 

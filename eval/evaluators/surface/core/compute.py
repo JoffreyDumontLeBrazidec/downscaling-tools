@@ -221,12 +221,28 @@ def _variance_from_running_moments(state: dict[str, float]) -> float | None:
     return variance
 
 
+def _native_input_on_output_points(ds: xr.Dataset) -> xr.DataArray:
+    """The native input ``x`` at the nearest native point of each output point, as a (..., grid_point_hres, ...)
+    array (rule 41; ``eval.shared.native_input``). Output points must be a flat list (lat_hres on grid_point_hres)."""
+    from eval.shared.native_input import nearest_native_index
+
+    if ds["lat_hres"].dims != ("grid_point_hres",) or ds["lon_hres"].dims != ("grid_point_hres",):
+        raise ValueError("native input on the output points needs lat_hres/lon_hres on grid_point_hres")
+    idx = nearest_native_index(ds["lat_lres"].values.reshape(-1), ds["lon_lres"].values.reshape(-1),
+                               ds["lat_hres"].values, ds["lon_hres"].values)
+    x = ds["x"]
+    point = next(d for d in x.dims if d.startswith("grid_point"))
+    return x.isel({point: xr.DataArray(idx, dims="grid_point_hres")})
+
+
 def process_predictions_dir(
     predictions_dir: Path,
     *,
     prediction_var: str = "y_pred",
     truth_var: str = "y",
 ) -> dict[str, Any]:
+    """Surface MSE of ``prediction_var`` against ``truth_var`` per file. ``prediction_var="x"`` scores the native
+    input at the nearest native point of each output point (rule 41), never interpolated."""
     pred_files = sorted(predictions_dir.glob("predictions_*.nc"))
     if not pred_files:
         raise ValueError(f"No prediction files found in {predictions_dir}")
@@ -244,7 +260,8 @@ def process_predictions_dir(
                 if required_var not in ds:
                     raise ValueError(f"{pred_file}: missing required variable '{required_var}'")
 
-            y_pred = _to_member_point_weather(ds[prediction_var], ds, label=prediction_var)
+            pred_da = _native_input_on_output_points(ds) if prediction_var == "x" else ds[prediction_var]
+            y_pred = _to_member_point_weather(pred_da, ds, label=prediction_var)
             y_true = _to_member_point_weather(ds[truth_var], ds, label=truth_var)
 
             if y_pred.sizes["grid_point_hres"] != y_true.sizes["grid_point_hres"]:
