@@ -54,6 +54,15 @@ distance between the model's peak location and the truth's, and between the
 model's and the driver's. That is the feature-based half of the displacement
 question; the field-based half lives in the ``displacement`` evaluator.
 
+Regional (cut-graph) prediction files. A file whose hres grid is a subset of the
+global grid (fewer points than the up matrix has rows) is scored in *regional mode*:
+the input wind is taken from the file's exported ``x_interp`` (the model's own
+interpolated driver) instead of ``up @ x``, boxes with no points in the file are
+skipped with a warning, and a box the file only partly covers is scored over its
+intersection with the file (``n_core_points`` in the output says how many points
+that is). Disks are truncated where they leave the file's domain, exactly as they
+are truncated at a box's padding edge in global mode.
+
 Boxes. The evaluator works inside geographical boxes because "the maximum wind"
 is a question about a storm, not about the globe. Each box is padded by more
 than the largest radius before the disk averages are built, so no point in the
@@ -436,6 +445,7 @@ def run(
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
     point_area_km2 = None
+    regional: bool | None = None
     samples: list[dict[str, Any]] = []
 
     for file_path in files:
@@ -456,18 +466,44 @@ def run(
             lon180 = np.where(np.mod(lon, 360.0) > 180.0, np.mod(lon, 360.0) - 360.0,
                               np.mod(lon, 360.0))
             if point_area_km2 is None:
-                point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
+                # Area per point of the (reduced Gaussian) output grid; a regional file
+                # holds a subset of that grid, so the global point count (the up
+                # matrix's rows) is the right divisor in both cases.
+                point_area_km2 = float(SPHERE_AREA_KM2 / up.shape[0])
+            if regional is None:
+                regional = lat.size != up.shape[0]
+                if regional:
+                    if "x_interp" not in ds.variables:
+                        raise RuntimeError(
+                            f"{file_path.name}: {lat.size} points do not match the up matrix "
+                            f"{up.shape} and the file carries no x_interp; regional files "
+                            "need the exported x_interp for the input wind")
+                    LOG.info("wind_extremes: regional file (%d points, up matrix %s); "
+                             "input wind from x_interp, boxes clipped to the file",
+                             lat.size, up.shape)
+            elif regional != (lat.size != up.shape[0]):
+                raise RuntimeError(
+                    f"{file_path.name}: {lat.size} points, but earlier files were "
+                    f"{'regional' if regional else 'global'}")
             if not box_static:
                 for name, box in boxes.items():
                     t_box = time.time()
-                    box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
-                    up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
+                    try:
+                        box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
+                    except ValueError as exc:
+                        if regional and "contains no grid points" in str(exc):
+                            LOG.warning("wind_extremes: box %s %s has no points in the "
+                                        "regional file; skipped", name, box)
+                            continue
+                        raise
+                    if not regional:
+                        up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
                     LOG.info("wind_extremes: box %s built in %.1fs (%d core, %d padded points)",
                              name, time.time() - t_box, box_static[name]["n_core"],
                              box_static[name]["n_padded"])
-            if up.shape[0] != lat.size:
-                raise RuntimeError(
-                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
+                if not box_static:
+                    raise RuntimeError(
+                        f"none of the boxes {list(boxes)} has grid points in {file_path.name}")
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
@@ -477,16 +513,24 @@ def run(
                 yp_v = _read_component(ds.variables["y_pred"], member_index, cv)
                 yt_u = _read_component(ds.variables["y"], member_index, cu)
                 yt_v = _read_component(ds.variables["y"], member_index, cv)
-                xx_u = _read_component(ds.variables["x"], member_index, cu)
-                xx_v = _read_component(ds.variables["x"], member_index, cv)
+                if regional:
+                    xi_u = _read_component(ds.variables["x_interp"], member_index, cu)
+                    xi_v = _read_component(ds.variables["x_interp"], member_index, cv)
+                else:
+                    xx_u = _read_component(ds.variables["x"], member_index, cu)
+                    xx_v = _read_component(ds.variables["x"], member_index, cv)
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
                     core_in_padded = st["core_in_padded"]
+                    if regional:
+                        w_input = np.hypot(xi_u[padded], xi_v[padded])
+                    else:
+                        w_input = np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v)
                     fields_padded = {
                         "model": np.hypot(yp_u[padded], yp_v[padded]),
                         "truth": np.hypot(yt_u[padded], yt_v[padded]),
-                        "input": np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v),
+                        "input": w_input,
                     }
                     entry: dict[str, Any] = {
                         "file": file_path.name, "date": date, "step": int(lead),
@@ -526,6 +570,9 @@ def run(
             "components": list(components), "steps": steps, "dates": dates,
             "members": members, "max_members": max_members, "paths": paths,
             "point_area_km2": point_area_km2,
+            "regional": bool(regional),
+            "input_source": "x_interp" if regional else "up @ x",
+            "boxes_skipped": [b for b in boxes if b not in box_static],
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],
                          "n_core_points": st["n_core"],
