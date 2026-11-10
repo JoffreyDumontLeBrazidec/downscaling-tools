@@ -40,6 +40,7 @@ from eval.shared.native_input import (
     interp_source,
     warn_fallback,
 )
+from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 
 LOG = logging.getLogger(__name__)
 
@@ -125,6 +126,8 @@ def run(
         xn_probe = (_probe_channel(ds0, "x", tp_idx)
                     if native_input and native_file else np.array([np.nan]))
         ckpt_id = str(ds0.attrs.get("checkpoint_id", checkpoint or ""))
+    # regional box: the 1-degree edge strip is left out of every score (eval.shared.edge_strip)
+    keep = box_edge_index(lat_hres, lon_hres, resolve_box_edge_deg(eval_config))
 
     if max_members:
         n_members = min(n_members, int(max_members))
@@ -185,16 +188,16 @@ def run(
                 ws_f = [str(s) for s in ds["weather_state"].values]
                 ti = ws_f.index(var)
                 if truth_src is not None:
-                    truth_mm = truth_src.load(date, p.step).astype(np.float64) * MM
+                    truth_mm = truth_src.load(date, p.step).astype(np.float64)[keep] * MM
                 else:
-                    truth_mm = ds["y"][0, 0].values[:, ti].astype(np.float64) * MM
+                    truth_mm = ds["y"][0, 0].values[keep, ti].astype(np.float64) * MM
 
                 ens_sum = np.zeros_like(truth_mm)
                 bl_sum = np.zeros_like(truth_mm) if baseline_mode != "none" else None
                 reader = InputReader(ds) if baseline_mode == "x-native" else None
                 mem_rows = []
                 for mi in range(n_members):
-                    yp_mm = ds["y_pred"][0, mi].values[:, ti].astype(np.float64) * MM
+                    yp_mm = ds["y_pred"][0, mi].values[keep, ti].astype(np.float64) * MM
                     ens_sum += yp_mm
                     mem = {
                         "member": member_ids[mi],
@@ -202,11 +205,11 @@ def run(
                                   **M.field_stats(yp_mm, wet_threshold_mm=wet_thr)},
                     }
                     if baseline_mode == "x-native":
-                        bl_mm = reader.channel(ti, member=mi) * MM
+                        bl_mm = reader.channel(ti, member=mi)[keep] * MM
                     elif baseline_mode == "x_interp":
-                        bl_mm = ds["x_interp"][0, mi].values[:, ti].astype(np.float64) * MM
+                        bl_mm = ds["x_interp"][0, mi].values[keep, ti].astype(np.float64) * MM
                     elif baseline_src is not None:
-                        bl_mm = baseline_src.load(date, p.step, member_ids[mi]).astype(np.float64) * MM
+                        bl_mm = baseline_src.load(date, p.step, member_ids[mi]).astype(np.float64)[keep] * MM
                     else:
                         bl_mm = None
                     if bl_mm is not None:
@@ -262,6 +265,9 @@ def run(
             "member_ids": member_ids,
             "n_slices": len(rows),
             "wet_threshold_mm": wet_thr,
+            "box_edge_deg": resolve_box_edge_deg(eval_config),
+            "n_points_scored": int(lat_hres.size if isinstance(keep, slice) else keep.size),
+            "n_points_file": int(lat_hres.size),
             "negative_handling": "raw values in rmse/bias/corr; negatives "
                                  "clipped to 0 only inside quantile histograms",
         },

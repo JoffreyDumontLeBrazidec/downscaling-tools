@@ -12,8 +12,8 @@ from eval.evaluators.probabilistic.core.calibration import (
     RATIO_BOOTSTRAP_SEED,
 )
 from eval.evaluators.probabilistic.core.scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM
+from eval.shared.edge_strip import resolve_box_edge_deg
 from eval.evaluators.probabilistic.core.scoring import (
-    DEFAULT_BOX_EDGE_DEG,
     DEFAULT_DOMAINS,
     DEFAULT_WEATHER_STATES,
 )
@@ -68,7 +68,7 @@ def run(
     scale_cut_km = float(_or(eval_config.get("scale_cut_km"), DEFAULT_CUT_KM))
     scale_grid_km = float(_or(eval_config.get("scale_grid_km"), DEFAULT_GRID_KM))
     scale_edge_margin_km = eval_config.get("scale_edge_margin_km")
-    box_edge_deg = float(_or(eval_config.get("box_edge_deg"), DEFAULT_BOX_EDGE_DEG))
+    box_edge_deg = resolve_box_edge_deg(eval_config)   # eval.shared.edge_strip (default 1 degree)
     rank_histogram = bool(_or(eval_config.get("rank_histogram"), True))
     rank_tie_seed = int(_or(eval_config.get("rank_tie_seed"), RANK_TIE_SEED))
     rank_dry_threshold_mm = float(_or(eval_config.get("rank_dry_threshold_mm"), DEFAULT_RANK_DRY_THRESHOLD_MM))
@@ -76,6 +76,7 @@ def run(
     ratio_bootstrap_seed = int(_or(eval_config.get("ratio_bootstrap_seed"), RATIO_BOOTSTRAP_SEED))
     include_input = bool(_or(eval_config.get("include_input"), True))
     native_input = bool(_or(eval_config.get("native_input"), True))
+    clip_nonnegative = eval_config.get("clip_nonnegative")
 
     payload = compute_probabilistic_scores(
         predictions_dir,
@@ -97,6 +98,7 @@ def run(
         ratio_bootstrap_seed=ratio_bootstrap_seed,
         include_input=include_input,
         native_input=native_input,
+        clip_nonnegative=clip_nonnegative,
     )
     LOG.info(
         "Probabilistic scores written to %s (%s rows, %s band rows, scale split %s)",

@@ -25,8 +25,21 @@ wind-speed fields are built from the 10 m wind components::
     W_truth = hypot(y     [10u], y     [10v])
     W_input = hypot(up @ x[10u], up @ x[10v])
 
-``up`` is the linear O320 -> O1280 interpolation matrix the lane itself uses, so
-``W_input`` is the driver seen on the output grid.
+Rule 41 (owner, 9 Nov 2026): the input row is scored on the input's own grid. When the file
+carries the native ``x`` on ``lat_lres``/``lon_lres`` (and ``native_input`` is not false),
+``W_input`` takes, at every output point, the wind of the nearest native input point
+(``eval.shared.native_input``): native values, no interpolation, on the same points, boxes
+and disks as the model and the truth. Only without a native ``x`` does the old route below
+apply, with a warning: ``up`` is the linear O320 -> O1280 interpolation matrix the lane itself
+uses, so ``W_input`` is the driver interpolated to the output grid. With ``input_source: x_interp`` the
+interpolated input stored in the prediction file is used instead and no matrix is read; this
+is how a lane other than o320->o1280 (o96->o320: the default matrix has the O1280 point
+count and is refused) gets its input curve. ``paths: {up_matrix: ...}`` still works.
+
+Grid scale: the default radii (10-100 km) and adjacency (15 km) are set for O1280 (9 km
+spacing). On O320 (32 km to the nearest neighbour, 39 km at most) a disk below 32 km holds
+the point alone and a 15 km adjacency connects nothing, so that lane passes radii of 50 km
+and more and an adjacency of about 40 km.
 
 For each field and each averaging radius R (kilometres) the evaluator forms the
 disk average ``S_R``, the mean of the field over every grid point within R km,
@@ -54,6 +67,15 @@ distance between the model's peak location and the truth's, and between the
 model's and the driver's. That is the feature-based half of the displacement
 question; the field-based half lives in the ``displacement`` evaluator.
 
+Regional (cut-graph) prediction files. A file whose hres grid is a subset of the
+global grid (fewer points than the up matrix has rows) is scored in *regional mode*:
+the input wind is taken from the file's exported ``x_interp`` (the model's own
+interpolated driver) instead of ``up @ x``, boxes with no points in the file are
+skipped with a warning, and a box the file only partly covers is scored over its
+intersection with the file (``n_core_points`` in the output says how many points
+that is). Disks are truncated where they leave the file's domain, exactly as they
+are truncated at a box's padding edge in global mode.
+
 Boxes. The evaluator works inside geographical boxes because "the maximum wind"
 is a question about a storm, not about the globe. Each box is padded by more
 than the largest radius before the disk averages are built, so no point in the
@@ -70,6 +92,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from eval.shared.edge_strip import box_edge_index, is_global, resolve_box_edge_deg, wrap_lon
+from eval.shared.native_input import SOURCE_NATIVE, has_native_input, nearest_native_index, warn_fallback
 
 LOG = logging.getLogger(__name__)
 
@@ -138,6 +163,16 @@ def _box_mask(lat: np.ndarray, lon180: np.ndarray, box, pad_deg: float = 0.0) ->
     return lat_ok & lon_ok
 
 
+def _box_area_km2(lat: np.ndarray, lon: np.ndarray) -> float:
+    """Area of the lat/lon box spanned by a regional point set (km^2)."""
+    lon180 = wrap_lon(lon)
+    lon360 = lon180 % 360.0
+    lo = lon180 if np.ptp(lon180) <= np.ptp(lon360) else lon360
+    dlon = np.deg2rad(float(np.ptp(lo)))
+    s1, s2 = np.sin(np.deg2rad(float(lat.min()))), np.sin(np.deg2rad(float(lat.max())))
+    return float(EARTH_RADIUS_KM ** 2 * dlon * abs(s2 - s1))
+
+
 def _build_box(lat: np.ndarray, lon180: np.ndarray, box, radii_km, adj_km: float) -> dict[str, Any]:
     """Disk-average matrices and the adjacency graph for one box.
 
@@ -192,6 +227,28 @@ def _build_box(lat: np.ndarray, lon180: np.ndarray, box, radii_km, adj_km: float
         "n_core": int(core_idx.size),
         "n_padded": int(padded_idx.size),
     }
+
+
+def _clip_boxes_to_extent(boxes: dict, lat: np.ndarray, lon180: np.ndarray, radii_km) -> dict:
+    """On a regional grid, shrink each box so that its padding stays inside the data.
+
+    A core point closer to the edge of the data than the largest radius would see a
+    truncated disk. Boxes left empty (e.g. the tropical Atlantic on the Europe box)
+    are dropped and logged.
+    """
+    pad_deg = float(max(radii_km)) / 111.0 + 0.5
+    lat0, lat1 = float(lat.min()) + pad_deg, float(lat.max()) - pad_deg
+    lon0, lon1 = float(lon180.min()) + pad_deg, float(lon180.max()) - pad_deg
+    out: dict[str, list[float]] = {}
+    for name, (a, b, c, d) in boxes.items():
+        box = [max(a, lat0), min(b, lat1), max(c, lon0), min(d, lon1)]
+        if box[0] >= box[1] or box[2] >= box[3]:
+            LOG.info("wind_extremes: box %s outside the regional data extent, dropped", name)
+            continue
+        if box != [a, b, c, d]:
+            LOG.info("wind_extremes: box %s clipped to %s (regional grid)", name, box)
+        out[name] = box
+    return out
 
 
 def _connected_patch(values: np.ndarray, adjacency, seed: int, threshold: float) -> int:
@@ -417,6 +474,11 @@ def run(
     members = _as_list(eval_config.get("members"), int)
     max_members = eval_config.get("max_members")
     paths = {**_default_paths(), **(eval_config.get("paths") or {})}
+    input_source = str(eval_config.get("input_source", "up_matrix"))
+    native_input = bool(eval_config.get("native_input", True))   # rule 41; False reproduces old tables
+    native_used: bool | None = None
+    if input_source not in ("up_matrix", "x_interp"):
+        raise ValueError(f"wind_extremes.input_source must be up_matrix or x_interp, got {input_source!r}")
 
     files = valid_prediction_files(predictions_dir, steps=steps)
     if dates:
@@ -431,11 +493,14 @@ def run(
              len(files), list(boxes), radii_km, members)
 
     t0 = time.time()
-    up = sps.load_npz(paths["up_matrix"]).tocsr()
+    up = sps.load_npz(paths["up_matrix"]).tocsr() if input_source == "up_matrix" else None
 
+    boxes_requested = dict(boxes)
+    box_edge_deg = resolve_box_edge_deg(eval_config)
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
     point_area_km2 = None
+    regional: bool | None = None
     samples: list[dict[str, Any]] = []
 
     for file_path in files:
@@ -443,7 +508,7 @@ def run(
         date, step = (m.group(1), int(m.group(2))) if m else ("", -1)
         with netCDF4.Dataset(file_path) as ds:
             ds.set_auto_mask(False)
-            for required in ("x", "y", "y_pred", "lat_hres", "lon_hres"):
+            for required in ("y", "y_pred", "lat_hres", "lon_hres"):
                 if required not in ds.variables:
                     raise RuntimeError(f"{file_path} is missing {required!r}")
             ws = [str(v) for v in np.asarray(ds.variables["weather_state"][:]).reshape(-1)]
@@ -455,30 +520,92 @@ def run(
             lon = np.asarray(ds.variables["lon_hres"][:]).reshape(-1).astype(np.float64)
             lon180 = np.where(np.mod(lon, 360.0) > 180.0, np.mod(lon, 360.0) - 360.0,
                               np.mod(lon, 360.0))
+            file_regional = (lat.size != up.shape[0]) if up is not None else not is_global(lat, lon)
+            if up is not None and file_regional and (lat.size > up.shape[0] or is_global(lat, lon)):
+                raise RuntimeError(
+                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
+            if regional is None:
+                regional = file_regional
+                if regional:
+                    LOG.info("wind_extremes: regional file (%d points%s); input wind from "
+                             "x_interp, boxes clipped to the file", lat.size,
+                             f", up matrix {up.shape}" if up is not None else "")
+            elif regional != file_regional:
+                raise RuntimeError(
+                    f"{file_path.name}: {lat.size} points, but earlier files were "
+                    f"{'regional' if regional else 'global'}")
+            # rule 41: the native x when the file has it; else regional files take the exported driver
+            # (the matrix is global) and global ones up @ x
+            file_native = native_input and has_native_input(ds)
+            if native_used is None:
+                native_used = file_native
+            needed_input = "x_native" if file_native else ("x_interp" if (regional or up is None) else "x")
+            if needed_input != "x_native" and needed_input not in ds.variables:
+                raise RuntimeError(
+                    f"{file_path} is missing {needed_input!r}"
+                    + ("; regional files need the exported x_interp for the input wind"
+                       if regional else ""))
             if point_area_km2 is None:
-                point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
+                # Area per point of the output grid. A regional file holds a subset of the
+                # global grid: the global point count (the up matrix's rows) is the divisor;
+                # without a matrix the box's own area over its point count is used.
+                if up is not None:
+                    point_area_km2 = float(SPHERE_AREA_KM2 / up.shape[0])
+                elif regional:
+                    point_area_km2 = _box_area_km2(lat, lon) / lat.size
+                else:
+                    point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
+            # Regional box: the box-edge strip (eval.shared.edge_strip, 1 degree by default) is dropped from
+            # every field before the boxes are built, so neither a core point nor a disk around one touches it.
+            keep = box_edge_index(lat, lon, box_edge_deg) if regional else slice(None)
+            if not isinstance(keep, slice):
+                lat, lon, lon180 = lat[keep], lon[keep], lon180[keep]
+            near = None
+            if needed_input == "x_native":
+                near = nearest_native_index(np.asarray(ds.variables["lat_lres"][:], np.float64).reshape(-1),
+                                            np.asarray(ds.variables["lon_lres"][:], np.float64).reshape(-1),
+                                            lat, lon)
             if not box_static:
+                if regional:
+                    boxes = _clip_boxes_to_extent(boxes, lat, lon180, radii_km)
+                    if not boxes:
+                        raise RuntimeError(
+                            f"{file_path.name}: no wind_extremes box lies inside the data extent")
                 for name, box in boxes.items():
                     t_box = time.time()
-                    box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
-                    up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
+                    try:
+                        box_static[name] = _build_box(lat, lon180, box, radii_km, adj_km)
+                    except ValueError as exc:
+                        if regional and "contains no grid points" in str(exc):
+                            LOG.warning("wind_extremes: box %s %s has no points in the "
+                                        "regional file; skipped", name, box)
+                            continue
+                        raise
+                    if needed_input == "x":
+                        up_box[name] = up[box_static[name]["padded_idx"]].tocsr()
                     LOG.info("wind_extremes: box %s built in %.1fs (%d core, %d padded points)",
                              name, time.time() - t_box, box_static[name]["n_core"],
                              box_static[name]["n_padded"])
-            if up.shape[0] != lat.size:
-                raise RuntimeError(
-                    f"grid mismatch: file has {lat.size} points, up matrix {up.shape}")
+                if not box_static:
+                    raise RuntimeError(
+                        f"none of the boxes {list(boxes)} has grid points in {file_path.name}")
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
                 cu, cv = idx_of[components[0]], idx_of[components[1]]
-                yp_u = _read_component(ds.variables["y_pred"], member_index, cu)
-                yp_v = _read_component(ds.variables["y_pred"], member_index, cv)
-                yt_u = _read_component(ds.variables["y"], member_index, cu)
-                yt_v = _read_component(ds.variables["y"], member_index, cv)
-                xx_u = _read_component(ds.variables["x"], member_index, cu)
-                xx_v = _read_component(ds.variables["x"], member_index, cv)
+                yp_u = _read_component(ds.variables["y_pred"], member_index, cu)[keep]
+                yp_v = _read_component(ds.variables["y_pred"], member_index, cv)[keep]
+                yt_u = _read_component(ds.variables["y"], member_index, cu)[keep]
+                yt_v = _read_component(ds.variables["y"], member_index, cv)[keep]
+                if needed_input == "x_native":
+                    # native values at the nearest native point of every kept output point (rule 41)
+                    xm = member_index if ds.variables["x"].shape[1] > 1 else 0
+                    xx_u = _read_component(ds.variables["x"], xm, cu)[near]
+                    xx_v = _read_component(ds.variables["x"], xm, cv)[near]
+                else:
+                    xx_u = _read_component(ds.variables[needed_input], member_index, cu)[keep]
+                    xx_v = _read_component(ds.variables[needed_input], member_index, cv)[keep]
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
@@ -486,7 +613,8 @@ def run(
                     fields_padded = {
                         "model": np.hypot(yp_u[padded], yp_v[padded]),
                         "truth": np.hypot(yt_u[padded], yt_v[padded]),
-                        "input": np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v),
+                        "input": (np.hypot(up_box[name] @ xx_u, up_box[name] @ xx_v)
+                                  if needed_input == "x" else np.hypot(xx_u[padded], xx_v[padded])),
                     }
                     entry: dict[str, Any] = {
                         "file": file_path.name, "date": date, "step": int(lead),
@@ -515,6 +643,9 @@ def run(
                 LOG.info("wind_extremes: %s member %s done in %.1fs",
                          file_path.name, member_label, time.time() - t_mem)
 
+    if not native_used:
+        warn_fallback(LOG, "wind_extremes", "x_interp" if (regional or up is None) else
+                      "up @ x (input linearly interpolated to the output grid; no native x in the file)")
     aggregate = _aggregate(samples, list(boxes), radii_km)
     payload = {
         "run_label": run_label or predictions_dir.name,
@@ -524,8 +655,15 @@ def run(
         "config": {
             "radii_km": radii_km, "adjacency_km": adj_km, "boxes": boxes,
             "components": list(components), "steps": steps, "dates": dates,
-            "members": members, "max_members": max_members, "paths": paths,
+            "members": members, "max_members": max_members,
+            "paths": paths if up is not None else {},
+            "input_source": (SOURCE_NATIVE if native_used
+                             else "x_interp" if (regional or up is None) else "up_matrix"),
+            "native_input": native_input,
             "point_area_km2": point_area_km2,
+            "regional": bool(regional),
+            "box_edge_deg": box_edge_deg if regional else 0.0,
+            "boxes_skipped": [b for b in boxes_requested if b not in box_static],
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],
                          "n_core_points": st["n_core"],

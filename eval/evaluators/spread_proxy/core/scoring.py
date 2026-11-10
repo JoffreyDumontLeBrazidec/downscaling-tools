@@ -51,6 +51,7 @@ from eval.evaluators.surface.core.compute import (
     _weather_state_index,
 )
 from eval.shared.native_input import SOURCE_NATIVE, has_native_input, interp_source, is_interpolated, warn_fallback
+from eval.shared.edge_strip import strip_box_edge
 from eval.discovery.predictions import PREDICTION_RE, PredictionFile, find_predictions
 
 LOG = logging.getLogger(__name__)
@@ -390,6 +391,7 @@ def compute_spread_proxy(
     for pred in pred_files:
         LOG.info("spread_proxy: %s", pred.path)
         with xr.open_dataset(pred.path, cache=False, decode_timedelta=False) as ds:
+            ds = strip_box_edge(ds)   # regional box: the 1-degree edge strip is not scored (edge_strip)
             for required in ("y_pred", "y", "weather_state"):
                 if required not in ds:
                     raise ValueError(f"{pred.path}: missing required variable {required!r}")

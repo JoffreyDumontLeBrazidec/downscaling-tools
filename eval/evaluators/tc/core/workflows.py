@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import re
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable
@@ -35,10 +36,8 @@ from .loading_predictions import (
     event_days_steps,
     forecast_dates_for_event,
     load_prediction_curves,
-    load_prediction_member_fields,
     select_prediction_files_for_event,
 )
-from .member_plot import _plot_member_page
 from .pdf_plot import plot_pdf_ratios
 from .plot_config import PLOT_CONFIGS, TCPlotConfig
 from .stats import _finite_1d, extreme_tail_table, summary_stats, tail_summary, variable_stats
@@ -46,6 +45,17 @@ from .stats import _finite_1d, extreme_tail_table, summary_stats, tail_summary, 
 LOG = logging.getLogger(__name__)
 
 MAX_DISPLAY_LABEL_CHARS = 24
+
+# The per-member maps (tc_members_<event>_<run>_<date>.pdf: input / prediction /
+# target of msl and 10 m wind for one member) were retired on 2026-09-30 by owner
+# decision. Printed by the member-maps tombstone below and logged by runner.run
+# when a lane still sets tc.member_maps.enabled.
+MEMBER_MAPS_RETIRED = (
+    "The tc per-member maps (tc.member_maps, tc_members_*.pdf) were retired on "
+    "2026-09-30 and are no longer drawn. For single-member maps of a storm use "
+    "`python -m eval.cli zoom_maps`. The retired code is in "
+    "eval/_quarantine/20260930/tc_member_maps/."
+)
 
 
 def cut_display_label(label: str | None, *, fallback: str) -> str:
@@ -535,95 +545,6 @@ def run_tc_pdf(
     return str(out_pdf)
 
 
-def run_member_maps(
-    *,
-    predictions_dir: str,
-    outdir: str,
-    run_label: str,
-    display_label: str | None = None,
-    event_names: list[str] | None = None,
-    date: str,
-    steps: list[int] | None = None,
-    members: list[int] | None = None,
-) -> list[str]:
-    """Member spatial maps workflow."""
-    display_label = display_label or run_label
-    steps = steps or [24, 120]
-    members = members or [0, 1, 2, 3, 4]
-
-    pred_dir = Path(predictions_dir).expanduser().resolve()
-    out_dir = Path(outdir).expanduser().resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    pred_files = discover_prediction_files(pred_dir)
-    if not pred_files:
-        raise FileNotFoundError(f"No predictions_*.nc files found in {pred_dir}")
-
-    selected_events = event_names or list(EVENTS.keys())
-    generated: list[str] = []
-
-    for event_name in selected_events:
-        if event_name not in EVENTS:
-            LOG.warning("Unknown event=%s, skipping", event_name)
-            continue
-        event = EVENTS[event_name]
-        exp_cfg = EXPERIMENT_CONFIGS.get(event_name)
-        plot_cfg = PLOT_CONFIGS.get(event_name, TCPlotConfig())
-
-        event_pred_files = select_prediction_files_for_event(pred_files, event)
-        if not event_pred_files:
-            LOG.info("Skipping event=%s: no matching prediction files", event_name)
-            continue
-
-        date_int = int(date)
-        step_files = [
-            (p, ymd, step) for p, ymd, step in event_pred_files
-            if ymd == date_int and step in steps
-        ]
-        if not step_files:
-            LOG.warning(
-                "Skipping event=%s: no prediction files for date=%s steps=%s",
-                event_name, date, steps,
-            )
-            continue
-
-        safe_label = display_label.replace(" ", "_").replace("/", "_")
-        pdf_name = f"tc_members_{event_name}_{safe_label}_{date}.pdf"
-        pdf_path = out_dir / pdf_name
-
-        with FigureBook(pdf_path, png=True) as book:
-            for nc_path, ymd, step in sorted(step_files, key=lambda x: x[2]):
-                LOG.info("Loading event=%s date=%s step=%d", event_name, date, step)
-                try:
-                    fields = load_prediction_member_fields(
-                        nc_path, event.bbox, members,
-                        regrid_resolution=plot_cfg.regrid_resolution,
-                    )
-                except Exception as exc:
-                    LOG.warning("Failed to load %s: %s", nc_path.name, exc)
-                    continue
-                for mi, mbr in enumerate(members):
-                    LOG.info("  Plotting member %d (step=%dh)", mbr, step)
-                    fig = _plot_member_page(
-                        fields,
-                        bbox=event.bbox,
-                        plot_config=plot_cfg,
-                        exp_config=exp_cfg,
-                        member_idx=mi,
-                        member_label=mbr,
-                        step_hours=step,
-                        date_str=date,
-                        display_label=display_label,
-                        event_name=event_name,
-                    )
-                    book.add(fig, name=f"step{step:03d}_member{mbr}")
-
-        LOG.info("Saved TC member maps PDF: %s", pdf_path)
-        generated.append(str(pdf_path))
-
-    return generated
-
-
 # --- Legacy GRIB-only member plots ---
 
 def run_tc_member_plots_legacy(
@@ -853,17 +774,14 @@ def main() -> None:
                             help="Comma-separated ML GRIB expids (GRIB-only mode)")
     pdf_parser.add_argument("--log-level", default="INFO")
 
-    # --- member-maps subcommand ---
-    mm_parser = subparsers.add_parser("member-maps", help="Generate TC member spatial maps.")
-    mm_parser.add_argument("--predictions-dir", required=True)
-    mm_parser.add_argument("--outdir", required=True)
-    mm_parser.add_argument("--run-label", required=True)
-    mm_parser.add_argument("--display-label", default="")
-    mm_parser.add_argument("--events", default="")
-    mm_parser.add_argument("--date", required=True)
-    mm_parser.add_argument("--steps", default="24,120")
-    mm_parser.add_argument("--members", default="0,1,2,3,4")
-    mm_parser.add_argument("--log-level", default="INFO")
+    # --- member-maps subcommand: tombstone (retired 2026-09-30) ---
+    # Kept so old command lines fail loudly. Checked before parsing, so that the
+    # old flags cannot turn the message into an argparse usage error.
+    subparsers.add_parser("member-maps", help="Retired on 2026-09-30; use eval.cli zoom_maps.",
+                          description=MEMBER_MAPS_RETIRED)
+    if sys.argv[1:2] == ["member-maps"]:
+        print(f"ERROR: {MEMBER_MAPS_RETIRED}", file=sys.stderr)
+        raise SystemExit(1)
 
     # --- legacy-members subcommand (GRIB-based) ---
     leg_parser = subparsers.add_parser("legacy-members", help="Legacy GRIB-based member plots.")
@@ -912,20 +830,6 @@ def main() -> None:
             analysis_expid=args.analysis_expid or None,
             plot_title_override=args.plot_title or None,
             ml_expids=ml_expids,
-        )
-
-    elif args.command == "member-maps":
-        event_names = [v.strip() for v in args.events.split(",") if v.strip()] or None
-        steps = [int(s.strip()) for s in args.steps.split(",") if s.strip()]
-        run_member_maps(
-            predictions_dir=args.predictions_dir,
-            outdir=args.outdir,
-            run_label=args.run_label,
-            display_label=args.display_label or None,
-            event_names=event_names,
-            date=args.date,
-            steps=steps,
-            members=_parse_members(args.members),
         )
 
     elif args.command == "legacy-members":

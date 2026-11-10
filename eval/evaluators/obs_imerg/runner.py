@@ -13,7 +13,7 @@ from eval.evaluators.obs_points.core.stations import resolve_cache, wrap_lon
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
 from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, rank_seed, read_fields, row_kinds
 from eval.evaluators.precip_read.core.metrics import EDGES
-from eval.shared.edge_strip import box_edge_mask
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 from eval.shared.native_input import is_interpolated, nearest_native_index, warn_fallback
 from eval.shared.provenance import ENSEMBLE_RULE, SINGLE_FIELD, is_single_input, provenance
 
@@ -138,7 +138,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         r, k, h = score_file({"model": f["model"], "input": f["input"], "truth": f["truth"]}, ref, lat, lon,
                              regions=regions, thresholds=thresholds, date=p.date, lead=p.step,
                              min_points=int(eval_config.get("min_points", 1000)), kinds=kinds,
-                             box_edge_deg=float(eval_config.get("box_edge_deg", 1.0)))
+                             box_edge_deg=resolve_box_edge_deg(eval_config))
         rows += r
         ranks += k
         for reg, d in h.items():

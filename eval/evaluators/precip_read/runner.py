@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.precip_read.core.metrics import EDGES, score_sums
 from eval.shared.native_input import InputReader, is_interpolated, warn_fallback
@@ -26,12 +27,14 @@ DEFAULT_REGIONS = {
 DEFAULT_THRESHOLDS = (20, 50, 100, 150, 200)
 
 
-def read_tp(path, var: str = "tp", *, native_input: bool = True, info: dict | None = None):
+def read_tp(path, var: str = "tp", box_edge_deg: float | None = None, *, native_input: bool = True,
+            info: dict | None = None):
     """lat, lon (-180..180), truth, input, members (M, points) in mm, clipped at 0.
 
     Truth and input may or may not carry an ensemble_member axis; member 0 is used when they do. The input is read
     on its own grid (rule 41): the native ``x`` at the nearest native point of each output point when the file
     carries it, else ``x_interp``; ``info["input_source"]`` says which.
+    On a regional (box) file the points of the box-edge strip are left out (eval.shared.edge_strip).
     """
     import netCDF4
 
@@ -50,7 +53,9 @@ def read_tp(path, var: str = "tp", *, native_input: bool = True, info: dict | No
         if info is not None:
             info["input_source"] = reader.source
     lon = np.where(lon > 180, lon - 360, lon)
-    return lat, lon, y.reshape(-1, lat.size)[0], xi, yp.reshape(-1, lat.size)
+    keep = box_edge_index(lat, lon, box_edge_deg)
+    y, yp = y.reshape(-1, lat.size)[0], yp.reshape(-1, lat.size)
+    return lat[keep], lon[keep], y[keep], xi[keep], yp[:, keep]
 
 
 def region_masks(lat, lon, regions: dict) -> dict:
@@ -102,7 +107,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         dates, npts = [], None
         for p in sorted(by_step[step], key=lambda q: q.date):
             info: dict = {}
-            lat, lon, y, xi, yp = read_tp(p.path, var, native_input=native_input, info=info)
+            lat, lon, y, xi, yp = read_tp(p.path, var, resolve_box_edge_deg(eval_config), native_input=native_input,
+                                          info=info)
             input_sources.add(str(info.get("input_source")))
             members.add(int(yp.shape[0]))
             masks = region_masks(lat, lon, regions)
@@ -155,7 +161,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     missing = [c["name"] for c in cases if not (output_dir / "cases" / f"{c['name']}.npz").exists()]
     meta = {"predictions_dir": str(predictions_dir), "var": var, "unit": "mm per accumulation window, clipped at 0",
             "accum_hours": eval_config.get("accum_hours", 6), "members": sorted(members), "regions": regions,
-            "thresholds": list(thresholds), "steps": sorted(by_step), "files": files, "cases_missing": missing,
+            "thresholds": list(thresholds), "box_edge_deg": resolve_box_edge_deg(eval_config), "steps": sorted(by_step), "files": files, "cases_missing": missing,
             "obs": {**obs_cfg, "per_file": station_log} if obs_cfg else None,
             "run_label": str(eval_config.get("run_label") or kwargs.get("run_label") or ""),
             "input_source": sorted(input_sources), "native_input": native_input}

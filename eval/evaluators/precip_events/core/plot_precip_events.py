@@ -28,6 +28,8 @@ import numpy as np
 import xarray as xr
 
 from eval.shared.native_input import InputReader, has_native_input
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+
 from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
@@ -140,6 +142,12 @@ class _EventData:
         return lat, lon, truth, base, pred
 
 
+def _scored_max(values: np.ndarray, scored: np.ndarray) -> float:
+    """Largest value outside the box-edge strip (nan when the zoom lies inside the strip)."""
+    v = np.asarray(values, dtype=np.float64)[scored]
+    return float(np.nanmax(v)) if v.size and np.isfinite(v).any() else float("nan")
+
+
 def _make_event_figure(event: Event, data: _EventData, run_label: str,
                        dlat: float, dlon: float) -> plt.Figure:
     """Truth | interpolated input | model | model minus truth, zoomed on the event.
@@ -173,6 +181,8 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
     for a in (truth_z, base_z):
         if a is not None:
             finite &= np.isfinite(a)
+    # the map shows the box-edge strip of a regional grid, the printed peaks leave it out (edge_strip)
+    scored_z = box_edge_mask(lat_hr, lon_hr, resolve_box_edge_deg())[hr_mask][finite]
     lat_z, lon_z, pred_z = lat_z[finite], lon_z[finite], pred_z[finite]
     truth_z = truth_z[finite] if truth_z is not None else None
     base_z = base_z[finite] if base_z is not None else None
@@ -196,10 +206,10 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
         error_z = pred_z - truth_z
         err_norm, _ = symmetric_norm(error_z, limit=_error_limit(error_z))
         panels.append((error_z, "Model minus truth", "error"))
-        peak_summary = (f"peak truth {float(np.nanmax(truth_z)):.1f} mm, "
-                        f"peak model {float(np.nanmax(pred_z)):.1f} mm")
+        peak_summary = (f"peak truth {_scored_max(truth_z, scored_z):.1f} mm, "
+                        f"peak model {_scored_max(pred_z, scored_z):.1f} mm")
     else:
-        peak_summary = f"peak model {float(np.nanmax(pred_z)):.1f} mm (no truth)"
+        peak_summary = f"peak model {_scored_max(pred_z, scored_z):.1f} mm (no truth)"
 
     extent = (clon - dlon, clon + dlon, clat - dlat, clat + dlat)
     n = len(panels)

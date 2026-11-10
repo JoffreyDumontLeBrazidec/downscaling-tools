@@ -222,7 +222,7 @@ class InputReader:
 
     def _layout(self) -> tuple[tuple[str, ...], str, list[str]]:
         dims = _dims(self.ds[self.variable])
-        point = next(d for d in dims if d.startswith("grid_point") or d in ("values", "points", "point"))
+        point = next(d for d in dims if "point" in d or d == "values")
         members = [d for d in dims if d not in ("sample", "weather_state", point)]
         return dims, point, members
 

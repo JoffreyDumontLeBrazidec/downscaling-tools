@@ -11,6 +11,8 @@ import xarray as xr
 from eval.shared.native_input import SOURCE_NATIVE, InputReader, has_native_input, interp_source
 
 from .data_types import BoundingBox, CurveVectors, SupportMode, curve_support_signature
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+
 from .grid import normalize_lon, point_mask, structured_grid_from_points, interp_structured, nearest_point_indices
 
 
@@ -160,7 +162,8 @@ def load_input_curves(
             i_v10 = weather_states.index("10v")
             if support_mode == "native":
                 lon, lat = prediction_point_coordinates(ds)
-                mask = point_mask(lon, lat, bbox)
+                # regional box: the 1-degree edge strip is not scored (eval.shared.edge_strip), as for the model
+                mask = point_mask(lon, lat, bbox) & box_edge_mask(lat, lon, resolve_box_edge_deg())
                 if not np.any(mask):
                     continue
                 pts_lon, pts_lat = lon[mask], lat[mask]
@@ -169,6 +172,14 @@ def load_input_curves(
                 pts_lon = np.asarray(target_lon, dtype=np.float64).reshape(-1)
                 pts_lat = np.asarray(target_lat, dtype=np.float64).reshape(-1)
                 signatures.add(curve_support_signature("regridded", target_lon, target_lat))
+                source_lon, source_lat = prediction_point_coordinates(ds)
+                src_keep = box_edge_mask(source_lat, source_lon, resolve_box_edge_deg())
+                if not src_keep.all():
+                    # regional source: the target points the model curve drops (their value comes from the
+                    # box-edge strip) are dropped from the input curve too
+                    tkeep = src_keep[nearest_point_indices(src_lon=source_lon, src_lat=source_lat,
+                                                           target_lon=target_lon, target_lat=target_lat)]
+                    pts_lon, pts_lat = pts_lon[tkeep], pts_lat[tkeep]
             else:
                 raise ValueError(f"Unsupported support_mode={support_mode!r}")
             reader = InputReader(ds, lat_out=pts_lat, lon_out=pts_lon)
@@ -182,140 +193,6 @@ def load_input_curves(
         raise ValueError(f"Input curve files do not share one spatial support: {sorted(signatures)}")
     return CurveVectors(msl=np.concatenate(msl_vals), wind=np.concatenate(wind_vals), support_mode=support_mode,
                         support_signature=signatures.pop()), SOURCE_NATIVE
-
-
-def load_prediction_member_fields(
-    nc_path: Path,
-    bbox: BoundingBox,
-    members: list[int],
-    regrid_resolution: float = 0.25,
-    native_input: bool = True,
-) -> dict[str, np.ndarray]:
-    """Load input, prediction, and truth fields for selected members, masked to event bbox.
-
-    Returns dict with keys: x_interp_msl, x_interp_wind, y_pred_msl, y_pred_wind,
-    y_msl, y_wind, lat_axis, lon_axis, input_source.
-    Arrays are shaped [len(members), nlat, nlon]. The input (keys ``x_interp_*`` kept for the plotters) comes from
-    the native ``x`` when the file has it (rule 41): each map cell takes the nearest native point, no smoothing;
-    ``x_interp`` (linearly regridded like the model) only without ``x`` or with ``native_input`` off.
-    """
-    from scipy.interpolate import griddata
-
-    with xr.open_dataset(nc_path) as ds:
-        weather_states = ds["weather_state"].values.tolist()
-        i_msl = weather_states.index("msl")
-        i_u10 = weather_states.index("10u")
-        i_v10 = weather_states.index("10v")
-
-        lon_flat, lat_flat = prediction_point_coordinates(ds)
-
-        y_pred_raw = np.asarray(ds["y_pred"].isel(sample=0).values, dtype=np.float64)[members]
-        y_raw = np.asarray(ds["y"].isel(sample=0).values, dtype=np.float64)[members]
-
-        if "x_interp" in ds and not (native_input and has_native_input(ds)):
-            x_interp_raw = np.asarray(ds["x_interp"].isel(sample=0).values, dtype=np.float64)[members]
-            x_lres_raw = None
-            x_lon_lres = None
-            x_lat_lres = None
-        elif "x" in ds:
-            x_interp_raw = None
-            x_lres_raw = np.asarray(ds["x"].isel(sample=0).values, dtype=np.float64)[members]
-            lon_lres_da = ds["lon_lres"]
-            lat_lres_da = ds["lat_lres"]
-            if lon_lres_da.ndim == 2:
-                lon_lres_da = lon_lres_da.isel({lon_lres_da.dims[0]: 0})
-                lat_lres_da = lat_lres_da.isel({lat_lres_da.dims[0]: 0})
-            x_lon_lres = normalize_lon(np.asarray(lon_lres_da.values, dtype=np.float64))
-            x_lat_lres = np.asarray(lat_lres_da.values, dtype=np.float64)
-        else:
-            x_interp_raw = None
-            x_lres_raw = None
-            x_lon_lres = None
-            x_lat_lres = None
-
-    mask = point_mask(lon_flat, lat_flat, bbox)
-    if not np.any(mask):
-        raise RuntimeError(f"No grid points inside event bbox")
-
-    lon_bbox = lon_flat[mask]
-    lat_bbox = lat_flat[mask]
-    y_pred_bbox = y_pred_raw[:, mask, :]
-    y_bbox = y_raw[:, mask, :]
-    x_interp_bbox = x_interp_raw[:, mask, :] if x_interp_raw is not None else None
-
-    x_lres_bbox = x_lres_raw if x_lres_raw is not None and np.any(point_mask(x_lon_lres, x_lat_lres, bbox)) \
-        else None
-
-    # Build regular target grid within bbox
-    west = normalize_lon(np.asarray([bbox.west], dtype=np.float64))[0]
-    east = normalize_lon(np.asarray([bbox.east], dtype=np.float64))[0]
-    lon_axis = np.arange(west, east + regrid_resolution / 4, regrid_resolution)
-    lat_axis = np.arange(bbox.south, bbox.north + regrid_resolution / 4, regrid_resolution)
-    target_lon, target_lat = np.meshgrid(lon_axis, lat_axis)
-
-    def _interp_to_grid(flat_vals: np.ndarray) -> np.ndarray:
-        return griddata(
-            (lon_bbox, lat_bbox),
-            flat_vals,
-            (target_lon, target_lat),
-            method="linear",
-        )
-
-    def _fields_for(raw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        msl_list, wind_list = [], []
-        for mi in range(raw.shape[0]):
-            msl_grid = _interp_to_grid(raw[mi, :, i_msl] / 100.0)
-            u10_grid = _interp_to_grid(raw[mi, :, i_u10])
-            v10_grid = _interp_to_grid(raw[mi, :, i_v10])
-            wind_grid = np.sqrt(u10_grid ** 2 + v10_grid ** 2)
-            msl_list.append(msl_grid)
-            wind_list.append(wind_grid)
-        return np.array(msl_list), np.array(wind_list)
-
-    pred_msl, pred_wind = _fields_for(y_pred_bbox)
-    truth_msl, truth_wind = _fields_for(y_bbox)
-
-    result = {
-        "y_pred_msl": pred_msl,
-        "y_pred_wind": pred_wind,
-        "y_msl": truth_msl,
-        "y_wind": truth_wind,
-        "lat_axis": lat_axis,
-        "lon_axis": lon_axis,
-    }
-
-    if x_interp_bbox is not None:
-        input_msl, input_wind = _fields_for(x_interp_bbox)
-        result["x_interp_msl"] = input_msl
-        result["x_interp_wind"] = input_wind
-        result["input_source"] = interp_source("x_interp", "native_input: false" if native_input is False
-                                               else "no native x in the file")
-    elif x_lres_bbox is not None:
-        from eval.shared.native_input import nearest_native_index
-
-        # rule 41: every map cell takes the nearest native input point (no linear interpolation of the input)
-        near = nearest_native_index(x_lat_lres, x_lon_lres, target_lat.reshape(-1), target_lon.reshape(-1))
-
-        def _interp_lres(flat_vals: np.ndarray) -> np.ndarray:
-            return flat_vals[near].reshape(target_lat.shape)
-
-        def _fields_lres(raw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            msl_list, wind_list = [], []
-            for mi in range(raw.shape[0]):
-                msl_grid = _interp_lres(raw[mi, :, i_msl] / 100.0)
-                u10_grid = _interp_lres(raw[mi, :, i_u10])
-                v10_grid = _interp_lres(raw[mi, :, i_v10])
-                wind_grid = np.sqrt(u10_grid ** 2 + v10_grid ** 2)
-                msl_list.append(msl_grid)
-                wind_list.append(wind_grid)
-            return np.array(msl_list), np.array(wind_list)
-
-        input_msl, input_wind = _fields_lres(x_lres_bbox)
-        result["x_interp_msl"] = input_msl
-        result["x_interp_wind"] = input_wind
-        result["input_source"] = SOURCE_NATIVE
-
-    return result
 
 
 # --- Internal helpers ---
@@ -379,7 +256,8 @@ def _load_prediction_curve_native(
             i_u10 = weather_states.index("10u")
             i_v10 = weather_states.index("10v")
             lon, lat = prediction_point_coordinates(ds)
-            mask = point_mask(lon, lat, bbox)
+            # regional box: the 1-degree edge strip is not scored (eval.shared.edge_strip)
+            mask = point_mask(lon, lat, bbox) & box_edge_mask(lat, lon, resolve_box_edge_deg())
             if not np.any(mask):
                 continue
             support_signatures.append(curve_support_signature("native", lon[mask], lat[mask]))
@@ -440,6 +318,12 @@ def _load_prediction_curve_regridded(
                 u10 = y_pred[:, target_indices, i_u10]
                 v10 = y_pred[:, target_indices, i_v10]
 
+            src_keep = box_edge_mask(source_lat, source_lon, resolve_box_edge_deg())
+            if not src_keep.all():
+                # regional source: target points that take their value from the box-edge strip are dropped
+                tkeep = src_keep[nearest_point_indices(src_lon=source_lon, src_lat=source_lat,
+                                                       target_lon=target_lon, target_lat=target_lat)]
+                msl, u10, v10 = msl[:, tkeep], u10[:, tkeep], v10[:, tkeep]
             msl_vals.append((msl / 100.0).reshape(-1))
             wind_vals.append(np.sqrt(u10 * u10 + v10 * v10).reshape(-1))
 

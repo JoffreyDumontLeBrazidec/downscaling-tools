@@ -493,6 +493,36 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional directory of *_input_bundle.nc files to use instead of the checkpoint validation zarr dataloader.",
     )
+    parser.add_argument(
+        "--noisy-input-mode",
+        type=str,
+        default="",
+        help=(
+            "Opt-in denoiser-input probe (input_modes.py), comma list of truth, noise_only, other_date: "
+            "D(x, sigma) once per bundle and sigma on x = truth residual + sigma*eps, sigma*eps, or another "
+            "date's truth residual + sigma*eps, same eps for every mode. Needs --bundle-root (one bundle per date) "
+            "and --sigmas. Unset (default): the sigma evaluator runs exactly as before."
+        ),
+    )
+    parser.add_argument(
+        "--other-date-map",
+        type=str,
+        default="",
+        help="With --noisy-input-mode other_date: explicit pairs 'date:other,...'. Default: the date half the "
+        "bundle list further along, cyclically.",
+    )
+    parser.add_argument(
+        "--save-scope-json",
+        type=str,
+        default="",
+        help="With --noisy-input-mode: local_scope JSON (eval.predict.local_scope) of the points saved. Default global.",
+    )
+    parser.add_argument(
+        "--save-weather-states",
+        type=str,
+        default="",
+        help="With --noisy-input-mode: comma list of output channels saved. Default all.",
+    )
     return parser
 
 
@@ -503,6 +533,10 @@ def _resolve_out_csv(args: argparse.Namespace) -> Path:
 
 
 def run_sigma_evaluator(args: argparse.Namespace) -> Path:
+    if (getattr(args, "noisy_input_mode", "") or "").strip():
+        from .input_modes import run_input_mode_probe  # pylint: disable=import-outside-toplevel
+
+        return run_input_mode_probe(args)
     out_csv = _resolve_out_csv(args)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 

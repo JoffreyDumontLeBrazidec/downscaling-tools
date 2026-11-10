@@ -36,7 +36,7 @@ def test_accumulate_uses_selected_member_and_mm_units(tmp_path):
     _write_nc(tmp_path / "predictions_20250101_step024.nc",
               y=y, y_pred=y_pred, x_interp=x_interp)
 
-    step_data = accumulate_tp_by_step(tmp_path, ensemble_member_index=0)
+    step_data = accumulate_tp_by_step(tmp_path, ensemble_member_index=0, box_edge_deg=0.0)  # 3-point toy grid
     bucket = step_data[24]
     # member 0 only: 3 points per series, in mm
     assert bucket["truth"].n == 3
@@ -90,9 +90,9 @@ def test_input_from_the_native_grid(tmp_path):
                np.array([[[[0.007], [0.009]], [[0.0], [0.0]]]], np.float32))
     ds.to_netcdf(path)
     info = {}
-    step_data = accumulate_tp_by_step(tmp_path, info=info)
+    step_data = accumulate_tp_by_step(tmp_path, info=info, box_edge_deg=0)   # toy points: keep the strip
     assert info["input_source"] == "x (native input grid)"
     assert step_data[12]["input"].n == 6 and np.isclose(step_data[12]["input"].max, 9.0, atol=0.05)
     info_old = {}
-    old = accumulate_tp_by_step(tmp_path, native_input=False, info=info_old)
+    old = accumulate_tp_by_step(tmp_path, native_input=False, info=info_old, box_edge_deg=0)
     assert "interpolated" in info_old["input_source"] and np.isclose(old[12]["input"].max, 3.0, atol=0.02)

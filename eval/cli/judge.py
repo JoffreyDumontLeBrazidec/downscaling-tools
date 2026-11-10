@@ -10,7 +10,9 @@ read in the owner's order 1) physical structure 2) spectra 3) extremes 4) scores
    ``box_spectra``, ``probabilistic``, and ``precip_dist`` and ``tp_maps`` when the run predicts ``tp``;
 2. draws the fixed ``zoom_maps``: the Alps box (43-49 N, 4-16 E) on the Alps case and the storm
    box (12 degrees around the truth's msl minimum) on the storm case, the run and the reference
-   side by side, wind10m and 2t, value and fine part;
+   side by side, wind10m and 2t, value and fine part, then the ``scales`` layout (residuals
+   against the input split at 400 km into large-scale change and fine detail, truth and each
+   arm) and the ``fronts`` layout (wind, temperature, its gradient, isobars); analysis only;
 3. writes ``read.md``, a ``## Run read:`` section with the header (reference, instrument,
    sampler and seeds read from the files) and the four parts filled with the numbers above, or
    "Not available: <reason>" where an evaluator could not run. The verdict lines are left for
@@ -58,7 +60,10 @@ SUMMARY = "Judge a run against its reference with the run-judging protocol and w
 PROTOCOL_EVALUATORS = ["shape", "tc_structure", "texture", "wind_extremes", "box_spectra",
                        "probabilistic"]
 MAP_VARIABLES = ["wind10m", "2t"]
+MAP_STATES = {"wind10m": ("10u", "10v"), "2t": ("2t",)}   # weather states each map variable needs
 MAP_FIELDS = ["value", "fine"]
+MAP_LAYOUTS = ["scales", "fronts"]
+LAYOUT_STATES = {"scales": ("10u", "10v"), "fronts": ("10u", "10v", "msl")}   # states each layout needs
 SPECTRA_TABLE_VARS = ["10u", "2t"]
 SCORE_VARS = ["10u", "10v", "10ff", "2t", "msl", "tp"]
 SCORE_BANDS = ["full", "full_inner", "large", "fine"]
@@ -91,6 +96,9 @@ def register(subparsers) -> argparse.ArgumentParser:
                    help="Comma-separated evaluators (or 'zoom_maps') not to run; the read says so.")
     p.add_argument("--weights", default=None,
                    help="Weights of the two runs, e.g. 'EMA-10000 / raw' (not recorded in the files).")
+    p.add_argument("--note", action="append", default=None, metavar="TEXT",
+                   help="A sentence about the instrument the files do not record, printed in the read's "
+                        "header (repeatable), e.g. that every member shares one input.")
     p.add_argument("--no-scale-split", action="store_true", default=False,
                    help="Score the full field only (no large/fine split at 400 km in part 4).")
     p.add_argument("--overwrite", action="store_true", default=False,
@@ -202,9 +210,47 @@ def sampler_line(facts: dict) -> str:
         cfg = json.loads(raw)
     except ValueError:
         return raw[:200]
-    keys = ("num_steps", "steps", "S_churn", "churn", "S_noise", "sigma_max", "sigma_min", "rho", "sampler")
+    if not isinstance(cfg, dict):
+        return raw[:200]
+    from manual_inference.prediction.sampler_spec import describe_sampler, is_flow_map
+
+    if is_flow_map(cfg):  # e.g. "jumps 2 from sigma 80 (flow_map)"
+        return f"{describe_sampler(cfg)} (flow_map)"
+    keys = (
+        "num_steps",
+        "steps",
+        "S_churn",
+        "churn",
+        "S_noise",
+        "sigma_max",
+        "sigma_min",
+        "rho",
+        "sampler",
+        "correction_steps",  # corrector passes per denoiser call (edm correction checkpoints)
+    )
     picked = {k: cfg[k] for k in keys if k in cfg}
     return json.dumps(picked or cfg, sort_keys=True)[:300]
+
+
+def flow_map_sampler_note(run_raw: str, ref_raw: str) -> str | None:
+    """The sampler warning when a flow-map run (jumps) is read against another sampler, else None.
+
+    A flow-map run against an EDM run of its parent checkpoint compares samplers on purpose;
+    what must match is the start sigma (both from sigma 80 in the protocol).
+    """
+    from manual_inference.prediction.sampler_spec import describe_sampler, is_flow_map
+
+    try:
+        run_cfg, ref_cfg = json.loads(run_raw), json.loads(ref_raw)
+    except ValueError:
+        return None
+    if not (is_flow_map(run_cfg) or is_flow_map(ref_cfg)):
+        return None
+    note = (f"the two arms sample differently by design ({describe_sampler(run_cfg)} against "
+            f"{describe_sampler(ref_cfg)})")
+    if float(run_cfg.get("sigma_max", -1)) != float(ref_cfg.get("sigma_max", -2)):
+        note += "; their start sigmas differ, so this is not the same-start comparison of the protocol"
+    return note
 
 
 def storm_centre(pred_dir: Path, date: str, step: int, member: int, event: str):
@@ -305,12 +351,27 @@ def draw_maps(runs: dict[str, Path], out_dir: Path, *, date: str, step: int, mem
     missing = [lab for lab, d in runs.items() if not (d / f"predictions_{date}_step{step:03d}.nc").exists()]
     if missing:
         return [], f"no predictions_{date}_step{step:03d}.nc for {', '.join(missing)}"
+    import netCDF4
+
+    from eval.evaluators.box_spectra.runner import _decode_states
+
     lat_min, lat_max, lon_min, lon_max = extent
     box_dir = out_dir / tag
     box_dir.mkdir(parents=True, exist_ok=True)
     before = set(box_dir.glob("*.png"))
+    # a map variable is drawn only when every run's file carries its states (a 2t-only run has no wind10m map)
+    states = None
+    for d in runs.values():
+        with netCDF4.Dataset(str(d / f"predictions_{date}_step{step:03d}.nc")) as ds:
+            have = set(_decode_states(ds["weather_state"]))
+        states = have if states is None else states & have
+    variables = [v for v in MAP_VARIABLES if set(MAP_STATES[v]) <= states]
+    if not variables:
+        return [], f"the files carry none of the map variables {MAP_VARIABLES} (states {sorted(states)})"
+    if len(variables) < len(MAP_VARIABLES):
+        LOG.info("judge: zoom_maps %s: drawing %s only (the files carry %s)", tag, variables, sorted(states))
     try:
-        for var in MAP_VARIABLES:
+        for var in variables:
             for field in MAP_FIELDS:
                 argv = [a for lab, d in runs.items() for a in ("--run", f"{lab}={d}")]
                 argv += ["--date", date, "--step", str(step), "--member", str(member),
@@ -318,7 +379,17 @@ def draw_maps(runs: dict[str, Path], out_dir: Path, *, date: str, step: int, mem
                          "--region-tag", tag, "--variable", var, "--field", field,
                          "--output-dir", str(box_dir)]
                 zm_run(build_arg_parser().parse_args(argv))
-    except Exception as exc:  # noqa: BLE001 - reported in the read
+        # the large/fine split of the residuals against the input, and the trough and front view
+        # (analysis only, the outputs are never filtered; ablation note s15.10)
+        # (wind is needed by both layouts; fronts also needs msl and a temperature)
+        for layout in [lay for lay in MAP_LAYOUTS if set(LAYOUT_STATES[lay]) <= states
+                       and (lay != "fronts" or {"t_850", "2t"} & states)]:
+            argv = [a for lab, d in runs.items() for a in ("--run", f"{lab}={d}")]
+            argv += ["--layout", layout, "--date", date, "--step", str(step), "--member", str(member),
+                     "--extent", str(lon_min), str(lon_max), str(lat_min), str(lat_max),
+                     "--region-tag", tag, "--output-dir", str(box_dir)]
+            zm_run(build_arg_parser().parse_args(argv))
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - reported in the read; zoom_maps exits on bad input
         return [], f"zoom_maps failed: {exc}"
     pngs = sorted(set(box_dir.glob("*.png")) - before) or sorted(box_dir.glob("*.png"))
     return [str(p) for p in pngs], None
@@ -356,7 +427,8 @@ def part_structure(arms: dict, maps: dict, shape_box: str, step: int) -> list[st
             folder = Path(pngs[0]).parent
             lines.append(f"- zoom_maps {tag}: `{folder}`, {len(pngs)} panels (input, truth, {run['label']}, "
                          f"{ref['label']}; wind10m and 2t; value and fine part; member {arms['member']}; one "
-                         "colour scale per variable and field). By eye: TODO")
+                         "colour scale per variable and field; plus the scales layout, residuals against the "
+                         "input split at 400 km for truth and each arm, and the fronts layout). By eye: TODO")
     a, b = _shape_rows(run["eval"] / "shape", step), _shape_rows(ref["eval"] / "shape", step)
     if a and b:
         lines += [f"- Shape, elongation of the residual's features (box {shape_box}, 40-109 km band, date-clustered "
@@ -416,7 +488,7 @@ def part_rotation(run: dict, ref: dict, step: int) -> list[str]:
 
 
 def part_spectra(arms: dict) -> list[str]:
-    from eval.evaluators.box_spectra.runner import read_bins
+    from eval.evaluators.box_spectra.runner import TARGET_NOTE, read_bins
 
     run, ref = arms["run"], arms["reference"]
     pa, pb = run["eval"] / "box_spectra" / "bins.csv", ref["eval"] / "box_spectra" / "bins.csv"
@@ -428,8 +500,8 @@ def part_spectra(arms: dict) -> list[str]:
     rows_a = [r for r in read_bins(pa) if r["scope"] == "all"]
     rows_b = {(r["variable"], r["bin_centre_km"]): r for r in read_bins(pb) if r["scope"] == "all"}
     lines.append(f"Amplitude ratio to the truth per bin (rule 14), full field and residual, box {meta['box']}, "
-                 f"{meta['method']} sampling; aligned part = coherence x full-field ratio. Target 1 from 125 to 31 km; "
-                 f"below 31 km model against model only. All variables and per-date rows: `{pa}`, `{pb}`.")
+                 f"{meta['method']} sampling; aligned part = coherence x full-field ratio; "
+                 f"{meta.get('target_note', TARGET_NOTE)}. All variables and per-date rows: `{pa}`, `{pb}`.")
     for var in SPECTRA_TABLE_VARS:
         sub = [r for r in rows_a if r["variable"] == var and 15.0 <= float(r["bin_centre_km"]) <= 600.0]
         if not sub:
@@ -704,7 +776,8 @@ def part_scores(arms: dict, step: int, domain: str) -> list[str]:
 
 
 def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, maps: dict,
-                 domain: str, weights: str | None, out_dir: Path, commit: str) -> str:
+                 domain: str, weights: str | None, out_dir: Path, commit: str,
+                 notes: list[str] | None = None) -> str:
     run, ref = arms["run"], arms["reference"]
     fr, ff = run["facts"], ref["facts"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -723,11 +796,14 @@ def compose_read(arms: dict, *, step: int, dates: list[str], shape_box: str, map
                         "evaluators that pool over the whole file are not on one instrument")
     if fr.get("sampling_config_json") and ff.get("sampling_config_json") \
             and fr["sampling_config_json"] != ff["sampling_config_json"]:
-        warnings.append("the sampler settings recorded in the files differ (never compare unequal samplers)")
+        warnings.append(flow_map_sampler_note(fr["sampling_config_json"], ff["sampling_config_json"])
+                        or "the sampler settings recorded in the files differ (never compare unequal samplers)")
     if fr.get("n_members") != ff.get("n_members"):
         warnings.append("the member counts differ")
     for w in warnings:
         head.append(f"WARNING: {w}.")
+    for n in notes or []:
+        head.append(f"Instrument note: {n.rstrip('.')}.")
     head += [f"Written by `eval.cli judge` (downscaling-tools {commit}); every output is under `{out_dir}`.", ""]
     body = (part_structure(arms, maps, shape_box, step) + [""] + part_spectra(arms) + [""]
             + part_extremes(arms, step) + [""] + part_scores(arms, step, domain))
@@ -813,7 +889,7 @@ def run(args: argparse.Namespace, session) -> None:
 
     text = compose_read(arms, step=step, dates=dates, shape_box=shape_box, maps=maps,
                         domain=args.score_domain, weights=args.weights, out_dir=out_dir,
-                        commit=_git_commit())
+                        commit=_git_commit(), notes=args.note)
     read_path = out_dir / "read.md"
     read_path.write_text(text)
     (out_dir / "judge_status.json").write_text(json.dumps(

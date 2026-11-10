@@ -1,4 +1,4 @@
-"""Inference-loop wrappers for bundle-based ensemble prediction."""
+"""Inference-loop wrappers for ensemble prediction from bundles or from a zarr split."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ _predict_from_bundle = _mi_predict._predict_from_bundle
 from .bundle_manager import date_str_to_datetime64
 from .seeding import resolve_base_seed, seed_draw
 from .types import BundleKey, EnsemblePrediction, PredictionResult
+from .zarr_split import predict_single_zarr_row
 
 
 def _squeeze_leading_singletons(array: np.ndarray, target_ndim: int) -> np.ndarray:
@@ -80,7 +81,7 @@ def predict_ensemble_members(
     inference_model,
     datamodule,
     device: str,
-    bundle_map: dict[BundleKey, Path],
+    bundle_map: dict[BundleKey, Path] | None,
     date: str,
     step: int,
     members: Sequence[int],
@@ -92,8 +93,14 @@ def predict_ensemble_members(
     output_weather_state_mode: str = "surface-plus-core-pl",
     output_weather_states: Sequence[str] | None = None,
     keep_outputs: bool = True,
+    zarr_source=None,
 ) -> EnsemblePrediction:
-    """Predict all requested members for one date/step pair."""
+    """Predict all requested members for one date/step pair.
+
+    Inputs come from ``bundle_map`` (one bundle per member), or, when ``zarr_source`` (a
+    ``zarr_split.ZarrSplitSource``) is given, from the split row of (date, step), the same
+    row for every member.
+    """
 
     x_members: list[np.ndarray] = []
     y_members: list[np.ndarray | None] = []
@@ -110,25 +117,41 @@ def predict_ensemble_members(
     seed_base = resolve_base_seed()
 
     for member in members:
-        bundle_path = bundle_map[BundleKey(date, step, int(member))]
+        if zarr_source is None:
+            bundle_path = bundle_map[BundleKey(date, step, int(member))]
         draw_seeds.append(seed_draw(seed_base, int(date), int(step), int(member)))
-        result = predict_single_bundle(
-            inference_model,
-            datamodule,
-            device,
-            bundle_path,
-            extra_args=extra_args,
-            precision=precision,
-            model_comm_group=model_comm_group,
-            output_weather_state_mode=output_weather_state_mode,
-            output_weather_states=output_weather_states,
-        )
+        if zarr_source is None:
+            result = predict_single_bundle(
+                inference_model,
+                datamodule,
+                device,
+                bundle_path,
+                extra_args=extra_args,
+                precision=precision,
+                model_comm_group=model_comm_group,
+                output_weather_state_mode=output_weather_state_mode,
+                output_weather_states=output_weather_states,
+            )
+            source_bundle_paths.append(str(bundle_path))
+        else:
+            result = predict_single_zarr_row(
+                inference_model,
+                datamodule,
+                device,
+                zarr_source,
+                date,
+                step,
+                extra_args=extra_args,
+                precision=precision,
+                model_comm_group=model_comm_group,
+                output_weather_state_mode=output_weather_state_mode,
+                output_weather_states=output_weather_states,
+            )
         lon_lres = result.lon_lres
         lat_lres = result.lat_lres
         lon_hres = result.lon_hres
         lat_hres = result.lat_hres
         weather_states = result.weather_states
-        source_bundle_paths.append(str(bundle_path))
         if result.y is None:
             members_missing_target.append(int(member))
 
@@ -153,18 +176,24 @@ def predict_ensemble_members(
         lat_lres=lat_lres,
         lon_hres=lon_hres,
         lat_hres=lat_hres,
+        input_provenance=None if zarr_source is None else zarr_source.provenance(date, step),
     )
     if not keep_outputs:
         return ensemble
 
     x_stack = np.stack(x_members, axis=0)[None, ...]
+    # zarr_split route: a saved state absent from in_lres is an all-NaN column of x; interpolate
+    # zeros there and give x_interp the same NaN column (bundle x has no such column).
+    nan_columns = np.isnan(x_stack).all(axis=tuple(range(x_stack.ndim - 1)))
     try:
         x_interp_stack = _compute_x_interp_for_export(
             inference_model=inference_model,
-            x=x_stack,
+            x=np.where(nan_columns, np.float32(0.0), x_stack) if nan_columns.any() else x_stack,
             device=device,
             model_comm_group=model_comm_group,
         )
+        if x_interp_stack is not None and nan_columns.any():
+            x_interp_stack[..., nan_columns] = np.nan
     except (RuntimeError, ValueError) as exc:
         msg = str(exc)
         recognized = (

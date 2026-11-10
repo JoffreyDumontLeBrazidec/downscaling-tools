@@ -36,7 +36,8 @@ def _fake_run(root: Path, *, nested: bool = False) -> Path:
     _write(ev / "spectra" / "all_spectra_proxy.pdf")
     _write(ev / "spectra" / "plots" / "spectra_2t.pdf")
     _write(ev / "spectra" / "metrics.json", json.dumps({"spectra_mean_relative_l2": 0.12}))
-    # tc: deep consolidated PDF under plots/ + member_maps + stats
+    # tc: deep consolidated PDF under plots/ + member_maps + stats. tc no longer
+    # writes member_maps/ (retired 2026-09-30); it stands for an old run folder.
     _write(ev / "tc" / "plots" / "all_tc_distributions.pdf")
     _write(ev / "tc" / "member_maps" / "tc_members_idalia.pdf")
     _write(ev / "tc" / "stats.json", "{}")
@@ -89,7 +90,8 @@ def test_projection_canonical_layout(tmp_path: Path):
     # The renamed source must NOT also leak under its raw name.
     assert not (run_root / "all_spectra_proxy.pdf").exists()
 
-    # plots/<name>/ views (default plots/ + extra member_maps subdir for tc).
+    # plots/<name>/ views (default plots/ + extra member_maps subdir for tc,
+    # still projected for old runs that hold one).
     assert (run_root / "plots" / "spectra").is_symlink()
     assert (run_root / "plots" / "tc").is_symlink()
     assert (run_root / "plots" / "tc_member_maps").is_symlink()

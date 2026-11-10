@@ -12,6 +12,8 @@ class TCPlotConfig:
     wind_ylim: tuple[float, float] = (0, 2)
     regrid_resolution: float = 0.25
     plot_title: str = ""
+    # Read only by the per-member maps, retired 2026-09-30. Kept so that a lane
+    # tc.plot_config override naming them still loads.
     member_map_msl_range: tuple[float, float] | None = None
     member_map_wind_range: tuple[float, float] | None = None
 

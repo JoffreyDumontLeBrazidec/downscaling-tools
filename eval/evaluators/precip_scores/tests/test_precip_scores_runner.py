@@ -104,12 +104,13 @@ def test_baseline_from_the_native_input_grid(tmp_path):
     ds["x"] = (("sample", "ensemble_member", "grid_point_lres", "weather_state"),
                np.full((1, 2, 40, 1), 0.005, np.float32))   # 5 mm everywhere on the native grid
     ds.to_netcdf(path)
-    out = run(tmp_path, lane_config={}, eval_config={}, output_dir=tmp_path / "nat", overwrite=True)
+    # a toy line of points reads as a regional box: keep its edge strip so the means below hold
+    out = run(tmp_path, lane_config={}, eval_config={"box_edge_deg": 0}, output_dir=tmp_path / "nat", overwrite=True)
     meta = json.loads((out / "scores.json").read_text())["meta"]
     assert meta["baseline_source"] == "x-native" and meta["input_source"] == "x (native input grid)"
     row = json.loads((out / "scores.json").read_text())["rows"][0]
     assert abs(row["members"][0]["baseline"]["bias_mm"] - (5.0 - truth_m.mean() * 1000)) < 1e-2
-    old = run(tmp_path, lane_config={}, eval_config={"native_input": False}, output_dir=tmp_path / "old",
+    old = run(tmp_path, lane_config={}, eval_config={"native_input": False, "box_edge_deg": 0}, output_dir=tmp_path / "old",
               overwrite=True)
     meta_old = json.loads((old / "scores.json").read_text())["meta"]
     assert meta_old["baseline_source"] == "x_interp" and "interpolated" in meta_old["input_source"]

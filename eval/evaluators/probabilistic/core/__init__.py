@@ -14,7 +14,7 @@ from .calibration import (
 )
 from .scale_split import LowPassOperator, inner_mask, sigma_km_for_cut
 from .verdict import calibration_state, paired_difference, verdict_label
-from .plotting import plot_probabilistic_summary, plot_rank_histograms, plot_band_scores
+from .plotting import plot_probabilistic_summary, plot_rank_histograms, plot_band_scores, plot_residual_bands
 
 __all__ = [
     "compute_probabilistic_scores",
@@ -37,4 +37,5 @@ __all__ = [
     "plot_probabilistic_summary",
     "plot_rank_histograms",
     "plot_band_scores",
+    "plot_residual_bands",
 ]

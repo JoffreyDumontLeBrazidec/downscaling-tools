@@ -48,6 +48,7 @@ from eval.shared.native_input import (
     interp_source,
     is_interpolated,
 )
+from eval.shared.edge_strip import box_edge_index
 from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
@@ -175,6 +176,7 @@ def accumulate_tp_by_step(
     interp_index_cache: str = "",
     native_input: bool = True,
     info: dict | None = None,
+    box_edge_deg: float | None = None,
 ) -> dict[int, dict[str, StreamingDist]]:
     """Stream every predictions file into per-step per-series StreamingDists.
 
@@ -194,6 +196,8 @@ def accumulate_tp_by_step(
             continue
         ds = xr.open_dataset(f)
         try:
+            # regional box: the box-edge strip is left out of every distribution (eval.shared.edge_strip)
+            keep = box_edge_index(ds["lat_hres"].values, ds["lon_hres"].values, box_edge_deg)
             ti = find_tp_index(ds, var)
             mi = ensemble_member_index
             pred = _member_channel(ds, "y_pred", ti, mi)
@@ -240,6 +244,9 @@ def accumulate_tp_by_step(
                 "x_interp": interp_source("x_interp", "native_input: false" if not native_input
                                           else "no usable native x in the file"),
             }[baseline_mode]
+        pred = pred[keep]
+        truth = None if truth is None else truth[keep]
+        inp = None if inp is None else inp[keep]
         bucket = step_data.setdefault(
             step, {s: StreamingDist() for s in SERIES})
         bucket["pred"].update(pred * MM)
@@ -439,6 +446,8 @@ def main():
                         help="Path of the cached lres->hres NN interp index.")
     parser.add_argument("--no-native-input", action="store_true",
                         help="Old tables: x_interp before the native x (rule 41 says never).")
+    parser.add_argument("--box-edge-deg", type=float, default=None,
+                        help="Box-edge strip left out on a regional grid, degrees (default 1; 0 keeps it).")
     args = parser.parse_args()
 
     if not args.predictions_dir.is_dir():
@@ -455,6 +464,7 @@ def main():
         interp_index_cache=args.interp_index_cache,
         native_input=not args.no_native_input,
         info=info,
+        box_edge_deg=args.box_edge_deg,
     )
     if not step_data:
         sys.exit("No prediction files found")

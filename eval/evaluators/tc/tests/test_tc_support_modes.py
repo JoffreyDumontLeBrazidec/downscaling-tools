@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import sys
 from pathlib import Path
 
@@ -15,6 +17,13 @@ from eval.evaluators.tc.core import data_types as data_types_mod
 from eval.evaluators.tc.core import plot_config as plot_config_mod
 from eval.evaluators.tc.core import experiment_config as exp_config_mod
 from eval.evaluators.tc import runner as tc_runner_mod
+
+
+@pytest.fixture(autouse=True)
+def _no_box_edge_strip(monkeypatch):
+    """Toy grids of a few points have no interior: the box-edge strip (eval.shared.edge_strip) is off here."""
+    monkeypatch.setenv("EVAL_BOX_EDGE_DEG", "0")
+
 
 
 def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):
@@ -286,9 +295,7 @@ def test_input_curve_from_the_native_grid(tmp_path: Path, monkeypatch):
     assert rg.support_mode == "regridded" and src_rg == src
     old, src_old = loading_pred_mod.load_input_curves(files, bbox=bbox, support_mode="native", native_input=False)
     assert "interpolated" in src_old and np.allclose(old.msl, 1010.5)
-    fields = loading_pred_mod.load_prediction_member_fields(path, bbox, [0, 1])
-    assert fields["input_source"] == "x (native input grid)"
-    assert set(np.unique(fields["x_interp_msl"])) <= {1000.0 + k for k in range(49)}
+    # (the member maps that also read x were retired on main, 30 Sep: load_prediction_member_fields is gone)
     path2 = tmp_path / "predictions_20230828_step024.nc"
     _native_input_file(path2, with_x=False)
     _, src2 = loading_pred_mod.load_input_curves([(path2, 20230828, 24)], bbox=bbox, support_mode="native")

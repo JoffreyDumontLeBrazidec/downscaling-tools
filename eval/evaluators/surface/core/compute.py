@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from eval.shared.edge_strip import strip_box_edge
+
 # Surface variables and weights from anemoi-config/training/scalers/downscaling.yaml.
 SURFACE_VARIABLES: OrderedDict[str, float] = OrderedDict(
     [
@@ -226,13 +228,13 @@ def _native_input_on_output_points(ds: xr.Dataset) -> xr.DataArray:
     array (rule 41; ``eval.shared.native_input``). Output points must be a flat list (lat_hres on grid_point_hres)."""
     from eval.shared.native_input import nearest_native_index
 
-    if ds["lat_hres"].dims != ("grid_point_hres",) or ds["lon_hres"].dims != ("grid_point_hres",):
-        raise ValueError("native input on the output points needs lat_hres/lon_hres on grid_point_hres")
+    if ds["lat_hres"].ndim != 1 or ds["lat_hres"].dims != ds["lon_hres"].dims:
+        raise ValueError("native input on the output points needs lat_hres/lon_hres as one point list")
     idx = nearest_native_index(ds["lat_lres"].values.reshape(-1), ds["lon_lres"].values.reshape(-1),
                                ds["lat_hres"].values, ds["lon_hres"].values)
     x = ds["x"]
-    point = next(d for d in x.dims if d.startswith("grid_point"))
-    return x.isel({point: xr.DataArray(idx, dims="grid_point_hres")})
+    point = next(d for d in x.dims if "point" in d)
+    return x.isel({point: xr.DataArray(idx, dims=ds["lat_hres"].dims[0])})
 
 
 def process_predictions_dir(
@@ -256,6 +258,7 @@ def process_predictions_dir(
     for pred_file in pred_files:
         print(f"Processing {pred_file.name}...")
         with xr.open_dataset(pred_file, cache=False) as ds:
+            ds = strip_box_edge(ds)   # regional box: the 1-degree edge strip is not scored (edge_strip)
             for required_var in (prediction_var, truth_var, "weather_state"):
                 if required_var not in ds:
                     raise ValueError(f"{pred_file}: missing required variable '{required_var}'")

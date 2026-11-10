@@ -60,6 +60,17 @@ So the evaluator also pushes Gaussian white noise through the same operator
 which is 0 when the model's fine part is textured like the truth and 1 when it
 is indistinguishable from white noise through the same filter.
 
+Regional (cut-graph) prediction files. When the file's hres points are a subset of
+the global grid, the evaluator runs in *regional mode*: every point is mapped to its
+global index, the static fields, strata and the up/down matrices are restricted to
+the file's points, the neighbour graph and zonal successor are rebuilt on the subset,
+and the model's own exported ``x_interp`` is the driver instead of ``up @ x``. The
+fine-part operator ``r - up(down(r))`` is exact wherever the coarse stencil lies
+inside the file, so points within ``edge_margin_deg`` (default 0.75) of the file's
+lat/lon bounds are removed from every stratum, ``all`` included. The statistics are
+then identical to a global run's on the same points; ``grid.regional`` in the JSON
+records the subset, the margin and the global index range.
+
 Strata: ``all``; five terrain classes from the lane's forcings zarr (``ocean``,
 ``open_ocean``, ``coastal``, ``flat_land``, ``mountain``, from the land-sea mask
 and the standard deviation of the orography over the 32 nearest neighbours); and
@@ -80,6 +91,19 @@ mean and standard deviation of each statistic. The standard deviation of the
 model - truth correlation differences is the null scatter that later arms are
 judged against.
 
+Other grids (o96->o320). Every grid-specific input is a key of ``paths``: ``up_matrix`` and
+``down_matrix`` (the coarse<->output linear pair that defines the fine part; on o96->o320,
+O96->O320 and O320->O96), ``residual_stats`` (o320_dict_0_72.npy), ``knn_cache`` (a new file:
+the cache holds one grid and is checked against it) and the static fields, as
+``forcings_zarr``, ``static_grib`` or ``forcings_npz`` (a flat npz with ``lsm`` and ``z``
+in the prediction files' point order, as /home/ecm5702/hpcperm/data/o320-forcings.npz; its
+coordinates come from ``latitudes``/``longitudes`` or sin/cos_latitude/longitude keys when
+present, else from the first prediction file, with a warning). ``input_source: x_interp``
+takes the interpolated input from the file instead of ``up @ x``, so the residual is measured
+against the input the model was actually given. Terrain roughness uses the 32 nearest
+neighbours, about 100 km on O320 against 25 km on O1280, so terrain classes are not
+comparable across lanes.
+
 Static data (built once per run, cached on disk where expensive):
   * the 32-nearest-neighbour table of the O1280 grid, cached as an .npz;
   * the zonal-successor index (cyclic along each latitude row);
@@ -97,6 +121,7 @@ from typing import Any
 
 import numpy as np
 
+from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 from eval.shared.regions import ALPS
 
 LOG = logging.getLogger(__name__)
@@ -149,11 +174,13 @@ def _default_paths() -> dict[str, str]:
         "up_matrix": os.path.join(inter, "interpol_O320_to_O1280_linear.mat.npz"),
         "down_matrix": os.path.join(inter, "interpol_o1280_to_o320_linear.mat.npz"),
         "residual_stats": os.path.join(resid, "o1280_dict_0_72.npy"),
-        "forcings_zarr": (
+        "forcings_zarr": os.environ.get(
+            "O1280_FORCINGS_ZARR",
             "/home/mlx/ai-ml/datasets/"
-            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr"
+            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr",
         ),
-        "knn_cache": "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz",
+        "knn_cache": os.environ.get("O1280_KNN32_FILE",
+                                    "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz"),
     }
 
 
@@ -323,8 +350,43 @@ def _read_precip_truth(path: str, step: int, lat_ref: np.ndarray, lon_ref: np.nd
     raise RuntimeError(f"no {var!r} message for step {step} in {path}")
 
 
+def _read_forcings_npz(path: str, fallback_latlon=None):
+    """lat, lon, lsm, orography (m) from a flat npz of constant forcings (keys lsm, z).
+
+    Coordinates: ``latitudes``/``longitudes`` (or ``lat``/``lon``) keys, else the angles of
+    the sin/cos_latitude/longitude keys, else ``fallback_latlon`` (the prediction file's own
+    points; the npz must then be in the same point order, which cannot be checked)."""
+    with np.load(path) as z:
+        keys = set(z.files)
+        missing = [k for k in ("lsm", "z") if k not in keys]
+        if missing:
+            raise RuntimeError(f"forcings npz {path} lacks {missing} (has {sorted(keys)})")
+        lsm = np.asarray(z["lsm"], dtype=np.float32).reshape(-1)
+        oro_m = np.asarray(z["z"], dtype=np.float32).reshape(-1) / GRAVITY
+        lat = lon = None
+        for la, lo in (("latitudes", "longitudes"), ("lat", "lon")):
+            if la in keys and lo in keys:
+                lat = np.asarray(z[la], dtype=np.float64).reshape(-1)
+                lon = np.asarray(z[lo], dtype=np.float64).reshape(-1)
+                break
+        if lat is None and {"sin_latitude", "cos_latitude", "sin_longitude", "cos_longitude"} <= keys:
+            lat = np.degrees(np.arctan2(np.asarray(z["sin_latitude"], dtype=np.float64).reshape(-1),
+                                        np.asarray(z["cos_latitude"], dtype=np.float64).reshape(-1)))
+            lon = np.degrees(np.arctan2(np.asarray(z["sin_longitude"], dtype=np.float64).reshape(-1),
+                                        np.asarray(z["cos_longitude"], dtype=np.float64).reshape(-1)))
+    if lat is None:
+        if fallback_latlon is None:
+            raise RuntimeError(f"forcings npz {path} holds no coordinates and no fallback was given")
+        LOG.warning("texture: %s holds no coordinates; using the prediction file's points "
+                    "(the npz must be in the same point order)", path)
+        lat, lon = (np.asarray(a, dtype=np.float64).reshape(-1) for a in fallback_latlon)
+    if lat.size != lsm.size:
+        raise RuntimeError(f"forcings npz {path}: {lsm.size} values but {lat.size} coordinates")
+    return lat, lon, lsm, oro_m
+
+
 def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
-                  up=None, down=None) -> dict[str, Any]:
+                  up=None, down=None, fallback_latlon=None) -> dict[str, Any]:
     """Grid structures and strata. ``up``/``down`` are the O320<->O1280 linear
     interpolation matrices; they define the coarse-smoothed land-sea mask that
     splits ``ocean`` into ``open_ocean`` and ``coastal``."""
@@ -333,6 +395,10 @@ def _build_static(paths: dict, regions: dict, terrain: dict, nn_count: int,
         lat, lon, lsm, oro_m = _read_static_grib(paths["static_grib"])
         n = lat.size
         LOG.info("texture: static GRIB read (%d points) in %.1fs", n, time.time() - t0)
+    elif paths.get("forcings_npz"):
+        lat, lon, lsm, oro_m = _read_forcings_npz(paths["forcings_npz"], fallback_latlon)
+        n = lat.size
+        LOG.info("texture: forcings npz read (%d points) in %.1fs", n, time.time() - t0)
     else:
         import zarr
 
@@ -501,6 +567,87 @@ def _grain_index(model: float, truth: float, noise) -> float:
     if not (np.isfinite(model) and np.isfinite(truth) and np.isfinite(den)) or abs(den) < 1e-6:
         return float("nan")
     return float((model - truth) / den)
+
+
+EDGE_MARGIN_DEG = 0.75   # regional mode: strip this much from the file's lat/lon bounds
+MIN_STRATUM_POINTS = 200 # regional mode: strata with fewer points are dropped
+
+
+def _subset_static(static: dict, idx: np.ndarray, up, down, nn_count: int,
+                   edge_margin_deg: float, min_points: int = MIN_STRATUM_POINTS):
+    """Restrict the static structures to the global points ``idx`` (a regional file).
+
+    Returns (static_subset, up_subset, down_subset). ``up_subset = up[idx]`` maps the
+    full coarse grid onto the subset and ``down_subset = down[:, idx]`` gathers the
+    subset only, so ``up(down(r))`` equals the global operator at every point whose
+    coarse stencil is covered by the subset; the edge margin removes the rest from
+    the strata. Neighbours and zonal successors are rebuilt on the subset.
+    """
+    t0 = time.time()
+    lat = np.asarray(static["lat"])[idx]
+    lon = np.asarray(static["lon"])[idx]
+    n = lat.size
+    knn_idx, knn_dist = _build_knn(lat, lon, min(KNN_K, n - 1))
+    nn = np.ascontiguousarray(knn_idx[:, :nn_count])
+    nn_dist_km = {
+        "nearest_km_median": float(np.median(knn_dist[:, 0])),
+        "sixth_km_median": float(np.median(knn_dist[:, min(nn_count, knn_dist.shape[1]) - 1])),
+    }
+    nxt, row_info = _zonal_successor(lat, lon)
+
+    lon360 = np.mod(lon, 360.0)
+    lon180 = np.where(lon360 > 180.0, lon360 - 360.0, lon360)
+    lat_lo, lat_hi = float(lat.min()), float(lat.max())
+    lon_lo, lon_hi = float(lon180.min()), float(lon180.max())
+    interior = (
+        (lat >= lat_lo + edge_margin_deg) & (lat <= lat_hi - edge_margin_deg)
+        & (lon180 >= lon_lo + edge_margin_deg) & (lon180 <= lon_hi - edge_margin_deg)
+    )
+    if int(interior.sum()) < min_points:
+        raise RuntimeError(
+            f"texture: only {int(interior.sum())} interior points after a {edge_margin_deg} deg "
+            f"edge margin on a {n}-point regional file")
+
+    masks: dict[str, np.ndarray | None] = {}
+    strata: dict[str, dict[str, Any]] = {}
+    dropped: list[str] = []
+    for name, m in static["masks"].items():
+        sub = interior.copy() if m is None else (np.asarray(m)[idx] & interior)
+        count = int(sub.sum())
+        if count < min_points:
+            dropped.append(name)
+            LOG.warning("texture: stratum %r has %d points in the regional file; dropped",
+                        name, count)
+            continue
+        masks[name] = sub
+        entry = dict(static["strata"][name])
+        entry["n_points"] = count
+        strata[name] = entry
+
+    up_sub = up[idx].tocsr()
+    down_sub = down[:, idx].tocsr()
+    LOG.info(
+        "texture: regional subset of %d points built in %.1fs (rows=%d, interior=%d, strata=%s)",
+        n, time.time() - t0, row_info["n_rows"], int(interior.sum()),
+        {k: v["n_points"] for k, v in strata.items()},
+    )
+    grid = dict(static["grid"])
+    grid.update({
+        "n_points": int(n), **row_info, **nn_dist_km,
+        "regional": {
+            "n_global": int(np.asarray(static["lat"]).size),
+            "edge_margin_deg": float(edge_margin_deg),
+            "n_interior": int(interior.sum()),
+            "lat_bounds": [lat_lo, lat_hi], "lon_bounds": [lon_lo, lon_hi],
+            "global_index_min": int(idx.min()), "global_index_max": int(idx.max()),
+            "strata_dropped": dropped,
+        },
+    })
+    return {
+        "lat": lat, "lon": lon, "nn": nn, "nxt": nxt,
+        "masks": masks, "strata": strata, "strata_order": list(masks.keys()),
+        "grid": grid,
+    }, up_sub, down_sub
 
 
 def _noise_reference(n_points: int, up, down, nxt, nn, sels: dict, strata_order: list[str],
@@ -754,6 +901,9 @@ def run(
     frac = float(eval_config.get("top_fraction", TOP_FRACTION))
     output_only = set(_as_list(eval_config.get("output_only_states")) or [])
     precip_truth_tpl = paths.get("precip_truth_tpl")
+    input_source = str(eval_config.get("input_source", "up_matrix"))
+    if input_source not in ("up_matrix", "x_interp"):
+        raise ValueError(f"texture.input_source must be up_matrix or x_interp, got {input_source!r}")
 
     files = valid_prediction_files(predictions_dir, steps=steps)
     if dates:
@@ -782,12 +932,54 @@ def run(
     stdev = {s: float(stdev_all[s]) for s in states}
     LOG.info("texture: matrices up=%s down=%s loaded in %.1fs", up.shape, down.shape, time.time() - t0)
 
-    static = _build_static(paths, regions, terrain, nn_count, up=up, down=down)
+    fallback_latlon = None
+    if paths.get("forcings_npz") and not paths.get("static_grib"):
+        with netCDF4.Dataset(files[0]) as ds0:
+            fallback_latlon = (np.asarray(ds0.variables["lat_hres"][:]).reshape(-1),
+                               np.asarray(ds0.variables["lon_hres"][:]).reshape(-1))
+    static = _build_static(paths, regions, terrain, nn_count, up=up, down=down,
+                           fallback_latlon=fallback_latlon)
     n_points = static["grid"]["n_points"]
     if up.shape[0] != n_points or down.shape[1] != n_points:
         raise RuntimeError(
             f"grid size mismatch: forcings {n_points} points, up {up.shape}, down {down.shape}"
         )
+
+    # Regional (cut-graph) files: a subset of the global grid in the file's own order.
+    regional = False
+    with netCDF4.Dataset(files[0]) as ds0:
+        ds0.set_auto_mask(False)
+        lat0 = np.asarray(ds0.variables["lat_hres"][:]).reshape(-1)
+        lon0 = np.asarray(ds0.variables["lon_hres"][:]).reshape(-1)
+        has_x_interp = "x_interp" in ds0.variables
+    # The box-edge strip of a regional file (eval.shared.edge_strip, 1 degree by default) is dropped before
+    # anything is built: the file minus its strip is a smaller regional file, and the edge margin below is
+    # then measured from the strip, so no statistic (fine part, neighbours, successors) touches a strip point.
+    box_edge_deg = resolve_box_edge_deg(eval_config)
+    keep = box_edge_index(lat0, lon0, box_edge_deg)
+    if not isinstance(keep, slice):
+        LOG.info("texture: regional file, %d of %d points outside the %.2g-degree box-edge strip",
+                 keep.size, lat0.size, box_edge_deg)
+        lat0, lon0 = lat0[keep], lon0[keep]
+    if not _lonlat_match(lat0, lon0, static["lat"], static["lon"]):
+        if lat0.size >= n_points:
+            raise RuntimeError(
+                f"{files[0].name}: {lat0.size} points do not match the forcings grid "
+                f"({n_points} points) and are not a subset of it")
+        if not has_x_interp:
+            raise RuntimeError(
+                f"{files[0].name}: regional file without x_interp; the evaluator needs the "
+                "exported driver on the file's points")
+        from eval.shared.grid import global_point_index
+
+        t_idx = time.time()
+        idx_global = global_point_index(lat0, lon0, static["lat"], static["lon"])
+        LOG.info("texture: regional file, %d of %d global points mapped in %.1fs",
+                 lat0.size, n_points, time.time() - t_idx)
+        edge_margin = float(eval_config.get("edge_margin_deg", EDGE_MARGIN_DEG))
+        static, up, down = _subset_static(static, idx_global, up, down, nn_count, edge_margin)
+        n_points = static["grid"]["n_points"]
+        regional = True
     masks = static["masks"]
     strata_order = static["strata_order"]
     sels = {name: (None if m is None else np.flatnonzero(m)) for name, m in masks.items()}
@@ -810,7 +1002,9 @@ def run(
         t_file = time.time()
         with netCDF4.Dataset(file_path) as ds:
             ds.set_auto_mask(False)
-            for required in ("x", "y", "y_pred"):
+            # regional files always use their exported driver (the matrices are global)
+            needed_input = "x_interp" if (regional or input_source == "x_interp") else "x"
+            for required in (needed_input, "y", "y_pred"):
                 if required not in ds.variables:
                     raise RuntimeError(f"{file_path} is missing {required!r}")
             ws = [str(v) for v in np.asarray(ds.variables["weather_state"][:]).reshape(-1)]
@@ -818,20 +1012,23 @@ def run(
             absent = [s for s in states if s not in idx_of]
             if absent:
                 LOG.warning("texture: %s lacks states %s; skipping them", file_path.name, absent)
-            lat_f = np.asarray(ds.variables["lat_hres"][:]).reshape(-1)
-            lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)
+            lat_f = np.asarray(ds.variables["lat_hres"][:]).reshape(-1)[keep]
+            lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)[keep]
             if not _lonlat_match(lat_f, lon_f, static["lat"], static["lon"]):
                 raise RuntimeError(
-                    f"{file_path.name}: lat/lon_hres do not match the forcings grid "
+                    f"{file_path.name}: lat/lon_hres do not match the "
+                    f"{'first file' if regional else 'forcings grid'} "
                     f"({lat_f.size} vs {n_points} points); the evaluator relies on identical point order"
                 )
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
 
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
-                yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)
-                yt = np.asarray(_read_member(ds.variables["y"], member_index))
-                xx = np.asarray(_read_member(ds.variables["x"], member_index))
+                yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)[keep]
+                yt = np.asarray(_read_member(ds.variables["y"], member_index))[keep]
+                xx = np.asarray(_read_member(ds.variables[needed_input], member_index))
+                if needed_input == "x_interp":
+                    xx = xx[keep]   # on the output points; x (the input grid) is never stripped
                 t_read = time.time() - t_mem
                 for state in states:
                     si = idx_of.get(state)
@@ -842,14 +1039,16 @@ def run(
                         # No input counterpart: the interpolated driver is identically zero
                         # and the residual is the raw field. Truth from the GRIB if given.
                         x_interp = 0.0
-                        if precip_truth_tpl:
+                        if precip_truth_tpl and not regional:
                             y_state = _read_precip_truth(
                                 precip_truth_tpl.format(date=date), int(lead), lat_f, lon_f, state,
                             )
                         else:
                             y_state = np.asarray(yt[:, si], dtype=np.float64)
                     else:
-                        x_interp = up @ np.asarray(xx[:, si], dtype=np.float64)
+                        x_interp = (up @ np.asarray(xx[:, si], dtype=np.float64)
+                                    if needed_input == "x"
+                                    else np.asarray(xx[:, si], dtype=np.float64))
                         y_state = np.asarray(yt[:, si], dtype=np.float64)
                     r_t = (y_state - x_interp) / sd
                     r_m = (yp[:, si] - x_interp) / sd
@@ -897,6 +1096,9 @@ def run(
         "n_files": len(files),
         "files": [f.name for f in files],
         "n_samples_per_cell": n_cell,
+        "regional": bool(regional),
+        "box_edge_deg": box_edge_deg if regional else 0.0,
+        "driver_source": "x_interp" if (regional or input_source == "x_interp") else "up @ x",
         "states": [s for s in states if any(r["state"] == s for r in aggregate)],
         "strata_order": strata_order,
         "strata": static["strata"],
@@ -907,6 +1109,7 @@ def run(
             "regions": regions, "terrain": terrain, "paths": paths,
             "knn_k": KNN_K, "nn_count": nn_count, "top_fraction": frac,
             "stdev": stdev, "output_only_states": sorted(output_only),
+            "input_source": input_source,
         },
         "statistics": STAT_NAMES,
         "ratio_statistics": RATIO_STATS,

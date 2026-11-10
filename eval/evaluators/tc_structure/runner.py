@@ -71,6 +71,7 @@ import numpy as np
 from eval.evaluators.tc.core.data_types import BoundingBox
 from eval.evaluators.tc.core.events import EVENTS
 from eval.evaluators.tc.core.grid import normalize_lon, point_mask
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 from eval.evaluators.tc.core.loading_predictions import select_prediction_files_for_event
 from eval.discovery.predictions import PREDICTION_RE, find_predictions
 from eval.shared.date_bootstrap import (
@@ -165,7 +166,9 @@ def _read_region(path: Path, events, margin_deg: float, native_input: bool = Tru
             keep |= inlat & lon_ok
         sel = np.flatnonzero(keep)
         s0, s1 = min(iu, iv, ip), max(iu, iv, ip) + 1
-        out = {"lat": lat_r[sel], "lon": lon_r[sel], "n_file_points": int(lat.size),
+        # regional file: the points of the box-edge strip (eval.shared.edge_strip); no centre is taken there
+        inner = box_edge_mask(lat, lon, resolve_box_edge_deg())[i0:i1][sel]
+        out = {"lat": lat_r[sel], "lon": lon_r[sel], "n_file_points": int(lat.size), "inner": inner,
                "attrs": {k: str(d.getncattr(k)) for k in d.ncattrs()}}
         nmem = int(d["y_pred"].shape[1])
         out["input_source"] = _source_of(d, native_input)
@@ -236,6 +239,13 @@ def _fmt(v):
     return str(v)
 
 
+def _centre_outside_strip(c: dict, inner: np.ndarray) -> dict:
+    """A centre whose grid minimum lies in the box-edge strip is not a centre (docs ablation note s21)."""
+    if c.get("found") and c.get("imin", -1) >= 0 and not inner[int(c["imin"])]:
+        return {**c, "found": False, "reason": "minimum in the box-edge strip"}
+    return c
+
+
 def measure_file(path: Path, ymd: int, step: int, events, params: StructureParams, *,
                  arm: str, storm_edge_km: float, storm_max_pmin_hpa: float,
                  track_km_per_24h: float = 900.0, track=None, members=None,
@@ -256,6 +266,7 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
     if input_sources is not None:
         input_sources.add(data["input_source"])
     lat, lon = data["lat"], data["lon"]
+    inner = data["inner"]
     if first_guess_field not in ("truth", "input"):
         raise ValueError(f"tc_structure: first_guess_field must be truth or input, not {first_guess_field!r}")
     nmem = data["model"].shape[0]
@@ -280,9 +291,9 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
             fg = {"found": False, "reason": "no best-track fix within 6 h of the valid time",
                   "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
         elif best_track is not None:
-            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox,
+            fg = _centre_outside_strip(find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox,
                              first_guess=(float(anchor["lat"]), float(anchor["lon"])),
-                             params=replace(fg_params, search_km=bt_search_km))
+                             params=replace(fg_params, search_km=bt_search_km)), inner)
             if not fg["found"] and fg["reason"]:
                 fg["reason"] = "best-track anchor: " + fg["reason"]
         elif state == "lost":
@@ -290,14 +301,14 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
                   "lat": np.nan, "lon": np.nan, "pmin_hpa": np.nan}
         elif state is None:
             # first lead with a storm: the deepest closed low of the truth ensemble mean
-            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, params=fg_params)
+            fg = _centre_outside_strip(find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, params=fg_params), inner)
         else:
             # follow the first-guess track: the truth ensemble-mean low within the
             # distance a storm can travel since the previous lead
             plat, plon, pstep = state
             radius = track_km_per_24h * max(int(step) - int(pstep), 1) / 24.0
-            fg = find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, first_guess=(plat, plon),
-                             params=replace(fg_params, search_km=radius))
+            fg = _centre_outside_strip(find_centre(lat, lon, fg_mean, ev_mask, bbox=bbox, first_guess=(plat, plon),
+                             params=replace(fg_params, search_km=radius)), inner)
             if not fg["found"] and fg["reason"]:
                 fg["reason"] = "first-guess track: " + fg["reason"]
         if not np.isfinite(fg_mean[ev_mask]).all():
@@ -321,7 +332,8 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
                 finite = bool(np.isfinite(msl[ev_mask]).all())
                 row.update(arm=arm, event=ev.name, date=f"{ymd:08d}", lead=int(step), field=fname,
                            member=int(k), storm_ok=int(storm_ok), found=0,
-                           box_min_hpa=float(msl[ev_mask].min()) if finite else np.nan,
+                           box_min_hpa=(float(msl[ev_mask & inner].min())
+                                        if finite and (ev_mask & inner).any() else np.nan),
                            fg_lat=fg["lat"], fg_lon=fg["lon"], fg_pmin_hpa=fg["pmin_hpa"],
                            file=str(path))
                 if not storm_ok:
@@ -332,8 +344,8 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
                     row["reason"] = "field missing or not finite in the box"
                     rows.append(row)
                     continue
-                c = find_centre(lat, lon, msl, ev_mask, bbox=bbox,
-                                first_guess=(fg["lat"], fg["lon"]), params=params)
+                c = _centre_outside_strip(find_centre(lat, lon, msl, ev_mask, bbox=bbox,
+                                first_guess=(fg["lat"], fg["lon"]), params=params), inner)
                 row.update(pmin_hpa=c["pmin_hpa"], centre_lat=c["lat"], centre_lon=c["lon"])
                 if not c["found"]:
                     row["reason"] = c["reason"]
@@ -341,7 +353,9 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
                     continue
                 row["displacement_km"] = float(gc_distance_km(fg["lat"], fg["lon"],
                                                               [c["lat"]], [c["lon"]])[0])
-                sc, vt = measure_structure(lat, lon, arr[k, :, 0], arr[k, :, 1],
+                # winds of the box-edge strip are not measured (NaN: a ring that reaches the strip is not valid)
+                sc, vt = measure_structure(lat, lon, np.where(inner, arr[k, :, 0], np.nan),
+                                           np.where(inner, arr[k, :, 1], np.nan),
                                            c["lat"], c["lon"], params)
                 row.update(found=1, **{kk: sc[kk] for kk in sc if kk in CASE_COLS})
                 rows.append(row)

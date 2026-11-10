@@ -37,6 +37,7 @@ from manual_inference.prediction.dataset import build_predictions_dataset
 from manual_inference.prediction.dataset import OUTPUT_WEATHER_STATE_MODE_CHOICES
 from manual_inference.prediction.dataset import resolve_output_weather_states
 from manual_inference.prediction.utils import extract_filtered_input_from_output
+from manual_inference.prediction.sampler_spec import is_flow_map, normalize_flow_map_sampler
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -61,8 +62,12 @@ _NOISE_SCHEDULER_KEYS = _LOOSE_NOISE_SCHEDULER_KEYS | {
     "num_steps_low",
     "rho_high",
     "rho_low",
+    "sigmas",  # explicit noise levels of schedule_type "custom" (few-step sampler campaign, 2026-09-30)
 }
 _SAMPLER_KEYS = {"sampler", "S_churn", "S_min", "S_max", "S_noise"}
+# A flow-map block (schedule_type "flow_map", sampler "jumps") travels on the same two routes:
+# schedule_type / num_steps / sigma_max / sigma_min are noise-scheduler keys (all loose ones),
+# sampler is a sampler key. See manual_inference/prediction/sampler_spec.py.
 
 
 def _model_takes_lead_hours(inference_model) -> bool:
@@ -87,6 +92,9 @@ def _predict_with_compatible_kwargs(*, inference_model, batch, model_comm_group,
     Sampling overrides are routed by inspecting the predict_step signature: either a
     single ``extra_args`` dict, or split ``noise_scheduler_params``/``sampler_params``.
     """
+    if is_flow_map(extra_args):
+        # canonical block: exactly the five flow-map keys, churn and EDM keys refused
+        extra_args = normalize_flow_map_sampler(extra_args)
     predict_params = inspect.signature(inference_model.predict_step).parameters
     predict_kwargs = {"model_comm_group": model_comm_group}
 
@@ -255,6 +263,15 @@ def _resolve_ckpt_path(
 
 
 
+def inference_weights_name(name_ckpt: str, ema: str | None = None) -> str:
+    """File name of the weights loaded for base checkpoint ``name_ckpt``.
+
+    ``inference-<name>`` holds the raw weights; runs with EMA on also save
+    ``inference-<ema>-<name>`` (e.g. ``inference-ema2000-<name>``), the EMA weights of that step.
+    """
+    return f"inference-{ema}-{name_ckpt}" if ema else f"inference-{name_ckpt}"
+
+
 def load_objects(
     *,
     ckpt_path: str,
@@ -262,8 +279,17 @@ def load_objects(
     validation_frequency: str,
     precision: str,
     num_gpus_per_model_override: int | None = None,
+    ema: str | None = None,
 ):
     ckpt_path, dir_exp, name_exp, name_ckpt = _split_ckpt_path(ckpt_path)
+    # ema="ema2000" loads the EMA weights inference-ema2000-<name> instead of the raw ones;
+    # refused before the (slow) base checkpoint load when that file does not exist.
+    weights_path = os.path.join(dir_exp, name_exp, inference_weights_name(name_ckpt, ema))
+    if ema and not os.path.exists(weights_path):
+        raise FileNotFoundError(
+            f"EMA weights {ema!r} requested but {weights_path} does not exist "
+            "(this run may not save that EMA half-life at this step)."
+        )
     checkpoint, config_checkpoint = get_checkpoint(dir_exp, name_exp, name_ckpt)
     # Unified multi-ds: config is checkpoint-native. Inject local paths from env vars
     # (DATA_DIR/GRID_DIR/RESIDUAL_STATISTICS_DIR/INTER_MAT_DIR are resolved via the
@@ -282,7 +308,7 @@ def load_objects(
         config_for_datamodule.dataloader.read_group_size = int(num_gpus_per_model_override)
 
     inference_model = torch.load(
-        os.path.join(dir_exp, name_exp, "inference-" + name_ckpt),
+        weights_path,
         map_location=torch.device(device),
         weights_only=False,
     ).to(device)
@@ -319,7 +345,8 @@ def load_objects(
                 return bsd, gss
             _core._before_sampling = _before_sampling_bf16
     graph_data = inference_model.graph_data
-    datamodule = get_datamodule(config_for_datamodule, graph_data)
+    task = (checkpoint.get("hyper_parameters") or {}).get("task") if isinstance(checkpoint, dict) else None
+    datamodule = get_datamodule(config_for_datamodule, graph_data, task=task)
     return inference_model, datamodule, dir_exp, name_exp
 
 

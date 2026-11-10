@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.shared.edge_strip import resolve_box_edge_deg
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
@@ -322,7 +323,7 @@ def resolve_config(eval_config: dict) -> dict:
         "thresholds": tuple(float(t) for t in eval_config.get("thresholds", DEFAULT_THRESHOLDS)),
         "radii": tuple(float(r) for r in eval_config.get("radii", DEFAULT_RADII)),
         "max_km": float(eval_config.get("max_km", 15.0)),
-        "box_edge_deg": float(eval_config.get("box_edge_deg", 1.0)),
+        "box_edge_deg": resolve_box_edge_deg(eval_config),
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,

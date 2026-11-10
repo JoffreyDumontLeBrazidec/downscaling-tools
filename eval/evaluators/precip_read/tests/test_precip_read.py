@@ -86,7 +86,8 @@ def test_run_then_plot(tmp_path, truth_members):
                                  "elevation": 0.0, "obs": rng.gamma(0.5, 2.0)})
     obs_rows.append({"valid": "2023010200", "lat": 45.0, "lon": 5.0, "stnid": 999, "elevation": 0.0, "obs": 703.0})
     pd.DataFrame(obs_rows).to_csv(tmp_path / "obs.csv", index=False)
-    cfg = {"accum_hours": 12, "bootstrap": 50, "run_label": "test",
+    # box_edge_deg 0: the station counts below are for the whole toy box (the strip has its own test)
+    cfg = {"accum_hours": 12, "bootstrap": 50, "run_label": "test", "box_edge_deg": 0,
            "obs": {"csv": str(tmp_path / "obs.csv"), "min_stations": 20, "max_km": 100.0},
            "cases": [{"name": "c1", "label": "Case 1", "date": "20230111", "step": 24, "box": [40, 50, 0, 15]}],
            "map_groups": {"demo": ["c1"]}}
