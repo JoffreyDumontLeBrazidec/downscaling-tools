@@ -210,3 +210,52 @@ def test_runner_end_to_end_on_synthetic_file(tmp_path):
     recs = score(out, {}, {})
     names = {r["metric"] for r in recs}
     assert "tcs_franklin_rmw_km_model_24_48" in names
+
+
+def test_runner_input_row_from_the_native_grid(tmp_path, monkeypatch):
+    """Rule 41: the input row is measured on the native x (nearest native point), not on x_interp."""
+    netCDF4 = pytest.importorskip("netCDF4")
+    import json
+
+    from eval.evaluators.tc_structure import run
+
+    monkeypatch.setenv("EVAL_NATIVE_INDEX_CACHE", str(tmp_path / "idx"))
+    lat, lon = o1280_points_in_box(10.0, 40.0, -100.0, -58.0)
+    order = np.lexsort((lon, -lat))
+    lat, lon = lat[order], lon[order]
+    u, v, p, _ = vortex(lat, lon)
+    states = ["10u", "10v", "2t", "msl"]
+    data = np.zeros((1, 2, lat.size, len(states)), dtype=np.float32)
+    data[0, :, :, 0], data[0, :, :, 1], data[0, :, :, 2], data[0, :, :, 3] = u, v, 300.0, p * 100.0
+    sel = np.arange(0, lat.size, 3)                     # a coarser native set: every third output point
+    pdir = tmp_path / "preds"
+    pdir.mkdir()
+    with netCDF4.Dataset(pdir / "predictions_20230826_step024.nc", "w") as d:
+        d.createDimension("sample", 1)
+        d.createDimension("ensemble_member", 2)
+        d.createDimension("grid_point_hres", lat.size)
+        d.createDimension("grid_point_lres", sel.size)
+        d.createDimension("weather_state", len(states))
+        d.createVariable("lat_hres", "f4", ("grid_point_hres",))[:] = lat
+        d.createVariable("lon_hres", "f4", ("grid_point_hres",))[:] = lon
+        d.createVariable("lat_lres", "f4", ("grid_point_lres",))[:] = lat[sel]
+        d.createVariable("lon_lres", "f4", ("grid_point_lres",))[:] = lon[sel]
+        ws = d.createVariable("weather_state", str, ("weather_state",))
+        for i, s in enumerate(states):
+            ws[i] = s
+        full = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
+        for name in ("y_pred", "y"):
+            d.createVariable(name, "f4", full)[:] = data
+        flat = data.copy()
+        flat[..., 3] = 101000.0                         # x_interp: no storm at all
+        d.createVariable("x_interp", "f4", full)[:] = flat
+        d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))[:] = \
+            data[:, :, sel]
+    out = tmp_path / "out"
+    run(pdir, {}, {"events": ["franklin"], "n_boot": 50}, output_dir=out, run_label="native")
+    import csv
+    rows = [r for r in csv.DictReader(open(out / "cases.csv")) if r["field"] == "input"]
+    assert rows and all(r["found"] == "1" for r in rows)            # the storm is in the native x
+    assert all(abs(float(r["rmw_km"]) - RMW_KM) <= 15.0 for r in rows)
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["input_source"] == ["x (native input grid)"]
