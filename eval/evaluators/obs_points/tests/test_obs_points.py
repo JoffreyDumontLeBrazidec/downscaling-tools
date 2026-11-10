@@ -604,3 +604,26 @@ def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
     assert n_strip < n_all == 80   # the strip drops stations, for the input row as for the model row
     meta = json.loads((out / "run_meta.json").read_text())
     assert meta["input_source"] == ["x (native input grid)"]
+
+
+def test_tp_obs_var_scores_tp_against_the_named_series(tmp_path):
+    """tp_obs_var: tp6 scores the file's tp against obs_tp6.csv (the 4 km lane's 6 h windows), not obs_tp.csv."""
+    import shutil
+
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "p6", noise=0.5, seed=11)
+    cfg = {"vars": ["tp"], "radii": [0], "min_stations": 10, "max_km": 100.0}
+    ref = obs_points.run(pred, {}, {**cfg, "cache": str(cache)}, output_dir=tmp_path / "ref", run_label="R")
+    c6 = tmp_path / "cache6"
+    shutil.copytree(cache, c6)
+    (c6 / "obs_tp.csv").rename(c6 / "obs_tp6.csv")
+    o = pd.read_csv(c6 / "obs_tp6.csv")
+    o["obs"] = o["obs"] * 7.0 + 3.0  # a different 12 h series that must NOT be used
+    o.to_csv(c6 / "obs_tp.csv", index=False)
+    out = obs_points.run(pred, {}, {**cfg, "cache": str(c6), "tp_obs_var": "tp6"}, output_dir=tmp_path / "o6",
+                         run_label="S")
+    a = pd.read_csv(ref / "scores_per_date.csv")
+    b = pd.read_csv(out / "scores_per_date.csv")
+    num = [c for c in a.columns if a[c].dtype.kind == "f"]
+    pd.testing.assert_frame_equal(a[num].reset_index(drop=True), b[num].reset_index(drop=True))
+    assert json.loads((out / "run_meta.json").read_text())["tp_obs_var"] == "tp6"

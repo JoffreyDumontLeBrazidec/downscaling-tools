@@ -11,7 +11,7 @@ import numpy as np
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
-    StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache, xyz,
+    LIMITS, StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache, xyz,
 )
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
 from eval.shared.provenance import (
@@ -330,6 +330,9 @@ def resolve_config(eval_config: dict) -> dict:
         # rule 41: score the input on its native grid (x, lat_lres/lon_lres); False only to reproduce old tables
         "native_input": bool(eval_config.get("native_input", True)),
         "seeps": bool(eval_config.get("seeps", True)),
+        # the cache series scored as the model's tp: "tp" (12 h windows, the default) or e.g. "tp6" (6 h windows ending
+        # at valid time, the 4 km lane whose files hold 6 h tp); anything but "tp" turns SEEPS and the 12 h window audit off
+        "tp_obs_var": str(eval_config.get("tp_obs_var", "tp")),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
     }
@@ -346,7 +349,18 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     output_dir.mkdir(parents=True, exist_ok=True)
     cfg = resolve_config(eval_config)
     cache_dir = resolve_cache(eval_config.get("cache"))
-    obs, hres, cache_meta = load_cache(cache_dir, cfg["vars"] + (["tp24"] if cfg["seeps"] else []))
+    if cfg["tp_obs_var"] != "tp":
+        cfg["seeps"] = False
+    load_vars = [cfg["tp_obs_var"] if v == "tp" else v for v in cfg["vars"]] + (["tp24"] if cfg["seeps"] else [])
+    obs, hres, cache_meta = load_cache(cache_dir, load_vars)
+    if cfg["tp_obs_var"] != "tp" and "tp" in cfg["vars"]:
+        lo_tp, hi_tp = LIMITS["tp"]
+        if cfg["tp_obs_var"] in obs:
+            o_tp = obs.pop(cfg["tp_obs_var"])
+            obs["tp"] = o_tp[(o_tp.obs >= lo_tp) & (o_tp.obs <= hi_tp)]
+        if cfg["tp_obs_var"] in hres:
+            hres["tp"] = hres.pop(cfg["tp_obs_var"])
+        LOG.info("obs_points: model tp scored against the cache series %s", cfg["tp_obs_var"])
     seeps_clim = load_seeps_clim(cache_dir) if cfg["seeps"] and "tp24" in obs and "tp" in cfg["vars"] else None
     if cfg["seeps"] and seeps_clim is None:
         LOG.info("obs_points: no 24 h tp or SEEPS climatology in the cache; SEEPS skipped")
@@ -387,7 +401,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             members.add(int(f["model"].shape[0]))
             r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,
                                     hres_pool=hres_pool, kinds=kinds, input_matcher=input_matcher, input_h=input_h)
-            if v == "tp":
+            if v == "tp" and cfg["tp_obs_var"] == "tp":
                 window += tp_window_check(f, obs[v], matcher, date=p.date, lead=p.step, cfg=cfg, log=log,
                                           input_matcher=input_matcher)
             rows += r
@@ -472,7 +486,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "members": sorted(members), "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}),
         "files": files, "stations_per_file": {k: v for k, v in sorted(stations.items())},
         "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
-        "input_source": sorted(input_sources), "input_height_column": input_h,
+        "input_source": sorted(input_sources), "tp_obs_var": cfg["tp_obs_var"], "input_height_column": input_h,
         "provenance": provenance(
             verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest output-grid point "
                             f"within {cfg['max_km']:g} km for model and truth, nearest point of the input's own grid "

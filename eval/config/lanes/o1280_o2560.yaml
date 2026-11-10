@@ -96,16 +96,17 @@ surface:
 # agent-work/20261103-o2560-obs12 (12 dates 20241101-20241112, leads 12-72 h, box 10-70 N 80 W-40 E).
 # tp on this lane is the 6 h window ending at each predicted lead; the matching station series is the
 # cache's obs_tp6.csv / hres_tp6.csv (6 h windows ending at the same valid time). obs_points reads
-# obs_tp.csv for var tp, which in this cache holds 12 h windows, so tp is NOT listed below: listing it
-# would score the 6 h model tp against 12 h station tp. Score tp6 with the obs12 kit scripts until
-# obs_points can read a 6 h station series.
+# cache obs_tp6.csv / hres_tp6.csv; tp_obs_var: tp6 makes obs_points score the model tp against that series
+# (SEEPS and the 12 h window audit are then off). Caches copied to hpcperm 10 Nov 2026 with the analysis column
+# (quaver analysis-departure check, eval.cli obs fetch --add-analysis).
 # Run:   python -m eval.cli evaluate --lane o1280_o2560 --host <jupiter|atos> --only obs_points \
 #          --predictions-dir <dir of predictions_<date>_step<NNN>.nc> --run-label <label>
 obs_points:
   cache:
-    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261103-o2560-obs12/cache/stvl_obs12
-    atos: /ec/res4/scratch/ecm5702/agent-work/20261103-o2560-wide-obs/stvl_obs12
-  vars: [2t, 10ff, msl]
+    atos: /home/ecm5702/hpcperm/data/station_caches/o2560_obs12_20241101_12
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/o2560_obs12_20241101_12
+  vars: [2t, 10ff, msl, tp]
+  tp_obs_var: tp6
 
 regions:
   showcase:
