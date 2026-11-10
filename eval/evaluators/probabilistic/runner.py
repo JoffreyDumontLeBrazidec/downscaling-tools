@@ -73,6 +73,7 @@ def run(
     ratio_bootstrap_resamples = int(_or(eval_config.get("ratio_bootstrap_resamples"), RATIO_BOOTSTRAP_RESAMPLES))
     ratio_bootstrap_seed = int(_or(eval_config.get("ratio_bootstrap_seed"), RATIO_BOOTSTRAP_SEED))
     include_input = bool(_or(eval_config.get("include_input"), True))
+    clip_nonnegative = eval_config.get("clip_nonnegative")
 
     payload = compute_probabilistic_scores(
         predictions_dir,
@@ -93,6 +94,7 @@ def run(
         ratio_bootstrap_resamples=ratio_bootstrap_resamples,
         ratio_bootstrap_seed=ratio_bootstrap_seed,
         include_input=include_input,
+        clip_nonnegative=clip_nonnegative,
     )
     LOG.info(
         "Probabilistic scores written to %s (%s rows, %s band rows, scale split %s)",

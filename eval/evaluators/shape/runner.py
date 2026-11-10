@@ -28,6 +28,20 @@ stats_file, windows ({"YYYYMM": label}), and, for a box other than the epic's (b
 - knn_file, forcings, inter_mat_dir: the global O1280 inputs that build a new box's
   open-ocean mask once (Atos paths by default; copy the mask cache to other clusters).
 
+Other grids (o96->o320). The band-pass kernels (SIGMAS, 4.1-18.4 km), the gradient half-width
+(GRAD_H_KM, 8 km), the regrid (0.09 deg) and the correlation windows (4 deg) are O1280 sizes
+(9 km spacing). On O320 (32 km spacing) the three narrowest kernels hold the point alone, so
+the b12 band (S_0 - S_2) is empty and the mid band becomes a grid-scale high-pass. Two keys put
+the instrument on another grid:
+
+- kernel_scale: multiplies SIGMAS and GRAD_H_KM (default 1). kernel_scale 4 keeps the
+  instrument in grid units on O320 (O320 spacing / O1280 spacing = 3.96): the b12 band then
+  spans about 84-160 km and the mid band about 160-436 km. Pass regrid_deg 0.36 with it;
+- window_deg: the side of the correlation windows (default 4); 8 on O320 holds 22 x 22
+  regrid pixels, as 4 deg holds 44 x 44 on O1280 at 0.09.
+
+The geometry cache name carries the kernel scale, so two scales never share a cache.
+
 Off the epic's box, all dates pool into one window "all" unless ``windows`` is given, and
 files whose members share one input (matched-seed draws) are read member by member,
 since the full-rung reader asserts that inputs differ.
@@ -67,6 +81,19 @@ def _git_commit() -> str:
 _MODULE_DEFAULTS: dict = {}
 
 
+def kernel_scale(eval_config: dict) -> float:
+    value = float(eval_config.get("kernel_scale") or 1.0)
+    if value <= 0:
+        raise ValueError(f"shape.kernel_scale must be positive, got {value}")
+    return value
+
+
+def band_km(S) -> dict[str, list[float]]:
+    """Approximate wavelength span of each band (the epic's 21-40 / 40-109 km at scale 1)."""
+    k = float(S.SIGMAS[0]) / 4.12
+    return {"b12": [round(21.0 * k, 1), round(40.0 * k, 1)], "mid": [round(40.0 * k, 1), round(109.0 * k, 1)]}
+
+
 def _configure(eval_config: dict):
     """Set the instrument's module constants for this run, starting from their defaults
     each time, so that two runs in one process (a model and its reference) never inherit
@@ -77,13 +104,27 @@ def _configure(eval_config: dict):
     if not _MODULE_DEFAULTS:
         _MODULE_DEFAULTS.update(
             {("S", k): getattr(S, k) for k in ("GEOMCACHE", "DONOR_MASKCACHE", "LOCAL_MASKCACHE",
-                                               "STATS", "KNN", "FORC", "IM", "REGRID_DEG")})
+                                               "STATS", "KNN", "FORC", "IM", "REGRID_DEG",
+                                               "SIGMAS", "GRAD_H_KM", "WINDOW_DEG",
+                                               "build_gradient_operator")})
         _MODULE_DEFAULTS[("F", "PROBE")] = F.PROBE
     for (mod, k), v in _MODULE_DEFAULTS.items():
         setattr(S if mod == "S" else F, k, v)
 
     if eval_config.get("regrid_deg"):
         S.REGRID_DEG = float(eval_config["regrid_deg"])
+    scale = kernel_scale(eval_config)
+    if scale != 1.0:
+        S.SIGMAS = [float(v) * scale for v in _MODULE_DEFAULTS[("S", "SIGMAS")]]
+        S.GRAD_H_KM = float(_MODULE_DEFAULTS[("S", "GRAD_H_KM")]) * scale
+        # the verbatim instrument binds h_km=GRAD_H_KM as a default argument at import, so the
+        # scaled half-width is passed explicitly (the geometry cache records it as grad_h)
+        original = _MODULE_DEFAULTS[("S", "build_gradient_operator")]
+        S.build_gradient_operator = (
+            lambda lat, lon, idx, h_km=None, kk=S.GRAD_K, _f=original:
+            _f(lat, lon, idx, h_km=S.GRAD_H_KM if h_km is None else h_km, kk=kk))
+    if eval_config.get("window_deg"):
+        S.WINDOW_DEG = float(eval_config["window_deg"])
     for key, attr in (("knn_file", "KNN"), ("forcings", "FORC"), ("inter_mat_dir", "IM")):
         if eval_config.get(key):
             setattr(S, attr, str(eval_config[key]))
@@ -199,6 +240,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                 cp = B.cache_paths(box, eval_config.get("cache_dir"), n_points=blat.size)
                 if not eval_config.get("geom_cache"):
                     S.GEOMCACHE = cp["geom_cache"]
+                    scale = kernel_scale(eval_config)
+                    if scale != 1.0:   # the gradient operator depends on GRAD_H_KM
+                        S.GEOMCACHE = S.GEOMCACHE.replace("_geometry.npz", f"_k{scale:g}_geometry.npz")
                 if not eval_config.get("mask_cache"):
                     S.DONOR_MASKCACHE = S.LOCAL_MASKCACHE = cp["mask_cache"]
             ap = S.Apparatus(blat, blon)
@@ -240,6 +284,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "predictions_dir": str(predictions_dir), "steps": steps, "vars": var_names,
             "bands": list(bands), "box": box.tag, "box_bounds": box.as_list(),
             "box_points": int(ap.n) if ap else None, "regrid_deg": S.REGRID_DEG,
+            "kernel_scale": kernel_scale(eval_config), "sigmas_km": list(S.SIGMAS),
+            "grad_h_km": S.GRAD_H_KM, "window_deg": S.WINDOW_DEG, "band_km": band_km(S),
             "windows": windows, "files": per_file, "geom_cache": S.GEOMCACHE,
             "mask_cache": ap.maskcache if ap else None, "probe_file": F.PROBE, "stats_file": S.STATS,
             "n_boot": n_boot, "seed": seed, "seconds": time.time() - t0}

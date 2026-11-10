@@ -174,9 +174,13 @@ def _select_field(da: xr.DataArray, ws_index: dict[str, int], field: str) -> np.
     return None
 
 
-def _clip_precip(field: str, values: np.ndarray | None) -> np.ndarray | None:
-    """Negative precipitation is set to zero before scoring (house convention)."""
-    if values is None or field not in PRECIP_FIELDS:
+def _clip_precip(field: str, values: np.ndarray | None,
+                 extra_fields: Iterable[str] = ()) -> np.ndarray | None:
+    """Negative precipitation is set to zero before scoring (house convention).
+
+    ``extra_fields`` (the ``clip_nonnegative`` option) adds fields clipped the same way.
+    """
+    if values is None or (field not in PRECIP_FIELDS and field not in extra_fields):
         return values
     return np.where(np.isfinite(values), np.maximum(values, 0.0), values)
 
@@ -543,6 +547,7 @@ def compute_probabilistic_scores(
     ratio_bootstrap_resamples: int = RATIO_BOOTSTRAP_RESAMPLES,
     ratio_bootstrap_seed: int = RATIO_BOOTSTRAP_SEED,
     include_input: bool = True,
+    clip_nonnegative: Iterable[str] | str | None = None,
 ) -> dict[str, Any]:
     """Compute local probabilistic scores and write CSV/JSON artifacts.
 
@@ -560,6 +565,10 @@ def compute_probabilistic_scores(
     and of the false-drizzle / missed-rain rates, in mm (the files hold metres; converted
     here). ``ratio_bootstrap_resamples`` / ``ratio_bootstrap_seed`` fix the bootstrap of the
     corrected spread/RMSE over dates.
+
+    ``clip_nonnegative`` names further fields whose members, truth and inputs are clipped at 0
+    before scoring, on top of ``tp``/``cp`` which are always clipped (standing rule: negative
+    precipitation is clipped before every rain metric).
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -570,6 +579,7 @@ def compute_probabilistic_scores(
     step_filter = set(_as_list(steps, cast=int)) if steps else None
     date_filter = set(_as_list(dates, cast=str)) if dates else None
     edge_margin_km = float(scale_cut_km if scale_edge_margin_km is None else scale_edge_margin_km)
+    clip_fields = set(_as_list(clip_nonnegative, cast=str)) if clip_nonnegative else set()
 
     pred_files = find_predictions(predictions_dir)
     if step_filter is not None:
@@ -633,8 +643,8 @@ def compute_probabilistic_scores(
             band_masks = {name: mask & inner for name, mask in domain_masks.items()}
 
             for field in fields:
-                pred_values = _clip_precip(field, _select_field(y_pred, ws_index, field))
-                truth_values = _clip_precip(field, _select_field(y_true, ws_index, field))
+                pred_values = _clip_precip(field, _select_field(y_pred, ws_index, field), clip_fields)
+                truth_values = _clip_precip(field, _select_field(y_true, ws_index, field), clip_fields)
                 if pred_values is None or truth_values is None:
                     missing_fields.add(field)
                     skipped.append({
@@ -645,18 +655,18 @@ def compute_probabilistic_scores(
                         "reason": "missing field or derived-field inputs",
                     })
                     continue
-                if field in PRECIP_FIELDS:
+                if field in PRECIP_FIELDS or field in clip_fields:
                     clipped_fields.add(field)
                 if truth_values.ndim == 2:
                     truth_point = truth_values[0]
                 else:
                     truth_point = np.asarray(truth_values).reshape(-1)
-                input_values = _clip_precip(field, _select_field(x_in, ws_index, field)) if x_in is not None else None
+                input_values = _clip_precip(field, _select_field(x_in, ws_index, field), clip_fields) if x_in is not None else None
                 n_members = int(pred_values.shape[0])
                 n_members_seen.add(n_members)
 
                 bands = _band_fields(pred_values, truth_point, input_values, operator)
-                ref_values = _clip_precip(field, _select_field(x_ref, ws_index, field)) if x_ref is not None else None
+                ref_values = _clip_precip(field, _select_field(x_ref, ws_index, field), clip_fields) if x_ref is not None else None
                 if ref_values is not None and ref_values.shape[0] > 1 and np.array_equal(ref_values, np.broadcast_to(ref_values[:1], ref_values.shape), equal_nan=True):
                     ref_values = ref_values[:1]      # one input copied per member (conv/ files): low-pass it once
                 if ref_values is not None and operator is not None:

@@ -3,6 +3,12 @@
 Reads lane_config[precip_dist] for tunables and lane_config[precip] for the
 truth/baseline GRIB fallbacks (used when the predictions embed no tp truth /
 no usable x_interp tp — the o1280->o2560 main-lane case).
+
+With ``tail_stats: true`` it also writes ``tail_stats.csv``: exact wet fraction (above
+``wet_threshold_mm``, default 0.1), p99, p99.9, p99.99, maximum and share of negative raw
+values of tp, pooled over every member, for the model, the truth and the input, pooled over
+the files (scope ``all``) and per date (core/tail_stats.py). Off by default, so the other
+lanes' outputs are unchanged.
 """
 from __future__ import annotations
 
@@ -63,4 +69,15 @@ def run(
 
     LOG.info("precip_dist subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
+
+    if eval_config.get("tail_stats"):
+        from .core.tail_stats import compute_tail_stats
+
+        compute_tail_stats(
+            predictions_dir, output_dir,
+            variable=str(eval_config.get("variable", "tp")),
+            wet_threshold_mm=float(eval_config.get("wet_threshold_mm", 0.1)),
+            steps=eval_config.get("steps"), dates=eval_config.get("dates"),
+            per_date=bool(eval_config.get("tail_stats_per_date", True)),
+        )
     return output_dir
