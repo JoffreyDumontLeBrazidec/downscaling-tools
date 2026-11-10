@@ -108,9 +108,30 @@ Moving a run to another cluster: copy the run folder and `CHAIN.json` together (
 Extending a run past its planned end: raise `END_STEP` in the job file (and switch the loss per the
 standing rules); the resolver then resumes instead of reporting `done`.
 
+## Input store guard (`store_guard.py`, `chain_store_guard`)
+
+On 2026-11-09 the Atos scratch purge (each file deleted about 30 days after its last access) removed single row
+chunks from the E2-v4 box stores and the E2 forcings store, and the small `count/` and `has_nans/` arrays. Zarr
+returns the fill value (0.0) for a missing chunk, so a job reading those rows trains or scores on zeros without
+any error. R4's job body had no check.
+
+Call the guard in every job body that reads a zarr store from purgeable storage, before `chain_resolve`:
+
+```bash
+source "$EXP/jobs/chain/chain_segment.sh"
+chain_store_guard --config "$EXP/config/run.yaml"     # every `dataset: <...>.zarr` in the config; exit 49 if not complete
+```
+
+It reads only directory listings and the `.zarray` files (no chunk, so no access time is refreshed) and checks,
+for every array of every store: `.zarray` present, chunk files = the count the shape and chunks imply (dot-files
+and rsync temporaries ignored). `STORE_GUARD_ALLOW_INCOMPLETE=1` downgrades the refusal to a warning, for timing
+smokes only. Repair lists: `python3 store_guard.py missing <store> --ranges` prints the missing row indices of
+`data`. A store written with skipped all-fill-value chunks would be reported as incomplete; anemoi-datasets
+stores write every chunk.
+
 ## Tests
 
-`python -m pytest tools/chain` (15 tests, about 35 s on CPU): the resolver's decision table on synthetic
+`python -m pytest tools/chain` (25 tests, about 40 s on CPU; `tests/test_store_guard.py` covers the store guard): the resolver's decision table on synthetic
 checkpoints, and an end-to-end chain through `tests/toy_job.sh` around a tiny Lightning trainer with anemoi's
 start semantics: refuse without a manifest, fresh from a donor, resume with the same job file, `done`, the
 guard stopping a weights-only resume, and the 2026-10-09 failure (a segment starting from the donor) stopped
