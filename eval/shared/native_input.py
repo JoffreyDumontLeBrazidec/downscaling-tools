@@ -50,6 +50,12 @@ def interp_source(variable: str = "x_interp", reason: str = "no native x in the 
     return f"{variable} (input interpolated to the output grid; {reason})"
 
 
+def grib_nn_source(var: str = "tp") -> str:
+    """Provenance string of the precipitation evaluators' GRIB input (``LresInterpBaseline``): the driving model's
+    member field at the nearest native point, the same method as ``nearest_native_index``."""
+    return f"driver member {var} from the input GRIB at the nearest native point (native input grid)"
+
+
 def has_native_input(ds) -> bool:
     """True when the file (netCDF4 or xarray Dataset) carries the native input ``x`` on ``lat_lres``/``lon_lres``."""
     names = ds.variables
@@ -228,21 +234,34 @@ class InputReader:
         shape = dict(zip(dims, self.ds[self.variable].shape))
         return int(np.prod([shape[d] for d in members])) if members else 1
 
-    def channel(self, ch, *, dtype=np.float64) -> np.ndarray:
-        """(members, output points) of one channel (name or index of weather_state)."""
+    def channel(self, ch, *, member: int | None = None, dtype=np.float64) -> np.ndarray:
+        """(members, output points) of one channel (name or index of weather_state); with ``member``, only that
+        member as (output points,) (a field without a member axis serves every member)."""
         if not self.available:
             raise KeyError("the file carries no input field")
         ci = self.states.index(ch) if isinstance(ch, str) else int(ch)
         dims, point, members = self._layout()
         var = self.ds[self.variable]
-        sel = tuple(self.sample if d == "sample" else ci if d == "weather_state" else slice(None) for d in dims)
-        a = _values(var, sel)
-        kept = [d for d in dims if d not in ("sample", "weather_state")]
+        one = member is not None and len(members) == 1
+
+        def pick(d):
+            if d == "sample":
+                return self.sample
+            if d == "weather_state":
+                return ci
+            if one and d == members[0]:
+                return int(member)
+            return slice(None)
+
+        a = _values(var, tuple(pick(d) for d in dims))
+        kept = [d for d in dims if d not in ("sample", "weather_state") and not (one and d == members[0])]
         a = np.moveaxis(a, kept.index(point), -1).reshape(-1, a.shape[kept.index(point)])
         if self.index is not None:
             a = a[:, self.index]
         elif self.points is not None:
             a = a[:, self.points]
+        if member is not None:
+            a = a[0] if (one or a.shape[0] == 1) else a[int(member)]
         return a.astype(dtype, copy=False) if dtype is not None else a
 
     def describe(self) -> dict[str, Any]:

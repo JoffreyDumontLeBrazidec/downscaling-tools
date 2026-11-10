@@ -108,11 +108,14 @@ def test_reader_returns_native_values_at_the_nearest_native_point(tmp_path, open
         np.testing.assert_array_equal(a[2], want + 2000.0)
         assert set(np.unique(a[0])) <= set(np.arange(la_i.size, dtype=float))
         np.testing.assert_array_equal(r.channel(1), 7.0)
+        np.testing.assert_array_equal(r.channel("2t", member=2), a[2])
         sub = ni.InputReader(ds, points=np.arange(5)).channel("2t")
         np.testing.assert_array_equal(sub, a[:, :5])
         old, src = ni.read_input(ds, "2t", native_input=False)
         assert ni.is_interpolated(src) and "native_input: false" in src
         assert old.shape == (1, la_o.size) and (old == -1.0).all()
+        one = ni.InputReader(ds, native_input=False).channel("2t", member=2)  # no member axis: serves every member
+        assert one.shape == (la_o.size,)
     finally:
         ds.close()
 
