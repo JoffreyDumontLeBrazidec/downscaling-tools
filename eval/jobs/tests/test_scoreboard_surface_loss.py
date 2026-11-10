@@ -7,6 +7,13 @@ import xarray as xr
 from eval.jobs import scoreboard_surface_loss as mod
 
 
+@pytest.fixture(autouse=True)
+def _no_box_edge_strip(monkeypatch):
+    """Toy grids of a few points have no interior: the box-edge strip (eval.shared.edge_strip) is off here."""
+    monkeypatch.setenv("EVAL_BOX_EDGE_DEG", "0")
+
+
+
 SURFACE_VARS = list(mod.SURFACE_VARIABLES.keys())
 
 
