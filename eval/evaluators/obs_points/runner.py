@@ -373,7 +373,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         if g["lat"] is None:
             input_matcher, input_h = None, "h_o320"
         elif input_matcher is None or not input_matcher.same_grid(g["lat"], g["lon"]):
-            input_matcher = StationMatcher(g["lat"], g["lon"])
+            # edge_deg=0: the station set (incl. the box-edge strip drop) is decided by the output-grid matcher
+            # alone; the input matcher only gives each kept station its nearest native point (same stations)
+            input_matcher = StationMatcher(g["lat"], g["lon"], 0.0)
             input_h = input_height_column(g["lat"], g["lon"])
         kinds = row_kinds(prov)
         constructions.add(prov["model"])
