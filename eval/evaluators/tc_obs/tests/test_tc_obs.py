@@ -261,3 +261,19 @@ def test_box_event_matches_the_tracker_by_tracker_name():
     from eval.evaluators.tc_obs.runner import tracker_name
     assert tracker_name("humberto_e2") == "HUMBERTO"
     assert tracker_name("franklin") == "franklin"
+
+
+def test_input_source_travels_from_tc_structure(tmp_path):
+    """Rule 41: tc_obs records the input source of tc_structure's cases (native x, or an interpolated fallback
+    with a warning)."""
+    p, cache = _cases(tmp_path)
+    cfg = {"cache": [str(cache)], "cases": str(tmp_path / "{run_label}" / "cases.csv")}
+    (p.parent / "run_meta.json").write_text(json.dumps({"input_source": "x (native input grid)"}))
+    meta = json.loads((tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "o1", run_label="X")
+                       / "run_meta.json").read_text())
+    assert meta["input_source"] == "x (native input grid)" and not any("rule 41" in w for w in meta["log"])
+    (p.parent / "run_meta.json").write_text(json.dumps(
+        {"input_source": "x_interp_members (input ensemble; input interpolated to the output grid; no native x)"}))
+    meta = json.loads((tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "o2", run_label="X")
+                       / "run_meta.json").read_text())
+    assert any("rule 41" in w for w in meta["log"])
