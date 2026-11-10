@@ -248,7 +248,7 @@ data/plots separation:
 |       |-- scores.csv
 |       |-- scores.md
 |-- plots/
-|   |-- tc/                     # TC PDFs, member field maps
+|   |-- tc/                     # TC distribution PDFs
 |   |-- spectra/                # Spectra comparison plots
 |   |-- region_plot/            # Six-panel regional comparisons
 |   |-- sigma/                  # Sigma sweep plots
