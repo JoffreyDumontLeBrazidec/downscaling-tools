@@ -53,9 +53,20 @@ def plot(
         except (OSError, ValueError):
             recorded = ""
 
+    # Rule 41: the runner records where the input curve lives (input_native/ for the native x,
+    # input/ for x_interp) and where it came from in run_meta.json.
+    recorded_input = ""
+    meta_path = results_dir / "run_meta.json"
+    if meta_path.exists():
+        try:
+            recorded_input = str(json.loads(meta_path.read_text(encoding="utf-8"))
+                                 .get("input_reference_dir", "") or "").strip()
+        except (OSError, ValueError):
+            recorded_input = ""
+
     if recorded:
         truth_amp_dir = Path(recorded)
-        # truth and input sit side by side under the same window key
+        # truth and the x_interp input sit side by side under the same window key
         input_amp_dir = Path(recorded.replace("/truth/", "/input/", 1))
         if input_amp_dir == truth_amp_dir:
             input_amp_dir = None
@@ -69,6 +80,8 @@ def plot(
             )
             truth_amp_dir = Path(reference_dir) / "truth" / "spectra"
             input_amp_dir = Path(reference_dir) / "input" / "spectra"
+    if recorded_input:
+        input_amp_dir = Path(recorded_input)
 
     for label, candidate in (("truth", truth_amp_dir), ("input", input_amp_dir)):
         if candidate is not None and not candidate.exists():

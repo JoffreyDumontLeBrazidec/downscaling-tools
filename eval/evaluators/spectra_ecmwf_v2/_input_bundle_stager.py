@@ -4,6 +4,13 @@
 Reads eefo_*_input_bundle.nc files and writes one GRIB per
 (date, step, member, weather_state) in the same nopoles layout used by
 _grib_stager.py so that runner.py can hand them to gptosp + _amplitude_computer.
+
+With --predictions-dir instead of --bundles-dir it stages the NATIVE input ``x``
+(sample, ensemble_member, grid_point_lres, weather_state) of the prediction files,
+on lat_lres/lon_lres, onto the input-grid template (rule 41, 9 Nov 2026: the input
+is scored on its own grid, never interpolated to the output grid first). That mode
+never interpolates: the native points must be the template's points, in the same
+order or as an exact permutation, otherwise it stops.
 """
 from __future__ import annotations
 
@@ -62,7 +69,10 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Stage input bundle NC files as input-grid GRIBs for spectra_ecmwf."
     )
-    p.add_argument("--bundles-dir",    required=True)
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--bundles-dir")
+    src.add_argument("--predictions-dir",
+                     help="Stage the native input x of predictions_*.nc (on lat_lres/lon_lres) instead of bundles")
     p.add_argument("--out-dir",        required=True)
     p.add_argument("--template-grib",  required=True, help="Path to the input-grid template GRIB, e.g. o96-template.grib or o320-template.grib")
     p.add_argument("--weather-states", default="10u,10v,2t,sp,t_850,z_500")
@@ -154,8 +164,132 @@ def write_grib(template_path: Path, out_path: Path, values: np.ndarray, *,
         codes_release(clone)
 
 
+PRED_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")
+# A point counts as the same point when it sits within this angle of the template's (about 1 m).
+_SAME_POINT_DEG = 1e-5
+
+
+def native_point_order(src_lat, src_lon, tmpl_lat, tmpl_lon) -> np.ndarray | None:
+    """How the native points map onto the template, WITHOUT interpolation.
+
+    Returns None when the two point sets are identical and in the same order, else
+    the permutation idx with template value i = native value idx[i]. Raises when the
+    native points are not the template's points (another grid, or a regional subset):
+    the native input is then not on the template grid, and remapping it would be the
+    interpolation rule 41 forbids.
+    """
+    src_lat = np.asarray(src_lat, dtype=np.float64)
+    src_lon = ((np.asarray(src_lon, dtype=np.float64) + 180.0) % 360.0) - 180.0
+    if src_lat.size != tmpl_lat.size:
+        raise ValueError(
+            f"native input has {src_lat.size} points but the template grid has {tmpl_lat.size}; "
+            "the native field is not on the template grid (regional file, or the wrong template)"
+        )
+    dlon = np.abs(((src_lon - tmpl_lon) + 180.0) % 360.0 - 180.0)
+    if np.abs(src_lat - tmpl_lat).max() <= _SAME_POINT_DEG and dlon.max() <= 1e-3:
+        return None
+    idx = _nn_index_great_circle(src_lat, src_lon, tmpl_lat, tmpl_lon)
+    la, lo = np.radians(src_lat[idx]), np.radians(src_lon[idx])
+    tla, tlo = np.radians(tmpl_lat), np.radians(tmpl_lon)
+    cosd = np.sin(la) * np.sin(tla) + np.cos(la) * np.cos(tla) * np.cos(lo - tlo)
+    worst = float(np.degrees(np.arccos(np.clip(cosd, -1.0, 1.0))).max())
+    if worst > _SAME_POINT_DEG or np.unique(idx).size != idx.size:
+        raise ValueError(
+            f"native input points are not a permutation of the template's (worst distance {worst:.3g} deg); "
+            "refusing to interpolate the native input"
+        )
+    return idx
+
+
+def stage_native_predictions(pred_dir: Path, out_dir: Path, template_path: Path, states: list[str], *,
+                             date_list: str = "ALL", step_list: str = "ALL",
+                             member_list: str = "ALL") -> dict:
+    """Write one native-grid GRIB per (date, step, member, state) from the x of predictions_*.nc."""
+    tmpl_lat, tmpl_lon = load_template_grib(template_path)
+    written = 0
+    order_kind = None
+    members_seen: set[int] = set()
+    dates: set[int] = set()
+    steps: set[int] = set()
+    files = sorted(p for p in pred_dir.glob("predictions_*.nc") if PRED_RE.match(p.name))
+    if not files:
+        raise FileNotFoundError(f"No predictions_*.nc files found in {pred_dir}")
+    for path in files:
+        m = PRED_RE.match(path.name)
+        date, step = int(m.group(1)), int(m.group(2))
+        if not (csv_matches(date_list, date) and csv_matches(step_list, step)):
+            continue
+        with xr.open_dataset(path) as ds:
+            if "x" not in ds.variables or "lat_lres" not in ds.variables:
+                raise ValueError(f"{path} has no native input x on lat_lres/lon_lres")
+            idx = native_point_order(ds["lat_lres"].values.reshape(-1), ds["lon_lres"].values.reshape(-1),
+                                     tmpl_lat, tmpl_lon)
+            order_kind = order_kind or ("same order" if idx is None else "exact permutation")
+            ws = [str(v) for v in ds["weather_state"].values.tolist()]
+            missing = [s for s in states if s not in ws]
+            if missing:
+                raise ValueError(f"{path}: x carries no {missing}")
+            x = ds["x"].isel(sample=0) if "sample" in ds["x"].dims else ds["x"]
+            if "ensemble_member" in x.dims:
+                ids = ([int(v) for v in ds["ensemble_member"].values.tolist()] if "ensemble_member" in ds.variables
+                       else list(range(1, x.sizes["ensemble_member"] + 1)))
+            else:
+                ids = [1]
+            dates.add(date)
+            steps.add(step)
+            for pos, member in enumerate(ids):
+                if not csv_matches(member_list, member):
+                    continue
+                members_seen.add(member)
+                for state in states:
+                    sel = x.isel(weather_state=ws.index(state))
+                    if "ensemble_member" in sel.dims:
+                        sel = sel.isel(ensemble_member=pos)
+                    arr = np.asarray(sel.values, dtype=np.float64).reshape(-1)
+                    if idx is not None:
+                        arr = arr[idx]
+                    out_path = out_dir / VARIABLE_MAP[state].dir_name / f"1_{date}_{step}_{member}_nopoles.grb"
+                    if out_path.exists():
+                        continue
+                    sn, lv, tol = GRIB_PARAM[state]
+                    write_grib(template_path, out_path, arr, short_name=sn, level=lv, type_of_level=tol)
+                    written += 1
+    return {
+        "source": "x (native input grid)",
+        "predictions_dir": str(pred_dir),
+        "out_dir": str(out_dir),
+        "template_grib": str(template_path),
+        "weather_states": states,
+        "dates": sorted(dates),
+        "steps_hours": sorted(steps),
+        "ensemble_members": sorted(members_seen),
+        "grib_files_written": written,
+        "template_point_count": int(tmpl_lat.size),
+        "source_point_count": int(tmpl_lat.size),
+        "interpolated_to_template": False,
+        "interpolation_method": "none_native_grid",
+        "point_order": order_kind,
+    }
+
+
 def main() -> None:
     args = parse_args()
+    if args.predictions_dir:
+        out_dir = Path(args.out_dir).expanduser().resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        states = [s.strip() for s in args.weather_states.split(",") if s.strip()]
+        unknown = [s for s in states if s not in VARIABLE_MAP]
+        if unknown:
+            raise ValueError(f"Unsupported weather states: {unknown}")
+        summary = stage_native_predictions(
+            Path(args.predictions_dir).expanduser().resolve(), out_dir,
+            Path(args.template_grib).expanduser().resolve(), states,
+            date_list=args.date_list, step_list=args.step_list, member_list=args.member_list)
+        sp = Path(args.summary_path) if args.summary_path else out_dir / "staging_summary.json"
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(f"Wrote staging summary: {sp}")
+        return
     bundles_dir   = Path(args.bundles_dir).expanduser().resolve()
     out_dir       = Path(args.out_dir).expanduser().resolve()
     template_path = Path(args.template_grib).expanduser().resolve()
