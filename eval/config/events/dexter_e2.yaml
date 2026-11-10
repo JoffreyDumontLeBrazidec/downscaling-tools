@@ -1,0 +1,17 @@
+name: dexter_e2
+full_name: "Tropical Storm Dexter (IBTrACS 2025215N33284)"
+# o2560 Europe-Atlantic box lane (E2 box less the 1-degree strip: 11-69 N, 79 W-39 E). Box = in-box best-track
+# fixes +- 4 degrees, clipped. Not scoring-eligible; selected by name with best_track_cache (NOAA rows by SID).
+# base_dates (YYYYMMDD) replaces year/month/dates for file selection, so events may cross a month.
+lat_min: 29.0
+lat_max: 53.0
+lon_min: -79.0
+lon_max: -8.0
+dates: ["08", "09", "10", "11", "12"]
+base_dates: ["20250808", "20250809", "20250810", "20250811", "20250812"]
+analysis_dates: []
+year: "2025"
+month: "08"
+pressure_threshold: 1013.25
+scoring_eligible: false
+tracker_name: DEXTER

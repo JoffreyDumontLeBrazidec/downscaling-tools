@@ -168,6 +168,9 @@ def decode_tracker(bufr_path):
                                      msl_hpa=np.nan if bad(msl[i][j]) else msl[i][j] / 100,
                                      wind_ms=np.nan if i >= len(ws) or bad(ws[i][j]) else ws[i][j]))
             ec.codes_release(h)
+    cols = ["storm", "name", "member", "step_h", "lat", "lon", "msl_hpa", "wind_ms"]
+    if not rows:
+        return pd.DataFrame(columns=cols)
     return pd.DataFrame(rows).dropna(subset=["msl_hpa"], how="all")
 
 
@@ -191,7 +194,7 @@ def fetch_tc(storms: dict, dates, out, *, zarr_path=IBTRACS_ZARR, noaa_csv=None,
     bt = pd.concat(bt, ignore_index=True)
     bt.to_csv(out / "best_track.csv", index=False, float_format="%.4f")
     log.append(f"best track: {len(bt)} rows for {sorted(set(bt.event))}")
-    files = {}
+    files, not_found = {}, []
     for date in dates:
         for stream in streams:
             bufr = out / f"tf_{stream}_{date}.bufr"
@@ -201,11 +204,13 @@ def fetch_tc(storms: dict, dates, out, *, zarr_path=IBTRACS_ZARR, noaa_csv=None,
             path = out / f"tracker_{stream}_{date}.csv"
             df.to_csv(path, index=False)
             files[path.name] = int(len(df))
+            if df.empty:
+                not_found.append(f"{stream}_{date}")
             log.append(f"tracker {stream} {date}: {len(df)} rows, {df.storm.nunique()} storms")
             print(log[-1], flush=True)
     meta = {"cache_version": CACHE_VERSION, "kind": "tropical cyclone references (tc_obs)",
             "created": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "host": socket.gethostname(),
-            "storms": {k: int(v) for k, v in storms.items()}, "dates": list(dates), "streams": list(streams),
+            "storms": {k: int(v) for k, v in storms.items()}, "tracker_not_found": not_found, "dates": list(dates), "streams": list(streams),
             "ibtracs_zarr": str(zarr_path), "noaa_csv": str(noaa_csv) if noaa_csv else None,
             "tracker_request": "class=od, expver=0001, type=tf, obstype=32, time=00", "rows": files,
             "hres_member": HRES_MEMBER, "log": log}

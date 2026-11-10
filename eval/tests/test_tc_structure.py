@@ -210,3 +210,108 @@ def test_runner_end_to_end_on_synthetic_file(tmp_path):
     recs = score(out, {}, {})
     names = {r["metric"] for r in recs}
     assert "tcs_franklin_rmw_km_model_24_48" in names
+
+
+def test_runner_input_first_guess_best_track_and_pairing(tmp_path):
+    """No truth in the file, first guess from the input ensemble mean anchored on a best-track fix,
+    and member pairing: model member k is 2 hPa deeper than input member k."""
+    netCDF4 = pytest.importorskip("netCDF4")
+    from eval.evaluators.tc_structure import run
+
+    lat, lon = o1280_points_in_box(10.0, 40.0, -100.0, -58.0)
+    order = np.lexsort((lon, -lat))
+    lat, lon = lat[order], lon[order]
+    u, v, p, r = vortex(lat, lon)
+    states = ["10u", "10v", "2t", "msl"]
+    nm = 3
+    x = np.zeros((1, nm, lat.size, len(states)), dtype=np.float32)
+    x[0, :, :, 0], x[0, :, :, 1], x[0, :, :, 2] = u, v, 300.0
+    for k in range(nm):
+        x[0, k, :, 3] = (p + 0.5 * k) * 100.0          # members differ by 0.5 hPa
+    y = x.copy()
+    y[0, :, :, 3] -= 200.0 * np.exp(-(r / 60.0) ** 2)  # model 2 hPa deeper at the centre
+    pdir = tmp_path / "preds"
+    pdir.mkdir()
+    with netCDF4.Dataset(pdir / "predictions_20230826_step024.nc", "w") as d:
+        d.createDimension("sample", 1)
+        d.createDimension("ensemble_member", nm)
+        d.createDimension("grid_point_hres", lat.size)
+        d.createDimension("weather_state", len(states))
+        d.createVariable("lat_hres", "f4", ("grid_point_hres",))[:] = lat
+        d.createVariable("lon_hres", "f4", ("grid_point_hres",))[:] = lon
+        ws = d.createVariable("weather_state", str, ("weather_state",))
+        for i, s in enumerate(states):
+            ws[i] = s
+        dims = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
+        d.createVariable("y_pred", "f4", dims)[:] = y
+        # member prediction files: x_interp is the single HRES input, x_interp_members the input ensemble
+        d.createVariable("x_interp", "f4", ("sample", "grid_point_hres", "weather_state"))[:] = x[:, 0] + 500.0
+        d.createVariable("x_interp_members", "f4", dims)[:] = x
+    cache = tmp_path / "tc_cache"
+    cache.mkdir()
+    (cache / "best_track.csv").write_text(
+        "event,storm_id,time,lat,lon,pmin_hpa,wind_ms,wind_src,source\n"
+        f"franklin,1,2023082700,{CLAT + 0.8},{CLON - 0.8},990,40,,noaa_ibtracs_csv\n")
+    out = tmp_path / "out"
+    run(pdir, {}, {"events": ["franklin"], "n_boot": 200, "first_guess_field": "input",
+                   "best_track_cache": str(cache)}, output_dir=out, run_label="synthetic")
+    import csv
+    import json
+    rows = list(csv.DictReader(open(out / "cases.csv")))
+    assert len(rows) == 3 * nm
+    truth = [r for r in rows if r["field"] == "truth"]
+    assert all(r["found"] == "0" and r["storm_ok"] == "1" for r in truth)
+    found = [r for r in rows if r["field"] != "truth"]
+    assert all(r["found"] == "1" for r in found)
+    assert all(float(r["displacement_km"]) < 5.0 for r in found)
+    paired = json.load(open(out / "summary.json"))["events"]["franklin"]["24"]["paired"]["model_minus_input"]
+    assert paired["n_pairs"] == nm
+    assert abs(paired["pmin_hpa"]["value"] + 2.0) < 0.3
+    inp = [r for r in rows if r["field"] == "input"]
+    assert [round(float(r["pmin_hpa"]) - float(inp[0]["pmin_hpa"]), 1) for r in inp] == [0.0, 0.5, 1.0]
+    meta = json.load(open(out / "run_meta.json"))
+    assert meta["input_source"].startswith("x_interp_members")
+
+
+def test_best_track_case_without_fix_is_not_a_storm(tmp_path):
+    netCDF4 = pytest.importorskip("netCDF4")
+    from eval.evaluators.tc_structure import run
+
+    lat, lon = o1280_points_in_box(10.0, 40.0, -100.0, -58.0)
+    u, v, p, _ = vortex(lat, lon)
+    states = ["10u", "10v", "msl"]
+    a = np.stack([u, v, p * 100.0], axis=-1)[None, None].astype(np.float32)
+    pdir = tmp_path / "preds"
+    pdir.mkdir()
+    with netCDF4.Dataset(pdir / "predictions_20230826_step024.nc", "w") as d:
+        d.createDimension("sample", 1)
+        d.createDimension("ensemble_member", 1)
+        d.createDimension("grid_point_hres", lat.size)
+        d.createDimension("weather_state", 3)
+        d.createVariable("lat_hres", "f4", ("grid_point_hres",))[:] = lat
+        d.createVariable("lon_hres", "f4", ("grid_point_hres",))[:] = lon
+        ws = d.createVariable("weather_state", str, ("weather_state",))
+        for i, s in enumerate(states):
+            ws[i] = s
+        for name in ("y_pred", "y", "x_interp"):
+            d.createVariable(name, "f4", ("sample", "ensemble_member", "grid_point_hres", "weather_state"))[:] = a
+    cache = tmp_path / "tc_cache"
+    cache.mkdir()
+    (cache / "best_track.csv").write_text(
+        "event,storm_id,time,lat,lon,pmin_hpa,wind_ms,wind_src,source\n"
+        f"franklin,1,2023082900,{CLAT},{CLON},990,40,,noaa_ibtracs_csv\n")
+    out = tmp_path / "out"
+    run(pdir, {}, {"events": ["franklin"], "n_boot": 50, "best_track_cache": str(cache)},
+        output_dir=out, run_label="synthetic")
+    import csv
+    rows = list(csv.DictReader(open(out / "cases.csv")))
+    assert rows and all(r["storm_ok"] == "0" for r in rows)
+    assert "best-track" in rows[0]["reason"]
+
+
+def test_event_base_dates_cross_a_month():
+    from eval.evaluators.tc.core.events import EVENTS
+    from eval.evaluators.tc.core.loading_predictions import select_prediction_files_for_event
+    e = EVENTS["imelda_e2"]
+    got = select_prediction_files_for_event([("a", 20250930, 24), ("b", 20251004, 48), ("c", 20251104, 24)], e)
+    assert [g[0] for g in got] == ["a", "b"]

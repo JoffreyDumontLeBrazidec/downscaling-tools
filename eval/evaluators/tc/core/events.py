@@ -25,6 +25,8 @@ class TCEvent:
     analysis_dates: list[str]  # YYYYMMDD strings
     bbox: BoundingBox  # Evaluation crop box — must NOT overlap with other scoring events
     scoring_eligible: bool = True  # False for combined events like franklin_idalia
+    tracker_name: str = ""  # storm name in the operational tracker (tc_obs); default: the event name
+    base_dates: tuple = ()  # optional YYYYMMDD list; when set it replaces year/month/dates (events across months)
 
 
 def _event_from_cfg(cfg: dict) -> TCEvent:
@@ -45,6 +47,8 @@ def _event_from_cfg(cfg: dict) -> TCEvent:
             west=float(cfg["lon_min"]),
         ),
         scoring_eligible=bool(cfg.get("scoring_eligible", True)),
+        tracker_name=str(cfg.get("tracker_name", "") or ""),
+        base_dates=tuple(str(d) for d in cfg.get("base_dates", []) or []),
     )
 
 

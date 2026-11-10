@@ -1,0 +1,17 @@
+name: humberto_e2
+full_name: "Hurricane Humberto, o2560 E2-box view (IBTrACS 2025268N19306)"
+# o2560 Europe-Atlantic box lane (E2 box less the 1-degree strip: 11-69 N, 79 W-39 E). Box = in-box best-track
+# fixes +- 4 degrees, clipped. Not scoring-eligible; selected by name with best_track_cache (NOAA rows by SID).
+# base_dates (YYYYMMDD) replaces year/month/dates for file selection, so events may cross a month.
+lat_min: 15.0
+lat_max: 40.0
+lon_min: -74.0
+lon_max: -50.0
+dates: ["23", "24", "25", "26", "27", "28", "29", "30"]
+base_dates: ["20250923", "20250924", "20250925", "20250926", "20250927", "20250928", "20250929", "20250930"]
+analysis_dates: []
+year: "2025"
+month: "09"
+pressure_threshold: 1013.25
+scoring_eligible: false
+tracker_name: HUMBERTO
