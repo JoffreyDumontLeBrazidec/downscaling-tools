@@ -30,6 +30,10 @@ coarseness is the point of showing it. A map box smaller than ``MIN_SPAN_DEG``
 is widened around its centre, and the box actually drawn is printed and written
 in the figure title.
 
+``--layout scales`` and ``--layout fronts`` (``scale_maps.py``) draw the large-scale /
+fine-scale split of the residuals against the input and the classic trough and front
+view; ``--layout panels`` (the default) is the map set described above.
+
 Diagnostic maps only — nothing here scores anything.
 
 Canonical invocation: ``python -m eval.cli zoom_maps ...`` (also runnable as
@@ -248,6 +252,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
     p.add_argument("--proj-lon", type=float, default=None, help="Lambert conformal central longitude (default: the centre of --extent). Ignored when the extent crosses the dateline (plate carree is used).")
     p.add_argument("--proj-lat", type=float, default=None, help="Lambert conformal central latitude (default: the centre of --extent).")
+    from .scale_maps import add_layout_args
+    add_layout_args(p)
     return p
 
 
@@ -801,6 +807,11 @@ def run(args: argparse.Namespace) -> int:
     if getattr(args, "trajectory_npz", None):
         from .plot_trajectory_wind_maps import run as trajectory_run
         return trajectory_run(args)
+
+    layout = getattr(args, "layout", "panels")
+    if layout != "panels":
+        from .scale_maps import run_fronts, run_scales
+        return run_scales(args) if layout == "scales" else run_fronts(args)
 
     import xarray as xr
 
