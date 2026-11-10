@@ -11,7 +11,7 @@ import numpy as np
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
-    StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache,
+    StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache, xyz,
 )
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
 from eval.shared.provenance import (
@@ -77,7 +77,7 @@ def file_provenance(ds, n_model: int) -> dict:
                                            source_bundles=bundles)}
 
 
-def read_fields(path, variables, *, ensembles: bool = True):
+def read_fields(path, variables, *, ensembles: bool = True, native_input: bool = True):
     """lat, lon (-180..180), {var: {"truth": (n,) or (M, n), "input": (n,) or (M, n), "model": (M, n)}} in
     observation units: 2t K, 10ff m/s (from 10u/10v), msl Pa, tp mm (file metres x 1000, clipped at 0), and the
     file's provenance (``file_provenance``). The input and the truth come as ensembles when the file carries
@@ -95,12 +95,30 @@ def read_fields(path, variables, *, ensembles: bool = True):
         prov = file_provenance(ds, int(ds["y_pred"].shape[1]))
         if not ensembles:
             prov["ensemble_rows"] = {"input": False, "truth": False}
+        # The input is scored on ITS OWN grid (owner, 9 Nov 2026, standing rule 41): the native low-resolution
+        # field ``x`` on lat_lres/lon_lres, nearest native point to the station, as quaver does. Interpolating
+        # it to the high-resolution grid first smooths the members, narrows their spread and flatters the model
+        # (6 h tp: +5 % against the interpolated input, 0 % against quaver's native input, note s19.7).
+        # ``x_interp`` is used only when the file has no native input, and the provenance says so.
+        native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
+        in_n = int(ds["lat_lres"].size) if native else n
         src = {"model": "y_pred",
-               "input": "x_interp_members" if "x_interp_members" in ds.variables else "x_interp",
+               "input": "x" if native else ("x_interp_members" if "x_interp_members" in ds.variables else "x_interp"),
                "truth": "y_members" if "y_members" in ds.variables else "y"}
+        if native:
+            a = np.asarray(ds["x"][0], np.float64).reshape(-1, in_n, len(ws))
+            m = int(ds["y_pred"].shape[1])
+            prov["ensemble_rows"]["input"] = bool(ensembles and a.shape[0] == m and m > 1 and members_differ(a))
+            prov["input_grid"] = {"source": "x (native input grid)", "points": in_n,
+                                  "lat": np.asarray(ds["lat_lres"][:], np.float64),
+                                  "lon": np.asarray(ds["lon_lres"][:], np.float64)}
+        else:
+            prov["input_grid"] = {"source": f"{src['input']} (input interpolated to the output grid; no native x "
+                                            "in the file)", "points": n, "lat": None, "lon": None}
 
         def get(row, ch):
-            a = np.asarray(ds[src[row]][0, ..., ws.index(ch)], np.float64).reshape(-1, n)
+            nn = in_n if row == "input" else n
+            a = np.asarray(ds[src[row]][0, ..., ws.index(ch)], np.float64).reshape(-1, nn)
             return a if row == "model" or prov["ensemble_rows"].get(row) else a[0]
 
         def triple(ch):
@@ -116,7 +134,22 @@ def read_fields(path, variables, *, ensembles: bool = True):
                 if v == "tp":
                     out[v] = {k: np.clip(a, 0.0, None) * MM for k, a in out[v].items()}
     lon = np.where(lon > 180.0, lon - 360.0, lon)
+    g = prov["input_grid"]
+    if g["lon"] is not None:
+        g["lon"] = np.where(g["lon"] > 180.0, g["lon"] - 360.0, g["lon"])
     return lat, lon, out, prov
+
+
+def input_height_column(lat, lon) -> str:
+    """Cache column of the model height at the station for the native input grid: ``h_o1280`` when the input
+    grid's point spacing is near O1280's (about 9 km), ``h_o320`` near O320's (about 35 km)."""
+    from scipy.spatial import cKDTree
+
+    k = min(2000, lat.size)
+    sel = np.linspace(0, lat.size - 1, k).astype(int)
+    d, _ = cKDTree(xyz(lat, lon)).query(xyz(lat[sel], lon[sel]), k=2)
+    km = float(np.median(d[:, 1])) * 6371.0
+    return "h_o1280" if km < 20.0 else "h_o320"
 
 
 def row_kinds(prov: dict) -> dict:
@@ -151,7 +184,7 @@ def hres_tp_in_metres(hr, ov) -> bool:
     return bool(np.nanmax(hr) < 1.0 and np.nanmean(hr) < 0.01 * wet.mean())
 
 
-def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
+def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None, input_matcher=None):
     """The A0 accumulation-window audit, at the nearest grid point: correlation of the truth, the input and the
     ensemble mean with the station tp of the 12 h window ending at valid time (corr_valid) and of the window
     before (corr_prev, observations valid 12 h earlier), on the stations that report both windows (joined on
@@ -178,9 +211,10 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
         log.append(f"window audit skipped for {date} +{lead} h: {len(j)} stations report both windows")
         return []
     ov, opv = j.obs.to_numpy(np.float64), j.obs_prev.to_numpy(np.float64)
+    idx_in = idx if input_matcher is None else input_matcher.match(j.lat.to_numpy(), j.lon.to_numpy(), np.inf)[0]
     out = []
     for row, f in (("truth", fields["truth"]), ("input", fields["input"]), ("model", fields["model"])):
-        x = (f.mean(0) if f.ndim == 2 else f)[idx]
+        x = (f.mean(0) if f.ndim == 2 else f)[idx_in if row == "input" else idx]
         if x.std() == 0 or ov.std() == 0 or opv.std() == 0:
             log.append(f"window audit skipped for {date} +{lead} h {row}: a constant series")
             continue
@@ -191,7 +225,7 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None):
 
 
 def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None, hres_pool=None,
-                kinds=None):
+                kinds=None, input_matcher=None, input_h="h_o320"):
     """Rows of one variable, one date and one lead. The station sample is the intersection over rows
     (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations.
     ``kinds`` (row -> kind, ``row_kinds``) labels each row; the input and truth rows are ensembles (M, n)
@@ -213,6 +247,8 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
         return [], [], 0
     idx, keep = matcher.match(o.lat.to_numpy(), o.lon.to_numpy(), cfg["max_km"])
     o, idx = o[keep].reset_index(drop=True), idx[keep]
+    # the input's own nearest native point (rule 41); same stations as every other row
+    idx_in = idx if input_matcher is None else input_matcher.match(o.lat.to_numpy(), o.lon.to_numpy(), np.inf)[0]
     if seeps_clim is not None:
         cc = c.loc[o.stnid]
         clim = (cc.t1.to_numpy(), cc.t2.to_numpy(), cc[[f"s{k}" for k in range(9)]].to_numpy())
@@ -228,21 +264,23 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     rows, ranks = [], []
     for r in radii:
         ball = None if r == 0 else matcher.discs(idx, r)
+        ball_in = ball if input_matcher is None or r == 0 else input_matcher.discs(idx_in, r)
 
-        def at(a):
-            if ball is None:
-                return a[..., idx]
+        def at(a, ix=idx, bl=ball):
+            if bl is None:
+                return a[..., ix]
             if a.ndim == 1:
-                return np.array([a[b].mean() for b in ball])
-            return np.stack([a[:, b].mean(1) for b in ball], 1)
+                return np.array([a[b].mean() for b in bl])
+            return np.stack([a[:, b].mean(1) for b in bl], 1)
 
-        vals = {k: at(fields[k]) for k in ("model", "input", "truth")}
+        vals = {"model": at(fields["model"]), "input": at(fields["input"], idx_in, ball_in),
+                "truth": at(fields["truth"])}
         if hr is not None and r == 0:
             vals["hres"] = hr
         variants = [("raw", vals)]
         if var == "2t" and r == 0 and cfg["lapse_rate"]:
             dz = {"model": o.h_o1280.to_numpy() - elev, "truth": o.h_o1280.to_numpy() - elev,
-                  "input": o.h_o320.to_numpy() - elev}
+                  "input": o[input_h].to_numpy() - elev}
             if "hres" in vals:
                 dz["hres"] = (hel if hel is not None else np.full(elev.size, np.nan)) - elev
             variants.append(("lapse", {k: x + cfg["lapse_rate"] * np.asarray(dz[k], np.float64) for k, x in vals.items()}))
@@ -288,6 +326,8 @@ def resolve_config(eval_config: dict) -> dict:
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
         "competitor_ensembles": bool(eval_config.get("competitor_ensembles", True)),
+        # rule 41: score the input on its native grid (x, lat_lres/lon_lres); False only to reproduce old tables
+        "native_input": bool(eval_config.get("native_input", True)),
         "seeps": bool(eval_config.get("seeps", True)),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
@@ -320,12 +360,20 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     rows, ranks, log, files, window, hres_pool = [], [], [], [], [], {}
     members = set()
     stations = defaultdict(list)
-    matcher = None
+    matcher = input_matcher = None
+    input_h, input_sources = "h_o320", set()
     constructions, kinds_seen = set(), {}
     prev = {}  # tp of the previous lead of the same date, for the 24 h windows of SEEPS
     for p in preds:
         lat, lon, fields, prov = read_fields(p.path, [v for v in cfg["vars"] if v in obs],
-                                             ensembles=cfg["competitor_ensembles"])
+                                             ensembles=cfg["competitor_ensembles"], native_input=cfg["native_input"])
+        g = prov["input_grid"]
+        input_sources.add(g["source"])
+        if g["lat"] is None:
+            input_matcher, input_h = None, "h_o320"
+        elif input_matcher is None or not input_matcher.same_grid(g["lat"], g["lon"]):
+            input_matcher = StationMatcher(g["lat"], g["lon"])
+            input_h = input_height_column(g["lat"], g["lon"])
         kinds = row_kinds(prov)
         constructions.add(prov["model"])
         for row, kind in kinds.items():
@@ -335,9 +383,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         for v, f in fields.items():
             members.add(int(f["model"].shape[0]))
             r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,
-                                    hres_pool=hres_pool, kinds=kinds)
+                                    hres_pool=hres_pool, kinds=kinds, input_matcher=input_matcher, input_h=input_h)
             if v == "tp":
-                window += tp_window_check(f, obs[v], matcher, date=p.date, lead=p.step, cfg=cfg, log=log)
+                window += tp_window_check(f, obs[v], matcher, date=p.date, lead=p.step, cfg=cfg, log=log,
+                                          input_matcher=input_matcher)
             rows += r
             ranks += k
             stations[f"{v} +{p.step:03d}"].append(nst)
@@ -354,7 +403,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             if before is not None:
                 f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"]}
                 r, k, nst = score_valid("tp24", f24, obs["tp24"], None, matcher, date=p.date, lead=p.step,
-                                        cfg=cfg, seeps_clim=seeps_clim, kinds=kinds)
+                                        cfg=cfg, seeps_clim=seeps_clim, kinds=kinds, input_matcher=input_matcher,
+                                        input_h=input_h)
                 rows += r
                 ranks += k
                 stations[f"tp24 +{p.step:03d}"].append(nst)
@@ -366,6 +416,11 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_points: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_points: no station sample reached min_stations; nothing scored")
+    for src_name in sorted(input_sources):
+        if "interpolated" in src_name:
+            log.append(f"WARN input row = {src_name}: rule 41 says the input is scored on its own grid; this "
+                       "file set carries no native x, so the input row is smoothed and its scores are not quotable "
+                       "against the model")
     if len(constructions) > 1:
         log.append(f"WARN the files disagree on how the model ensemble was built: {sorted(constructions)}")
     construction = sorted(constructions)[0]
@@ -414,9 +469,12 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "members": sorted(members), "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}),
         "files": files, "stations_per_file": {k: v for k, v in sorted(stations.items())},
         "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
+        "input_source": sorted(input_sources), "input_height_column": input_h,
         "provenance": provenance(
-            verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest O1280 point "
-                            f"within {cfg['max_km']:g} km; 2t lapse {cfg['lapse_rate']:g} K/m on the 'lapse' variant)",
+            verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest output-grid point "
+                            f"within {cfg['max_km']:g} km for model and truth, nearest point of the input's own grid "
+                            f"for the input ({'; '.join(sorted(input_sources))}); 2t lapse {cfg['lapse_rate']:g} K/m "
+                            "on the 'lapse' variant)",
             against_observations=True,
             ensemble=construction, competitor_rows=competitor,
             weight_form=("unweighted mean over stations" if cfg["weighting"] == "none"

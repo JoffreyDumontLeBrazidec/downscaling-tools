@@ -84,6 +84,11 @@ class _File:
         self.lat = np.asarray(self.ds["lat_hres"][:], dtype=np.float64).reshape(-1)
         self.lon = np.asarray(self.ds["lon_hres"][:], dtype=np.float64).reshape(-1)
         self.states = _decode_states(self.ds["weather_state"])
+        # the native input (rule 41): x on lat_lres/lon_lres, when the file carries it
+        self.native = "x" in self.ds.variables and "lat_lres" in self.ds.variables
+        if self.native:
+            self.lat_in = np.asarray(self.ds["lat_lres"][:], dtype=np.float64).reshape(-1)
+            self.lon_in = np.asarray(self.ds["lon_lres"][:], dtype=np.float64).reshape(-1)
         n = len(self.ds.dimensions["ensemble_member"])
         if "ensemble_member" in self.ds.variables:
             self.members = [int(v) for v in np.asarray(self.ds["ensemble_member"][:]).reshape(-1)]
@@ -139,8 +144,9 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
     """Sum of the powers per (scope, variable) over draws; returns (spectrum, sums, counts, meta)."""
     sums: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     counts: dict[tuple[str, str], int] = {}
-    smp = spec = None
+    smp = spec = smp_in = None
     meta: dict = {}
+    input_sources: set[str] = set()
     for pf in files:
         f = _File(pf.path)
         try:
@@ -163,6 +169,10 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                                     f"{smp.lat0:.0f} N, so the wavelength axis is approximate; model/truth "
                                     "ratios stay fair (one operator for every field)")
                 LOG.info("box_spectra: %s box %s, grid %d x %d", how, box, spec.ny, spec.nx)
+            if f.native and smp_in is None:
+                # the input sampled from ITS OWN grid onto the same regular grid, same method (rule 41)
+                smp_in = Sampler(f.lat_in, _contiguous(f.lon_in, meta["box"][2]), tuple(meta["extent_sampled"]),
+                                 res_deg, method=method)
             elif f.lat.shape != grid_lat.shape or np.abs(f.lat - grid_lat).max() > 1e-6 \
                     or np.abs(f.lon - grid_lon).max() > 1e-6:
                 raise ValueError(f"{pf.path}: point set differs from the first file's")
@@ -179,8 +189,18 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                         return smp(full)
                     y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
                     Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
+                    # input spectrum: from the native input when the file has it (rule 41); the residual
+                    # terms stay defined against x_interp (y - x_interp is what the model learns)
+                    if f.native and smp_in is not None:
+                        full_in = np.zeros(f.lat_in.size)
+                        full_in[smp_in.src_idx] = f.field("x", m, var, smp_in.src_idx)
+                        Fin = spec.fft(smp_in(full_in))
+                        input_sources.add("x (native input grid)")
+                    else:
+                        Fin = Fx
+                        input_sources.add("x_interp (input interpolated to the output grid)")
                     terms = {"pred": spec.power(Fp), "truth": spec.power(Fy),
-                             "interp": spec.power(Fx), "resid_pred": spec.power(Fp - Fx),
+                             "interp": spec.power(Fin), "resid_pred": spec.power(Fp - Fx),
                              "resid_true": spec.power(Fy - Fx), "pred_x_truth": spec.cross(Fp, Fy)}
                     for scope in ("all", pf.date):
                         acc = sums.setdefault((scope, var), {t: 0.0 for t in TERMS})
@@ -190,6 +210,10 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
             LOG.info("box_spectra: %s done (%d members)", Path(pf.path).name, len(mems))
         finally:
             f.close()
+    meta["input_source"] = sorted(input_sources)
+    if any("interpolated" in s_ for s_ in input_sources):
+        LOG.warning("box_spectra: input spectrum from x_interp (no native x in the files); rule 41: the input/truth "
+                    "ratio is then a smoothed-input diagnostic, not the input's spectrum")
     return spec, sums, counts, meta
 
 
@@ -238,6 +262,9 @@ def write_table(rows, path, label: str, meta: dict) -> None:
              f"Box {meta.get('box')} ({meta.get('box_chosen_by')}), {meta.get('method')} sampling at "
              f"{meta.get('res_deg')} deg, grid {meta.get('grid')}. AMPLITUDE ratios (not power), per bin; "
              "target 1 from 125 km to 31 km; below 31 km the truth is empty (model against model only).", ""]
+    if meta.get("input_source"):
+        lines += [f"Input spectrum from: {'; '.join(meta['input_source'])} (rule 41: the input is never "
+                  "interpolated to the output grid before scoring).", ""]
     if meta.get("note"):
         lines += [f"Note: {meta['note']}.", ""]
     for var in sorted({r["variable"] for r in rows if r["scope"] == "all"}):

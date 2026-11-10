@@ -76,3 +76,33 @@ def test_named_box_and_global_default():
     assert runner.resolve_box(None, lat, lon) == ([10.0, 70.0, -80.0, 40.0], "e2 (global file)")
     assert runner.resolve_box("north_atlantic", lat, lon)[0] == [35.0, 55.0, -45.0, -20.0]
     assert runner.resolve_box("36,44,-28,-17", lat, lon) == ([36.0, 44.0, -28.0, -17.0], "given")
+
+
+def test_input_spectrum_from_native_grid(tmp_path):
+    """Rule 41: a file with a native x (lat_lres/lon_lres) gives the input spectrum from x, not x_interp.
+    Here x is the truth on a 0.16-degree grid and x_interp is pure noise, so input/truth tracks 1 at large
+    scales only with the native field."""
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    path = pred / "predictions_20230226_step024.nc"
+    _write(path, mode="truth", seed=1)
+    lat1 = np.arange(35.0, 45.0 + 1e-9, 0.16)
+    lon1 = np.arange(-30.0, -15.0 + 1e-9, 0.16)
+    LA, LO = np.meshgrid(lat1, lon1, indexing="ij")
+    with nc.Dataset(str(path), "a") as d:
+        d.createDimension("grid_point_lres", LA.size)
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = LA.ravel()
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(LO.ravel(), 360.0)
+        x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+        sig = np.cos(LA.ravel() / 3)[:, None] * 50.0
+        x[0] = np.stack([np.repeat(sig, 3, 1)] * 2)
+        hres_la = np.asarray(d["lat_hres"][:])
+        sig_h = np.cos(hres_la / 3)[:, None] * 50.0
+        d["y"][0] = np.stack([np.repeat(sig_h, 3, 1)] * 2)
+        d["y_pred"][0] = d["y"][0]
+        d["x_interp"][0] = np.random.default_rng(0).standard_normal(d["x_interp"][0].shape)
+    out = box_spectra.run(pred, {}, {"variables": ["2t"]}, output_dir=tmp_path / "bs")
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["input_source"] == ["x (native input grid)"]
+    rows = [r for r in runner.read_bins(out / "bins.csv") if r["scope"] == "all"]
+    assert abs(float(rows[0]["ratio_interp_to_truth"]) - 1.0) < 0.05   # largest scale: the native input is the truth
