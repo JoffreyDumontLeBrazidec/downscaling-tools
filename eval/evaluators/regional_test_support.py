@@ -65,13 +65,15 @@ def make_world(root: Path, seed: int = 7):
     lsm = land.astype(np.float32)
     z = np.where(land, 500.0 + 300.0 * rng.standard_normal(lat_h.size), 0.0).astype(np.float32)
     zpath = root / "forcings.zarr"
-    g = zarr.open_group(str(zpath), mode="w", zarr_format=2)
-    g.create_array("latitudes", data=lat_h)
-    g.create_array("longitudes", data=lon_h)
+    zarr3 = int(zarr.__version__.split(".")[0]) >= 3  # clusters run zarr 2.17
+    g = zarr.open_group(str(zpath), mode="w", zarr_format=2) if zarr3 else zarr.open_group(str(zpath), mode="w")
+    put = g.create_array if zarr3 else g.create_dataset
+    put("latitudes", data=lat_h)
+    put("longitudes", data=lon_h)
     data = np.zeros((1, 2, 1, lat_h.size), dtype=np.float32)
     data[0, 0, 0] = lsm
     data[0, 1, 0] = z * 9.80665
-    g.create_array("data", data=data)
+    put("data", data=data)
     (zpath / ".zattrs").write_text(json.dumps({"variables": ["lsm", "z"]}))
 
     resid = root / "resid.npy"

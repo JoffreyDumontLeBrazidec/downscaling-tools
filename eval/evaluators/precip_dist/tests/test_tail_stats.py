@@ -45,7 +45,7 @@ def test_tail_stats_match_numpy_on_all_members(preds, tmp_path):
     v = np.concatenate(vals)
     r = pooled["pred"]
     assert int(r["n"]) == v.size == 2 * 3 * octahedral_grid(24)[0].size
-    assert float(r["p99_9"]) == pytest.approx(np.percentile(v, 99.9), rel=1e-5)
+    assert float(r["p99_9"]) == pytest.approx(np.percentile(v, 99.9), rel=1e-4)  # value written at 5 decimals
     assert float(r["max_mm"]) == pytest.approx(v.max(), rel=1e-5)
     assert float(r["wet_frac"]) == pytest.approx(np.mean(v > 0.1), rel=1e-5)
     assert float(r["neg_share"]) == pytest.approx(np.mean(v < 0), rel=1e-5, abs=1e-9)

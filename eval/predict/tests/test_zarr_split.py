@@ -279,7 +279,7 @@ def _patch_load_objects(monkeypatch):
 
     monkeypatch.setattr(mi_predict, "get_checkpoint", _get_checkpoint)
     monkeypatch.setattr(mi_predict, "adapt_config_hpc", lambda cfg: cfg)
-    monkeypatch.setattr(mi_predict, "get_datamodule", lambda cfg, graph: "datamodule")
+    monkeypatch.setattr(mi_predict, "get_datamodule", lambda cfg, graph, **kw: "datamodule")
     monkeypatch.setattr(mi_predict.torch, "load", lambda path, **kw: loaded.append(os.path.basename(path)) or _LoadedModel())
     return mi_predict, loaded, checkpoints
 
