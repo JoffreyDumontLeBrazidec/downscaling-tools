@@ -153,6 +153,11 @@ def add_prepml_args(parser: argparse.ArgumentParser) -> None:
         "--prepml-runner", default=None,
         help="PrepML runner or venv path, overriding the lane config.",
     )
+    parser.add_argument(
+        "--allow-unfixed-runner", action="store_true", default=False,
+        help="Launch prepml even when the runner venv's downscaling_unified_runner.py lacks the "
+             "2026-11-10 fix marker (sampler keys dropped, one seed per process). Default: refuse.",
+    )
 
 
 # ---------------------------------------------------------------------------

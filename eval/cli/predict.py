@@ -61,6 +61,7 @@ def cmd_predict(args: argparse.Namespace, lane_config: dict, host_config: dict, 
             expver=getattr(args, "expver", None),
             runner_override=getattr(args, "prepml_runner", None),
             lane=getattr(args, "lane", ""),
+            allow_unfixed_runner=bool(getattr(args, "allow_unfixed_runner", False)),
         )
         return
 

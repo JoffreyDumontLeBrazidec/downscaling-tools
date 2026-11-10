@@ -806,6 +806,7 @@ def prepml_predict(
     expver: str | None = None,
     runner_override: str | None = None,
     lane: str = "",
+    allow_unfixed_runner: bool = False,
 ) -> None:
     """Run PrepML prediction: generate config, launch, retrieve, assemble.
 
@@ -841,6 +842,11 @@ def prepml_predict(
         prepml_config, output_dir / "prepml_config.yaml"
     )
     LOG.info("PrepML config written to %s", prepml_config_path)
+
+    # Refuse a runner venv whose downscaling_unified runner lacks the 2026-11-10 fix
+    # (sampler keys dropped, one seed per process) before anything is pushed.
+    from eval.predict.prepml_runner_guard import enforce_prepml_runner
+    enforce_prepml_runner(prepml_config, allow_unfixed=allow_unfixed_runner)
 
     # 4. Launch PrepML (pushes to ecFlow) and wait for completion
     _launch_prepml(prepml_config_path, resolved_expver)

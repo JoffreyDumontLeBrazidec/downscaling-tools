@@ -213,6 +213,13 @@ def run_lane_command(args: argparse.Namespace, command: Command) -> None:
                 print(f"Expver: {resolved_expver}")
             except Exception as exc:
                 print(f"\n--- PrepML Config Preview (error) ---\n{exc}")
+            else:
+                # Same runner guard as the real launch: a dry run on an unfixed runner fails.
+                from eval.predict.prepml_runner_guard import enforce_prepml_runner
+                check = enforce_prepml_runner(
+                    prepml_cfg, allow_unfixed=bool(getattr(args, "allow_unfixed_runner", False)),
+                )
+                print(f"PrepML runner guard: {'OK' if check.ok else 'OVERRIDDEN'}: {check.message}")
         return
 
     # --- Preflight: write effective config ---
