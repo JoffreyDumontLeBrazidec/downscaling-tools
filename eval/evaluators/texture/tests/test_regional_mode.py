@@ -33,6 +33,11 @@ def test_regional_matches_global_on_interior(tmp_path):
 
     lat_h, lon_h = world["lat_h"], world["lon_h"]
     lon180 = np.where(lon_h > 180.0, lon_h - 360.0, lon_h)
+    # the regional run drops the 1-degree box-edge strip first (eval.shared.edge_strip), so its edge
+    # margin is measured from the strip: compare with the global run on the same, smaller interior
+    from eval.shared.edge_strip import box_edge_mask
+
+    sel = np.asarray(sel)[box_edge_mask(lat_h[sel], lon_h[sel])]
     lat_lo, lat_hi = float(lat_h[sel].min()), float(lat_h[sel].max())
     lon_lo, lon_hi = float(lon180[sel].min()), float(lon180[sel].max())
     interior = [lat_lo + margin, lat_hi - margin, lon_lo + margin, lon_hi - margin]
@@ -48,7 +53,7 @@ def test_regional_matches_global_on_interior(tmp_path):
     assert g_pay["regional"] is False and r_pay["regional"] is True
     assert r_pay["driver_source"] == "x_interp"
     assert r_pay["grid"]["regional"]["n_global"] == lat_h.size
-    assert r_pay["grid"]["n_points"] == sel.size
+    assert r_pay["grid"]["n_points"] == sel.size and r_pay["box_edge_deg"] == 1.0
 
     def key(r):
         return (r["date"], r["step"], r["member"])

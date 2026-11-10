@@ -9,6 +9,8 @@ import numpy as np
 import xarray as xr
 
 from .data_types import BoundingBox, CurveVectors, SupportMode, curve_support_signature
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+
 from .grid import normalize_lon, point_mask, structured_grid_from_points, interp_structured, nearest_point_indices
 
 
@@ -181,7 +183,8 @@ def _load_prediction_curve_native(
             i_u10 = weather_states.index("10u")
             i_v10 = weather_states.index("10v")
             lon, lat = prediction_point_coordinates(ds)
-            mask = point_mask(lon, lat, bbox)
+            # regional box: the 1-degree edge strip is not scored (eval.shared.edge_strip)
+            mask = point_mask(lon, lat, bbox) & box_edge_mask(lat, lon, resolve_box_edge_deg())
             if not np.any(mask):
                 continue
             support_signatures.append(curve_support_signature("native", lon[mask], lat[mask]))
@@ -242,6 +245,12 @@ def _load_prediction_curve_regridded(
                 u10 = y_pred[:, target_indices, i_u10]
                 v10 = y_pred[:, target_indices, i_v10]
 
+            src_keep = box_edge_mask(source_lat, source_lon, resolve_box_edge_deg())
+            if not src_keep.all():
+                # regional source: target points that take their value from the box-edge strip are dropped
+                tkeep = src_keep[nearest_point_indices(src_lon=source_lon, src_lat=source_lat,
+                                                       target_lon=target_lon, target_lat=target_lat)]
+                msl, u10, v10 = msl[:, tkeep], u10[:, tkeep], v10[:, tkeep]
             msl_vals.append((msl / 100.0).reshape(-1))
             wind_vals.append(np.sqrt(u10 * u10 + v10 * v10).reshape(-1))
 

@@ -28,6 +28,8 @@ import argparse, json, logging
 from pathlib import Path
 import numpy as np
 
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+
 LOG = logging.getLogger(__name__)
 FIELDS = ("10u", "10v", "msl")
 GRID_DEG = 0.075
@@ -232,7 +234,18 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
     grids = {"hres": d0.attrs.get("grid") or _ogrid(d0.sizes.get("grid_point_hres", lat.size)),
              "lres": _ogrid(d0.sizes["grid_point_lres"]) if "grid_point_lres" in d0.sizes else None}
     d0.close()
-    box_mask = ((lat >= event_box[0] - RIM_DEG) & (lat <= event_box[1] + RIM_DEG) &
+    # Regional box: the box-edge strip (eval.shared.edge_strip) is left out of the spectra and of the storm
+    # search; the event and storm boxes are shrunk to the points outside it.
+    keep = box_edge_mask(lat, lon, resolve_box_edge_deg())
+    if not keep.all():
+        inner = (float(lat[keep].min()), float(lat[keep].max()), float(lon[keep].min()), float(lon[keep].max()))
+        event_box = (max(event_box[0], inner[0] - RIM_DEG), min(event_box[1], inner[1] + RIM_DEG),
+                     max(event_box[2], inner[2] - RIM_DEG), min(event_box[3], inner[3] + RIM_DEG))
+        storm_box = (max(storm_box[0], inner[0]), min(storm_box[1], inner[1]),
+                     max(storm_box[2], inner[2]), min(storm_box[3], inner[3]))
+        LOG.info("storm_maps: regional grid, event box %s and storm box %s outside the box-edge strip",
+                 event_box, storm_box)
+    box_mask = keep & ((lat >= event_box[0] - RIM_DEG) & (lat <= event_box[1] + RIM_DEG) &
                 (lon >= event_box[2] - RIM_DEG) & (lon <= event_box[3] + RIM_DEG))
     bidx = np.where(box_mask)[0]
     bs = BoxSpectra(lat[bidx], lon[bidx], event_box)
@@ -253,7 +266,7 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
                 for mem in range(nmem):
                     acc[f][c].append(bs.spectrum_1d(bs.power(v[mem])))
         # storm search on truth msl within storm_box
-        sm = ((lat[bidx] >= storm_box[0]) & (lat[bidx] <= storm_box[1]) &
+        sm = keep[bidx] & ((lat[bidx] >= storm_box[0]) & (lat[bidx] <= storm_box[1]) &
               (lon[bidx] >= storm_box[2]) & (lon[bidx] <= storm_box[3]))
         tmsl = raw["truth"][:, bidx, si["msl"]]
         mm = np.where(sm[None, :], tmsl, 1e12).min(axis=1)
@@ -280,7 +293,7 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
           "input": ds.x_interp.isel(sample=0).values}
     ds.close()
     tmsl = yy["truth"][mem, bidx, si["msl"]]
-    sm = ((lat[bidx] >= storm_box[0]) & (lat[bidx] <= storm_box[1]) &
+    sm = keep[bidx] & ((lat[bidx] >= storm_box[0]) & (lat[bidx] <= storm_box[1]) &
           (lon[bidx] >= storm_box[2]) & (lon[bidx] <= storm_box[3]))
     eloc = np.where(sm, tmsl, 1e12).argmin(); elat, elon = lat[bidx][eloc], lon[bidx][eloc]
     G, HALF = 0.06, 9.0

@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from eval.discovery.predictions import find_predictions
+from eval.shared.edge_strip import subprocess_env
 
 LOG = logging.getLogger(__name__)
 
@@ -55,5 +56,5 @@ def run(
         cmd += ["--checkpoint", str(checkpoint)]
 
     LOG.info("region_plot subprocess: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=subprocess_env(eval_config))   # carries box_edge_deg
     return output_dir

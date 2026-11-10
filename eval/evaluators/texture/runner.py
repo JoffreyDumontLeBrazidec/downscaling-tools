@@ -121,6 +121,7 @@ from typing import Any
 
 import numpy as np
 
+from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 from eval.shared.regions import ALPS
 
 LOG = logging.getLogger(__name__)
@@ -951,6 +952,15 @@ def run(
         lat0 = np.asarray(ds0.variables["lat_hres"][:]).reshape(-1)
         lon0 = np.asarray(ds0.variables["lon_hres"][:]).reshape(-1)
         has_x_interp = "x_interp" in ds0.variables
+    # The box-edge strip of a regional file (eval.shared.edge_strip, 1 degree by default) is dropped before
+    # anything is built: the file minus its strip is a smaller regional file, and the edge margin below is
+    # then measured from the strip, so no statistic (fine part, neighbours, successors) touches a strip point.
+    box_edge_deg = resolve_box_edge_deg(eval_config)
+    keep = box_edge_index(lat0, lon0, box_edge_deg)
+    if not isinstance(keep, slice):
+        LOG.info("texture: regional file, %d of %d points outside the %.2g-degree box-edge strip",
+                 keep.size, lat0.size, box_edge_deg)
+        lat0, lon0 = lat0[keep], lon0[keep]
     if not _lonlat_match(lat0, lon0, static["lat"], static["lon"]):
         if lat0.size >= n_points:
             raise RuntimeError(
@@ -1002,8 +1012,8 @@ def run(
             absent = [s for s in states if s not in idx_of]
             if absent:
                 LOG.warning("texture: %s lacks states %s; skipping them", file_path.name, absent)
-            lat_f = np.asarray(ds.variables["lat_hres"][:]).reshape(-1)
-            lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)
+            lat_f = np.asarray(ds.variables["lat_hres"][:]).reshape(-1)[keep]
+            lon_f = np.asarray(ds.variables["lon_hres"][:]).reshape(-1)[keep]
             if not _lonlat_match(lat_f, lon_f, static["lat"], static["lon"]):
                 raise RuntimeError(
                     f"{file_path.name}: lat/lon_hres do not match the "
@@ -1014,9 +1024,11 @@ def run(
 
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
-                yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)
-                yt = np.asarray(_read_member(ds.variables["y"], member_index))
+                yp = np.asarray(_read_member(ds.variables["y_pred"], member_index), dtype=np.float64)[keep]
+                yt = np.asarray(_read_member(ds.variables["y"], member_index))[keep]
                 xx = np.asarray(_read_member(ds.variables[needed_input], member_index))
+                if needed_input == "x_interp":
+                    xx = xx[keep]   # on the output points; x (the input grid) is never stripped
                 t_read = time.time() - t_mem
                 for state in states:
                     si = idx_of.get(state)
@@ -1085,6 +1097,7 @@ def run(
         "files": [f.name for f in files],
         "n_samples_per_cell": n_cell,
         "regional": bool(regional),
+        "box_edge_deg": box_edge_deg if regional else 0.0,
         "driver_source": "x_interp" if (regional or input_source == "x_interp") else "up @ x",
         "states": [s for s in states if any(r["state"] == s for r in aggregate)],
         "strata_order": strata_order,

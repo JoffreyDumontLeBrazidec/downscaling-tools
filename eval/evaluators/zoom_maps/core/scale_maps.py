@@ -161,6 +161,17 @@ def subset_box(lat: np.ndarray, lon: np.ndarray, extent, margin_deg: float) -> n
             & (lon >= lon_min - mlon) & (lon <= lon_max + mlon))
 
 
+def _without_strip(sub, lat: np.ndarray, lon: np.ndarray):
+    """``sub`` (a boolean mask or index array over the file's points) minus the box-edge strip points."""
+    from eval.shared.edge_strip import box_edge_mask
+
+    inner = box_edge_mask(lat, lon)
+    if inner.all():
+        return sub
+    sub = np.asarray(sub)
+    return sub & inner if sub.dtype == bool else sub[inner[sub]]
+
+
 def in_box(lat: np.ndarray, lon: np.ndarray, extent) -> np.ndarray:
     lon_min, lon_max, lat_min, lat_max = extent
     return (lat >= lat_min) & (lat <= lat_max) & (lon >= lon_min) & (lon <= lon_max)
@@ -304,6 +315,9 @@ def run_scales(args: argparse.Namespace) -> int:
             raise SystemExit(f"{pred_file} not found (run {key!r}).")
         data = read_member(pred_file, args.member)
         sub = subset_box(data["lat"], data["lon"], extent, SCALE_MARGIN_DEG)
+        # This layout prints scores (rms, correlations, min/max) and its low-pass mixes neighbouring points,
+        # so the box-edge strip of a regional grid (eval.shared.edge_strip) is left out of it entirely.
+        sub = _without_strip(sub, data["lat"], data["lon"])
         lat, lon = data["lat"][sub], data["lon"][sub]
         operator = LowPassOperator(lat, lon, None, cut_km=cut)
         mask = in_box(lat, lon, extent)

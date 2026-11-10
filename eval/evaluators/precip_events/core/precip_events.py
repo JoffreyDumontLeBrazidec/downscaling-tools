@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+
 from eval.shared.precip.sources import PrecipTruthSource
 
 _FNAME_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc")
@@ -95,6 +97,8 @@ def find_precip_events(
         finally:
             ds.close()
 
+        # regional box: an event peak is never taken in the box-edge strip (eval.shared.edge_strip)
+        arr = np.where(box_edge_mask(lats, lons, resolve_box_edge_deg()), np.asarray(arr, dtype=np.float64), np.nan)
         gp = int(np.nanargmax(arr))
         peak = float(arr[gp])
         lat = float(lats[gp])

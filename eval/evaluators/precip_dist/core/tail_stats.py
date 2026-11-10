@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from eval.discovery.predictions import find_predictions
+from eval.shared.edge_strip import box_edge_index
 
 LOG = logging.getLogger(__name__)
 
@@ -43,14 +44,21 @@ def _decode(var) -> list[str]:
     return out
 
 
-def _read_all_members(ds, name: str, j: int) -> np.ndarray | None:
-    """Every member of one weather state, flattened, as float32 (None if the variable is absent)."""
+def _read_all_members(ds, name: str, j: int, keep=slice(None)) -> np.ndarray | None:
+    """Every member of one weather state, flattened, as float32 (None if the variable is absent).
+
+    ``keep`` (``eval.shared.edge_strip.box_edge_index``) selects the output points: on a regional box the
+    box-edge strip is left out."""
     if name not in ds.variables:
         return None
     v = ds[name]
     key = tuple(0 if d == "sample" else (j if d == "weather_state" else slice(None))
                 for d in v.dimensions)
-    return np.asarray(v[key], dtype=np.float32).reshape(-1)
+    arr = np.asarray(v[key], dtype=np.float32)
+    if not isinstance(keep, slice):
+        kept = [d for d in v.dimensions if d not in ("sample", "weather_state")]
+        arr = np.take(arr, keep, axis=kept.index("grid_point_hres"))
+    return arr.reshape(-1)
 
 
 def stats_of(values_mm: np.ndarray, wet_threshold_mm: float) -> dict | None:
@@ -67,7 +75,7 @@ def stats_of(values_mm: np.ndarray, wet_threshold_mm: float) -> dict | None:
 
 def compute_tail_stats(predictions_dir, output_dir, *, variable: str = "tp",
                        wet_threshold_mm: float = 0.1, steps=None, dates=None,
-                       per_date: bool = True) -> Path:
+                       per_date: bool = True, box_edge_deg: float | None = None) -> Path:
     """Write ``tail_stats.csv`` (and return its path)."""
     import netCDF4
 
@@ -88,8 +96,10 @@ def compute_tail_stats(predictions_dir, output_dir, *, variable: str = "tp",
                 continue
             j = states.index(variable)
             n_members = len(ds.dimensions["ensemble_member"]) if "ensemble_member" in ds.dimensions else 1
+            keep = (box_edge_index(np.asarray(ds["lat_hres"][:]), np.asarray(ds["lon_hres"][:]), box_edge_deg)
+                    if "lat_hres" in ds.variables else slice(None))
             for series, name in SERIES:
-                vals = _read_all_members(ds, name, j)
+                vals = _read_all_members(ds, name, j, keep)
                 if vals is None:
                     continue
                 vals = vals * np.float32(MM)

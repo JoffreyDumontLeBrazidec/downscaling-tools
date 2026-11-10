@@ -12,8 +12,8 @@ from eval.evaluators.probabilistic.core.calibration import (
     RATIO_BOOTSTRAP_SEED,
 )
 from eval.evaluators.probabilistic.core.scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM
+from eval.shared.edge_strip import resolve_box_edge_deg
 from eval.evaluators.probabilistic.core.scoring import (
-    DEFAULT_BOX_EDGE_DEG,
     DEFAULT_DOMAINS,
     DEFAULT_WEATHER_STATES,
 )
@@ -66,7 +66,7 @@ def run(
     scale_cut_km = float(_or(eval_config.get("scale_cut_km"), DEFAULT_CUT_KM))
     scale_grid_km = float(_or(eval_config.get("scale_grid_km"), DEFAULT_GRID_KM))
     scale_edge_margin_km = eval_config.get("scale_edge_margin_km")
-    box_edge_deg = float(_or(eval_config.get("box_edge_deg"), DEFAULT_BOX_EDGE_DEG))
+    box_edge_deg = resolve_box_edge_deg(eval_config)   # eval.shared.edge_strip (default 1 degree)
     rank_histogram = bool(_or(eval_config.get("rank_histogram"), True))
     rank_tie_seed = int(_or(eval_config.get("rank_tie_seed"), RANK_TIE_SEED))
     rank_dry_threshold_mm = float(_or(eval_config.get("rank_dry_threshold_mm"), DEFAULT_RANK_DRY_THRESHOLD_MM))

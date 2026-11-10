@@ -88,7 +88,7 @@ from typing import Any
 
 import numpy as np
 
-from eval.shared.edge_strip import is_global, wrap_lon
+from eval.shared.edge_strip import box_edge_index, is_global, resolve_box_edge_deg, wrap_lon
 
 LOG = logging.getLogger(__name__)
 
@@ -488,6 +488,7 @@ def run(
     up = sps.load_npz(paths["up_matrix"]).tocsr() if input_source == "up_matrix" else None
 
     boxes_requested = dict(boxes)
+    box_edge_deg = resolve_box_edge_deg(eval_config)
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
     point_area_km2 = None
@@ -542,6 +543,11 @@ def run(
                     point_area_km2 = _box_area_km2(lat, lon) / lat.size
                 else:
                     point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
+            # Regional box: the box-edge strip (eval.shared.edge_strip, 1 degree by default) is dropped from
+            # every field before the boxes are built, so neither a core point nor a disk around one touches it.
+            keep = box_edge_index(lat, lon, box_edge_deg) if regional else slice(None)
+            if not isinstance(keep, slice):
+                lat, lon, lon180 = lat[keep], lon[keep], lon180[keep]
             if not box_static:
                 if regional:
                     boxes = _clip_boxes_to_extent(boxes, lat, lon180, radii_km)
@@ -571,12 +577,12 @@ def run(
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
                 cu, cv = idx_of[components[0]], idx_of[components[1]]
-                yp_u = _read_component(ds.variables["y_pred"], member_index, cu)
-                yp_v = _read_component(ds.variables["y_pred"], member_index, cv)
-                yt_u = _read_component(ds.variables["y"], member_index, cu)
-                yt_v = _read_component(ds.variables["y"], member_index, cv)
-                xx_u = _read_component(ds.variables[needed_input], member_index, cu)
-                xx_v = _read_component(ds.variables[needed_input], member_index, cv)
+                yp_u = _read_component(ds.variables["y_pred"], member_index, cu)[keep]
+                yp_v = _read_component(ds.variables["y_pred"], member_index, cv)[keep]
+                yt_u = _read_component(ds.variables["y"], member_index, cu)[keep]
+                yt_v = _read_component(ds.variables["y"], member_index, cv)[keep]
+                xx_u = _read_component(ds.variables[needed_input], member_index, cu)[keep]
+                xx_v = _read_component(ds.variables[needed_input], member_index, cv)[keep]
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
@@ -628,6 +634,7 @@ def run(
             "input_source": "x_interp" if (regional or up is None) else "up_matrix",
             "point_area_km2": point_area_km2,
             "regional": bool(regional),
+            "box_edge_deg": box_edge_deg if regional else 0.0,
             "boxes_skipped": [b for b in boxes_requested if b not in box_static],
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],

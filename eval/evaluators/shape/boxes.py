@@ -26,6 +26,7 @@ import netCDF4 as nc
 import numpy as np
 
 from eval.paths import resolve_eval_root
+from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 from eval.shared.regions import E2, NORTH_ATLANTIC, TC_ATLANTIC
 
 
@@ -98,7 +99,12 @@ def select_box(path, box: Box):
         glon = np.asarray(d["lon_hres"][:], dtype=np.float64)
     # the bbox rule of eval.predict.local_scope (not imported: that package needs torch)
     east = contiguous_lon(glon, box.lon_min) - box.lon_min
-    sel = np.flatnonzero((glat >= box.lat_min) & (glat <= box.lat_max) & (east <= _width(box)))
+    inbox = (glat >= box.lat_min) & (glat <= box.lat_max) & (east <= _width(box))
+    # Regional file: the box-edge strip (eval.shared.edge_strip, 1 degree by default) is never part of a box.
+    edge_deg = resolve_box_edge_deg()
+    inner = box_edge_mask(glat, glon, edge_deg)
+    stripped = not inner.all()
+    sel = np.flatnonzero(inbox & inner)
     if sel.size == 0:
         raise ValueError(f"shape box {box.tag} {box.as_list()} holds no point of {path} "
                          f"(file spans lat {glat.min():.1f}..{glat.max():.1f}, "
@@ -109,13 +115,16 @@ def select_box(path, box: Box):
     # interior, silently; refuse it. The tolerance is 0.2 degrees or one grid row, whichever
     # is larger: on O320 the rows are 0.28 degrees apart, so the first row inside a box edge
     # can sit 0.27 degrees in (35.27 N for the north_atlantic box) on a box the file holds.
-    tol = max(0.2, _row_spacing_deg(glat))
+    tol = max(0.2, _row_spacing_deg(glat)) + (edge_deg if stripped else 0.0)
     if (lat.min() > box.lat_min + tol or lat.max() < box.lat_max - tol
             or lon.min() > box.lon_min + tol or lon.max() < box.lon_min + _width(box) - tol):
         raise ValueError(f"shape box {box.tag} {box.as_list()} is not fully inside {path}: "
                          f"the file covers lat {lat.min():.2f}..{lat.max():.2f}, "
                          f"lon {lon.min():.2f}..{lon.max():.2f} of it")
-    return sel, lat, lon, f"box {box.tag} {box.as_list()}: {sel.size} of {glat.size} points"
+    note = f"box {box.tag} {box.as_list()}: {sel.size} of {glat.size} points"
+    if stripped:
+        note += f" (box-edge strip of {edge_deg:g} deg left out)"
+    return sel, lat, lon, note
 
 
 def _row_spacing_deg(glat) -> float:

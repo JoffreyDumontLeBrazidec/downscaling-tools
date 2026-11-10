@@ -62,13 +62,16 @@ def test_regional_skips_boxes_outside_and_clips_partial_ones(tmp_path):
     assert sorted(r["config"]["boxes_skipped"]) == ["europe", "open_north_atlantic"]
     assert list(r["boxes"]) == ["west_tropical_atlantic"]
     # [10, 32, -85, -55] clipped inside the cut (lat 10..40, lon -100..-58, 1-degree points at
-    # half degrees) so that the padding of the largest disk stays inside the data
-    # (_clip_boxes_to_extent): every edge at least radius/111 + margin from the data edge.
+    # half degrees): the 1-degree box-edge strip is dropped first (eval.shared.edge_strip, data
+    # then 11.5..38.5, -98.5..-59.5), and the padding of the largest disk stays inside what is left
+    # (_clip_boxes_to_extent): every edge at least radius/111 + 0.5 from it.
     import numpy as np
 
+    assert r["config"]["box_edge_deg"] == 1.0
     box = r["boxes"]["west_tropical_atlantic"]["box"]
-    pad = 120.0 / 111.0
-    assert box[0] >= 10.5 + pad and box[3] <= -58.5 - pad and box[1] == 32.0 and box[2] == -85.0
+    pad = 120.0 / 111.0 + 0.5
+    assert box[0] == pytest.approx(11.5 + pad) and box[3] == pytest.approx(-59.5 - pad)
+    assert box[1] == 32.0 and box[2] == -85.0
     lat, lon = world["lat_h"], np.where(world["lon_h"] > 180, world["lon_h"] - 360, world["lon_h"])
     core = (lat >= box[0]) & (lat <= box[1]) & (lon >= box[2]) & (lon <= box[3])
     assert r["boxes"]["west_tropical_atlantic"]["n_core_points"] == int(core.sum())

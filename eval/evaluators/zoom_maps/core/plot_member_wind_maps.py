@@ -47,6 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.shared.edge_strip import inner_bounds, inside_bounds
 from eval.shared.manifest import write_manifest
 
 DEFAULT_EXTENT = (-45.0, 55.0, 27.0, 72.0)
@@ -498,6 +499,21 @@ def _source_layers(
     return layers
 
 
+def _layer_inside(ax, layer: tuple, bounds) -> np.ndarray:
+    """For each value of a drawn layer, whether its point lies inside ``bounds`` (``inner_bounds``)."""
+    kind, geometry, data = layer
+    if bounds is None:
+        return np.ones(np.shape(data), dtype=bool)
+    if kind == "tri":
+        import cartopy.crs as ccrs
+
+        ll = ccrs.PlateCarree().transform_points(ax.projection, np.asarray(geometry.x), np.asarray(geometry.y))
+        return inside_bounds(bounds, ll[:, 1], ll[:, 0])
+    gx, gy = geometry
+    gx, gy = np.broadcast_arrays(*np.meshgrid(gx, gy)) if np.ndim(gx) == 1 else (gx, gy)
+    return inside_bounds(bounds, gy, gx)
+
+
 def _draw_layer(ax, layer: tuple, *, cmap, vmin: float, vmax: float):
     import cartopy.crs as ccrs
 
@@ -694,8 +710,12 @@ def _render_grid(
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
     box_line: str = "",
+    scored_bounds=None,
 ) -> None:
     """One figure holding every member of a single source on a shared colour scale.
+
+    ``scored_bounds`` (``eval.shared.edge_strip.inner_bounds`` of the output grid) limits the printed
+    peaks to the points outside the box-edge strip of a regional grid; the maps still show the strip.
 
     The members are prepared and drawn exactly as the single-member renderer
     does, so a panel of this figure and the corresponding standalone PNG show
@@ -735,7 +755,11 @@ def _render_grid(
             if gl is not None:
                 gl.left_labels = i % ncols == 0
                 gl.bottom_labels = i + ncols >= len(members)
-            peak = float(np.nanmax(grid)) if field == "value" else float(np.nanmax(np.abs(grid)))
+            # the map shows the box-edge strip of a regional grid; the printed peak leaves it out
+            scored = _layer_inside(ax, layer, scored_bounds)
+            g = np.where(scored, np.asarray(grid, dtype=np.float64), np.nan)
+            peak = (float(np.nanmax(g)) if field == "value" else float(np.nanmax(np.abs(g)))) \
+                if np.isfinite(g).any() else float("nan")
             peak_word = "max" if field == "value" else "max |value|"
             ax.set_title(f"Member {member} ({peak_word} {peak:.1f} {unit})", fontsize=9)
         for ax in axes[len(members):]:
@@ -786,6 +810,8 @@ def run_member_grid(args: argparse.Namespace) -> int:
         ds = xr.open_dataset(pred_file, decode_timedelta=False)
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
+        if i == 0:
+            scored_bounds = inner_bounds(lat_h, lon_h)   # the output box minus its edge strip (None: global)
         available = [int(m) for m in np.asarray(ds["ensemble_member"].values).reshape(-1)]
         here = parse_members(args.members, available)
         if not members:
@@ -814,6 +840,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
+            scored_bounds=scored_bounds,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)

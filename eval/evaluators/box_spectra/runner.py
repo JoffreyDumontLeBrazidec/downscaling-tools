@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from eval.discovery.predictions import find_predictions
+from eval.shared.edge_strip import inner_bounds, resolve_box_edge_deg
 from eval.shared import regions
 
 from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, Sampler, Spectrum
@@ -143,7 +144,8 @@ def _contiguous(lon: np.ndarray, west: float) -> np.ndarray:
     return west + np.mod(lon - west, 360.0)
 
 
-def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec, clip_nonnegative=()):
+def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec, clip_nonnegative=(),
+               box_edge_deg: float | None = None):
     """Sum of the powers per (scope, variable) over draws; returns (spectrum, sums, counts, meta)."""
     sums: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     counts: dict[tuple[str, str], int] = {}
@@ -158,6 +160,16 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                 la0, la1, lo0, lo1 = box
                 extent = (la0 + margin_deg, la1 - margin_deg, lo0 + margin_deg,
                           lo0 + ((lo1 - lo0) % 360.0 or 360.0) - margin_deg)
+                ib = inner_bounds(f.lat, f.lon, box_edge_deg)
+                if ib is not None:
+                    # regional file: the sampled extent never reaches into the box-edge strip (edge_strip),
+                    # whatever box was asked for (the default file-bounds box with margin 1 is unchanged)
+                    ilo = ib[2] + 360.0 * round((lo0 - ib[2]) / 360.0)
+                    extent = (max(extent[0], ib[0]), min(extent[1], ib[1]),
+                              max(extent[2], ilo), min(extent[3], ilo + (ib[3] - ib[2])))
+                    if extent[0] >= extent[1] or extent[2] >= extent[3]:
+                        raise ValueError(f"box_spectra: box {box} lies inside the {box_edge_deg:g}-degree "
+                                         "box-edge strip of the regional file")
                 lon_c = _contiguous(f.lon, lo0)
                 smp = Sampler(f.lat, lon_c, extent, res_deg, method=method)
                 dx, dy = smp.dx_dy_km()
@@ -306,7 +318,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         raise FileNotFoundError(f"box_spectra: no prediction files for steps {steps} under {predictions_dir}")
     clip = tuple(eval_config.get("clip_nonnegative") or ())
     spec, sums, counts, meta = accumulate(files, variables, members, method, res_deg, margin_deg,
-                                          eval_config.get("box"), clip_nonnegative=clip)
+                                          eval_config.get("box"), clip_nonnegative=clip,
+                                          box_edge_deg=resolve_box_edge_deg(eval_config))
     meta["clip_nonnegative"] = list(clip)
     meta["target_note"] = str(eval_config.get("target_note") or TARGET_NOTE)
     if not sums:

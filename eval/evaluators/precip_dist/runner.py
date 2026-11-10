@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from eval.discovery.predictions import find_predictions
+from eval.shared.edge_strip import resolve_box_edge_deg
 
 LOG = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ def run(
         "--out-pdf", str(out_pdf),
         "--ensemble-member-index", str(ensemble_member_index),
         "--style", style,
+        # the subprocess does not see eval.cli's setting: pass the box-edge strip explicitly
+        "--box-edge-deg", str(resolve_box_edge_deg(eval_config)),
     ]
     if precip_cfg.get("truth_grib_tpl"):
         cmd += ["--truth-grib-tpl", str(precip_cfg["truth_grib_tpl"])]
@@ -79,5 +82,6 @@ def run(
             wet_threshold_mm=float(eval_config.get("wet_threshold_mm", 0.1)),
             steps=eval_config.get("steps"), dates=eval_config.get("dates"),
             per_date=bool(eval_config.get("tail_stats_per_date", True)),
+            box_edge_deg=resolve_box_edge_deg(eval_config),
         )
     return output_dir

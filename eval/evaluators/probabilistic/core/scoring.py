@@ -88,10 +88,9 @@ from .calibration import (
     tie_rng,
     truth_ranks,
 )
-from .scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM, LowPassOperator, box_edge_mask, inner_mask
+from eval.shared.edge_strip import DEFAULT_BOX_EDGE_DEG, box_edge_mask  # noqa: F401 (DEFAULT re-exported)
 
-# Strip dropped at a regional box edge in every band, as in the wide box kits (degrees).
-DEFAULT_BOX_EDGE_DEG = 1.0
+from .scale_split import DEFAULT_CUT_KM, DEFAULT_GRID_KM, LowPassOperator, inner_mask
 
 LOG = logging.getLogger(__name__)
 
