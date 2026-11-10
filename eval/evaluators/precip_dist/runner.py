@@ -60,6 +60,8 @@ def run(
         cmd += ["--interp-index-cache", str(precip_cfg["interp_index_cache"])]
     if run_label:
         cmd += ["--run-label", str(run_label)]
+    if not bool(eval_config.get("native_input", True)):  # rule 41 off: old tables only
+        cmd += ["--no-native-input"]
 
     LOG.info("precip_dist subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
