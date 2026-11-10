@@ -4,9 +4,13 @@ Scores model tp (and the interpolation baseline) against 6h-window truth at
 the same step, in mm. Truth comes from the predictions' embedded `y` when the
 tp channel is populated, otherwise from the lane's `precip.truth_grib_tpl`
 GRIB (the o1280->o2560 main-lane bundles historically carried no tp truth).
-The baseline comes from `x_interp` when its tp channel is a real series,
-otherwise from the driving o1280 member tp via `precip.baseline_lres_grib_tpl`
-(tp is output-only on this lane, so the exported x_interp tp is all zero).
+The baseline (the input row) is read on the input's own grid (rule 41): the
+native `x` at the nearest native point of each output point when the file
+carries it with a real tp series, otherwise the driving o1280 member tp via
+`precip.baseline_lres_grib_tpl` (also nearest native point; tp is output-only
+on the o2560 lane, so the exported x and x_interp tp are all zero), and only
+then `x_interp` (interpolated; logged as such). `native_input: false` restores
+the old order (x_interp first). `scores.json` meta records `input_source`.
 
 Outputs: scores.json (machine-readable, scoreboard-ingestable), scores_rows.csv,
 plots/precip_scores.pdf.
@@ -28,6 +32,14 @@ from eval.shared.precip.sources import (
     is_degenerate_channel,
 )
 from eval.discovery.predictions import find_predictions
+from eval.shared.native_input import (
+    SOURCE_NATIVE,
+    InputReader,
+    grib_nn_source,
+    has_native_input,
+    interp_source,
+    warn_fallback,
+)
 from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 
 LOG = logging.getLogger(__name__)
@@ -83,6 +95,7 @@ def run(
     only_dates = {str(d) for d in eval_config.get("dates", [])} or None
     only_steps = {int(s) for s in eval_config.get("steps", [])} or None
     max_members = eval_config.get("max_members")
+    native_input = bool(eval_config.get("native_input", True))
 
     preds = find_predictions(predictions_dir)
     if only_dates:
@@ -109,6 +122,9 @@ def run(
         y_probe = _probe_channel(ds0, "y", tp_idx)
         xi_probe = (_probe_channel(ds0, "x_interp", tp_idx)
                     if "x_interp" in ds0.variables else np.array([np.nan]))
+        native_file = has_native_input(ds0)
+        xn_probe = (_probe_channel(ds0, "x", tp_idx)
+                    if native_input and native_file else np.array([np.nan]))
         ckpt_id = str(ds0.attrs.get("checkpoint_id", checkpoint or ""))
     # regional box: the 1-degree edge strip is left out of every score (eval.shared.edge_strip)
     keep = box_edge_index(lat_hres, lon_hres, resolve_box_edge_deg(eval_config))
@@ -137,11 +153,15 @@ def run(
             var, tpl)
 
     baseline_src = None
-    if not is_degenerate_channel(xi_probe):
+    tpl = precip_cfg.get("baseline_lres_grib_tpl")
+    if native_input and not is_degenerate_channel(xn_probe):
+        # rule 41: the input on its own grid, nearest native point of each output point
+        baseline_mode = "x-native"
+        LOG.info("precip_scores: baseline = native x[%s] at the nearest native point", var)
+    elif not is_degenerate_channel(xi_probe) and not (native_input and tpl):
         baseline_mode = "x_interp"
         LOG.info("precip_scores: baseline = embedded x_interp[%s]", var)
     else:
-        tpl = precip_cfg.get("baseline_lres_grib_tpl")
         if tpl:
             baseline_src = LresInterpBaseline(
                 tpl, precip_cfg.get("interp_index_cache"), var=var)
@@ -174,6 +194,7 @@ def run(
 
                 ens_sum = np.zeros_like(truth_mm)
                 bl_sum = np.zeros_like(truth_mm) if baseline_mode != "none" else None
+                reader = InputReader(ds) if baseline_mode == "x-native" else None
                 mem_rows = []
                 for mi in range(n_members):
                     yp_mm = ds["y_pred"][0, mi].values[keep, ti].astype(np.float64) * MM
@@ -183,7 +204,9 @@ def run(
                         "model": {**M.pair_scores(yp_mm, truth_mm),
                                   **M.field_stats(yp_mm, wet_threshold_mm=wet_thr)},
                     }
-                    if baseline_mode == "x_interp":
+                    if baseline_mode == "x-native":
+                        bl_mm = reader.channel(ti, member=mi)[keep] * MM
+                    elif baseline_mode == "x_interp":
                         bl_mm = ds["x_interp"][0, mi].values[keep, ti].astype(np.float64) * MM
                     elif baseline_src is not None:
                         bl_mm = baseline_src.load(date, p.step, member_ids[mi]).astype(np.float64)[keep] * MM
@@ -217,6 +240,14 @@ def run(
         if baseline_src is not None:
             baseline_src.release()
 
+    input_source = {"x-native": SOURCE_NATIVE, "none": None}.get(baseline_mode)
+    if baseline_mode == "x_interp":
+        input_source = interp_source("x_interp", "native_input: false" if native_file and not native_input
+                                     else "no usable native x in the file")
+        warn_fallback(LOG, "precip_scores", input_source)
+    elif baseline_mode.startswith("lres-nn"):
+        input_source = grib_nn_source(var)
+
     # ---- aggregate ----------------------------------------------------------
     per_step = aggregate_rows(rows)
     summary = summarize(per_step)
@@ -228,6 +259,7 @@ def run(
             "unit": "mm / 6h window",
             "truth_source": truth_mode,
             "baseline_source": baseline_mode,
+            "input_source": input_source,
             "checkpoint_id": ckpt_id,
             "n_members": n_members,
             "member_ids": member_ids,

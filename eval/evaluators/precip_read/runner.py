@@ -12,6 +12,7 @@ import numpy as np
 from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.precip_read.core.metrics import EDGES, score_sums
+from eval.shared.native_input import InputReader, is_interpolated, warn_fallback
 
 LOG = logging.getLogger(__name__)
 
@@ -26,10 +27,13 @@ DEFAULT_REGIONS = {
 DEFAULT_THRESHOLDS = (20, 50, 100, 150, 200)
 
 
-def read_tp(path, var: str = "tp", box_edge_deg: float | None = None):
+def read_tp(path, var: str = "tp", box_edge_deg: float | None = None, *, native_input: bool = True,
+            info: dict | None = None):
     """lat, lon (-180..180), truth, input, members (M, points) in mm, clipped at 0.
 
-    Truth and input may or may not carry an ensemble_member axis; member 0 is used when they do.
+    Truth and input may or may not carry an ensemble_member axis; member 0 is used when they do. The input is read
+    on its own grid (rule 41): the native ``x`` at the nearest native point of each output point when the file
+    carries it, else ``x_interp``; ``info["input_source"]`` says which.
     On a regional (box) file the points of the box-edge strip are left out (eval.shared.edge_strip).
     """
     import netCDF4
@@ -41,10 +45,16 @@ def read_tp(path, var: str = "tp", box_edge_deg: float | None = None):
         lat = np.asarray(ds["lat_hres"][:], dtype=np.float32)
         lon = np.asarray(ds["lon_hres"][:], dtype=np.float32)
         get = lambda n: np.clip(np.asarray(ds[n][0][..., k], dtype=np.float64), 0, None) * MM
-        yp, y, xi = get("y_pred"), get("y"), get("x_interp")
+        yp, y = get("y_pred"), get("y")
+        reader = InputReader(ds, native_input=native_input, fallback=("x_interp",),
+                             lat_out=np.asarray(ds["lat_hres"][:], np.float64),
+                             lon_out=np.asarray(ds["lon_hres"][:], np.float64))
+        xi = np.clip(reader.channel(k, member=0), 0, None) * MM
+        if info is not None:
+            info["input_source"] = reader.source
     lon = np.where(lon > 180, lon - 360, lon)
     keep = box_edge_index(lat, lon, box_edge_deg)
-    y, xi, yp = y.reshape(-1, lat.size)[0], xi.reshape(-1, lat.size)[0], yp.reshape(-1, lat.size)
+    y, yp = y.reshape(-1, lat.size)[0], yp.reshape(-1, lat.size)
     return lat[keep], lon[keep], y[keep], xi[keep], yp[:, keep]
 
 
@@ -80,6 +90,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("precip_read: %d station values, %d dropped outside [0, %s] mm", len(obs), n_bad,
                  obs_cfg.get("obs_max", 300.0))
     station, station_log = [], []
+    native_input = bool(eval_config.get("native_input", True))
+    input_sources: set[str] = set()
 
     preds = [p for p in find_predictions(predictions_dir)
              if (only_dates is None or p.date in only_dates) and (only_steps is None or p.step in only_steps)]
@@ -94,7 +106,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         H = {"truth": [], "input": [], "model": []}
         dates, npts = [], None
         for p in sorted(by_step[step], key=lambda q: q.date):
-            lat, lon, y, xi, yp = read_tp(p.path, var, resolve_box_edge_deg(eval_config))
+            info: dict = {}
+            lat, lon, y, xi, yp = read_tp(p.path, var, resolve_box_edge_deg(eval_config), native_input=native_input,
+                                          info=info)
+            input_sources.add(str(info.get("input_source")))
             members.add(int(yp.shape[0]))
             masks = region_masks(lat, lon, regions)
             npts = [int(m.sum()) for m in masks.values()]
@@ -148,7 +163,11 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "accum_hours": eval_config.get("accum_hours", 6), "members": sorted(members), "regions": regions,
             "thresholds": list(thresholds), "box_edge_deg": resolve_box_edge_deg(eval_config), "steps": sorted(by_step), "files": files, "cases_missing": missing,
             "obs": {**obs_cfg, "per_file": station_log} if obs_cfg else None,
-            "run_label": str(eval_config.get("run_label") or kwargs.get("run_label") or "")}
+            "run_label": str(eval_config.get("run_label") or kwargs.get("run_label") or ""),
+            "input_source": sorted(input_sources), "native_input": native_input}
+    for src in sorted(input_sources):
+        if is_interpolated(src):
+            warn_fallback(LOG, "precip_read", src)
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
     if missing:
         LOG.warning("precip_read: no file for cases %s", missing)

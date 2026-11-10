@@ -19,6 +19,11 @@ check against coherence.json.
 
 Surface classes come from the O1280 constant forcings (lsm, z), which are the very
 fields the model does and does not receive -- the point of the test.
+
+The ``interp_*`` columns score the input as a competitor (its band correlation and
+amplitude ratio against the truth). Under rule 41 they come from the native input ``x``
+sampled at the pixel centres (runner._native_sampler, the box_spectra operator), and from
+``x_interp`` only when the file has no native x; ``input_source`` records which.
 """
 from __future__ import annotations
 
@@ -147,10 +152,12 @@ def run_stratified(
     max_members=None,
     run_label="",
     bands=None,
+    native_input=True,
 ):
     from eval.discovery.predictions import valid_prediction_files
     from eval.evaluators.spectra_coherence.runner import (
-        _alm, _healpix_binner, _healpix_map, _select_member,
+        INPUT_INTERP, INPUT_INTERP_OFF, INPUT_NATIVE, _alm, _healpix_binner, _healpix_map, _input_member,
+        _native_sampler, _sampled_map, _select_member,
     )
 
     predictions_dir = Path(predictions_dir)
@@ -165,6 +172,8 @@ def run_stratified(
     # acc[(state, band, cls)] = [sum p*t, sum p^2, sum t^2, sum i*t, sum i^2]
     acc: dict[tuple, np.ndarray] = {}
     n_samples = 0
+    input_sources: set[str] = set()
+    samplers: dict = {}
 
     for file_path in files:
         with xr.open_dataset(file_path) as ds:
@@ -181,7 +190,14 @@ def run_stratified(
                 classes, class_info = build_surface_classes(lat, lon, nside)
 
             pix, counts, valid, npix, cov = _healpix_binner(lat, lon, nside)
-            has_interp = "x_interp" in ds
+            # the input columns: native x on its own grid when the file has it (rule 41)
+            file_native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
+            has_interp = file_native or "x_interp" in ds
+            sampler = _native_sampler(ds, nside, valid, samplers) if file_native else None
+            if file_native:
+                input_sources.add(INPUT_NATIVE)
+            elif has_interp:
+                input_sources.add(INPUT_INTERP if native_input else INPUT_INTERP_OFF)
             n_mem = int(ds.sizes["ensemble_member"]) if "ensemble_member" in ds.dims else 1
             if max_members:
                 n_mem = min(n_mem, int(max_members))
@@ -189,7 +205,10 @@ def run_stratified(
             for member_idx in range(n_mem):
                 pred = _select_member(ds["y_pred"], member_idx)
                 truth = _select_member(ds["y"], member_idx)
-                interp = _select_member(ds["x_interp"], member_idx) if has_interp else None
+                if file_native:
+                    interp = _input_member(ds["x"], member_idx)
+                else:
+                    interp = _select_member(ds["x_interp"], member_idx) if has_interp else None
 
                 for state in states:
                     si = idx_of.get(state)
@@ -197,8 +216,12 @@ def run_stratified(
                         continue
                     a_p = _alm(_healpix_map(pred[:, si], pix, counts, valid, npix), lmax)
                     a_t = _alm(_healpix_map(truth[:, si], pix, counts, valid, npix), lmax)
-                    a_i = (_alm(_healpix_map(interp[:, si], pix, counts, valid, npix), lmax)
-                           if interp is not None else None)
+                    if interp is None:
+                        a_i = None
+                    elif file_native:
+                        a_i = _alm(_sampled_map(interp[:, si], sampler, valid, npix), lmax)
+                    else:
+                        a_i = _alm(_healpix_map(interp[:, si], pix, counts, valid, npix), lmax)
 
                     for bname, lo, hi in bands:
                         mp = _band_map(a_p, lo, hi, lmax, nside)
@@ -239,6 +262,8 @@ def run_stratified(
         "predictions_dir": str(predictions_dir),
         "nside": nside, "lmax": lmax, "steps": steps,
         "n_member_files": n_samples,
+        "native_input": native_input,
+        "input_source": sorted(input_sources),
         "surface_classes": class_info,
         "class_definition": {
             "ocean": "land-sea fraction < 0.2",

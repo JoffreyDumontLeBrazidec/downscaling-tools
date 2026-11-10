@@ -8,10 +8,13 @@ Each event page shows, zoomed tightly around the event centre, as Cartopy maps:
   truth | interpolated input | model | model minus truth
 The pages go to one PDF plus a PNG per page in ``<name>_pages/``.
 
-Truth and the interp-input baseline fall back to the lane's GRIB sources when
-the predictions do not embed them (tp truth was historically missing from the
-o1280->o2560 bundles, and x_interp tp is identically zero there because tp is
-an output-only channel). All colourbars are mm per 6h window.
+The input panel shows the input on its own grid (rule 41): the native `x` at
+the nearest native point of each output point when the file carries it as a
+real series, else the lane's GRIB driver member at the nearest native point,
+and only then the interpolated `x_interp` (titled so). Truth falls back to the
+lane's GRIB when the predictions do not embed it (tp truth was historically
+missing from the o1280->o2560 bundles, and x / x_interp tp is identically zero
+there because tp is an output-only channel). All colourbars are mm per 6h window.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
+from eval.shared.native_input import InputReader, has_native_input
 from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 
 from eval.shared.precip.sources import (
@@ -76,7 +80,9 @@ class _EventData:
     """Per-event field slices (mm), resolved from NC + fallback GRIB sources."""
 
     def __init__(self, truth_grib_tpl: str, baseline_grib_tpl: str,
-                 interp_index_cache: str, var: str, member_index: int):
+                 interp_index_cache: str, var: str, member_index: int, native_input: bool = True):
+        self.native_input = bool(native_input)
+        self.input_how: str | None = None    # "native" or "interpolated", for the panel title
         self.truth_grib_tpl = truth_grib_tpl
         self.baseline_grib_tpl = baseline_grib_tpl
         self.interp_index_cache = interp_index_cache
@@ -112,10 +118,15 @@ class _EventData:
             truth = truth * 1000.0 if np.isfinite(truth).mean() > 0.5 else None
 
             base = None
-            if "x_interp" in ds.variables:
+            if self.native_input and has_native_input(ds):
+                # rule 41: the input on its own grid, nearest native point of each output point
+                cand = InputReader(ds, lat_out=lat, lon_out=lon).channel(vi, member=self.mi)
+                if not is_degenerate_channel(cand):
+                    base, self.input_how = cand * 1000.0, "native"
+            if base is None and "x_interp" in ds.variables and not (self.native_input and self.baseline_grib_tpl):
                 cand = ds["x_interp"][0, self.mi].values[:, vi]
                 if not is_degenerate_channel(cand):
-                    base = cand * 1000.0
+                    base, self.input_how = cand * 1000.0, "interpolated"
             if base is None and self.baseline_grib_tpl:
                 if self._baseline_src is None:
                     self._baseline_src = LresInterpBaseline(
@@ -125,6 +136,7 @@ class _EventData:
                                                     probe_date=event.date)
                 base = self._baseline_src.load(
                     event.date, event.step, _member_id(ds, self.mi)) * 1000.0
+                self.input_how = "native"   # the GRIB member at the nearest native point
         finally:
             ds.close()
         return lat, lon, truth, base, pred
@@ -186,7 +198,8 @@ def _make_event_figure(event: Event, data: _EventData, run_label: str,
     if base_z is not None:
         into = f" to {data.target_grid}" if data.target_grid else ""
         src = f" ({data.input_grid})" if data.input_grid else ""
-        panels.append((base_z, f"Input{src} interpolated{into}", "field"))
+        how = ", native grid" if data.input_how == "native" else f" interpolated{into}"
+        panels.append((base_z, f"Input{src}{how}", "field"))
     panels.append((pred_z, f"Model{tgt}", "field"))
     error_z = None
     if truth_z is not None:
@@ -272,6 +285,8 @@ def main() -> None:
     parser.add_argument("--truth-grib-tpl", default="")
     parser.add_argument("--baseline-grib-tpl", default="")
     parser.add_argument("--interp-index-cache", default="")
+    parser.add_argument("--no-native-input", action="store_true",
+                        help="Old pages: x_interp before the native x (rule 41 says never).")
     args = parser.parse_args()
 
     src_path = Path(args.predictions_dir)
@@ -288,7 +303,8 @@ def main() -> None:
               f" at ({e.lat:.2f}, {e.lon:.2f})")
 
     data = _EventData(args.truth_grib_tpl, args.baseline_grib_tpl,
-                      args.interp_index_cache, args.var, args.member_index)
+                      args.interp_index_cache, args.var, args.member_index,
+                      native_input=not args.no_native_input)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     from eval.plotting import FigureBook

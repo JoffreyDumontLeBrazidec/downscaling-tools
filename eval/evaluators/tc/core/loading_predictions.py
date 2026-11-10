@@ -8,6 +8,8 @@ from typing import Iterable
 import numpy as np
 import xarray as xr
 
+from eval.shared.native_input import SOURCE_NATIVE, InputReader, has_native_input, interp_source
+
 from .data_types import BoundingBox, CurveVectors, SupportMode, curve_support_signature
 from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 
@@ -120,6 +122,77 @@ def load_prediction_curves(
             prediction_var=prediction_var,
         )
     raise ValueError(f"Unsupported support_mode={support_mode!r}")
+
+
+def load_input_curves(
+    pred_files: Iterable[tuple[Path, int, int]],
+    *,
+    bbox: BoundingBox,
+    support_mode: SupportMode,
+    target_lon: np.ndarray | None = None,
+    target_lat: np.ndarray | None = None,
+    native_input: bool = True,
+) -> tuple[CurveVectors, str]:
+    """The input curve of an event and its source (rule 41).
+
+    When the files carry the native input ``x`` (and ``native_input``), each verification point of the curve's
+    support (the output points in the bbox for ``native``, the target grid for ``regridded``) takes the value of
+    the nearest native input point: native values, unsmoothed, on the same support as the model and truth curves.
+    Otherwise the curve is ``x_interp`` loaded like the model (interpolated; the source says so)."""
+    pred_files = list(pred_files)
+    if not pred_files:
+        raise ValueError("No prediction files provided")
+    with xr.open_dataset(pred_files[0][0]) as ds0:
+        native = native_input and has_native_input(ds0)
+    if not native:
+        reason = "native_input: false" if not native_input else "no native x in the file"
+        curves = load_prediction_curves(pred_files, bbox=bbox, support_mode=support_mode, target_lon=target_lon,
+                                        target_lat=target_lat, prediction_var="x_interp")
+        return curves, interp_source("x_interp", reason)
+    if support_mode == "regridded" and (target_lon is None or target_lat is None):
+        raise ValueError("target_lon/target_lat are required for regridded input curves")
+    msl_vals: list[np.ndarray] = []
+    wind_vals: list[np.ndarray] = []
+    signatures: set[str] = set()
+    for path, _, _ in pred_files:
+        with xr.open_dataset(path) as ds:
+            weather_states = ds["weather_state"].values.tolist()
+            i_msl = weather_states.index("msl")
+            i_u10 = weather_states.index("10u")
+            i_v10 = weather_states.index("10v")
+            if support_mode == "native":
+                lon, lat = prediction_point_coordinates(ds)
+                # regional box: the 1-degree edge strip is not scored (eval.shared.edge_strip), as for the model
+                mask = point_mask(lon, lat, bbox) & box_edge_mask(lat, lon, resolve_box_edge_deg())
+                if not np.any(mask):
+                    continue
+                pts_lon, pts_lat = lon[mask], lat[mask]
+                signatures.add(curve_support_signature("native", pts_lon, pts_lat))
+            elif support_mode == "regridded":
+                pts_lon = np.asarray(target_lon, dtype=np.float64).reshape(-1)
+                pts_lat = np.asarray(target_lat, dtype=np.float64).reshape(-1)
+                signatures.add(curve_support_signature("regridded", target_lon, target_lat))
+                source_lon, source_lat = prediction_point_coordinates(ds)
+                src_keep = box_edge_mask(source_lat, source_lon, resolve_box_edge_deg())
+                if not src_keep.all():
+                    # regional source: the target points the model curve drops (their value comes from the
+                    # box-edge strip) are dropped from the input curve too
+                    tkeep = src_keep[nearest_point_indices(src_lon=source_lon, src_lat=source_lat,
+                                                           target_lon=target_lon, target_lat=target_lat)]
+                    pts_lon, pts_lat = pts_lon[tkeep], pts_lat[tkeep]
+            else:
+                raise ValueError(f"Unsupported support_mode={support_mode!r}")
+            reader = InputReader(ds, lat_out=pts_lat, lon_out=pts_lon)
+            msl = reader.channel(i_msl)
+            u10, v10 = reader.channel(i_u10), reader.channel(i_v10)
+            msl_vals.append((msl / 100.0).reshape(-1))
+            wind_vals.append(np.sqrt(u10 * u10 + v10 * v10).reshape(-1))
+    if not msl_vals:
+        raise RuntimeError("No native input values extracted")
+    if len(signatures) != 1:
+        raise ValueError(f"Input curve files do not share one spatial support: {sorted(signatures)}")
+    return CurveVectors(msl=np.concatenate(msl_vals), wind=np.concatenate(wind_vals), support_mode=support_mode,
+                        support_signature=signatures.pop()), SOURCE_NATIVE
 
 
 # --- Internal helpers ---

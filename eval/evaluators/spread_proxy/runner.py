@@ -45,6 +45,7 @@ def run(
         enfo_n_members=eval_config.get("enfo_n_members"),
         enfo_subsample_seed=int(eval_config.get("enfo_subsample_seed", 0)),
         include_input=bool(eval_config.get("include_input", True)),
+        native_input=bool(eval_config.get("native_input", True)),  # rule 41; False reproduces old tables
     )
     LOG.info("spread_proxy scores written to %s (%s rows)", output_dir, payload.get("n_rows"))
     return output_dir

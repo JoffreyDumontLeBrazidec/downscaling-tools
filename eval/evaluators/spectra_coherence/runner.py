@@ -29,9 +29,19 @@ phase-random texture and no amplitude/sharpness knob (guidance, churn, sigma
 schedule) can help -- only a different model or loss can. That is the single
 number this evaluator exists to produce.
 
-The same quantities are computed for the interpolated low-resolution driver
-(`x_interp`), which is the honest baseline: it tells us at which scales the model
-is actually adding skill over simply interpolating its own input.
+The same quantities are computed for the low-resolution input, which is the honest
+baseline: it tells us at which scales the model is actually adding skill over its own
+input. These curves (keys ``interp_*``, ``P_interp``, ``X_interp_true``; the names are
+kept so the scorer's ``coh_*_interp_coherence`` rows stay comparable) score the INPUT AS A
+COMPETITOR: the coherence and amplitude ratio of the input with the truth per degree. They
+are not a residual quantity (the residual curves below are, and stay on x_interp). So under
+rule 41 (owner, 9 Nov 2026: the input is scored on its own grid, never interpolated to the
+output grid first) they come from the native input ``x`` on ``lat_lres/lon_lres`` whenever
+the file carries it, sampled at the analysis-map pixel centres with the operator
+box_spectra uses for its native input (linear, barycentric over the native points'
+triangulation; see _input_sampler.py), not from ``x_interp``. Without a native x they fall
+back to ``x_interp``, with a warning. ``native_input: false`` reproduces the old curves.
+coherence.json records ``input_source``.
 
 Residual (rule 14 of the run-judging protocol): with the interpolated input present, the
 amplitude ratio of the residual is also written per degree,
@@ -40,6 +50,8 @@ amplitude ratio of the residual is also written per degree,
 
 (the transform is linear, so this is the spectrum of y_pred - x_interp over that of
 y - x_interp), next to the input over truth R_interp(l) and the aligned part C(l) x R(l).
+The residual is a residual DEFINITION, so it stays against ``x_interp`` (y - x_interp is what
+the model learns), also when the input curves come from the native x.
 ``curves.csv`` holds every per-degree quantity in long form (one row per scope, state and
 degree; scope ``all`` pools every file and member, scope ``YYYYMMDD`` one date) with the
 wavelength 2 pi a / sqrt(l (l + 1)) in km. Per-date rows are written with ``per_date: true``.
@@ -120,6 +132,39 @@ def _auto_cross(alm_a, alm_b, lmax):
     return hp.alm2cl(alm_a, alm_b, lmax=lmax)
 
 
+def _input_member(da: xr.DataArray, member_idx: int) -> np.ndarray:
+    """The input of draw member_idx: its own input member, or the only one when the input has one."""
+    if "ensemble_member" in da.dims and int(da.sizes["ensemble_member"]) == 1:
+        member_idx = 0
+    return _select_member(da, member_idx)
+
+
+def _native_sampler(ds, nside: int, valid: np.ndarray, cache: dict):
+    """Linear sampler of the file's native input at the centres of the valid pixels (rule 41); cached per grid."""
+    import healpy as hp
+    from eval.evaluators.spectra_coherence._input_sampler import SphereLinearSampler
+
+    lat_in = np.asarray(ds["lat_lres"].values, dtype=np.float64).reshape(-1)
+    lon_in = np.asarray(ds["lon_lres"].values, dtype=np.float64).reshape(-1)
+    key = (nside, int(valid.sum()), lat_in.size, float(lat_in[0]), float(lat_in[-1]),
+           float(lon_in[0]), float(lon_in[-1]))
+    if key not in cache:
+        theta, phi = hp.pix2ang(nside, np.flatnonzero(valid), nest=False)
+        cache[key] = SphereLinearSampler(lat_in, lon_in, 90.0 - np.degrees(theta), np.degrees(phi))
+    return cache[key]
+
+
+def _sampled_map(values, sampler, valid, npix):
+    """The native input on the analysis map: sampled at the valid pixels, mean-removed like _healpix_map."""
+    m = np.zeros(npix, dtype=np.float64)
+    m[valid] = sampler(values)
+    m[valid] -= np.mean(m[valid])
+    return m
+
+
+INPUT_NATIVE = "x (native input grid)"
+INPUT_INTERP = "x_interp (input interpolated to the output grid; no native x in the file)"
+INPUT_INTERP_OFF = "x_interp (input interpolated to the output grid; native_input: false)"
 EARTH_RADIUS_KM = 6371.0088
 CURVE_COLS = ["scope", "state", "ell", "wavelength_km", "n_samples",
               "amplitude_ratio", "coherence", "aligned", "residual_amplitude_ratio",
@@ -234,6 +279,7 @@ def run(
     clip_fields = set(eval_config.get("clip_nonnegative") or ())
     steps = eval_config.get("steps", spectra_cfg.get("steps"))
     max_members = eval_config.get("max_members")
+    native_input = bool(eval_config.get("native_input", True))
 
     files = valid_prediction_files(predictions_dir, steps=[int(s) for s in steps] if steps else None)
     if not files:
@@ -258,6 +304,8 @@ def run(
     n_samples: dict[str, int] = {s: 0 for s in states}
     n_date: dict[tuple[str, str], int] = {}
     have_interp = False
+    input_sources: set[str] = set()
+    samplers: dict = {}
     coverage = None
 
     for file_path in files:
@@ -285,8 +333,15 @@ def run(
             m_date = PREDICTION_RE.search(file_path.name)
             date_scope = m_date.group(1) if m_date else file_path.name
 
-            file_has_interp = "x_interp" in ds
+            # the input curves: native x on its own grid when the file has it (rule 41)
+            file_native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
+            file_has_interp = file_native or "x_interp" in ds
             have_interp = have_interp or file_has_interp
+            sampler = _native_sampler(ds, nside, valid, samplers) if file_native else None
+            if file_native:
+                input_sources.add(INPUT_NATIVE)
+            elif file_has_interp:
+                input_sources.add(INPUT_INTERP if native_input else INPUT_INTERP_OFF)
 
             n_mem = int(ds.sizes["ensemble_member"]) if "ensemble_member" in ds.dims else 1
             if max_members:
@@ -295,7 +350,13 @@ def run(
             for member_idx in range(n_mem):
                 pred = _select_member(ds["y_pred"], member_idx)
                 truth = _select_member(ds["y"], member_idx)
-                interp = _select_member(ds["x_interp"], member_idx) if file_has_interp else None
+                if file_native:
+                    interp = _input_member(ds["x"], member_idx)
+                else:
+                    interp = _select_member(ds["x_interp"], member_idx) if file_has_interp else None
+                # the residuals stay defined against x_interp (a residual definition, not the input row)
+                resid_ref = (interp if not file_native else
+                             _select_member(ds["x_interp"], member_idx) if "x_interp" in ds else None)
 
                 for state in states:
                     si = idx_of.get(state)
@@ -308,6 +369,9 @@ def run(
                         if interp is not None:
                             interp = interp.copy()
                             interp[:, si] = np.maximum(interp[:, si], 0.0)
+                        if resid_ref is not None and resid_ref is not interp:
+                            resid_ref = resid_ref.copy()
+                            resid_ref[:, si] = np.maximum(resid_ref[:, si], 0.0)
 
                     m_t = _healpix_map(truth[:, si], pix, counts, valid, npix)
                     m_p = _healpix_map(pred[:, si], pix, counts, valid, npix)
@@ -321,17 +385,20 @@ def run(
                     terms = [("P_true", p_true), ("P_pred", p_pred), ("X_pred_true", x_pt)]
 
                     if interp is not None:
-                        m_i = _healpix_map(interp[:, si], pix, counts, valid, npix)
+                        m_i = (_sampled_map(interp[:, si], sampler, valid, npix) if file_native
+                               else _healpix_map(interp[:, si], pix, counts, valid, npix))
                         a_i = _alm(m_i, lmax)
                         p_int = _auto_cross(a_i, a_i, lmax) / max(cov, 1e-6)
                         x_it = _auto_cross(a_i, a_t, lmax) / max(cov, 1e-6)
-                        d_p, d_t = a_p - a_i, a_t - a_i
+                        terms += [("P_interp", p_int), ("X_interp_true", x_it)]
+                    if resid_ref is not None:
+                        a_r = a_i if (interp is not None and not file_native) else _alm(
+                            _healpix_map(resid_ref[:, si], pix, counts, valid, npix), lmax)
+                        d_p, d_t = a_p - a_r, a_t - a_r
                         p_rp = _auto_cross(d_p, d_p, lmax) / max(cov, 1e-6)
                         p_rt = _auto_cross(d_t, d_t, lmax) / max(cov, 1e-6)
                         x_r = _auto_cross(d_p, d_t, lmax) / max(cov, 1e-6)
-                        terms += [("P_interp", p_int), ("X_interp_true", x_it),
-                                  ("P_resid_pred", p_rp), ("P_resid_true", p_rt),
-                                  ("X_resid", x_r)]
+                        terms += [("P_resid_pred", p_rp), ("P_resid_true", p_rt), ("X_resid", x_r)]
 
                     targets = [acc.setdefault(state, {})]
                     if per_date:
@@ -343,6 +410,10 @@ def run(
 
                     n_samples[state] += 1
         LOG.info("spectra_coherence: done %s", file_path.name)
+
+    if INPUT_INTERP in input_sources:
+        LOG.warning("spectra_coherence: input curves from x_interp (no native x in the files); rule 41: they are "
+                    "then a smoothed-input diagnostic, not the input's own coherence with the truth")
 
     curves: dict[str, Any] = {}
     npz_payload: dict[str, np.ndarray] = {}
@@ -462,6 +533,8 @@ def run(
         "steps": steps,
         "states": states,
         "has_interp_baseline": have_interp,
+        "native_input": native_input,
+        "input_source": sorted(input_sources),
         "bands": [{"name": n_, "lo": lo, "hi": hi} for n_, lo, hi in bands],
         "band_summary": band_rows,
         "curves": curves,

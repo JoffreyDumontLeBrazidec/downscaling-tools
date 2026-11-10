@@ -15,12 +15,15 @@ F = field - L of members and truth, P_L being one isotropic Gaussian low-pass wi
 half-power wavelength at `scale_cut_km` (400 km by default; see core/scale_split.py), and
 for the full field on the same inner points those bands use (band `full_inner`, so full,
 large and fine are comparable). The bands are NOT additive (P_L is a taper): full_inner is
-not large + fine. When the files carry the input members (x_interp), their spread per band
-is reported too, so the read can say how much large-scale spread comes from the input, and
-the residuals against the input are split the same way (residual_bands_by_lead.csv): how far
-the truth and the model are from the input in each band, whether the model's change goes
-towards the truth's (a large-scale correction) or is its own drift, and its error against the
-input's. A read only: the outputs are never filtered (ablation note section 15.10).
+not large + fine. When the files carry the input members, their spread per band is
+reported too, so the read can say how much large-scale spread comes from the input; the
+input is read on its own grid (rule 41: native x at the nearest native point, x_interp only
+when the file has no x; input_source in the summary JSON). The residuals against the input
+are split the same way (residual_bands_by_lead.csv; the residual stays defined against
+x_interp, y - x_interp being what the model learns): how far the truth and the model are
+from the input in each band, whether the model's change goes towards the truth's (a
+large-scale correction) or is its own drift, and its error against the input's. A read
+only: the outputs are never filtered (ablation note section 15.10).
 Precipitation (tp) is in the default variables and is clipped at zero before scoring.
 
 The scores are read with the owner's rule 32 v2 (core/verdict.py, applied by `eval.cli

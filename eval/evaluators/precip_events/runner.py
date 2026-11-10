@@ -85,6 +85,8 @@ def run(
     run_label = str(eval_config.get("run_label") or kwargs.get("run_label") or "")
     if run_label:
         cmd += ["--run-label", run_label]
+    if not bool(eval_config.get("native_input", True)):  # rule 41 off: old pages only
+        cmd += ["--no-native-input"]
 
     LOG.info("precip_events subprocess: %s", " ".join(cmd))
     subprocess.run(cmd, check=True, env=subprocess_env(eval_config))   # carries box_edge_deg

@@ -85,3 +85,32 @@ def test_missing_truth_without_config_raises(tmp_path):
     import pytest
     with pytest.raises(RuntimeError, match="truth_grib_tpl"):
         run(tmp_path, lane_config={}, eval_config={}, overwrite=True)
+
+
+def test_baseline_from_the_native_input_grid(tmp_path):
+    """Rule 41: a file with a native x (lat_lres/lon_lres) gives the baseline from x at the nearest native point,
+    not from x_interp; native_input: false reads x_interp as before."""
+    rng = np.random.default_rng(3)
+    n = 400
+    truth_m = rng.gamma(0.5, 0.002, size=n)
+    pred_m = np.stack([truth_m + 0.001, truth_m - 0.001])
+    base_m = np.stack([truth_m + 0.002, truth_m + 0.002])
+    path = tmp_path / "predictions_20250926_step006.nc"
+    _write_predictions(path, truth_m=truth_m, pred_m=pred_m, base_m=base_m)
+    ds = xr.load_dataset(path)
+    lat_l = np.linspace(-10, 10, 40)
+    ds["lat_lres"] = (("grid_point_lres",), lat_l)
+    ds["lon_lres"] = (("grid_point_lres",), np.linspace(0, 20, 40))
+    ds["x"] = (("sample", "ensemble_member", "grid_point_lres", "weather_state"),
+               np.full((1, 2, 40, 1), 0.005, np.float32))   # 5 mm everywhere on the native grid
+    ds.to_netcdf(path)
+    # a toy line of points reads as a regional box: keep its edge strip so the means below hold
+    out = run(tmp_path, lane_config={}, eval_config={"box_edge_deg": 0}, output_dir=tmp_path / "nat", overwrite=True)
+    meta = json.loads((out / "scores.json").read_text())["meta"]
+    assert meta["baseline_source"] == "x-native" and meta["input_source"] == "x (native input grid)"
+    row = json.loads((out / "scores.json").read_text())["rows"][0]
+    assert abs(row["members"][0]["baseline"]["bias_mm"] - (5.0 - truth_m.mean() * 1000)) < 1e-2
+    old = run(tmp_path, lane_config={}, eval_config={"native_input": False, "box_edge_deg": 0}, output_dir=tmp_path / "old",
+              overwrite=True)
+    meta_old = json.loads((old / "scores.json").read_text())["meta"]
+    assert meta_old["baseline_source"] == "x_interp" and "interpolated" in meta_old["input_source"]

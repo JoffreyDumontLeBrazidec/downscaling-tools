@@ -25,8 +25,13 @@ wind-speed fields are built from the 10 m wind components::
     W_truth = hypot(y     [10u], y     [10v])
     W_input = hypot(up @ x[10u], up @ x[10v])
 
-``up`` is the linear O320 -> O1280 interpolation matrix the lane itself uses, so
-``W_input`` is the driver seen on the output grid. With ``input_source: x_interp`` the
+Rule 41 (owner, 9 Nov 2026): the input row is scored on the input's own grid. When the file
+carries the native ``x`` on ``lat_lres``/``lon_lres`` (and ``native_input`` is not false),
+``W_input`` takes, at every output point, the wind of the nearest native input point
+(``eval.shared.native_input``): native values, no interpolation, on the same points, boxes
+and disks as the model and the truth. Only without a native ``x`` does the old route below
+apply, with a warning: ``up`` is the linear O320 -> O1280 interpolation matrix the lane itself
+uses, so ``W_input`` is the driver interpolated to the output grid. With ``input_source: x_interp`` the
 interpolated input stored in the prediction file is used instead and no matrix is read; this
 is how a lane other than o320->o1280 (o96->o320: the default matrix has the O1280 point
 count and is refused) gets its input curve. ``paths: {up_matrix: ...}`` still works.
@@ -89,6 +94,7 @@ from typing import Any
 import numpy as np
 
 from eval.shared.edge_strip import box_edge_index, is_global, resolve_box_edge_deg, wrap_lon
+from eval.shared.native_input import SOURCE_NATIVE, has_native_input, nearest_native_index, warn_fallback
 
 LOG = logging.getLogger(__name__)
 
@@ -469,6 +475,8 @@ def run(
     max_members = eval_config.get("max_members")
     paths = {**_default_paths(), **(eval_config.get("paths") or {})}
     input_source = str(eval_config.get("input_source", "up_matrix"))
+    native_input = bool(eval_config.get("native_input", True))   # rule 41; False reproduces old tables
+    native_used: bool | None = None
     if input_source not in ("up_matrix", "x_interp"):
         raise ValueError(f"wind_extremes.input_source must be up_matrix or x_interp, got {input_source!r}")
 
@@ -526,9 +534,13 @@ def run(
                 raise RuntimeError(
                     f"{file_path.name}: {lat.size} points, but earlier files were "
                     f"{'regional' if regional else 'global'}")
-            # regional files always take the exported driver (the matrix is global)
-            needed_input = "x_interp" if (regional or up is None) else "x"
-            if needed_input not in ds.variables:
+            # rule 41: the native x when the file has it; else regional files take the exported driver
+            # (the matrix is global) and global ones up @ x
+            file_native = native_input and has_native_input(ds)
+            if native_used is None:
+                native_used = file_native
+            needed_input = "x_native" if file_native else ("x_interp" if (regional or up is None) else "x")
+            if needed_input != "x_native" and needed_input not in ds.variables:
                 raise RuntimeError(
                     f"{file_path} is missing {needed_input!r}"
                     + ("; regional files need the exported x_interp for the input wind"
@@ -548,6 +560,11 @@ def run(
             keep = box_edge_index(lat, lon, box_edge_deg) if regional else slice(None)
             if not isinstance(keep, slice):
                 lat, lon, lon180 = lat[keep], lon[keep], lon180[keep]
+            near = None
+            if needed_input == "x_native":
+                near = nearest_native_index(np.asarray(ds.variables["lat_lres"][:], np.float64).reshape(-1),
+                                            np.asarray(ds.variables["lon_lres"][:], np.float64).reshape(-1),
+                                            lat, lon)
             if not box_static:
                 if regional:
                     boxes = _clip_boxes_to_extent(boxes, lat, lon180, radii_km)
@@ -581,8 +598,14 @@ def run(
                 yp_v = _read_component(ds.variables["y_pred"], member_index, cv)[keep]
                 yt_u = _read_component(ds.variables["y"], member_index, cu)[keep]
                 yt_v = _read_component(ds.variables["y"], member_index, cv)[keep]
-                xx_u = _read_component(ds.variables[needed_input], member_index, cu)[keep]
-                xx_v = _read_component(ds.variables[needed_input], member_index, cv)[keep]
+                if needed_input == "x_native":
+                    # native values at the nearest native point of every kept output point (rule 41)
+                    xm = member_index if ds.variables["x"].shape[1] > 1 else 0
+                    xx_u = _read_component(ds.variables["x"], xm, cu)[near]
+                    xx_v = _read_component(ds.variables["x"], xm, cv)[near]
+                else:
+                    xx_u = _read_component(ds.variables[needed_input], member_index, cu)[keep]
+                    xx_v = _read_component(ds.variables[needed_input], member_index, cv)[keep]
 
                 for name, st in box_static.items():
                     padded = st["padded_idx"]
@@ -620,6 +643,9 @@ def run(
                 LOG.info("wind_extremes: %s member %s done in %.1fs",
                          file_path.name, member_label, time.time() - t_mem)
 
+    if not native_used:
+        warn_fallback(LOG, "wind_extremes", "x_interp" if (regional or up is None) else
+                      "up @ x (input linearly interpolated to the output grid; no native x in the file)")
     aggregate = _aggregate(samples, list(boxes), radii_km)
     payload = {
         "run_label": run_label or predictions_dir.name,
@@ -631,7 +657,9 @@ def run(
             "components": list(components), "steps": steps, "dates": dates,
             "members": members, "max_members": max_members,
             "paths": paths if up is not None else {},
-            "input_source": "x_interp" if (regional or up is None) else "up_matrix",
+            "input_source": (SOURCE_NATIVE if native_used
+                             else "x_interp" if (regional or up is None) else "up_matrix"),
+            "native_input": native_input,
             "point_area_km2": point_area_km2,
             "regional": bool(regional),
             "box_edge_deg": box_edge_deg if regional else 0.0,

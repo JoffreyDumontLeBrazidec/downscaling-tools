@@ -47,6 +47,12 @@ scatter is the weather's, not the model's.
 """
 from __future__ import annotations
 
+# Rule 41 (owner, 9 Nov 2026): the input is taken on its own grid. When the file carries the native
+# ``x`` on ``lat_lres``/``lon_lres`` (and ``native_input`` is not false), the input field of every box
+# takes the value of the nearest native input point at each box point, not ``up @ x``; the matrix is
+# then used only for the optional coarsened truth. Without a native x the old ``up @ x`` route applies,
+# with a warning. ``config.input_source`` in the output says which.
+
 import json
 import logging
 import os
@@ -402,8 +408,13 @@ def run(
     t0 = time.time()
     up = sps.load_npz(paths["up_matrix"]).tocsr()
     down = sps.load_npz(paths["down_matrix"]).tocsr() if coarsen_truth else None
+    native_input = bool(eval_config.get("native_input", True))
+    from eval.shared.native_input import SOURCE_NATIVE, has_native_input, nearest_native_index, warn_fallback
+
+    input_sources: set[str] = set()
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
+    near_box: dict[str, Any] = {}
     samples: list[dict[str, Any]] = []
 
     for file_path in files:
@@ -438,6 +449,15 @@ def run(
                              name, time.time() - t_box, box_static[name]["n_cells"],
                              box_static[name]["n_native"])
             lead = ds.getncattr("lead_step_hours") if "lead_step_hours" in ds.ncattrs() else step
+            file_native = native_input and has_native_input(ds)
+            input_sources.add(SOURCE_NATIVE if file_native else
+                              "up @ x (input linearly interpolated to the output grid; "
+                              + ("native_input: false)" if has_native_input(ds) else "no native x in the file)"))
+            if file_native and not near_box:
+                la_l = np.asarray(ds.variables["lat_lres"][:], np.float64).reshape(-1)
+                lo_l = np.asarray(ds.variables["lon_lres"][:], np.float64).reshape(-1)
+                for name, st in box_static.items():
+                    near_box[name] = nearest_native_index(la_l, lo_l, lat[st["native_idx"]], lon[st["native_idx"]])
 
             for member_label, member_index in _select_members(ds, members, max_members):
                 t_mem = time.time()
@@ -461,14 +481,17 @@ def run(
 
                     for name, st in box_static.items():
                         native = st["native_idx"]
+                        # rule 41: the input at the nearest native point of each box point when the file has x
+                        inp = ((lambda a, nb=near_box[name]: a[nb]) if file_native
+                               else (lambda a, ub=up_box[name]: ub @ a))
                         if combine == "hypot":
                             model_n = np.hypot(yp[0][native], yp[1][native])
                             truth_n = np.hypot(yt[0][native], yt[1][native])
-                            input_n = np.hypot(up_box[name] @ xx[0], up_box[name] @ xx[1])
+                            input_n = np.hypot(inp(xx[0]), inp(xx[1]))
                         else:
                             model_n = yp[0][native]
                             truth_n = yt[0][native]
-                            input_n = up_box[name] @ xx[0]
+                            input_n = inp(xx[0])
 
                         sources = [("model", model_n), ("truth", truth_n),
                                    ("input", input_n)]
@@ -537,6 +560,9 @@ def run(
                 LOG.info("displacement: %s member %s done in %.1fs",
                          file_path.name, member_label, time.time() - t_mem)
 
+    for src in sorted(input_sources):
+        if "interpolated" in src:
+            warn_fallback(LOG, "displacement", src)
     aggregate = _aggregate(samples, list(boxes), fields)
     payload = {
         "run_label": run_label or predictions_dir.name,
@@ -549,6 +575,7 @@ def run(
             "include_coarsened_truth": coarsen_truth,
             "steps": steps, "dates": dates, "members": members,
             "max_members": max_members, "paths": paths,
+            "input_source": sorted(input_sources), "native_input": native_input,
             "search_cells": max_cells, "smooth_sigma_cells": sigma_cells,
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],

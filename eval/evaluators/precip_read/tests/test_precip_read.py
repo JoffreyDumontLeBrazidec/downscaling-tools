@@ -105,3 +105,32 @@ def test_run_then_plot(tmp_path, truth_members):
     for name in ("tp_station_scores.png", "tp_pdf_step024.png", "tp_pdf_step048.png", "tp_scores_by_lead.png", "tp_heavy_area_by_lead.png",
                  "tp_maps_demo.png"):
         assert (out / name).exists(), name
+
+
+def test_input_from_the_native_grid(tmp_path):
+    """Rule 41: with a native x the input row (scores, histograms, cases) is x at the nearest native point."""
+    import json
+
+    from eval.evaluators.precip_read.runner import read_tp, run
+
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    path = pred / "predictions_20230101_step024.nc"
+    _write(path, mode="truth")
+    with nc.Dataset(str(path), "a") as d:
+        la = np.asarray(d["lat_hres"][:])
+        lo = np.asarray(d["lon_hres"][:])
+        sel = np.arange(0, la.size, 7)
+        d.createDimension("grid_point_lres", sel.size)
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la[sel]
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = lo[sel]
+        x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+        x[:] = 0.0
+        x[0, :, :, 1] = 0.004   # 4 mm on every native point
+    info = {}
+    _, _, _, xi, _ = read_tp(path, info=info)
+    assert info["input_source"] == "x (native input grid)" and np.allclose(xi, 4.0)
+    _, _, _, xi_old, _ = read_tp(path, native_input=False, info=info)
+    assert "interpolated" in info["input_source"] and not np.allclose(xi_old, 4.0)
+    out = run(pred, {}, {}, output_dir=tmp_path / "out")
+    assert json.loads((out / "run_meta.json").read_text())["input_source"] == ["x (native input grid)"]

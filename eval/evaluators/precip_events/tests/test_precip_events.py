@@ -82,3 +82,28 @@ def test_bbox_clamped_near_pole(tmp_path):
 def test_empty_dir_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         find_precip_events(tmp_path, n_events=8, dlat=12, dlon=15, rank_by="truth")
+
+
+def test_event_input_panel_from_the_native_grid(tmp_path):
+    """Rule 41: the input panel of an event page is the native x at the nearest native point, titled so; with
+    native_input off it is x_interp as before."""
+    from eval.evaluators.precip_events.core.plot_precip_events import _EventData
+
+    path = tmp_path / "predictions_20250926_step024.nc"
+    _write_nc(path, date="20250926", step=24, peak_value=0.05, peak_lat=20.0, peak_lon=-70.0)
+    ds = xr.load_dataset(path)
+    n = ds.sizes["grid_point_hres"]
+    ds["x_interp"] = (("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+                      np.full((1, 1, n, 1), 0.002, np.float32))
+    ds["lat_lres"] = (("grid_point_lres",), np.linspace(-60, 60, 9))
+    ds["lon_lres"] = (("grid_point_lres",), np.linspace(-150, 150, 9))
+    ds["x"] = (("sample", "ensemble_member", "grid_point_lres", "weather_state"),
+               np.full((1, 1, 9, 1), 0.003, np.float32))
+    ds.to_netcdf(path)
+    event = find_precip_events(tmp_path, n_events=1, dlat=12, dlon=15, rank_by="truth")[0]
+    data = _EventData("", "", "", "tp", 0)
+    *_, base, _ = data.load(event)
+    assert data.input_how == "native" and np.allclose(base, 3.0)
+    old = _EventData("", "", "", "tp", 0, native_input=False)
+    *_, base_old, _ = old.load(event)
+    assert old.input_how == "interpolated" and np.allclose(base_old, 2.0)

@@ -20,7 +20,8 @@ def o320_dir(tmp_path_factory):
 
 
 def test_x_interp_input_on_the_real_o320_grid(o320_dir, tmp_path):
-    cfg = {"input_source": "x_interp", "radii_km": [20, 50, 100], "adjacency_km": 40,
+    # the file carries the native x, which rule 41 reads by default; this test pins the old x_interp route
+    cfg = {"input_source": "x_interp", "native_input": False, "radii_km": [20, 50, 100], "adjacency_km": 40,
            "boxes": {"europe": [35.0, 62.0, -12.0, 25.0]}, "steps": [60]}
     W.run(o320_dir, {}, cfg, output_dir=tmp_path)
     payload = json.loads((tmp_path / "wind_extremes.json").read_text())
@@ -47,3 +48,13 @@ def test_default_o1280_matrix_is_refused_on_o320(o320_dir, tmp_path):
         W.run(o320_dir, {}, {"paths": {"up_matrix": str(m)}, "radii_km": [50],
                              "boxes": {"europe": [35.0, 62.0, -12.0, 25.0]}},
               output_dir=tmp_path / "out")
+
+
+def test_native_input_is_the_default_input_row_on_o320(o320_dir, tmp_path):
+    """Rule 41: with a native x in the file the input row reads it, whatever input_source says."""
+    cfg = {"input_source": "x_interp", "radii_km": [50, 100], "adjacency_km": 40,
+           "boxes": {"europe": [35.0, 62.0, -12.0, 25.0]}, "steps": [60]}
+    W.run(o320_dir, {}, cfg, output_dir=tmp_path)
+    payload = json.loads((tmp_path / "wind_extremes.json").read_text())
+    assert payload["config"]["input_source"] == "x (native input grid)"
+    assert np.isfinite(payload["samples"][0]["input"]["peak"])

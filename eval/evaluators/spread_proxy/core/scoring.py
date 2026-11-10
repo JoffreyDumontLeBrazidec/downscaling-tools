@@ -46,9 +46,11 @@ from eval.evaluators.probabilistic.core.scoring import (
 )
 from eval.evaluators.surface.core.compute import (
     _area_weights,
+    _native_input_on_output_points,
     _to_member_point_weather,
     _weather_state_index,
 )
+from eval.shared.native_input import SOURCE_NATIVE, has_native_input, interp_source, is_interpolated, warn_fallback
 from eval.shared.edge_strip import strip_box_edge
 from eval.discovery.predictions import PREDICTION_RE, PredictionFile, find_predictions
 
@@ -343,8 +345,13 @@ def compute_spread_proxy(
     enfo_n_members: int | None = None,
     enfo_subsample_seed: int = 0,
     include_input: bool = True,
+    native_input: bool = True,
 ) -> dict[str, Any]:
-    """Compare ML (y_pred) vs ENFO (y) ensemble spread; write CSV/JSON/NPZ."""
+    """Compare ML (y_pred) vs ENFO (y) ensemble spread; write CSV/JSON/NPZ.
+
+    The input spread readout reads the input on its own grid (rule 41): the native ``x`` at the nearest native
+    point of each output point when the file carries it, else ``x_interp`` (with a warning)."""
+    input_sources: set[str] = set()
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -395,8 +402,17 @@ def compute_spread_proxy(
             ml = _load_member_point_weather(ds, "y_pred")
             enfo = _load_member_point_weather(ds, "y")
             inp: np.ndarray | None = None
-            if include_input and "x_interp" in ds:
+            if include_input and native_input and has_native_input(ds):
+                da = _to_member_point_weather(_native_input_on_output_points(ds), ds, label="x")
+                inp = np.asarray(da.transpose("member", "grid_point_hres", "weather_state").values,
+                                 dtype=np.float32)
+                input_sources.add(SOURCE_NATIVE)
+                if inp.shape[0] < 2:
+                    inp = None
+            elif include_input and "x_interp" in ds:
                 inp = _load_member_point_weather(ds, "x_interp")
+                input_sources.add(interp_source("x_interp", "native_input: false" if not native_input
+                                                else "no native x in the file"))
                 if inp.shape[0] < 2:
                     inp = None
             n_points = ml.shape[1]
@@ -531,10 +547,14 @@ def compute_spread_proxy(
         "enfo_exclude_members": exclude,
         "enfo_n_members": enfo_n_members,
         "include_input": bool(include_input),
+        "input_source": sorted(input_sources),
         "grid": grid_info,
         "source_attrs": file_attrs,
         "headline_metrics": _headline_metrics(summary_rows),
     }
+    for src in sorted(input_sources):
+        if is_interpolated(src):
+            warn_fallback(LOG, "spread_proxy", src)
     (output_dir / "spread_proxy_summary.json").write_text(
         json.dumps(payload, indent=2, default=str) + "\n"
     )

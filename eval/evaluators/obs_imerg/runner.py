@@ -14,6 +14,7 @@ from eval.evaluators.obs_points.core.summary import paired, summarise, write_sum
 from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, rank_seed, read_fields, row_kinds
 from eval.evaluators.precip_read.core.metrics import EDGES
 from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
+from eval.shared.native_input import is_interpolated, nearest_native_index, warn_fallback
 from eval.shared.provenance import ENSEMBLE_RULE, SINGLE_FIELD, is_single_input, provenance
 
 LOG = logging.getLogger(__name__)
@@ -108,6 +109,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     rows, ranks, log, files, members = [], [], [], [], set()
     constructions, kinds_seen = set(), {}
     var = str(eval_config.get("var", "tp"))
+    # rule 41: the input row from the native x, at the nearest native point of each IMERG/output point
+    native_input = bool(eval_config.get("native_input", True))
+    input_sources: set[str] = set()
     H = {}
     for p in preds:
         valid = (pd.Timestamp(p.date) + pd.Timedelta(hours=p.step)).strftime("%Y%m%d%H")
@@ -115,10 +119,16 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         if ref is None:
             log.append(f"WARN no IMERG field for {valid} ({p.date} +{p.step} h)")
             continue
-        lat, lon, fields, prov = read_fields(p.path, [var], ensembles=bool(eval_config.get("competitor_ensembles", True)))
+        lat, lon, fields, prov = read_fields(p.path, [var], ensembles=bool(eval_config.get("competitor_ensembles", True)),
+                                             native_input=native_input)
         if var not in fields:
             raise ValueError(f"{p.path}: no channel {var!r}")
         f = fields[var]  # tp in mm, clipped at 0 (read_fields); 2t etc. would be in observation units
+        g = prov["input_grid"]
+        input_sources.add(g["source"])
+        if g["lat"] is not None:
+            # native input values (no averaging) at the nearest native point of every output point (rule 41)
+            f = {**f, "input": f["input"][..., nearest_native_index(g["lat"], g["lon"], lat, lon)]}
         kinds = row_kinds(prov)
         constructions.add(prov["model"])
         for row, kind in kinds.items():
@@ -139,6 +149,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_imerg: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_imerg: nothing scored (no IMERG field for any file?)")
+    for src in sorted(input_sources):
+        if is_interpolated(src):
+            log.append(warn_fallback(LOG, "obs_imerg", src))
     construction = sorted(constructions)[0]
     if len(constructions) > 1:
         log.append(f"WARN the files disagree on how the model ensemble was built: {sorted(constructions)}")
@@ -168,11 +181,13 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "imerg_file": str(imerg_path), "imerg_attrs": {k: str(imerg.ds.getncattr(k)) for k in imerg.ds.ncattrs()},
             "regions": regions, "thresholds": list(thresholds), "members": sorted(members),
             "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}), "files": files,
-            "config": {"weighting": "none (O1280 points, nearly equal area)"},
+            "config": {"weighting": "none (O1280 points, nearly equal area)", "native_input": native_input},
+            "input_source": sorted(input_sources),
             "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
             "provenance": provenance(
                 verifying_field=f"IMERG Final V07B {imerg.accum_h} h precipitation on the same O1280 points "
-                                f"({imerg_path.name}); satellite estimate, not a station observation",
+                                f"({imerg_path.name}); satellite estimate, not a station observation; input row "
+                                f"from {'; '.join(sorted(input_sources))} (nearest native point per IMERG point)",
                 against_observations=True, ensemble=construction, competitor_rows=competitor,
                 weight_form="unweighted mean over O1280 points (within 25-60 N the point areas differ by under "
                             "10 %, so no ring weights)",

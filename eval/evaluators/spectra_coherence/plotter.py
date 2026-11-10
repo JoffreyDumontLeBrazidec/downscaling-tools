@@ -70,6 +70,9 @@ def plot(
     if not curves:
         return output_dir
 
+    # rule 41: the input curves come from the native x unless the run recorded x_interp
+    native = any(s.startswith("x (native") for s in payload.get("input_source", []))
+    input_name = "input (native grid)" if native else "interpolated input"
     label = shorten_run_label(str(payload.get("run_label") or ""))
     label = "" if label == "predictions" else label   # the generic directory name says nothing
     states = [s for s in payload.get("states", []) if s in curves]
@@ -95,7 +98,7 @@ def plot(
             if "interp_coherence" in c:
                 Ci = _smooth(np.asarray(c["interp_coherence"]), ell)
                 ax.semilogx(ell[keep], Ci[keep], color=Q_COLOUR["C"], lw=1.6, ls=INTERP_LS,
-                            label="coherence C (interpolated input with truth)")
+                            label=f"coherence C ({input_name} with truth)")
             ax.axhline(1.0, color="0.5", lw=0.8, ls=":")
             ax.axhline(0.0, color="0.5", lw=0.8, ls=":")
             ax.set_ylim(-0.15, 1.6)
@@ -116,7 +119,7 @@ def plot(
             if "interp_normalised_error" in c:
                 Ei = _smooth(np.asarray(c["interp_normalised_error"]), ell)
                 ax.semilogx(ell[keep], Ei[keep], color=Q_COLOUR["E"], lw=1.6, ls=INTERP_LS,
-                            label="error E of the interpolated input")
+                            label=f"error E of the {input_name}")
             ax.axhline(1.0, color="0.5", lw=0.8, ls=":")
             ax.set_ylim(0.0, 2.2)
             ax.set_xlabel(AXIS["wavenumber"])

@@ -128,7 +128,8 @@ def test_probabilistic_evaluator_writes_outputs(tmp_path: Path) -> None:
     assert payload["ratio_bootstrap"]["resamples"] == 2000 and payload["ratio_bootstrap"]["seed"] == 32
     assert payload["rank_histogram"]["dry_threshold_mm"] == 0.1 and payload["rank_histogram"]["dry_threshold_native"] == 1e-4
     assert h["false_drizzle_rate"] == "" and h["bin_0_fraction"] == "0.0" and h["bin_expected"] == "0.25"
-    assert payload["input_members"]["n_members"] == 0           # x on the coarse grid only, no x_interp
+    # rule 41: the native x (3 identical members on the coarse grid) is the input, no x_interp needed
+    assert payload["input_members"]["n_members"] == 3 and payload["input_source"] == ["x (native input grid)"]
     assert payload["rank_histogram"]["n_bins"] == 4
 
 
@@ -298,6 +299,7 @@ def test_single_input_member_is_reported_not_scored(tmp_path: Path) -> None:
     run(pred_dir, {}, {"weather_states": ["2t"], "domains": ["global"], "scale_split": True}, output_dir=out_dir)
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
     assert payload["input_members"]["n_members"] == 0 and "no x_interp" in payload["input_members"]["note"]
+    assert payload["input_source"] == []
     with (out_dir / "calibration_by_lead.csv").open(newline="") as f:
         cal = list(csv.DictReader(f))
     assert all(r["spread_input_rms"] in ("", "nan") for r in cal)
@@ -322,6 +324,47 @@ def test_probabilistic_reference_compare_writes_outputs(tmp_path: Path) -> None:
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.csv").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_comparison.json").exists()
     assert (tmp_path / "cmp" / "probabilistic_reference_overlay.pdf").exists()
+
+
+def test_input_spread_from_the_native_grid(tmp_path: Path) -> None:
+    """Rule 41: with a native x on lat_lres/lon_lres the input spread is read there (nearest native point, the
+    same band operator on that field), not from x_interp; native_input: false reads x_interp as before."""
+    from eval.shared.native_input import nearest_native_index
+
+    pred_dir = tmp_path / "predictions"
+    pred_dir.mkdir()
+    path = pred_dir / "predictions_20230816_step024.nc"
+    _write_box_prediction(path, date="20230816", step=24, n_members=4)
+    ds = xr.load_dataset(path)
+    lat_l, lon_l = np.meshgrid(np.arange(19.0, 51.0, 2.0), np.arange(-41.0, 11.0, 2.0), indexing="ij")
+    lat_l, lon_l = lat_l.ravel(), lon_l.ravel()
+    rng = np.random.default_rng(5)
+    x = np.zeros((1, 4, lat_l.size, 4), np.float32)
+    x[0, :, :, 0] = 280.0 + 2.0 * rng.standard_normal((4, lat_l.size))   # native member spread: SD 2
+    ds["x"] = (("sample", "ensemble_member", "grid_point_lres", "weather_state"), x)
+    ds["lat_lres"] = (("grid_point_lres",), lat_l)
+    ds["lon_lres"] = (("grid_point_lres",), lon_l)
+    ds.to_netcdf(path)
+    cfg = {"weather_states": ["2t"], "domains": ["global"], "box_edge_deg": 0, "scale_split": True,
+           "scale_cut_km": 400, "scale_edge_margin_km": 300}
+    out = tmp_path / "native"
+    run(pred_dir, {}, cfg, output_dir=out, overwrite=True)
+    payload = json.loads((out / "probabilistic_summary.json").read_text())
+    assert payload["input_source"] == ["x (native input grid)"]
+    assert payload["input_members"]["n_members"] == 4 and "native" in payload["provenance"]["competitor_rows"]["input"]
+    with (out / "calibration_by_lead.csv").open(newline="") as f:
+        cal = {r["band"]: r for r in csv.DictReader(f)}
+    idx = nearest_native_index(lat_l, lon_l, ds["lat_hres"].values, ds["lon_hres"].values)
+    want = np.sqrt(np.mean(np.var(x[0, :, idx, 0].T.astype(np.float64), axis=0, ddof=1)))  # equal-ish weights
+    assert abs(float(cal["full"]["spread_input_rms"]) - want) / want < 0.1
+    assert float(cal["large"]["spread_input_rms"]) > 0          # the band operator runs on the native field
+    old = tmp_path / "old"
+    run(pred_dir, {}, {**cfg, "native_input": False}, output_dir=old, overwrite=True)
+    payload_old = json.loads((old / "probabilistic_summary.json").read_text())
+    assert payload_old["input_source"] and "interpolated" in payload_old["input_source"][0]
+    with (old / "calibration_by_lead.csv").open(newline="") as f:
+        cal_old = {r["band"]: r for r in csv.DictReader(f)}
+    assert abs(float(cal_old["full"]["spread_input_rms"]) - want) > 0.5   # x_interp members: a different spread
 
 
 def _write_residual_prediction(path: Path, *, seed: int, n_members: int = 6, paired_input: bool = False) -> None:

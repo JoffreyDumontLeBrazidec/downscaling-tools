@@ -32,7 +32,8 @@ def test_regional_matches_global_inside_the_cut(tmp_path):
     g = _payload(runner.run(gdir, {}, cfg, output_dir=gdir / "wx"))
     r = _payload(runner.run(rdir, {}, cfg, output_dir=rdir / "wx"))
     assert g["config"]["regional"] is False
-    assert r["config"]["regional"] is True and r["config"]["input_source"] == "x_interp"
+    # rule 41: these files carry the native x, so the input row reads it (nearest native point), not x_interp
+    assert r["config"]["regional"] is True and r["config"]["input_source"] == "x (native input grid)"
     assert g["config"]["point_area_km2"] == pytest.approx(r["config"]["point_area_km2"])
     assert g["boxes"]["inner"]["n_core_points"] == r["boxes"]["inner"]["n_core_points"]
 
@@ -45,7 +46,10 @@ def test_regional_matches_global_inside_the_cut(tmp_path):
         for source in ("model", "truth", "input"):
             a, b = gs[k][source], rs[k][source]
             assert a["peak"] == pytest.approx(b["peak"], rel=1e-5), (k, source)
-            assert a["peak_lat"] == b["peak_lat"] and a["peak_lon"] == b["peak_lon"]
+            if source != "input":
+                assert a["peak_lat"] == b["peak_lat"] and a["peak_lon"] == b["peak_lon"]
+            # the native input (rule 41) is constant over each native cell, so its maximum is a plateau
+            # whose first point depends on the file's point order (the cut is shuffled); same value
             assert a["patch_points_90pct"] == b["patch_points_90pct"]
             for rad, val in a["retention"].items():
                 assert val == pytest.approx(b["retention"][rad], rel=1e-5), (k, source, rad)
@@ -75,3 +79,18 @@ def test_regional_skips_boxes_outside_and_clips_partial_ones(tmp_path):
     lat, lon = world["lat_h"], np.where(world["lon_h"] > 180, world["lon_h"] - 360, world["lon_h"])
     core = (lat >= box[0]) & (lat <= box[1]) & (lon >= box[2]) & (lon <= box[3])
     assert r["boxes"]["west_tropical_atlantic"]["n_core_points"] == int(core.sum())
+
+
+def test_native_input_false_reads_x_interp_on_a_regional_file(tmp_path):
+    """native_input: false reproduces the pre-rule-41 input row (the exported x_interp)."""
+    world = make_world(tmp_path / "world")
+    rdir = tmp_path / "regional"
+    rdir.mkdir()
+    write_prediction(rdir / "predictions_20230830_step024.nc", world, 1, seed=3, cut=True)
+    cfg = {"boxes": {"inner": INNER}, "radii_km": [120.0], "adjacency_km": 120.0,
+           "paths": {"up_matrix": world["paths"]["up_matrix"]}}
+    nat = _payload(runner.run(rdir, {}, cfg, output_dir=rdir / "nat"))
+    old = _payload(runner.run(rdir, {}, {**cfg, "native_input": False}, output_dir=rdir / "old"))
+    assert nat["config"]["input_source"] == "x (native input grid)" and old["config"]["input_source"] == "x_interp"
+    assert nat["samples"][0]["input"]["peak"] != old["samples"][0]["input"]["peak"]
+    assert nat["samples"][0]["model"]["peak"] == old["samples"][0]["model"]["peak"]

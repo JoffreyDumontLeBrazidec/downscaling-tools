@@ -46,7 +46,9 @@ def run(
     false-drizzle and missed-rain rates; the files hold metres, the conversion is made here);
     ``ratio_bootstrap_resamples`` (2000) and ``ratio_bootstrap_seed`` (the 95 % interval of
     the corrected spread/RMSE over dates); ``include_input`` (bool, default on: the input
-    members' spread when the files carry ``x_interp`` members).
+    members' spread when the files carry input members); ``native_input`` (bool, default on,
+    rule 41: the input read from the native ``x`` at the nearest native point, never from
+    ``x_interp`` when the file has ``x``; off reproduces old tables).
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir) if output_dir else predictions_dir / "evaluators" / "probabilistic"
@@ -73,6 +75,7 @@ def run(
     ratio_bootstrap_resamples = int(_or(eval_config.get("ratio_bootstrap_resamples"), RATIO_BOOTSTRAP_RESAMPLES))
     ratio_bootstrap_seed = int(_or(eval_config.get("ratio_bootstrap_seed"), RATIO_BOOTSTRAP_SEED))
     include_input = bool(_or(eval_config.get("include_input"), True))
+    native_input = bool(_or(eval_config.get("native_input"), True))
     clip_nonnegative = eval_config.get("clip_nonnegative")
 
     payload = compute_probabilistic_scores(
@@ -94,6 +97,7 @@ def run(
         ratio_bootstrap_resamples=ratio_bootstrap_resamples,
         ratio_bootstrap_seed=ratio_bootstrap_seed,
         include_input=include_input,
+        native_input=native_input,
         clip_nonnegative=clip_nonnegative,
     )
     LOG.info(

@@ -22,6 +22,8 @@ Lane configuration (the ``obs_imerg:`` block):
   min_points   A region is scored on a date only with at least this many valid IMERG points. Default 1000.
   dates, steps Restrict the files read.
   plot_regions Regions drawn. Default the first two regions.
+  native_input   rule 41: the input row from the native x (nearest native point of each IMERG point), never
+                 x_interp when the file has x. Default true; false reproduces old tables.
   competitor_ensembles
                As in obs_points: the input and truth rows are ensembles when the files carry their members
                (default true); otherwise single fields, labelled so (rule 34(e)).

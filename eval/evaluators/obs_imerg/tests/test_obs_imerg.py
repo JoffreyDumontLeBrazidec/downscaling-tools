@@ -151,3 +151,38 @@ def test_points_with_a_missing_field_value_leave_every_row(setup):
     q = df[(df.date == "20230101") & (df.lead == 12) & (df.region == "25-60N")]
     assert set(q.row) == {"model", "input", "truth"} and q.n.nunique() == 1
     assert q.n.iloc[0] == int(((la >= 25) & (la <= 60) & inner).sum()) - 50 and np.isfinite(q.fcrps).all()
+
+
+def test_input_row_from_the_native_grid(setup):
+    """Rule 41: with a native x on lat_lres/lon_lres the input row is x at the nearest native point of each
+    IMERG point (same points as every other row); without x it is x_interp and the run warns."""
+    from eval.shared.native_input import nearest_native_index
+
+    tmp, pred, cfg = setup
+    la_l, lo_l = np.meshgrid(np.arange(19.0, 66.0, 2.0), np.arange(-31.0, 31.0, 2.0), indexing="ij")
+    la_l, lo_l = la_l.ravel(), lo_l.ravel()
+    for f in sorted(pred.glob("*.nc")):
+        with nc.Dataset(str(f), "a") as d:
+            d.createDimension("grid_point_lres", la_l.size)
+            d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la_l
+            d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(lo_l, 360.0)
+            x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+            x[0, :, :, 0] = 0.002  # 2 mm everywhere in every member; x_interp is 0.8 x truth
+    out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "nat", run_label="N")
+    df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
+    assert (df.groupby(["region", "lead", "date"]).n.nunique() == 1).all()   # same points for every row
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["input_source"] == ["x (native input grid)"]
+    la, lo = _grid()
+    idx = nearest_native_index(la_l, lo_l, la, lo)
+    assert idx.min() >= 0 and idx.max() < la_l.size
+    old = obs_imerg.run(pred, {}, {**cfg, "native_input": False}, output_dir=tmp / "old", run_label="O")
+    df_old = pd.read_csv(old / "scores_per_date.csv", dtype={"date": str})
+    key = ["region", "lead", "date"]
+    a = df[df.row == "input"].set_index(key).sort_index()
+    b = df_old[df_old.row == "input"].set_index(key).sort_index()
+    assert not np.allclose(a.fcrps, b.fcrps)                                  # a different input row
+    pd.testing.assert_series_equal(df[df.row == "model"].set_index(key).sort_index().fcrps,
+                                   df_old[df_old.row == "model"].set_index(key).sort_index().fcrps)
+    meta_old = json.loads((old / "run_meta.json").read_text())
+    assert "interpolated" in meta_old["input_source"][0] and any("rule 41" in w for w in meta_old["warnings"])

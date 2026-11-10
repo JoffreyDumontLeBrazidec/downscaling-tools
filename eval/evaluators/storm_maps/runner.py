@@ -101,10 +101,12 @@ def run(
     else:
         steps = list(_DEFAULT_STEPS)
     LOG.info("storm_maps: predictions=%s event_box=%s storm_box=%s steps=%s", predictions_dir, box, storm, steps)
+    # rule 41: the input from the native x by default; native_input: false reproduces the old pages
+    extra = {} if bool(eval_config.get("native_input", True)) else {"native_input": False}
     if len(steps) == 1:
         return render(
             predictions_dir, output_dir,
-            event_box=box, event_name=name, step=steps[0], storm_box=storm,
+            event_box=box, event_name=name, step=steps[0], storm_box=storm, **extra,
         )
     # Several lead times: the renderer writes fixed file names, so each gets its own folder.
     for step in steps:
@@ -112,6 +114,6 @@ def run(
         step_dir.mkdir(parents=True, exist_ok=True)
         render(
             predictions_dir, step_dir,
-            event_box=box, event_name=name, step=step, storm_box=storm,
+            event_box=box, event_name=name, step=step, storm_box=storm, **extra,
         )
     return output_dir

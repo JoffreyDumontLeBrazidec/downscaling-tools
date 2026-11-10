@@ -247,6 +247,11 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         t1 = pd.Timestamp(max(cases.date)) + pd.Timedelta(hours=int(cases.lead.max()) + 24)
         noaa = read_noaa_csv(noaa_path, events, window=(t0, t1))
         bt = pd.concat([bt[bt.source != "noaa_ibtracs_csv"], noaa], ignore_index=True)
+    # the input row is tc_structure's; its source (rule 41: native x, or an interpolated fallback) travels along
+    input_source = "unknown (no tc_structure run_meta.json beside the cases.csv)"
+    tcs_meta = cases_path.parent / "run_meta.json"
+    if tcs_meta.exists():
+        input_source = str(json.loads(tcs_meta.read_text()).get("input_source") or input_source)
     df, mem, log = score_cases(cases, bt, trackers, only_storm_ok=bool(eval_config.get("only_storm_ok", True)),
                                max_gap_h=float(eval_config.get("max_gap_h", 6.0)),
                                wind_col=str(eval_config.get("wind_col", "maxwind300_ms")))
@@ -258,12 +263,16 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     summ.to_csv(output_dir / "summary.csv", index=False)
     pr = paired(df)
     pr.to_csv(output_dir / "paired.csv", index=False)
+    from eval.shared.native_input import is_interpolated, warn_fallback
+
+    if is_interpolated(input_source):
+        log.append(warn_fallback(LOG, "tc_obs", input_source))
     n_cases = int(df[["event", "date", "lead"]].drop_duplicates().shape[0])
     n_dates = int(df.date.nunique())
     meta = {"evaluator": "tc_obs", "run_label": label, "cases_csv": str(cases_path), "cache_dir": str(cache_dir),
             "noaa_csv": str(noaa_path) if noaa_path else None,
             "best_track_source": sorted(set(bt.source)) if "source" in bt else None,
-            "cache_meta": cache_meta, "n_cases": n_cases, "n_dates": n_dates,
+            "cache_meta": cache_meta, "n_cases": n_cases, "n_dates": n_dates, "input_source": input_source,
             "events": sorted(set(df.event)), "note": VERDICT_NOTE.format(n=n_cases, d=n_dates, dates="date" if n_dates == 1 else "dates"), "log": log}
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2))
     write_summary_md(summ, pr, meta, output_dir / "summary.md")
@@ -280,6 +289,7 @@ def write_summary_md(summ, pr, meta, path):
              "(operational HRES tracker) are single fields: their CRPS is the absolute error and their spread zero.",
              "Model, truth and input centres and pressures are tc_structure's on the O1280 grid; the trackers' are "
              "the operational tracker's on the operational grids, so part of any pressure difference is resolution.",
+             f"Input row from: {meta.get('input_source', 'unknown')} (rule 41: the input on its own grid).",
              f"Events: {', '.join(meta['events'])}.", ""]
     for key, name in (("pmin_crps", "Central pressure: fair CRPS (hPa)"), ("pmin_err", "Central pressure: mean error (hPa)"),
                       ("pos_err_member_km", "Centre position: mean member error (km)"),

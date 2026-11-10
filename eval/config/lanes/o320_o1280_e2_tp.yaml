@@ -55,8 +55,8 @@ precip_read:
 obs_points:
   # 30 seed-locked dates of 2023, leads 12-72 h, box 9-71 N 81 W-41 E; manifest in cache_meta.json
   cache:
-    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
-    atos: /ec/res4/scratch/ecm5702/agent-work/20261102-obs-eval/cache/stations_e2_2023_v1
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/e2_2023_v1
+    atos: /home/ecm5702/hpcperm/data/station_caches/e2_2023_v1
   vars: [2t, 10ff, msl, tp]
   regions:
     all: null

@@ -62,6 +62,9 @@ def plot_stratified(results_dir, *, output_dir=None):
         LOG.warning("stratified plot: %s missing", path)
         return output_dir
     d = json.loads(path.read_text())
+    # rule 41: the input columns come from the native x unless the run recorded x_interp
+    input_name = ("input (native grid)" if any(s.startswith("x (native") for s in d.get("input_source", []))
+                  else "interpolated input")
 
     rows = d["rows"]
     states, bands = [], []
@@ -114,7 +117,7 @@ def plot_stratified(results_dir, *, output_dir=None):
                 handles, labels = axes[0][j].get_legend_handles_labels()
                 axes[1][j].legend(handles, labels, fontsize=7.5, loc="upper left", ncol=2,
                                   title="wavenumber band (top row: solid = model,\n"
-                                        "dotted = interpolated input)",
+                                        f"dotted = {input_name})",
                                   title_fontsize=7.5)
 
         raw = str(d.get("run_label") or "")

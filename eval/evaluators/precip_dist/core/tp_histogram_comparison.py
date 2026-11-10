@@ -9,11 +9,14 @@ load of 100 slices x 26.3M points would need ~30 GB).
 
 Truth: the embedded `y` tp channel when populated, else the per-date truth
 GRIB given via --truth-grib-tpl (the o1280->o2560 main-lane bundles carried
-no tp truth). Input: the embedded `x_interp` tp channel when it is a real
-series, else the o1280 driver member tp interpolated through the cached
-nearest-neighbour index (--baseline-grib-tpl / --interp-index-cache); tp is
-output-only on the o2560 lane, so its exported x_interp is all zero and is
-never plotted as data.
+no tp truth). Input, on its own grid (rule 41): the native `x` tp channel at
+the nearest native point of each output point when the file carries it as a
+real series, else the o1280 driver member tp through the cached
+nearest-neighbour index (--baseline-grib-tpl / --interp-index-cache), and only
+then the interpolated `x_interp` (logged as such); --no-native-input restores
+the old order (x_interp first). tp is output-only on the o2560 lane, so its
+exported x / x_interp tp is all zero and is never plotted as data. The input
+source goes to ``<pdf stem>_run_meta.json`` next to the PDF.
 
 All axes are in mm per 6h window. Colours follow the house roles: truth black,
 model red, interpolated input blue dashed. The pages go to one PDF plus a PNG
@@ -37,6 +40,14 @@ import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
+from eval.shared.native_input import (
+    SOURCE_NATIVE,
+    InputReader,
+    grib_nn_source,
+    has_native_input,
+    interp_source,
+    is_interpolated,
+)
 from eval.shared.edge_strip import box_edge_index
 from eval.shared.precip.sources import (
     LresInterpBaseline,
@@ -140,6 +151,21 @@ def _member_id(ds: xr.Dataset, mi: int) -> int:
     return mi + 1
 
 
+def _choose_input(ds: xr.Dataset, ti: int, mi: int, native_input: bool, baseline_grib_tpl: str) -> str:
+    """The input series of the run, decided on its first file: rule 41 order (native x, then the GRIB at the nearest
+    native point, then the interpolated x_interp) or, with ``native_input`` off, the old order."""
+    interp_ok = "x_interp" in ds.variables and not is_degenerate_channel(_member_channel(ds, "x_interp", ti, mi))
+    if native_input:
+        if has_native_input(ds) and not is_degenerate_channel(_member_channel(ds, "x", ti, mi)):
+            return "x-native"
+        if baseline_grib_tpl:
+            return "grib"
+        return "x_interp" if interp_ok else "missing"
+    if interp_ok:
+        return "x_interp"
+    return "grib" if baseline_grib_tpl else "missing"
+
+
 def accumulate_tp_by_step(
     predictions_dir: Path,
     *,
@@ -148,9 +174,14 @@ def accumulate_tp_by_step(
     truth_grib_tpl: str = "",
     baseline_grib_tpl: str = "",
     interp_index_cache: str = "",
+    native_input: bool = True,
+    info: dict | None = None,
     box_edge_deg: float | None = None,
 ) -> dict[int, dict[str, StreamingDist]]:
-    """Stream every predictions file into per-step per-series StreamingDists."""
+    """Stream every predictions file into per-step per-series StreamingDists.
+
+    ``native_input`` (rule 41): the input from the native x at the nearest native point first; ``info`` (a dict)
+    receives ``input_source`` and ``truth_source``."""
     files = sorted(predictions_dir.glob("predictions_*_step*.nc"))
     if not files:
         raise FileNotFoundError(f"No predictions_*.nc in {predictions_dir}")
@@ -185,19 +216,15 @@ def accumulate_tp_by_step(
             elif truth_mode == "missing":
                 truth = None
 
-            if "x_interp" in ds.variables:
-                inp = _member_channel(ds, "x_interp", ti, mi)
-            else:
-                inp = None
             if baseline_mode is None:
-                if inp is not None and not is_degenerate_channel(inp):
-                    baseline_mode = "x_interp"
-                elif baseline_grib_tpl:
-                    baseline_mode = "grib"
-                else:
-                    baseline_mode = "missing"
+                baseline_mode = _choose_input(ds, ti, mi, native_input, baseline_grib_tpl)
                 print(f"input/baseline source: {baseline_mode}")
-            if baseline_mode == "grib":
+            inp = None
+            if baseline_mode == "x-native":
+                inp = InputReader(ds).channel(ti, member=mi)
+            elif baseline_mode == "x_interp":
+                inp = _member_channel(ds, "x_interp", ti, mi)
+            elif baseline_mode == "grib":
                 if baseline_src is None:
                     baseline_src = LresInterpBaseline(
                         baseline_grib_tpl, interp_index_cache or None, var=var)
@@ -210,6 +237,13 @@ def accumulate_tp_by_step(
         finally:
             ds.close()
 
+        if info is not None:
+            info["truth_source"] = truth_mode
+            info["input_source"] = {
+                "x-native": SOURCE_NATIVE, "grib": grib_nn_source(var), "missing": None,
+                "x_interp": interp_source("x_interp", "native_input: false" if not native_input
+                                          else "no usable native x in the file"),
+            }[baseline_mode]
         pred = pred[keep]
         truth = None if truth is None else truth[keep]
         inp = None if inp is None else inp[keep]
@@ -410,6 +444,8 @@ def main():
                              "{date}; used when x_interp tp is degenerate.")
     parser.add_argument("--interp-index-cache", type=str, default="",
                         help="Path of the cached lres->hres NN interp index.")
+    parser.add_argument("--no-native-input", action="store_true",
+                        help="Old tables: x_interp before the native x (rule 41 says never).")
     parser.add_argument("--box-edge-deg", type=float, default=None,
                         help="Box-edge strip left out on a regional grid, degrees (default 1; 0 keeps it).")
     args = parser.parse_args()
@@ -418,6 +454,7 @@ def main():
         sys.exit(f"predictions-dir not found: {args.predictions_dir}")
 
     print(f"Streaming TP data from {args.predictions_dir}...")
+    info: dict = {}
     step_data = accumulate_tp_by_step(
         args.predictions_dir,
         ensemble_member_index=args.ensemble_member_index,
@@ -425,10 +462,25 @@ def main():
         truth_grib_tpl=args.truth_grib_tpl,
         baseline_grib_tpl=args.baseline_grib_tpl,
         interp_index_cache=args.interp_index_cache,
+        native_input=not args.no_native_input,
+        info=info,
         box_edge_deg=args.box_edge_deg,
     )
     if not step_data:
         sys.exit("No prediction files found")
+    src = info.get("input_source")
+    if src and not is_interpolated(src):
+        SERIES_LABEL["input"] = "Input (native grid)"
+    elif src:
+        print(f"WARNING precip_dist: input series from {src}; rule 41 says the input is scored on its own grid, "
+              "so this input series is smoothed and not quotable against the model")
+    import json
+
+    args.out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    args.out_pdf.with_name(f"{args.out_pdf.stem}_run_meta.json").write_text(json.dumps(
+        {"input_source": src, "truth_source": info.get("truth_source"),
+         "ensemble_member_index": args.ensemble_member_index, "native_input": not args.no_native_input},
+        indent=2) + "\n")
 
     steps = sorted(step_data.keys())
     has_truth = any(not step_data[s]["truth"].empty for s in steps)
