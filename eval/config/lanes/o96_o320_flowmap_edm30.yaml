@@ -1,0 +1,19 @@
+base: o96_o320_flowmap
+
+# The EDM comparison row of o96_o320_flowmap: the parent EDM checkpoint, Heun on a Karras
+# schedule of 30 steps from sigma 80 (59 network calls), churn off. Same dates, leads,
+# members and rule-31 seeds as the flow-map rows. Added 2026-11-02 (flow-map recap note,
+# section 21, item I1).
+#
+# schedule_type "karras": see the note in o320_o1280_e2_flowmap_edm30.yaml (fallback:
+# experimental_piecewise with num_steps_high 0 and sigma_transition = sigma_max).
+
+predict:
+  sampler:
+    schedule_type: "karras"
+    num_steps: 30
+    sigma_max: 80.0
+    sigma_min: 0.03
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0

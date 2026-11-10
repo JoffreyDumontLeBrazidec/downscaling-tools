@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from eval.shared.edge_strip import strip_box_edge
+
 # Surface variables and weights from anemoi-config/training/scalers/downscaling.yaml.
 SURFACE_VARIABLES: OrderedDict[str, float] = OrderedDict(
     [
@@ -240,6 +242,7 @@ def process_predictions_dir(
     for pred_file in pred_files:
         print(f"Processing {pred_file.name}...")
         with xr.open_dataset(pred_file, cache=False) as ds:
+            ds = strip_box_edge(ds)   # regional box: the 1-degree edge strip is not scored (edge_strip)
             for required_var in (prediction_var, truth_var, "weather_state"):
                 if required_var not in ds:
                     raise ValueError(f"{pred_file}: missing required variable '{required_var}'")

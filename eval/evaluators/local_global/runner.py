@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from eval.shared.edge_strip import resolve_box_edge_deg
+
 from eval.evaluators.local_global.core.parity import compute_parity
 
 LOG = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ def run(
         output_dir=output_dir,
         coordinate_tolerance=float(eval_config.get("coordinate_tolerance", 1e-6)),
         variables=variables,
+        box_edge_deg=resolve_box_edge_deg(eval_config),
     )
     LOG.info("Local/global parity written to %s", summary_path)
     return output_dir

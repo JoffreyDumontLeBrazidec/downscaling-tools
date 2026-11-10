@@ -70,6 +70,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# one box-edge strip for every evaluator (re-exported here for the callers of this module)
+from eval.shared.edge_strip import box_edge_mask, is_global  # noqa: F401
+
 KM_PER_DEG = 111.2
 DEFAULT_CUT_KM = 400.0
 DEFAULT_GRID_KM = 25.0
@@ -94,12 +97,6 @@ def gaussian_power_transfer(wavelength_km: np.ndarray | float, sigma_km: float) 
     return np.exp(-4.0 * math.pi ** 2 * sigma_km ** 2 / lam ** 2)
 
 
-def is_global(lat: np.ndarray, lon: np.ndarray) -> bool:
-    """True when the point set covers the sphere (no box edges to flag)."""
-    lon = ((np.asarray(lon, dtype=np.float64) + 180.0) % 360.0) - 180.0
-    return bool(np.ptp(lat) > 170.0 and np.ptp(lon) > 350.0)
-
-
 def inner_mask(lat: np.ndarray, lon: np.ndarray, margin_km: float) -> np.ndarray:
     """Points farther than ``margin_km`` from the bounding box of a regional point set.
 
@@ -116,22 +113,6 @@ def inner_mask(lat: np.ndarray, lon: np.ndarray, margin_km: float) -> np.ndarray
     margin_deg_lon = margin_km / (KM_PER_DEG * np.maximum(np.cos(np.deg2rad(lat)), 1e-3))
     return ((lat - lat.min() >= margin_deg_lat) & (lat.max() - lat >= margin_deg_lat)
             & (lon - lon.min() >= margin_deg_lon) & (lon.max() - lon >= margin_deg_lon))
-
-
-def box_edge_mask(lat: np.ndarray, lon: np.ndarray, edge_deg: float) -> np.ndarray:
-    """Points at least ``edge_deg`` degrees (latitude and longitude) inside a regional box.
-
-    The wide box kits drop a 1-degree strip at the E2 box edge before scoring; this is the
-    same strip, applied to every band. Every point of a global set is kept.
-    """
-    lat = np.asarray(lat, dtype=np.float64)
-    if is_global(lat, lon) or edge_deg <= 0.0:
-        return np.ones(lat.shape, dtype=bool)
-    lon180 = ((np.asarray(lon, dtype=np.float64) + 180.0) % 360.0) - 180.0
-    lon360 = lon180 % 360.0
-    lon = lon180 if np.ptp(lon180) <= np.ptp(lon360) else lon360
-    return ((lat - lat.min() >= edge_deg) & (lat.max() - lat >= edge_deg)
-            & (lon - lon.min() >= edge_deg) & (lon.max() - lon >= edge_deg))
 
 
 def _pole_pad(grid: np.ndarray, rows: int) -> np.ndarray:

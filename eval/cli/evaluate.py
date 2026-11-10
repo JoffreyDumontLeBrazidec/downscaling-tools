@@ -19,6 +19,7 @@ from eval.cli._common import (
     add_common_args, add_lane_override_args, evaluator_registry,
 )
 from eval.cli._selection import add_evaluator_filter_args
+from eval.shared.edge_strip import configured as edge_strip_configured
 
 SUMMARY = "Run evaluators on existing predictions."
 
@@ -177,9 +178,21 @@ def _declared_evaluators(
 
 
 # Evaluators that leave the box-edge strip out of every number on a regional grid (or read no field), so the
-# slot-head edge artefact (docs ablation note s21) cannot reach their output.
-EDGE_STRIP_SAFE = frozenset({"probabilistic", "box_spectra", "obs_points", "obs_imerg", "describe", "mlflow",
-                             "sigma_loss"})
+# slot-head edge artefact (docs ablation note s21) cannot reach their output. Each applies
+# eval.shared.edge_strip (box_edge_mask, width box_edge_deg, default 1 degree); an evaluator whose block sets
+# box_edge_deg: 0 is no longer safe and is gated like the others. Not in the set:
+#   sigma_loss   its loss is the model's training loss over every target point of the validation batch; it
+#                has no point coordinates to drop the strip with, so it is gated (EVAL_ALLOW_EDGE_ARTEFACT=1).
+#   spectra_ecmwf_v2, spectra_coherence   global spherical-harmonic spectra; a regional box is not a
+#                valid input (spectra_coherence refuses unfilled HEALPix maps), so there is no strip to drop.
+#   displacement  refuses regional files (its driver is up @ x on the global grid).
+#   quaver       scores FDB fields with the external quaver tool, which cannot leave the strip out.
+EDGE_STRIP_SAFE = frozenset({
+    "probabilistic", "box_spectra", "obs_points", "obs_imerg", "describe", "mlflow",
+    "surface", "precip_scores", "tc", "texture", "wind_extremes", "spread_proxy", "precip_dist",
+    "precip_events", "local_global", "lane_diagnostics", "shape", "precip_read",
+    "tc_structure", "tc_obs", "zoom_maps", "region_plot", "tp_maps", "storm_maps",
+})
 _EDGE_SCAN_CACHE: dict[str, dict] = {}
 
 
@@ -242,7 +255,9 @@ def _run_evaluators(
             )
             continue
 
-        if edge.get("artefact") and not edge.get("allowed_by_env") and name not in EDGE_STRIP_SAFE:
+        _edge_knob = _lane_block(lane_config, name).get("box_edge_deg")
+        strip_off = _edge_knob is not None and float(_edge_knob) <= 0.0   # per-evaluator opt-out: gated again
+        if edge.get("artefact") and not edge.get("allowed_by_env") and (name not in EDGE_STRIP_SAFE or strip_off):
             detail = (f"box-edge artefact in the predictions ({edge.get('detail')}); '{name}' does not leave the "
                       "edge strip out. Set EVAL_ALLOW_EDGE_ARTEFACT=1 to run it anyway (docs ablation note s21).")
             LOG.warning("Skipping evaluator '%s': %s", name, detail)
@@ -336,12 +351,13 @@ def _run_evaluators(
         run_fn = getattr(mod, "run", None)
         if run_fn is not None and not plot_only:
             try:
-                run_fn(
-                    predictions_dir, lane_config, eval_config,
-                    output_dir=results_dir, overwrite=overwrite,
-                    checkpoint=checkpoint,
-                    run_label=run_label,
-                )
+                with edge_strip_configured(eval_config):  # box_edge_deg of this evaluator (docs ablation note s21)
+                    run_fn(
+                        predictions_dir, lane_config, eval_config,
+                        output_dir=results_dir, overwrite=overwrite,
+                        checkpoint=checkpoint,
+                        run_label=run_label,
+                    )
             except Exception as exc:
                 LOG.error("Evaluator '%s' run() failed", name, exc_info=True)
                 failures.append(f"{name}.run: {exc}")
@@ -352,10 +368,11 @@ def _run_evaluators(
         score_fn = getattr(mod, "score", None)
         if score_fn is not None:
             try:
-                scores = score_fn(
-                    results_dir, lane_config, eval_config,
-                    predictions_dir=predictions_dir,
-                )
+                with edge_strip_configured(eval_config):  # box_edge_deg of this evaluator (docs ablation note s21)
+                    scores = score_fn(
+                        results_dir, lane_config, eval_config,
+                        predictions_dir=predictions_dir,
+                    )
                 if scores:
                     metrics_path = results_dir / "metrics.json"
                     metrics_path.write_text(
@@ -371,7 +388,8 @@ def _run_evaluators(
         plot_fn = getattr(mod, "plot", None)
         if plot_fn is not None:
             try:
-                plot_fn(results_dir, lane_config, eval_config, output_dir=results_dir)
+                with edge_strip_configured(eval_config):  # box_edge_deg of this evaluator (docs ablation note s21)
+                    plot_fn(results_dir, lane_config, eval_config, output_dir=results_dir)
             except Exception as exc:
                 LOG.error("Evaluator '%s' plot() failed", name, exc_info=True)
                 failures.append(f"{name}.plot: {exc}")

@@ -17,6 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from eval.evaluators.precip_events.core.precip_events import find_precip_events
+from eval.shared.edge_strip import subprocess_env
 
 LOG = logging.getLogger(__name__)
 
@@ -86,6 +87,6 @@ def run(
         cmd += ["--run-label", run_label]
 
     LOG.info("precip_events subprocess: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=subprocess_env(eval_config))   # carries box_edge_deg
     _validate_pdf(out_pdf)
     return output_dir

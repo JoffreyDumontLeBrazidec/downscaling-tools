@@ -21,7 +21,9 @@ eval_config keys (all optional):
 - steps (default [24]), dates, members (labels, default all), variables
   (default 10u, 10v, ws, 2t, msl; those absent from the files are skipped);
 - method (linear; nearest only to reproduce old nearest-neighbour reads), res_deg (0.07),
-  margin_deg (1.0).
+  margin_deg (1.0);
+- target_note: the sentence naming the bins where the ratio should be 1, written into bins.md
+  and the judge's read (default: the o320 -> o1280 band, TARGET_NOTE). Another lane sets its own.
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ from pathlib import Path
 import numpy as np
 
 from eval.discovery.predictions import find_predictions
+from eval.shared.edge_strip import inner_bounds, resolve_box_edge_deg
 from eval.shared import regions
 
 from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, Sampler, Spectrum
@@ -42,6 +45,7 @@ from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, Sampler, S
 LOG = logging.getLogger(__name__)
 
 DEFAULT_VARIABLES = ["10u", "10v", "ws", "2t", "msl"]
+TARGET_NOTE = "target 1 from 125 km to 31 km; below 31 km the truth is empty (model against model only)"
 COMPOSITES = {"ws": ("10u", "10v")}
 BIN_COLS = ["scope", "variable", "bin_lo_km", "bin_hi_km", "bin_centre_km",
             "amp_resid_pred", "amp_resid_true", "ratio_resid",
@@ -140,7 +144,8 @@ def _contiguous(lon: np.ndarray, west: float) -> np.ndarray:
     return west + np.mod(lon - west, 360.0)
 
 
-def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec):
+def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec, clip_nonnegative=(),
+               box_edge_deg: float | None = None):
     """Sum of the powers per (scope, variable) over draws; returns (spectrum, sums, counts, meta)."""
     sums: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     counts: dict[tuple[str, str], int] = {}
@@ -155,6 +160,16 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                 la0, la1, lo0, lo1 = box
                 extent = (la0 + margin_deg, la1 - margin_deg, lo0 + margin_deg,
                           lo0 + ((lo1 - lo0) % 360.0 or 360.0) - margin_deg)
+                ib = inner_bounds(f.lat, f.lon, box_edge_deg)
+                if ib is not None:
+                    # regional file: the sampled extent never reaches into the box-edge strip (edge_strip),
+                    # whatever box was asked for (the default file-bounds box with margin 1 is unchanged)
+                    ilo = ib[2] + 360.0 * round((lo0 - ib[2]) / 360.0)
+                    extent = (max(extent[0], ib[0]), min(extent[1], ib[1]),
+                              max(extent[2], ilo), min(extent[3], ilo + (ib[3] - ib[2])))
+                    if extent[0] >= extent[1] or extent[2] >= extent[3]:
+                        raise ValueError(f"box_spectra: box {box} lies inside the {box_edge_deg:g}-degree "
+                                         "box-edge strip of the regional file")
                 lon_c = _contiguous(f.lon, lo0)
                 smp = Sampler(f.lat, lon_c, extent, res_deg, method=method)
                 dx, dy = smp.dx_dy_km()
@@ -163,7 +178,7 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                 meta = {"box": box, "box_chosen_by": how, "extent_sampled": list(extent),
                         "grid": [spec.ny, spec.nx], "res_deg": res_deg, "method": method,
                         "dx_km": dx, "dy_km": dy, "dx_at_lat": smp.lat0,
-                        "n_bins": int(spec.wavelength_km.size)}
+                        "n_bins": int(spec.wavelength_km.size), "source_pad_deg": smp.pad_deg}
                 if la1 - la0 > 35.0:
                     meta["note"] = (f"the box spans {la1 - la0:.0f} degrees of latitude and dx is taken at "
                                     f"{smp.lat0:.0f} N, so the wavelength axis is approximate; model/truth "
@@ -186,6 +201,8 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec)
                     def grid(name, _m=m, _v=var):
                         full = np.zeros(f.lat.size)
                         full[idx] = f.field(name, _m, _v, idx)
+                        if _v in clip_nonnegative:   # rule 7: negative precipitation clipped
+                            full[idx] = np.maximum(full[idx], 0.0)
                         return smp(full)
                     y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
                     Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
@@ -261,7 +278,7 @@ def write_table(rows, path, label: str, meta: dict) -> None:
     lines = [f"# Per-bin amplitude ratios, {label}", "",
              f"Box {meta.get('box')} ({meta.get('box_chosen_by')}), {meta.get('method')} sampling at "
              f"{meta.get('res_deg')} deg, grid {meta.get('grid')}. AMPLITUDE ratios (not power), per bin; "
-             "target 1 from 125 km to 31 km; below 31 km the truth is empty (model against model only).", ""]
+             f"{meta.get('target_note', TARGET_NOTE)}.", ""]
     if meta.get("input_source"):
         lines += [f"Input spectrum from: {'; '.join(meta['input_source'])} (rule 41: the input is never "
                   "interpolated to the output grid before scoring).", ""]
@@ -299,8 +316,12 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
              if p.step in steps and (not dates or p.date in dates)]
     if not files:
         raise FileNotFoundError(f"box_spectra: no prediction files for steps {steps} under {predictions_dir}")
+    clip = tuple(eval_config.get("clip_nonnegative") or ())
     spec, sums, counts, meta = accumulate(files, variables, members, method, res_deg, margin_deg,
-                                          eval_config.get("box"))
+                                          eval_config.get("box"), clip_nonnegative=clip,
+                                          box_edge_deg=resolve_box_edge_deg(eval_config))
+    meta["clip_nonnegative"] = list(clip)
+    meta["target_note"] = str(eval_config.get("target_note") or TARGET_NOTE)
     if not sums:
         raise ValueError(f"box_spectra: none of {variables} is in the files of {predictions_dir}")
     rows = bin_rows(spec, sums, counts)

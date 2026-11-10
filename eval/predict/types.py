@@ -56,6 +56,11 @@ class PredictionConfig:
     dates: list[str] = field(default_factory=lambda: list(DEFAULT_DATES))
     bundle_pairs: str = ""
     local_scope_json: str = ""
+    # None: bundles under input_dir; {"type": "zarr_split", "split": ...}: rows of the checkpoint's
+    # own datamodule split (eval/config/predict_input.py)
+    input_source: dict | None = None
+    # "" loads inference-<name> (raw weights); "ema2000" loads inference-ema2000-<name>
+    ema: str = ""
 
 
 @dataclass
@@ -80,6 +85,13 @@ class PredictionMetadata:
     missing_target_policy: str | None = None
     local_scope_json: str = ""
     local_scope_hres_node_count: int = 0
+    # one line read by eval.cli judge, e.g. "jumps 2 from sigma 80" for a flow-map run
+    sampler_summary: str = ""
+    # "raw" or the EMA tag, and the file the weights came from
+    checkpoint_weights: str = "raw"
+    weights_path: str = ""
+    # zarr_split route: where the inputs and the truth came from, in place of bundle paths
+    input_provenance: dict | None = None
 
     def to_attrs(self) -> dict[str, str | int]:
         """Return NetCDF-safe global attributes."""
@@ -102,6 +114,13 @@ class PredictionMetadata:
             "slim_output": int(bool(self.slim_output)),
             "source_bundle_count": int(len(self.source_bundle_paths)),
         }
+        if self.sampler_summary:
+            attrs["sampler_summary"] = self.sampler_summary
+        attrs["checkpoint_weights"] = self.checkpoint_weights
+        if self.weights_path:
+            attrs["weights_path"] = self.weights_path
+        for key, value in (self.input_provenance or {}).items():
+            attrs[key] = value if isinstance(value, (int, str)) else str(value)
         if self.local_scope_json:
             attrs["local_scope_json"] = self.local_scope_json
             attrs["local_scope_hres_node_count"] = int(self.local_scope_hres_node_count)
@@ -120,7 +139,7 @@ class PredictionResult:
     lon_hres: np.ndarray
     lat_hres: np.ndarray
     weather_states: list[str]
-    bundle_path: Path
+    bundle_path: Path | None  # None on the zarr_split route
     dates: np.ndarray | None = None
 
 
@@ -146,6 +165,9 @@ class EnsemblePrediction:
     # Rule 31 (2026-10-30): one sampler seed per (base, date, lead, member).
     draw_seeds: list[int] | None = None
     seed_base: int | None = None
+    # zarr_split route (2026-11-03): input_source, input_split, input_row_index, input_fake_date,
+    # input_stores; source_bundle_paths is then empty
+    input_provenance: dict | None = None
 
     @property
     def target_members_with_data(self) -> int:

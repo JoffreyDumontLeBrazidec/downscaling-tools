@@ -28,10 +28,6 @@ class Sampler:
                  method: str = "linear"):
         from scipy.spatial import cKDTree
         lat_min, lat_max, lon_min, lon_max = extent
-        m = (lat >= lat_min - 0.5) & (lat <= lat_max + 0.5) & (lon >= lon_min - 0.5) & (lon <= lon_max + 0.5)
-        if not np.any(m):
-            raise ValueError(f"no source points inside extent {extent}")
-        self.src_idx = np.flatnonzero(m)
         self.gx = np.arange(lon_min, lon_max + 1e-9, res)
         self.gy = np.arange(lat_min, lat_max + 1e-9, res)
         GX, GY = np.meshgrid(self.gx, self.gy)
@@ -40,17 +36,37 @@ class Sampler:
         self.res = res
         self.lat0 = 0.5 * (lat_min + lat_max)
         pts = np.column_stack([GX.ravel(), GY.ravel()])
+
+        def select(pad):
+            m = (lat >= lat_min - pad) & (lat <= lat_max + pad) & (lon >= lon_min - pad) & (lon <= lon_max + pad)
+            if not np.any(m):
+                raise ValueError(f"no source points inside extent {extent}")
+            return m
+
+        # 0.5 deg of source points around the extent covers O1280; on coarser grids (O320 rows near
+        # 70 N are ~1.2 deg apart in longitude) corner points fall outside the hull, so the linear
+        # sampler widens the pad until the hull covers the grid. pad_deg records the pad used.
+        self.pad_deg = 0.5
+        m = select(self.pad_deg)
         if method == "nearest":
+            self.src_idx = np.flatnonzero(m)
             tree = cKDTree(np.column_stack([lon[m], lat[m] * lat_scale]))
             _, idx = tree.query(np.column_stack([pts[:, 0], pts[:, 1] * lat_scale]), workers=-1)
             self.idx = self.src_idx[idx].reshape(self.shape)
         elif method == "linear":
             # barycentric (Delaunay) interpolation, weights computed once and reused for every field
             from scipy.spatial import Delaunay
-            tri = Delaunay(np.column_stack([lon[m], lat[m]]))
-            simplex = tri.find_simplex(pts)
-            if np.any(simplex < 0):
-                raise ValueError(f"{int((simplex < 0).sum())} grid points outside the triangulation")
+            for pad in (0.5, 1.0, 2.0, 4.0):
+                m = select(pad)
+                tri = Delaunay(np.column_stack([lon[m], lat[m]]))
+                simplex = tri.find_simplex(pts)
+                if not np.any(simplex < 0):
+                    break
+            else:
+                raise ValueError(f"{int((simplex < 0).sum())} grid points outside the triangulation "
+                                 f"(source pad up to {pad} deg)")
+            self.pad_deg = pad
+            self.src_idx = np.flatnonzero(m)
             T = tri.transform[simplex]                     # (n, 3, 2)
             b = np.einsum("nij,nj->ni", T[:, :2, :], pts - T[:, 2, :])
             self.w = np.column_stack([b, 1.0 - b.sum(axis=1)])      # (n, 3)

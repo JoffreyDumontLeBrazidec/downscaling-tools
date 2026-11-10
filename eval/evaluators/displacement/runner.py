@@ -420,6 +420,13 @@ def run(
                             file_path.name, skipped)
             lat = np.asarray(ds.variables["lat_hres"][:]).reshape(-1).astype(np.float64)
             lon = np.asarray(ds.variables["lon_hres"][:]).reshape(-1).astype(np.float64)
+            if lat.size != up.shape[0]:
+                # A regional (box) file: the driver here is up @ x on the global grid, so the file's
+                # points cannot be matched to the matrix rows, and the box-edge strip
+                # (eval.shared.edge_strip) could not be left out. Refuse instead of mis-indexing.
+                raise RuntimeError(
+                    f"displacement: {file_path.name} has {lat.size} points but the up matrix has "
+                    f"{up.shape[0]} rows; regional (box) files are not supported")
             lon360 = np.mod(lon, 360.0)
             lon180 = np.where(lon360 > 180.0, lon360 - 360.0, lon360)
             if not box_static:

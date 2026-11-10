@@ -37,6 +37,7 @@ import numpy as np
 import xarray as xr
 from matplotlib.backends.backend_pdf import PdfPages
 
+from eval.shared.edge_strip import box_edge_index
 from eval.shared.precip.sources import (
     LresInterpBaseline,
     PrecipTruthSource,
@@ -147,6 +148,7 @@ def accumulate_tp_by_step(
     truth_grib_tpl: str = "",
     baseline_grib_tpl: str = "",
     interp_index_cache: str = "",
+    box_edge_deg: float | None = None,
 ) -> dict[int, dict[str, StreamingDist]]:
     """Stream every predictions file into per-step per-series StreamingDists."""
     files = sorted(predictions_dir.glob("predictions_*_step*.nc"))
@@ -163,6 +165,8 @@ def accumulate_tp_by_step(
             continue
         ds = xr.open_dataset(f)
         try:
+            # regional box: the box-edge strip is left out of every distribution (eval.shared.edge_strip)
+            keep = box_edge_index(ds["lat_hres"].values, ds["lon_hres"].values, box_edge_deg)
             ti = find_tp_index(ds, var)
             mi = ensemble_member_index
             pred = _member_channel(ds, "y_pred", ti, mi)
@@ -206,6 +210,9 @@ def accumulate_tp_by_step(
         finally:
             ds.close()
 
+        pred = pred[keep]
+        truth = None if truth is None else truth[keep]
+        inp = None if inp is None else inp[keep]
         bucket = step_data.setdefault(
             step, {s: StreamingDist() for s in SERIES})
         bucket["pred"].update(pred * MM)
@@ -403,6 +410,8 @@ def main():
                              "{date}; used when x_interp tp is degenerate.")
     parser.add_argument("--interp-index-cache", type=str, default="",
                         help="Path of the cached lres->hres NN interp index.")
+    parser.add_argument("--box-edge-deg", type=float, default=None,
+                        help="Box-edge strip left out on a regional grid, degrees (default 1; 0 keeps it).")
     args = parser.parse_args()
 
     if not args.predictions_dir.is_dir():
@@ -416,6 +425,7 @@ def main():
         truth_grib_tpl=args.truth_grib_tpl,
         baseline_grib_tpl=args.baseline_grib_tpl,
         interp_index_cache=args.interp_index_cache,
+        box_edge_deg=args.box_edge_deg,
     )
     if not step_data:
         sys.exit("No prediction files found")

@@ -155,4 +155,5 @@ def apply_local_output_scope(ensemble: EnsemblePrediction, raw_scope: str | dict
         used_missing_target_unsafe=ensemble.used_missing_target_unsafe,
         draw_seeds=ensemble.draw_seeds,
         seed_base=ensemble.seed_base,
+        input_provenance=ensemble.input_provenance,
     )

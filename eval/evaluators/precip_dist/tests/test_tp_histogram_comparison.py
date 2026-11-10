@@ -36,7 +36,7 @@ def test_accumulate_uses_selected_member_and_mm_units(tmp_path):
     _write_nc(tmp_path / "predictions_20250101_step024.nc",
               y=y, y_pred=y_pred, x_interp=x_interp)
 
-    step_data = accumulate_tp_by_step(tmp_path, ensemble_member_index=0)
+    step_data = accumulate_tp_by_step(tmp_path, ensemble_member_index=0, box_edge_deg=0.0)  # 3-point toy grid
     bucket = step_data[24]
     # member 0 only: 3 points per series, in mm
     assert bucket["truth"].n == 3

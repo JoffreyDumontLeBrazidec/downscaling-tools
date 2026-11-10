@@ -39,6 +39,8 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.shared.edge_strip import box_edge_mask
+
 LOG = logging.getLogger(__name__)
 
 MM = 1000.0            # metres -> millimetres
@@ -63,7 +65,8 @@ def _box_index(lat: np.ndarray, lon: np.ndarray, box: dict):
     The O2560 grid is stored in latitude order, so restricting to a latitude band
     first turns a 26-million-point mask into a contiguous slice.
     """
-    inb = (lat >= box["south"]) & (lat <= box["north"])
+    # regional grid: the box-edge strip (eval.shared.edge_strip) never holds a box maximum
+    inb = (lat >= box["south"]) & (lat <= box["north"]) & box_edge_mask(lat, lon)
     i0 = int(np.argmax(inb))
     i1 = int(len(inb) - np.argmax(inb[::-1]))
     lo = np.where(lon[i0:i1] > 180, lon[i0:i1] - 360, lon[i0:i1])
@@ -167,6 +170,8 @@ def loss_budget(
             truth_src.verify_grid(ds["lat_hres"].values, ds["lon_hres"].values)
             truth_mm = truth_src.load(date, step).astype(np.float64) * MM
             pred_mm = ds["y_pred"][0, member].values[:, ti].astype(np.float64) * MM
+            inner = box_edge_mask(ds["lat_hres"].values, ds["lon_hres"].values)   # box-edge strip left out
+            truth_mm, pred_mm = truth_mm[inner], pred_mm[inner]
         err2 = (pred_mm - truth_mm) ** 2
         good = np.isfinite(err2) & np.isfinite(truth_mm)
         err2, truth_mm = err2[good], truth_mm[good]
@@ -219,13 +224,14 @@ def pair_coherence(
         chans = [str(c) for c in d.variables["weather_state"][:]]
         ci = chans.index(channel)
         n = d.dimensions["grid_point_hres"].size
+        inner = box_edge_mask(np.asarray(d.variables["lat_hres"][:]), np.asarray(d.variables["lon_hres"][:]))
         acc = dict.fromkeys(("sy", "syy", "d2x", "d2p", "cnt"), 0.0)
         for s in range(0, n, CHANNEL_BLOCK):
             e = min(s + CHANNEL_BLOCK, n)
             xi = np.asarray(d.variables["x_interp"][0, member, s:e, ci], dtype=np.float64)
             y = np.asarray(d.variables["y"][0, member, s:e, ci], dtype=np.float64)
             yp = np.asarray(d.variables["y_pred"][0, member, s:e, ci], dtype=np.float64)
-            m = np.isfinite(xi) & np.isfinite(y) & np.isfinite(yp)
+            m = np.isfinite(xi) & np.isfinite(y) & np.isfinite(yp) & inner[s:e]   # box-edge strip left out
             xi, y, yp = xi[m], y[m], yp[m]
             acc["cnt"] += xi.size
             acc["sy"] += y.sum()
@@ -282,12 +288,14 @@ def sampler_peaks(arm_roots: dict) -> dict:
                     cfg = {}
             chans = [str(c) for c in d.variables["weather_state"][:]]
             ti = chans.index("tp")
-            a = np.asarray(d.variables["y_pred"][0, :, :, ti], dtype=np.float32) * MM
+            inner = box_edge_mask(np.asarray(d.variables["lat_hres"][:]),
+                                  np.asarray(d.variables["lon_hres"][:]))   # box-edge strip left out
+            a = np.asarray(d.variables["y_pred"][0, :, :, ti], dtype=np.float32)[:, inner] * MM
             for m in range(a.shape[0]):
                 v = a[m][np.isfinite(a[m])]
                 if v.size:
                     peaks.append(float(v.max()))
-            y = np.asarray(d.variables["y"][0, 0, :, ti], dtype=np.float32) * MM
+            y = np.asarray(d.variables["y"][0, 0, :, ti], dtype=np.float32)[inner] * MM
             if np.isfinite(y).any():
                 truth_peaks.append(float(np.nanmax(y)))
             d.close()

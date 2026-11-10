@@ -61,7 +61,7 @@ def test_local_global_runner_compares_cropped_support(tmp_path: Path):
     run(
         local_dir,
         {},
-        {"global_predictions_dir": str(global_dir)},
+        {"global_predictions_dir": str(global_dir), "box_edge_deg": 0},  # two-point toy grid: no strip
         output_dir=out_dir,
     )
 

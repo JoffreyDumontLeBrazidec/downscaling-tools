@@ -97,13 +97,24 @@ def test_truth_source_warns_when_loaded_before_the_grid_is_declared(fake_truth_g
 
 def test_histogram_counts_only_the_region_for_every_lead_time(
         regional_predictions, fake_truth_grib):
+    # box_edge_deg=0: every point of the region (the truth order is what is tested here)
     step_data = accumulate_tp_by_step(
-        regional_predictions, truth_grib_tpl=fake_truth_grib)
+        regional_predictions, truth_grib_tpl=fake_truth_grib, box_edge_deg=0.0)
     for step in STEPS:
         truth = step_data[step]["truth"]
         assert truth.n == REGION.size, f"step {step}: counted {truth.n} truth values"
         assert truth.max == pytest.approx(INSIDE_PEAK * 1000.0, rel=1e-3)
         assert step_data[step]["pred"].n == REGION.size
+    # by default the 1-degree box-edge strip of the region is left out (eval.shared.edge_strip)
+    from eval.shared.edge_strip import box_edge_mask
+
+    lats, lons = _full_grid()
+    n_inner = int(box_edge_mask(lats[REGION], lons[REGION]).sum())
+    assert 0 < n_inner < REGION.size
+    stripped = accumulate_tp_by_step(regional_predictions, truth_grib_tpl=fake_truth_grib)
+    for step in STEPS:
+        assert stripped[step]["truth"].n == n_inner and stripped[step]["pred"].n == n_inner
+        assert stripped[step]["truth"].max == pytest.approx(INSIDE_PEAK * 1000.0, rel=1e-3)
 
 
 def test_precip_events_ranked_by_truth_on_a_regional_run(

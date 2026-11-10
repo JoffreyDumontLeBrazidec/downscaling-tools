@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
+from eval.shared.edge_strip import resolve_box_edge_deg, strip_box_edge
+
 
 _PRED_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")
 
@@ -101,8 +103,12 @@ def compute_parity(
     output_dir: str | Path,
     coordinate_tolerance: float = 1e-6,
     variables: list[str] | None = None,
+    box_edge_deg: float | None = None,
 ) -> dict[str, Any]:
-    """Compare local prediction files against cropped global prediction files."""
+    """Compare local prediction files against cropped global prediction files.
+
+    The box-edge strip of the local file (``box_edge_deg``, default 1 degree) is left out."""
+    box_edge_deg = resolve_box_edge_deg() if box_edge_deg is None else float(box_edge_deg)
 
     local_predictions_dir = Path(local_predictions_dir).expanduser().resolve()
     global_predictions_dir = Path(global_predictions_dir).expanduser().resolve()
@@ -124,11 +130,15 @@ def compute_parity(
         if global_path is None:
             raise ValueError(f"Missing matching global prediction file for {name} in {global_predictions_dir}")
         with xr.open_dataset(local_path) as local_ds, xr.open_dataset(global_path) as global_ds:
+            local_hres_points = int(local_ds.sizes.get("grid_point_hres", 0))
+            # the box-edge strip of the local (regional) file is left out of the parity (eval.shared.edge_strip)
+            local_ds = strip_box_edge(local_ds, box_edge_deg)
             indices = _global_indices_for_local(local_ds, global_ds, float(coordinate_tolerance))
             global_crop = global_ds.isel(grid_point_hres=indices)
             row: dict[str, Any] = {
                 "file": name,
-                "local_hres_points": int(local_ds.sizes.get("grid_point_hres", 0)),
+                "local_hres_points": local_hres_points,
+                "compared_hres_points": int(local_ds.sizes.get("grid_point_hres", 0)),
                 "global_hres_points": int(global_ds.sizes.get("grid_point_hres", 0)),
                 "variables": {},
             }
@@ -168,6 +178,7 @@ def compute_parity(
         "local_predictions_dir": str(local_predictions_dir),
         "global_predictions_dir": str(global_predictions_dir),
         "coordinate_tolerance": float(coordinate_tolerance),
+        "box_edge_deg": box_edge_deg,
         "headline": headline,
         "files": file_rows,
     }

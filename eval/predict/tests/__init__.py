@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.machinery
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -115,14 +116,24 @@ def install_manual_inference_dataset_stub(
     predict_mod = types.ModuleType("manual_inference.prediction.predict")
     predict_mod.__package__ = "manual_inference.prediction"
 
+    # the real sampler_spec (pure Python): output_writer and main import it
+    spec = importlib.util.spec_from_file_location(
+        "manual_inference.prediction.sampler_spec",
+        PREDICT_DIR.parents[1] / "manual_inference" / "prediction" / "sampler_spec.py",
+    )
+    sampler_spec_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sampler_spec_mod)
+
     manual_pkg.prediction = prediction_pkg
     prediction_pkg.dataset = dataset_mod
     prediction_pkg.predict = predict_mod
+    prediction_pkg.sampler_spec = sampler_spec_mod
 
     monkeypatch.setitem(sys.modules, "manual_inference", manual_pkg)
     monkeypatch.setitem(sys.modules, "manual_inference.prediction", prediction_pkg)
     monkeypatch.setitem(sys.modules, "manual_inference.prediction.dataset", dataset_mod)
     monkeypatch.setitem(sys.modules, "manual_inference.prediction.predict", predict_mod)
+    monkeypatch.setitem(sys.modules, "manual_inference.prediction.sampler_spec", sampler_spec_mod)
 
 
 def install_torch_stub(

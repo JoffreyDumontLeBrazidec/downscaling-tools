@@ -30,6 +30,10 @@ coarseness is the point of showing it. A map box smaller than ``MIN_SPAN_DEG``
 is widened around its centre, and the box actually drawn is printed and written
 in the figure title.
 
+``--layout scales`` and ``--layout fronts`` (``scale_maps.py``) draw the large-scale /
+fine-scale split of the residuals against the input and the classic trough and front
+view; ``--layout panels`` (the default) is the map set described above.
+
 Diagnostic maps only — nothing here scores anything.
 
 Canonical invocation: ``python -m eval.cli zoom_maps ...`` (also runnable as
@@ -43,6 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
+from eval.shared.edge_strip import inner_bounds, inside_bounds
 from eval.shared.manifest import write_manifest
 
 DEFAULT_EXTENT = (-45.0, 55.0, 27.0, 72.0)
@@ -73,19 +78,44 @@ MIN_SPAN_DEG = 12.0
 # source points (for example the edge of a local domain) and are not drawn.
 MAX_EDGE_RATIO = 6.0
 
-DEFAULT_TITLES = {
-    "eefo": "Input (EEFO O320)",
-    "enfo": "Truth (operational ENFO O1280, same member number)",
-    "control": "Model, control arm (O1280)",
-    "guided": "Model, guided arm (O1280)",
-}
+def default_titles(lres: str = "O320", hres: str = "O1280") -> dict[str, str]:
+    """Preset panel titles; lres / hres name the input and output grids (O320 -> O1280 by default)."""
+    return {
+        "eefo": f"Input (EEFO {lres})",
+        "enfo": f"Truth (operational ENFO {hres}, same member number)",
+        "control": f"Model, control arm ({hres})",
+        "guided": f"Model, guided arm ({hres})",
+    }
 
 
-def default_title(key: str) -> str:
+DEFAULT_TITLES = default_titles()
+
+
+def default_title(key: str, hres: str = "O1280") -> str:
     """Panel title for a source key without an explicit --title."""
     if key.lower() == "model":
-        return "Model (O1280)"
-    return DEFAULT_TITLES.get(key, f"Model, {key} (O1280)")
+        return f"Model ({hres})"
+    return default_titles(hres=hres).get(key, f"Model, {key} ({hres})")
+
+
+def octahedral_name(n_points: int) -> str | None:
+    """'O<N>' when n_points is the size of a global octahedral grid (4 N (N + 9) points), else None
+    (a regional file, for example the E2 box, does not tell its grid by its size)."""
+    root = int(round((81 + int(n_points)) ** 0.5))
+    if root * root != 81 + int(n_points) or (root - 9) % 2:
+        return None
+    n = (root - 9) // 2
+    return f"O{n}" if n > 0 and 4 * n * (n + 9) == int(n_points) else None
+
+
+def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int) -> tuple[dict[str, str], str]:
+    """Titles of the panels and the output grid name. The grid names come from the file's point
+    counts when the file is global, else the O320 -> O1280 defaults; '{lres}' and '{hres}' in a
+    --title are replaced by them."""
+    lres = octahedral_name(n_lres) or "O320"
+    hres = octahedral_name(n_hres) or "O1280"
+    user = {k: v.replace("{lres}", lres).replace("{hres}", hres) for k, v in user_titles.items()}
+    return {**default_titles(lres, hres), **user}, hres
 
 # Renderable fields. Each entry fixes the source weather states, the filename
 # token and the fixed colour scale, so adding a field is a table entry rather
@@ -202,7 +232,9 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--title", action="append", default=[], metavar="KEY=TITLE",
-        help="Override the first title line for a panel key (defaults: eefo/enfo/control/guided presets, else KEY · O1280).",
+        help="Override the first title line for a panel key (defaults: eefo/enfo/control/guided presets, else "
+             "KEY with the output grid, read from a global file's size, else O1280). '{lres}' / '{hres}' in "
+             "TITLE become the input / output grid names.",
     )
     p.add_argument("--trajectory-npz", action="append", default=[], metavar="KEY=FILE",
                    help="Opt-in saved seeding_fields.npz comparison; repeat for three models, with target from the first.")
@@ -248,6 +280,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--time", default="0000", help="Init time HHMM (default: 0000).")
     p.add_argument("--proj-lon", type=float, default=None, help="Lambert conformal central longitude (default: the centre of --extent). Ignored when the extent crosses the dateline (plate carree is used).")
     p.add_argument("--proj-lat", type=float, default=None, help="Lambert conformal central latitude (default: the centre of --extent).")
+    from .scale_maps import add_layout_args
+    add_layout_args(p)
     return p
 
 
@@ -465,6 +499,21 @@ def _source_layers(
     return layers
 
 
+def _layer_inside(ax, layer: tuple, bounds) -> np.ndarray:
+    """For each value of a drawn layer, whether its point lies inside ``bounds`` (``inner_bounds``)."""
+    kind, geometry, data = layer
+    if bounds is None:
+        return np.ones(np.shape(data), dtype=bool)
+    if kind == "tri":
+        import cartopy.crs as ccrs
+
+        ll = ccrs.PlateCarree().transform_points(ax.projection, np.asarray(geometry.x), np.asarray(geometry.y))
+        return inside_bounds(bounds, ll[:, 1], ll[:, 0])
+    gx, gy = geometry
+    gx, gy = np.broadcast_arrays(*np.meshgrid(gx, gy)) if np.ndim(gx) == 1 else (gx, gy)
+    return inside_bounds(bounds, gy, gx)
+
+
 def _draw_layer(ax, layer: tuple, *, cmap, vmin: float, vmax: float):
     import cartopy.crs as ccrs
 
@@ -661,8 +710,12 @@ def _render_grid(
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
     box_line: str = "",
+    scored_bounds=None,
 ) -> None:
     """One figure holding every member of a single source on a shared colour scale.
+
+    ``scored_bounds`` (``eval.shared.edge_strip.inner_bounds`` of the output grid) limits the printed
+    peaks to the points outside the box-edge strip of a regional grid; the maps still show the strip.
 
     The members are prepared and drawn exactly as the single-member renderer
     does, so a panel of this figure and the corresponding standalone PNG show
@@ -702,7 +755,11 @@ def _render_grid(
             if gl is not None:
                 gl.left_labels = i % ncols == 0
                 gl.bottom_labels = i + ncols >= len(members)
-            peak = float(np.nanmax(grid)) if field == "value" else float(np.nanmax(np.abs(grid)))
+            # the map shows the box-edge strip of a regional grid; the printed peak leaves it out
+            scored = _layer_inside(ax, layer, scored_bounds)
+            g = np.where(scored, np.asarray(grid, dtype=np.float64), np.nan)
+            peak = (float(np.nanmax(g)) if field == "value" else float(np.nanmax(np.abs(g)))) \
+                if np.isfinite(g).any() else float("nan")
             peak_word = "max" if field == "value" else "max |value|"
             ax.set_title(f"Member {member} ({peak_word} {peak:.1f} {unit})", fontsize=9)
         for ax in axes[len(members):]:
@@ -729,7 +786,8 @@ def run_member_grid(args: argparse.Namespace) -> int:
 
     runs = _parse_kv(args.run, "run")
     gribs = _parse_kv(args.grib, "grib")
-    titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
+    user_titles = _parse_kv(args.title, "title")
+    titles, hres = panel_titles(user_titles, 0, 0)
     if not runs:
         raise SystemExit("--members needs at least one --run panel (GRIB files hold one member).")
     if gribs:
@@ -752,11 +810,14 @@ def run_member_grid(args: argparse.Namespace) -> int:
         ds = xr.open_dataset(pred_file, decode_timedelta=False)
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
+        if i == 0:
+            scored_bounds = inner_bounds(lat_h, lon_h)   # the output box minus its edge strip (None: global)
         available = [int(m) for m in np.asarray(ds["ensemble_member"].values).reshape(-1)]
         here = parse_members(args.members, available)
         if not members:
             members = here
         if i == 0:
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                DEFAULT_LRES_RES, here,
@@ -773,12 +834,13 @@ def run_member_grid(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render_grid(
-            out_path=out_path, title=titles.get(key, default_title(key)),
+            out_path=out_path, title=titles.get(key, default_title(key, hres)),
             members=member_labels, values=values, date=args.date, time=args.time,
             step=args.step,
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
+            scored_bounds=scored_bounds,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
@@ -802,6 +864,11 @@ def run(args: argparse.Namespace) -> int:
         from .plot_trajectory_wind_maps import run as trajectory_run
         return trajectory_run(args)
 
+    layout = getattr(args, "layout", "panels")
+    if layout != "panels":
+        from .scale_maps import run_fronts, run_scales
+        return run_scales(args) if layout == "scales" else run_fronts(args)
+
     import xarray as xr
 
     if getattr(args, "members", None):
@@ -809,7 +876,8 @@ def run(args: argparse.Namespace) -> int:
 
     runs = _parse_kv(args.run, "run")
     gribs = _parse_kv(args.grib, "grib")
-    titles = {**DEFAULT_TITLES, **_parse_kv(args.title, "title")}
+    user_titles = _parse_kv(args.title, "title")
+    titles, hres = panel_titles(user_titles, 0, 0)
     if not runs and not gribs:
         raise SystemExit("Nothing to plot: give at least one --run or --grib panel.")
     extent, box_line = resolve_extent(args)
@@ -826,6 +894,7 @@ def run(args: argparse.Namespace) -> int:
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
         if i == 0:
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                _field(_member_slice(ds["x"], args.member), states, spec), DEFAULT_LRES_RES))
@@ -849,7 +918,7 @@ def run(args: argparse.Namespace) -> int:
             f"_{args.region_tag}_f{args.step:03d}.png"
         )
         _render(
-            out_path=out_path, title=titles.get(key, default_title(key)),
+            out_path=out_path, title=titles.get(key, default_title(key, hres)),
             member=args.member, date=args.date, time=args.time, step=args.step,
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,

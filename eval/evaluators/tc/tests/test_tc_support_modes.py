@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import sys
 from pathlib import Path
 
@@ -15,6 +17,13 @@ from eval.evaluators.tc.core import data_types as data_types_mod
 from eval.evaluators.tc.core import plot_config as plot_config_mod
 from eval.evaluators.tc.core import experiment_config as exp_config_mod
 from eval.evaluators.tc import runner as tc_runner_mod
+
+
+@pytest.fixture(autouse=True)
+def _no_box_edge_strip(monkeypatch):
+    """Toy grids of a few points have no interior: the box-edge strip (eval.shared.edge_strip) is off here."""
+    monkeypatch.setenv("EVAL_BOX_EDGE_DEG", "0")
+
 
 
 def test_workflows_pdf_main_defaults_to_regridded(monkeypatch):

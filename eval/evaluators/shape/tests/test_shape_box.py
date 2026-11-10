@@ -148,3 +148,65 @@ def test_module_constants_reset_between_runs(setup):
     assert S.REGRID_DEG == 0.05
     runner._configure({})
     assert S.REGRID_DEG == 0.09 and S.STATS != str(stats)
+
+
+def test_kernel_scale_puts_the_instrument_in_grid_units(setup):
+    """kernel_scale multiplies the kernels and the gradient half-width, names its own geometry
+    cache, and resets on the next run (o96->o320 big eval)."""
+    from eval.evaluators.shape import instrument as S
+
+    pred, stats, cache = setup
+    f = pred / "predictions_20230226_step024.nc"
+    _write_file(f, shared_input=False)
+    box, sel, cp = _premask(f, cache)
+    out = runner.run(pred, {}, {"box": BOX, "cache_dir": str(cache), "stats_file": str(stats),
+                                "steps": [24], "n_boot": 20, "kernel_scale": 4, "window_deg": 2,
+                                "regrid_deg": 0.2},
+                     output_dir=pred / "shape_k4", run_label="model")
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["kernel_scale"] == 4.0 and meta["grad_h_km"] == 32.0 and meta["window_deg"] == 2.0
+    assert meta["sigmas_km"][0] == pytest.approx(4 * 4.12)
+    assert meta["band_km"]["mid"] == [160.0, 436.0]
+    assert meta["geom_cache"].endswith("_k4_geometry.npz")
+    with np.load(meta["geom_cache"]) as z:
+        assert float(z["grad_h"]) == 32.0
+        runner._configure({})
+        _, P32 = S.build_gradient_operator(z["lat"], z["lon"], z["idx"], h_km=32.0)
+        _, P8 = S.build_gradient_operator(z["lat"], z["lon"], z["idx"])
+        np.testing.assert_allclose(z["P"], P32, rtol=1e-5, atol=1e-7)
+        assert not np.allclose(z["P"], P8)
+    assert len(runner.read_rows(out / "rows.csv")) == 3 * 2 * 3 * 2
+    runner._configure({})
+    assert S.SIGMAS[0] == 4.12 and S.GRAD_H_KM == 8.0 and S.WINDOW_DEG == 4.0
+    with pytest.raises(ValueError):
+        runner._configure({"kernel_scale": -1})
+
+
+def test_north_atlantic_box_on_the_real_o320_grid(tmp_path):
+    """The bigeval setting (box north_atlantic, kernel_scale 4, regrid 0.36, window 8) on the real
+    O320 point set; the open-ocean mask is faked (building it needs the Atos forcings)."""
+    from eval.tests.synthetic_predictions import octahedral_grid, write_predictions_file
+
+    pred = tmp_path / "pred"
+    f = write_predictions_file(pred / "predictions_20220819_step060.nc", grids=(octahedral_grid(320), octahedral_grid(8)),
+                               states=("10u", "10v"), members=(1, 2), seed=4)
+    stats = tmp_path / "stats.npy"
+    np.save(stats, {"stdev": {"10u": 2.0, "10v": 2.0}}, allow_pickle=True)
+    box = B.resolve_box("north_atlantic")
+    sel, lat, lon, _ = B.select_box(f, box)
+    assert 3000 < sel.size < 3500                       # 3,256 O320 points in 20 x 25 degrees
+    cp = B.cache_paths(box, tmp_path, n_points=sel.size)
+    interior = (lat >= lat.min() + 0.7) & (lat <= lat.max() - 0.7) & (lon >= lon.min() + 0.7) & (lon <= lon.max() - 0.7)
+    np.savez(cp["mask_cache"], **{k: (interior if k in ("interior", "all_interior", "ocean_interior",
+                                                         "open_ocean_interior") else np.zeros_like(interior))
+                                  for k in MASK_KEYS})
+    cfg = {"box": "north_atlantic", "cache_dir": str(tmp_path), "stats_file": str(stats), "steps": [60],
+           "n_boot": 20, "kernel_scale": 4, "regrid_deg": 0.36, "window_deg": 8}
+    out = runner.run(pred, {}, cfg, output_dir=tmp_path / "shape", run_label="model")
+    rows = runner.read_rows(out / "rows.csv")
+    assert len(rows) == 2 * 2 * 3 * 2
+    mid = [r for r in rows if r["band"] == "mid"]
+    assert all(float(r["n_windows"]) >= 4 for r in mid)           # 8-degree windows fit the box
+    # at this regrid the b12 band (84-160 km) is 2-4 pixels: too fine for the ellipse fit
+    assert all(float(r["n_windows"]) <= 2 for r in rows if r["band"] == "b12" and r["field"] != "driver")
+    assert all(r["n_components"] != "" and float(r["n_components"]) > 0 for r in mid)
