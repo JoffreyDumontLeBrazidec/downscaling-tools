@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from eval.evaluators import obs_imerg
+from eval.shared.edge_strip import box_edge_mask
 
 DATES = ["20230101", "20230111"]
 STEPS = (12, 24)
@@ -87,8 +88,9 @@ def test_run_then_plot(setup):
     df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
     assert set(df.row) == {"model", "input", "truth"} and set(df.variant) == {"imerg"}
     assert (df.groupby(["region", "lead", "date"]).n.nunique() == 1).all()
-    la, _ = _grid()
-    n_region = int(((la >= 25) & (la <= 60)).sum())
+    la, lo = _grid()
+    inner = box_edge_mask(la, lo, 1.0)  # the 1-degree box-edge strip is left out (docs ablation note s21)
+    n_region = int(((la >= 25) & (la <= 60) & inner).sum())
     assert (df[df.region == "25-60N"].n == n_region).all()  # the NaN points sit at 20 N, outside the region
     # the truth is IMERG minus 0.5 mm everywhere: its fair CRPS (= MAE) is 0.5 where IMERG >= 0.5
     t = df[(df.row == "truth") & (df.region == "25-60N")]
@@ -139,12 +141,13 @@ def test_fetch_sums_the_two_steps_ending_at_valid(tmp_path):
 def test_points_with_a_missing_field_value_leave_every_row(setup):
     tmp, pred, cfg = setup
     path = pred / "predictions_20230101_step012.nc"
-    la, _ = _grid()
-    inside = np.flatnonzero((la >= 25) & (la <= 60))[:50]
+    la, lo = _grid()
+    inner = box_edge_mask(la, lo, 1.0)
+    inside = np.flatnonzero((la >= 25) & (la <= 60) & inner)[:50]
     with nc.Dataset(str(path), "a") as d:
         d["y_pred"][0, 1, inside, 0] = np.nan  # one member missing at 50 points
     out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "o3", run_label="X")
     df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
     q = df[(df.date == "20230101") & (df.lead == 12) & (df.region == "25-60N")]
     assert set(q.row) == {"model", "input", "truth"} and q.n.nunique() == 1
-    assert q.n.iloc[0] == int(((la >= 25) & (la <= 60)).sum()) - 50 and np.isfinite(q.fcrps).all()
+    assert q.n.iloc[0] == int(((la >= 25) & (la <= 60) & inner).sum()) - 50 and np.isfinite(q.fcrps).all()

@@ -322,6 +322,7 @@ def resolve_config(eval_config: dict) -> dict:
         "thresholds": tuple(float(t) for t in eval_config.get("thresholds", DEFAULT_THRESHOLDS)),
         "radii": tuple(float(r) for r in eval_config.get("radii", DEFAULT_RADII)),
         "max_km": float(eval_config.get("max_km", 15.0)),
+        "box_edge_deg": float(eval_config.get("box_edge_deg", 1.0)),
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
@@ -379,7 +380,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         for row, kind in kinds.items():
             kinds_seen.setdefault(row, set()).add(kind)
         if matcher is None or not matcher.same_grid(lat, lon):
-            matcher = StationMatcher(lat, lon)
+            matcher = StationMatcher(lat, lon, cfg["box_edge_deg"])
         for v, f in fields.items():
             members.add(int(f["model"].shape[0]))
             r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,

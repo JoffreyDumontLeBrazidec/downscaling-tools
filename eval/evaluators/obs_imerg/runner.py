@@ -13,6 +13,7 @@ from eval.evaluators.obs_points.core.stations import resolve_cache, wrap_lon
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
 from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, rank_seed, read_fields, row_kinds
 from eval.evaluators.precip_read.core.metrics import EDGES
+from eval.shared.edge_strip import box_edge_mask
 from eval.shared.provenance import ENSEMBLE_RULE, SINGLE_FIELD, is_single_input, provenance
 
 LOG = logging.getLogger(__name__)
@@ -58,13 +59,15 @@ class Imerg:
                              f"({self.lat.size} points, same order expected)")
 
 
-def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_points=1000, kinds=None):
+def score_file(fields, ref, lat, lon, *, regions, thresholds, date, lead, min_points=1000, kinds=None,
+               box_edge_deg=1.0):
     """Rows, rank rows and histogram counts of one file against one IMERG field. A point is used only where
     IMERG and every field (all members, input, truth) are finite, so every row is scored on the same points.
     ``kinds`` labels each row (ensemble or single field; the input and truth are ensembles when the file carries
     their members, see ``obs_points.runner.read_fields``)."""
     kinds = kinds or ROW_KIND
     ok = np.isfinite(ref)
+    ok &= box_edge_mask(lat, lon, box_edge_deg)  # box-edge strip left out (docs ablation note s21)
     for x in fields.values():
         ok &= np.isfinite(x).all(0) if x.ndim == 2 else np.isfinite(x)
     rows, ranks, hist = [], [], {}
@@ -124,7 +127,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         members.add(int(f["model"].shape[0]))
         r, k, h = score_file({"model": f["model"], "input": f["input"], "truth": f["truth"]}, ref, lat, lon,
                              regions=regions, thresholds=thresholds, date=p.date, lead=p.step,
-                             min_points=int(eval_config.get("min_points", 1000)), kinds=kinds)
+                             min_points=int(eval_config.get("min_points", 1000)), kinds=kinds,
+                             box_edge_deg=float(eval_config.get("box_edge_deg", 1.0)))
         rows += r
         ranks += k
         for reg, d in h.items():
