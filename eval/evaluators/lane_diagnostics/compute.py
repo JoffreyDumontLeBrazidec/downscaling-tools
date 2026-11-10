@@ -9,7 +9,7 @@ Four reductions live here:
 
 ``box_wind``
     The maximum 10 m wind speed inside a fixed box, per (date, lead step, member),
-    for the target, for the interpolated driver and for the model.  This is the
+    for the target, for the driver (the input) and for the model.  This is the
     wind counterpart of the box-minimum pressure table, and it is recorded per
     case rather than pooled, because a pooled extreme on this lane is set by the
     single best case and hides the typical one.
@@ -20,14 +20,19 @@ Four reductions live here:
     target exceeds a threshold, and what share of the grid those points are.
 
 ``pair_coherence``
-    How close the interpolated low-resolution input already is to the
-    high-resolution target, per lead time, for one channel and one member.  Run
+    How close the low-resolution input already is to the high-resolution
+    target, per lead time, for one channel and one member.  Run
     on two lanes it answers whether the o1280->o2560 pair is looser than the
     o320->o1280 pair.
 
 ``sampler_peaks``
     The per-(slice, member) precipitation maximum for each sampler arm, so the
     arms can be compared on one axis.
+
+The input (the ``interp`` keys, kept for the figures) is read on its own grid
+(rule 41): the native ``x`` at the nearest native point of each output point
+when the file carries it, else ``x_interp``; every row says which in
+``input_source``.
 """
 from __future__ import annotations
 
@@ -38,6 +43,8 @@ import os
 from pathlib import Path
 
 import numpy as np
+
+from eval.shared.native_input import InputReader
 
 LOG = logging.getLogger(__name__)
 
@@ -75,8 +82,8 @@ def _box_index(lat: np.ndarray, lon: np.ndarray, box: dict):
 # 1. box maximum 10 m wind speed, per (date, step, member)
 # ---------------------------------------------------------------------------
 
-def box_wind(predictions_dir: str | Path, box: dict) -> list[dict]:
-    """Maximum 10 m wind speed inside ``box`` for target, driver and model."""
+def box_wind(predictions_dir: str | Path, box: dict, native_input: bool = True) -> list[dict]:
+    """Maximum 10 m wind speed inside ``box`` for target, driver (native x, rule 41) and model."""
     import netCDF4 as nc
 
     files = sorted(glob.glob(os.path.join(str(predictions_dir), "predictions_*_step*.nc")))
@@ -95,9 +102,13 @@ def box_wind(predictions_dir: str | Path, box: dict) -> list[dict]:
         i0, i1, keep, blat, blon = band
         date, step = _parse_name(f)
         got = {}
+        reader = InputReader(d, native_input=native_input, lat_out=blat, lon_out=blon)
         for name, key in (("model", "y_pred"), ("interp", "x_interp"), ("truth", "y")):
-            u = np.asarray(d.variables[key][0, :, i0:i1, iu], dtype=np.float32)[:, keep]
-            v = np.asarray(d.variables[key][0, :, i0:i1, iv], dtype=np.float32)[:, keep]
+            if name == "interp" and reader.native:
+                u, v = reader.channel(iu, dtype=np.float32), reader.channel(iv, dtype=np.float32)
+            else:
+                u = np.asarray(d.variables[key][0, :, i0:i1, iu], dtype=np.float32)[:, keep]
+                v = np.asarray(d.variables[key][0, :, i0:i1, iv], dtype=np.float32)[:, keep]
             spd = np.sqrt(u * u + v * v)
             j = np.nanargmax(spd, axis=1)
             got[name] = (np.take_along_axis(spd, j[:, None], 1)[:, 0], blat[j], blon[j])
@@ -110,6 +121,7 @@ def box_wind(predictions_dir: str | Path, box: dict) -> list[dict]:
                 "interp_lat": float(got["interp"][1][m]), "interp_lon": float(got["interp"][2][m]),
                 "model": float(got["model"][0][m]),
                 "model_lat": float(got["model"][1][m]), "model_lon": float(got["model"][2][m]),
+                "input_source": reader.source,
             })
         d.close()
         LOG.info("box_wind: %s", os.path.basename(f))
@@ -198,8 +210,10 @@ def pair_coherence(
     channel: str = "msl",
     member: int = 0,
     steps: list[int] | None = None,
+    native_input: bool = True,
 ) -> list[dict]:
-    """Root-mean-square error of interpolated input, and of the model, against truth.
+    """Root-mean-square error of the input (native x at the nearest native point, rule 41; x_interp without
+    x), and of the model, against truth.
 
     Accumulated in blocks over grid points so a full high-resolution field is
     never held in memory at once.
@@ -220,9 +234,12 @@ def pair_coherence(
         ci = chans.index(channel)
         n = d.dimensions["grid_point_hres"].size
         acc = dict.fromkeys(("sy", "syy", "d2x", "d2p", "cnt"), 0.0)
+        reader = InputReader(d, native_input=native_input)
+        x_native = reader.channel(ci, member=member) if reader.native else None
         for s in range(0, n, CHANNEL_BLOCK):
             e = min(s + CHANNEL_BLOCK, n)
-            xi = np.asarray(d.variables["x_interp"][0, member, s:e, ci], dtype=np.float64)
+            xi = x_native[s:e] if x_native is not None else \
+                np.asarray(d.variables["x_interp"][0, member, s:e, ci], dtype=np.float64)
             y = np.asarray(d.variables["y"][0, member, s:e, ci], dtype=np.float64)
             yp = np.asarray(d.variables["y_pred"][0, member, s:e, ci], dtype=np.float64)
             m = np.isfinite(xi) & np.isfinite(y) & np.isfinite(yp)
@@ -241,6 +258,7 @@ def pair_coherence(
             "rmse_interp": float(np.sqrt(acc["d2x"] / n_ok)),
             "rmse_model": float(np.sqrt(acc["d2p"] / n_ok)),
             "std_truth": float(np.sqrt(acc["syy"] / n_ok - (acc["sy"] / n_ok) ** 2)),
+            "input_source": reader.source,
         })
         LOG.info("pair_coherence: %s", os.path.basename(f))
     return rows

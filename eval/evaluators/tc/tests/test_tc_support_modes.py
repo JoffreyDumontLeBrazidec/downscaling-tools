@@ -235,3 +235,61 @@ def test_native_per_date_analysis_keeps_each_verification_date(monkeypatch):
 
     assert calls == [("analysis-27.grib",), ("analysis-28.grib",)]
     assert curves["OPER_O320_0001"].msl.tolist() == [1.0, 2.0]
+
+
+def _native_input_file(path: Path, *, with_x: bool = True) -> None:
+    """Output points every 0.5 deg in 10-20 N, 60-70 W; native input every 2 deg; msl 1000 hPa + native index."""
+    lat_h, lon_h = np.meshgrid(np.arange(10.0, 20.01, 0.5), np.arange(-70.0, -59.99, 0.5), indexing="ij")
+    lat_h, lon_h = lat_h.ravel(), lon_h.ravel()
+    lat_l, lon_l = np.meshgrid(np.arange(9.0, 21.01, 2.0), np.arange(-71.0, -58.99, 2.0), indexing="ij")
+    lat_l, lon_l = lat_l.ravel(), lon_l.ravel()
+    n, nl = lat_h.size, lat_l.size
+    hres = np.zeros((1, 2, n, 3), np.float32)
+    hres[..., 0] = 101000.0
+    data = {
+        "y_pred": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), hres),
+        "y": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), hres),
+        "x_interp": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), hres + 50.0),
+        "lat_hres": (("grid_point_hres",), lat_h), "lon_hres": (("grid_point_hres",), lon_h),
+    }
+    if with_x:
+        x = np.zeros((1, 2, nl, 3), np.float32)
+        x[..., 0] = 100000.0 + 100.0 * np.arange(nl)
+        x[..., 1] = 3.0
+        x[..., 2] = 4.0
+        data.update({"x": (("sample", "ensemble_member", "grid_point_lres", "weather_state"), x),
+                     "lat_lres": (("grid_point_lres",), lat_l), "lon_lres": (("grid_point_lres",), lon_l)})
+    xr.Dataset(data, coords={"weather_state": np.array(["msl", "10u", "10v"], dtype=object)}).to_netcdf(path)
+
+
+def test_input_curve_from_the_native_grid(tmp_path: Path, monkeypatch):
+    """Rule 41: the TC input curve is the native x at the nearest native point of each curve point, on the same
+    support as the model curve (native and regridded); without x it is x_interp and the source says so."""
+    from eval.shared.native_input import nearest_native_index
+
+    monkeypatch.setenv("EVAL_NATIVE_INDEX_CACHE", str(tmp_path / "idx"))
+    path = tmp_path / "predictions_20230827_step024.nc"
+    _native_input_file(path)
+    files = [(path, 20230827, 24)]
+    bbox = data_types_mod.BoundingBox(north=18.0, south=12.0, west=-68.0, east=-62.0)
+    model = loading_pred_mod.load_prediction_curves(files, bbox=bbox, support_mode="native")
+    curve, src = loading_pred_mod.load_input_curves(files, bbox=bbox, support_mode="native")
+    assert src == "x (native input grid)" and curve.support_signature == model.support_signature
+    assert curve.msl.shape == model.msl.shape
+    assert np.isclose(np.mean(curve.wind), 5.0) and set(np.unique(curve.msl)) <= {1000.0 + k for k in range(49)}
+    tlon, tlat = np.meshgrid(np.arange(-68.0, -61.9, 0.25), np.arange(12.0, 18.01, 0.25))
+    rg, src_rg = loading_pred_mod.load_input_curves(files, bbox=bbox, support_mode="regridded",
+                                                    target_lon=tlon.ravel(), target_lat=tlat.ravel())
+    idx = nearest_native_index(xr.open_dataset(path)["lat_lres"].values, xr.open_dataset(path)["lon_lres"].values,
+                               tlat.ravel(), tlon.ravel())
+    np.testing.assert_allclose(rg.msl[: tlat.size], 1000.0 + idx)          # member 0: native values, no blending
+    assert rg.support_mode == "regridded" and src_rg == src
+    old, src_old = loading_pred_mod.load_input_curves(files, bbox=bbox, support_mode="native", native_input=False)
+    assert "interpolated" in src_old and np.allclose(old.msl, 1010.5)
+    fields = loading_pred_mod.load_prediction_member_fields(path, bbox, [0, 1])
+    assert fields["input_source"] == "x (native input grid)"
+    assert set(np.unique(fields["x_interp_msl"])) <= {1000.0 + k for k in range(49)}
+    path2 = tmp_path / "predictions_20230828_step024.nc"
+    _native_input_file(path2, with_x=False)
+    _, src2 = loading_pred_mod.load_input_curves([(path2, 20230828, 24)], bbox=bbox, support_mode="native")
+    assert src2 == "x_interp (input interpolated to the output grid; no native x in the file)"

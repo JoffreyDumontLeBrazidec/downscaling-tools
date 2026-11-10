@@ -14,7 +14,8 @@ Method (identical to the T24 regional box-FFT audit, tc_o320_o1280):
   native O1280 box points -> nearest-neighbour onto a regular GRID_DEG grid (2 deg rim removed)
   -> per field: linear-plane detrend + 2D Hann window -> np.fft.rfft2 power -> isotropic radial
   binning into log-spaced wavenumber bins -> PER-MEMBER spectra averaged (never the ensemble mean).
-  Truth = each member's target `y`; input = `x_interp`. Windowed box-FFT powers are the model/truth
+  Truth = each member's target `y`; input = the native `x` at the nearest native point of each
+  output point (rule 41; `x_interp` only when a file has no `x`). Windowed box-FFT powers are the model/truth
   ratio under byte-identical processing only (NOT comparable to global healpix C_l boards).
 
 Figures are drawn in the house style of ``eval.plotting`` (role colours, variable-table colour
@@ -117,7 +118,9 @@ def _column_titles(grids: dict | None) -> dict:
     g = grids or {}
     hres, lres = g.get("hres"), g.get("lres")
     on = f" ({hres})" if hres else ""
-    if lres and hres:
+    if g.get("input_native"):
+        inp = f"Input ({lres}, native grid)" if lres else "Input (native grid)"
+    elif lres and hres:
         inp = f"Input ({lres} interpolated to {hres})"
     else:
         inp = "Input (interpolated to the target grid)"
@@ -209,13 +212,28 @@ def plot_storm_maps(out_dir, lon_grid, lat_grid, fields: dict, *, eye_lat: float
         save_figure(fig, Path(out_dir) / "storm_maps.png", close=True)
 
 
+def _input_values(ds, native: bool):
+    """(member, output point, weather) of the input: the native x at the nearest native point of each output
+    point (rule 41), or x_interp."""
+    if not native:
+        return ds.x_interp.isel(sample=0).values
+    from eval.shared.native_input import nearest_native_index
+
+    idx = nearest_native_index(ds.lat_lres.values.reshape(-1), ds.lon_lres.values.reshape(-1),
+                               ds.lat_hres.values.reshape(-1), ds.lon_hres.values.reshape(-1))
+    x = ds.x.isel(sample=0)
+    point = next(d for d in x.dims if d.startswith("grid_point"))
+    members = [d for d in x.dims if d not in (point, "weather_state")]
+    return x.transpose(*members, point, "weather_state").values[:, idx, :]
+
+
 def _open(nc):
     import xarray as xr
     return xr.open_dataset(nc, decode_timedelta=False)
 
 
 def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="storm",
-           step="072", storm_box=None):
+           step="072", storm_box=None, native_input=True):
     predictions_dir = Path(predictions_dir)
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     ncs = sorted(predictions_dir.glob(f"predictions_*_step{step}.nc"))
@@ -231,6 +249,14 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
     nmem = int(d0.sizes["ensemble_member"])
     grids = {"hres": d0.attrs.get("grid") or _ogrid(d0.sizes.get("grid_point_hres", lat.size)),
              "lres": _ogrid(d0.sizes["grid_point_lres"]) if "grid_point_lres" in d0.sizes else None}
+    from eval.shared.native_input import SOURCE_NATIVE, has_native_input, interp_source, warn_fallback
+
+    native = bool(native_input) and has_native_input(d0)
+    grids["input_native"] = native
+    input_source = SOURCE_NATIVE if native else interp_source(
+        "x_interp", "native_input: false" if not native_input else "no native x in the file")
+    if not native:
+        warn_fallback(LOG, "storm_maps", input_source)
     d0.close()
     box_mask = ((lat >= event_box[0] - RIM_DEG) & (lat <= event_box[1] + RIM_DEG) &
                 (lon >= event_box[2] - RIM_DEG) & (lon <= event_box[3] + RIM_DEG))
@@ -245,7 +271,7 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
         ds = _open(nc)
         raw = {"model": ds.y_pred.isel(sample=0).values,
                "truth": ds.y.isel(sample=0).values,
-               "input": ds.x_interp.isel(sample=0).values}
+               "input": _input_values(ds, native)}
         ds.close()
         for f in FIELDS:
             for c in ("model", "truth", "input"):
@@ -262,7 +288,8 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
             deepest = (float(mm[mem]), nc, mem)
 
     spec = {f: {c: np.nanmean(np.array(acc[f][c]), axis=0) for c in acc[f]} for f in FIELDS}
-    jout = {"fine_band_40_150km_ratio_to_truth": {}, "slope_fine_40_150km": {}, "storm_box_min_msl_hpa": round(deepest[0] / 100.0, 1)}
+    jout = {"fine_band_40_150km_ratio_to_truth": {}, "slope_fine_40_150km": {}, "storm_box_min_msl_hpa": round(deepest[0] / 100.0, 1),
+            "input_source": input_source}
     for f in FIELDS:
         jout["fine_band_40_150km_ratio_to_truth"][f] = round(bs.fine_ratio(spec[f]["model"], spec[f]["truth"]), 3)
         jout["slope_fine_40_150km"][f] = {c: round(bs.slope(spec[f][c]), 3) for c in ("model", "truth", "input")}
@@ -277,7 +304,7 @@ def render(predictions_dir, out_dir, event_box=(5, 35, -100, -40), event_name="s
     _msl, nc, mem = deepest
     ds = _open(nc)
     yy = {"truth": ds.y.isel(sample=0).values, "model": ds.y_pred.isel(sample=0).values,
-          "input": ds.x_interp.isel(sample=0).values}
+          "input": _input_values(ds, native)}
     ds.close()
     tmsl = yy["truth"][mem, bidx, si["msl"]]
     sm = ((lat[bidx] >= storm_box[0]) & (lat[bidx] <= storm_box[1]) &

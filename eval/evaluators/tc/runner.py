@@ -14,12 +14,14 @@ from pathlib import Path
 
 from eval.config.loader import load_event
 from eval.discovery.predictions import find_predictions
+from eval.shared.native_input import is_interpolated, warn_fallback
 from eval.evaluators.tc.core.data_types import BoundingBox
 from eval.evaluators.tc.core.events import EVENTS, TCEvent
 from eval.evaluators.tc.core.experiment_config import TCExperimentConfig
 from eval.evaluators.tc.core.loading_predictions import (
     event_days_steps,
     forecast_dates_for_event,
+    load_input_curves,
     load_prediction_curves,
     select_prediction_files_for_event,
 )
@@ -266,6 +268,9 @@ def run(
     # this cap ENFO_O320 contributes 50 members, biasing tail percentiles deeper
     # than ML purely from sample-size effects. Default 10 mirrors run_tc_pdf.
     max_pf_members = eval_config.get("max_pf_members", 10)
+    # rule 41: the input curve from the native x (nearest native point of each curve point); False = old tables
+    native_input = bool(eval_config.get("native_input", True))
+    input_sources: set[str] = set()
 
     pred_files = _pred_files_as_tuples(predictions_dir)
     if not pred_files:
@@ -381,18 +386,20 @@ def run(
                 regrid_resolution=plot_cfg.regrid_resolution,
             )
 
-            # Load input (x_interp) and target (y) curves directly from NetCDF files
+            # Load input (native x, rule 41; x_interp without it) and target (y) curves from the NetCDF files
             input_label, target_nc_label = resolve_bundle_curve_labels(eval_config)
+            event_input_source = None
             if input_label and event_pred_files:
                 try:
-                    curves[input_label] = load_prediction_curves(
+                    curves[input_label], event_input_source = load_input_curves(
                         event_pred_files,
                         bbox=event.bbox,
                         **bundle_curve_kwargs,
-                        prediction_var="x_interp",
+                        native_input=native_input,
                     )
+                    input_sources.add(event_input_source)
                 except Exception:
-                    LOG.warning("Failed to load x_interp curve for event=%s", event_name, exc_info=True)
+                    LOG.warning("Failed to load the input curve for event=%s", event_name, exc_info=True)
 
             if target_nc_label and event_pred_files:
                 try:
@@ -440,6 +447,7 @@ def run(
 
             event_stats["event"] = event_name
             event_stats["support_mode"] = mode
+            event_stats["input_source"] = event_input_source
             event_stats["support_contract"] = {
                 "declared_mode": mode,
                 "validated": True,
@@ -482,6 +490,10 @@ def run(
         )
     if mode_failures:
         payload["mode_failures"] = mode_failures
+    payload["input_source"] = sorted(input_sources)
+    for src in sorted(input_sources):
+        if is_interpolated(src):
+            warn_fallback(LOG, "tc", src)
 
     stats_path = output_dir / "stats.json"
     with open(stats_path, "w", encoding="utf-8") as f:

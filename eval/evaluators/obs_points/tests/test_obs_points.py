@@ -575,3 +575,55 @@ def test_input_is_scored_on_its_native_grid(tmp_path):
     assert "interpolated" in prov_old["input_grid"]["source"]
     assert fields_old["2t"]["input"].shape[-1] == fields_old["2t"]["model"].shape[-1]
     assert input_height_column(la, lo) == "h_o320"  # 1-degree spacing: the coarse column
+
+
+def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
+    """Rule 41 with the box-edge strip (docs ablation note s21): stations dropped for the strip of the output
+    grid are dropped for the native input row as well, so input and model rows share one station sample."""
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "native", noise=1.0, seed=5)
+    lat1, lon1 = np.arange(29.0, 61.0 + 1e-9, 0.5), np.arange(-21.0, 21.0 + 1e-9, 0.5)
+    LA, LO = np.meshgrid(lat1, lon1, indexing="ij")
+    la, lo = LA.ravel(), LO.ravel()
+    for f in sorted(pred.glob("*.nc")):
+        with nc.Dataset(str(f), "a") as d:
+            d.createDimension("grid_point_lres", la.size)
+            d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la
+            d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(lo, 360.0)
+            x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+            base = np.zeros((la.size, 5)); base[:, 0] = 280.0; base[:, 3] = 101000.0
+            x[0] = np.stack([base] * 5)
+    cfg = {"cache": str(cache), "vars": ["msl"], "max_km": 100.0, "min_stations": 20, "radii": [0],
+           "regions": {"all": None}, "height_classes": {}, "box_edge_deg": 3.0}  # wide strip: stations sit >= 1 deg in
+    out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "o1", run_label="N")
+    df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
+    assert (df.groupby(["var", "variant", "radius_km", "region", "lead", "date"]).n.nunique() == 1).all()
+    n_strip = int(df[df.row == "input"].n.iloc[0])
+    out0 = obs_points.run(pred, {}, {**cfg, "box_edge_deg": 0.0}, output_dir=tmp_path / "o0", run_label="N0")
+    n_all = int(pd.read_csv(out0 / "scores_per_date.csv").query("row == \"input\"").n.iloc[0])
+    assert n_strip < n_all == 80   # the strip drops stations, for the input row as for the model row
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["input_source"] == ["x (native input grid)"]
+
+
+def test_tp_obs_var_scores_tp_against_the_named_series(tmp_path):
+    """tp_obs_var: tp6 scores the file's tp against obs_tp6.csv (the 4 km lane's 6 h windows), not obs_tp.csv."""
+    import shutil
+
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "p6", noise=0.5, seed=11)
+    cfg = {"vars": ["tp"], "radii": [0], "min_stations": 10, "max_km": 100.0}
+    ref = obs_points.run(pred, {}, {**cfg, "cache": str(cache)}, output_dir=tmp_path / "ref", run_label="R")
+    c6 = tmp_path / "cache6"
+    shutil.copytree(cache, c6)
+    (c6 / "obs_tp.csv").rename(c6 / "obs_tp6.csv")
+    o = pd.read_csv(c6 / "obs_tp6.csv")
+    o["obs"] = o["obs"] * 7.0 + 3.0  # a different 12 h series that must NOT be used
+    o.to_csv(c6 / "obs_tp.csv", index=False)
+    out = obs_points.run(pred, {}, {**cfg, "cache": str(c6), "tp_obs_var": "tp6"}, output_dir=tmp_path / "o6",
+                         run_label="S")
+    a = pd.read_csv(ref / "scores_per_date.csv")
+    b = pd.read_csv(out / "scores_per_date.csv")
+    num = [c for c in a.columns if a[c].dtype.kind == "f"]
+    pd.testing.assert_frame_equal(a[num].reset_index(drop=True), b[num].reset_index(drop=True))
+    assert json.loads((out / "run_meta.json").read_text())["tp_obs_var"] == "tp6"

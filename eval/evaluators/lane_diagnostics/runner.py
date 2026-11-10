@@ -53,11 +53,12 @@ def run(
 
     box = dict(eval_config.get("box", F.BOX))
     stages = set(eval_config.get("stages", ["sampler_peaks", "loss_budget", "pair_coherence", "box_wind"]))
+    native_input = bool(eval_config.get("native_input", True))  # rule 41; False reproduces old tables
 
     if "box_wind" in stages:
         path = meas / "box_wind.json"
         if overwrite or not path.exists():
-            rows = compute.box_wind(predictions_dir, box)
+            rows = compute.box_wind(predictions_dir, box, native_input=native_input)
             path.write_text(json.dumps(rows) + "\n")
             LOG.info("wrote %s (%d rows)", path, len(rows))
 
@@ -84,7 +85,7 @@ def run(
             lanes = {}
             for name, pdir in _cfg(eval_config, "pair_lanes").items():
                 lanes[name] = compute.pair_coherence(pdir, channel="msl", member=0,
-                                                     steps=pair_steps)
+                                                     steps=pair_steps, native_input=native_input)
             path.write_text(json.dumps(lanes) + "\n")
             LOG.info("wrote %s", path)
 

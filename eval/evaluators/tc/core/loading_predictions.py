@@ -8,6 +8,8 @@ from typing import Iterable
 import numpy as np
 import xarray as xr
 
+from eval.shared.native_input import SOURCE_NATIVE, InputReader, has_native_input, interp_source
+
 from .data_types import BoundingBox, CurveVectors, SupportMode, curve_support_signature
 from .grid import normalize_lon, point_mask, structured_grid_from_points, interp_structured, nearest_point_indices
 
@@ -120,17 +122,82 @@ def load_prediction_curves(
     raise ValueError(f"Unsupported support_mode={support_mode!r}")
 
 
+def load_input_curves(
+    pred_files: Iterable[tuple[Path, int, int]],
+    *,
+    bbox: BoundingBox,
+    support_mode: SupportMode,
+    target_lon: np.ndarray | None = None,
+    target_lat: np.ndarray | None = None,
+    native_input: bool = True,
+) -> tuple[CurveVectors, str]:
+    """The input curve of an event and its source (rule 41).
+
+    When the files carry the native input ``x`` (and ``native_input``), each verification point of the curve's
+    support (the output points in the bbox for ``native``, the target grid for ``regridded``) takes the value of
+    the nearest native input point: native values, unsmoothed, on the same support as the model and truth curves.
+    Otherwise the curve is ``x_interp`` loaded like the model (interpolated; the source says so)."""
+    pred_files = list(pred_files)
+    if not pred_files:
+        raise ValueError("No prediction files provided")
+    with xr.open_dataset(pred_files[0][0]) as ds0:
+        native = native_input and has_native_input(ds0)
+    if not native:
+        reason = "native_input: false" if not native_input else "no native x in the file"
+        curves = load_prediction_curves(pred_files, bbox=bbox, support_mode=support_mode, target_lon=target_lon,
+                                        target_lat=target_lat, prediction_var="x_interp")
+        return curves, interp_source("x_interp", reason)
+    if support_mode == "regridded" and (target_lon is None or target_lat is None):
+        raise ValueError("target_lon/target_lat are required for regridded input curves")
+    msl_vals: list[np.ndarray] = []
+    wind_vals: list[np.ndarray] = []
+    signatures: set[str] = set()
+    for path, _, _ in pred_files:
+        with xr.open_dataset(path) as ds:
+            weather_states = ds["weather_state"].values.tolist()
+            i_msl = weather_states.index("msl")
+            i_u10 = weather_states.index("10u")
+            i_v10 = weather_states.index("10v")
+            if support_mode == "native":
+                lon, lat = prediction_point_coordinates(ds)
+                mask = point_mask(lon, lat, bbox)
+                if not np.any(mask):
+                    continue
+                pts_lon, pts_lat = lon[mask], lat[mask]
+                signatures.add(curve_support_signature("native", pts_lon, pts_lat))
+            elif support_mode == "regridded":
+                pts_lon = np.asarray(target_lon, dtype=np.float64).reshape(-1)
+                pts_lat = np.asarray(target_lat, dtype=np.float64).reshape(-1)
+                signatures.add(curve_support_signature("regridded", target_lon, target_lat))
+            else:
+                raise ValueError(f"Unsupported support_mode={support_mode!r}")
+            reader = InputReader(ds, lat_out=pts_lat, lon_out=pts_lon)
+            msl = reader.channel(i_msl)
+            u10, v10 = reader.channel(i_u10), reader.channel(i_v10)
+            msl_vals.append((msl / 100.0).reshape(-1))
+            wind_vals.append(np.sqrt(u10 * u10 + v10 * v10).reshape(-1))
+    if not msl_vals:
+        raise RuntimeError("No native input values extracted")
+    if len(signatures) != 1:
+        raise ValueError(f"Input curve files do not share one spatial support: {sorted(signatures)}")
+    return CurveVectors(msl=np.concatenate(msl_vals), wind=np.concatenate(wind_vals), support_mode=support_mode,
+                        support_signature=signatures.pop()), SOURCE_NATIVE
+
+
 def load_prediction_member_fields(
     nc_path: Path,
     bbox: BoundingBox,
     members: list[int],
     regrid_resolution: float = 0.25,
+    native_input: bool = True,
 ) -> dict[str, np.ndarray]:
     """Load input, prediction, and truth fields for selected members, masked to event bbox.
 
     Returns dict with keys: x_interp_msl, x_interp_wind, y_pred_msl, y_pred_wind,
-    y_msl, y_wind, lat_axis, lon_axis.
-    Arrays are shaped [len(members), nlat, nlon].
+    y_msl, y_wind, lat_axis, lon_axis, input_source.
+    Arrays are shaped [len(members), nlat, nlon]. The input (keys ``x_interp_*`` kept for the plotters) comes from
+    the native ``x`` when the file has it (rule 41): each map cell takes the nearest native point, no smoothing;
+    ``x_interp`` (linearly regridded like the model) only without ``x`` or with ``native_input`` off.
     """
     from scipy.interpolate import griddata
 
@@ -145,7 +212,7 @@ def load_prediction_member_fields(
         y_pred_raw = np.asarray(ds["y_pred"].isel(sample=0).values, dtype=np.float64)[members]
         y_raw = np.asarray(ds["y"].isel(sample=0).values, dtype=np.float64)[members]
 
-        if "x_interp" in ds:
+        if "x_interp" in ds and not (native_input and has_native_input(ds)):
             x_interp_raw = np.asarray(ds["x_interp"].isel(sample=0).values, dtype=np.float64)[members]
             x_lres_raw = None
             x_lon_lres = None
@@ -176,16 +243,8 @@ def load_prediction_member_fields(
     y_bbox = y_raw[:, mask, :]
     x_interp_bbox = x_interp_raw[:, mask, :] if x_interp_raw is not None else None
 
-    if x_lres_raw is not None:
-        lres_mask = point_mask(x_lon_lres, x_lat_lres, bbox)
-        if np.any(lres_mask):
-            x_lres_bbox = x_lres_raw[:, lres_mask, :]
-            x_lon_bbox = x_lon_lres[lres_mask]
-            x_lat_bbox = x_lat_lres[lres_mask]
-        else:
-            x_lres_bbox = None
-    else:
-        x_lres_bbox = None
+    x_lres_bbox = x_lres_raw if x_lres_raw is not None and np.any(point_mask(x_lon_lres, x_lat_lres, bbox)) \
+        else None
 
     # Build regular target grid within bbox
     west = normalize_lon(np.asarray([bbox.west], dtype=np.float64))[0]
@@ -229,14 +288,16 @@ def load_prediction_member_fields(
         input_msl, input_wind = _fields_for(x_interp_bbox)
         result["x_interp_msl"] = input_msl
         result["x_interp_wind"] = input_wind
+        result["input_source"] = interp_source("x_interp", "native_input: false" if native_input is False
+                                               else "no native x in the file")
     elif x_lres_bbox is not None:
+        from eval.shared.native_input import nearest_native_index
+
+        # rule 41: every map cell takes the nearest native input point (no linear interpolation of the input)
+        near = nearest_native_index(x_lat_lres, x_lon_lres, target_lat.reshape(-1), target_lon.reshape(-1))
+
         def _interp_lres(flat_vals: np.ndarray) -> np.ndarray:
-            return griddata(
-                (x_lon_bbox, x_lat_bbox),
-                flat_vals,
-                (target_lon, target_lat),
-                method="linear",
-            )
+            return flat_vals[near].reshape(target_lat.shape)
 
         def _fields_lres(raw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             msl_list, wind_list = [], []
@@ -252,6 +313,7 @@ def load_prediction_member_fields(
         input_msl, input_wind = _fields_lres(x_lres_bbox)
         result["x_interp_msl"] = input_msl
         result["x_interp_wind"] = input_wind
+        result["input_source"] = SOURCE_NATIVE
 
     return result
 

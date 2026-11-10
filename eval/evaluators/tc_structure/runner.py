@@ -4,7 +4,8 @@ For every prediction file (one initial date, one lead, ten members) and every ev
 (storm box from ``eval/config/events/*.yaml`` through ``eval.evaluators.tc.core.events``)
 whose dates match the file, the evaluator measures the storm in three fields on the
 same native grid points: the model ``y_pred``, the truth ``y`` and the interpolated
-coarse input ``x_interp``. The measurements are defined in ``core.py``.
+coarse input (the native ``x`` at the nearest native point of each output point, rule 41;
+``x_interp_members``, then ``x_interp``, only when the file has no ``x``). The measurements are defined in ``core.py``.
 
 The truth at member index k is an ENFO member stored there by convention; it is NOT
 the truth that model member k should reproduce. The three fields are therefore
@@ -76,6 +77,10 @@ from eval.shared.date_bootstrap import (
     DEFAULT_N_BOOT, DEFAULT_SEED, boot_mean, boot_mean_diff, boot_slope,
 )
 
+from eval.shared.native_input import (
+    SOURCE_NATIVE, InputReader, has_native_input, is_interpolated, warn_fallback,
+)
+
 from .core import StructureParams, find_centre, gc_distance_km, measure_structure
 
 LOG = logging.getLogger(__name__)
@@ -130,7 +135,7 @@ def _bbox_tuple(ev):
     return (float(b.south), float(b.north), w, e)
 
 
-def _read_region(path: Path, events, margin_deg: float):
+def _read_region(path: Path, events, margin_deg: float, native_input: bool = True):
     """Read 10u, 10v, msl of the three fields on the rows covering every event box
     plus a margin. Returns dict with lat, lon (-180..180), and per field an array
     (member, point, 3) ordered (10u, 10v, msl[hPa])."""
@@ -163,12 +168,25 @@ def _read_region(path: Path, events, margin_deg: float):
         out = {"lat": lat_r[sel], "lon": lon_r[sel], "n_file_points": int(lat.size),
                "attrs": {k: str(d.getncattr(k)) for k in d.ncattrs()}}
         nmem = int(d["y_pred"].shape[1])
-        out["input_source"] = "x_interp"
+        out["input_source"] = _source_of(d, native_input)
+        native = native_input and has_native_input(d)
         for fname, var in FIELDS:
+            if fname == "input" and native:
+                # rule 41: native values at the nearest native point of each selected output point; member k of
+                # x is the input that drove model member k (a single-member x is shared by every member)
+                reader = InputReader(d, lat_out=lat_r[sel], lon_out=lon_r[sel])
+                arr = np.stack([reader.channel(c, dtype=np.float32) for c in (iu, iv, ip)], axis=-1)
+                if arr.shape[0] == 1 and nmem > 1:
+                    arr = np.broadcast_to(arr, (nmem,) + arr.shape[1:])
+                arr = arr.astype(np.float64)
+                med = float(np.nanmedian(arr[0, :, 2])) if np.isfinite(arr[0, :, 2]).any() else 0.0
+                if med > 5000.0:          # Pa -> hPa
+                    arr[..., 2] /= 100.0
+                out[fname] = arr
+                continue
             if fname == "input" and "x_interp_members" in d.variables:
                 # member prediction files: the input ensemble, member k = the input that drove model member k
                 var = "x_interp_members"
-                out["input_source"] = var
             if var not in d.variables:
                 out[fname] = np.full((nmem, sel.size, 3), np.nan)
                 continue
@@ -176,8 +194,6 @@ def _read_region(path: Path, events, margin_deg: float):
                 # (sample, point, state): one input shared by every member
                 blk = np.asarray(d[var][0, i0:i1, s0:s1], dtype=np.float32)[sel, :]
                 blk = np.broadcast_to(blk[None], (nmem,) + blk.shape)
-                if fname == "input":
-                    out["input_source"] = var + " (single field broadcast)"
             else:
                 blk = np.asarray(d[var][0, :, i0:i1, s0:s1], dtype=np.float32)[:, sel, :]
             arr = np.stack([blk[..., iu - s0], blk[..., iv - s0], blk[..., ip - s0]], axis=-1).copy()
@@ -190,15 +206,24 @@ def _read_region(path: Path, events, margin_deg: float):
     return out
 
 
-def _input_source(path) -> str:
+def _source_of(d, native_input: bool = True) -> str:
+    """The input row's source in an open file: the native x (rule 41), else what PR #19 reads."""
+    if native_input and has_native_input(d):
+        return SOURCE_NATIVE
+    why = ("input interpolated to the output grid; "
+           + ("native_input: false" if has_native_input(d) else "no native x in the file"))
+    if "x_interp_members" in d.variables:
+        return f"x_interp_members (input ensemble, member k drives model member k; {why})"
+    if "x_interp" in d.variables and d["x_interp"].ndim == 3:
+        return f"x_interp (single input broadcast to every member; {why})"
+    return f"x_interp ({why})"
+
+
+def _input_source(path, native_input: bool = True) -> str:
     import netCDF4 as nc
 
     with nc.Dataset(path) as d:
-        if "x_interp_members" in d.variables:
-            return "x_interp_members (input ensemble, member k drives model member k)"
-        if "x_interp" in d.variables and d["x_interp"].ndim == 3:
-            return "x_interp (single input broadcast to every member)"
-        return "x_interp"
+        return _source_of(d, native_input)
 
 
 def _fmt(v):
@@ -214,7 +239,8 @@ def _fmt(v):
 def measure_file(path: Path, ymd: int, step: int, events, params: StructureParams, *,
                  arm: str, storm_edge_km: float, storm_max_pmin_hpa: float,
                  track_km_per_24h: float = 900.0, track=None, members=None,
-                 first_guess_field: str = "truth", best_track=None, bt_search_km: float = 300.0):
+                 first_guess_field: str = "truth", best_track=None, bt_search_km: float = 300.0,
+                 native_input: bool = True, input_sources: set | None = None):
     """All case rows (and profiles) of one prediction file.
 
     ``track`` maps an event name to the first-guess state left by the previous lead
@@ -223,10 +249,12 @@ def measure_file(path: Path, ymd: int, step: int, events, params: StructureParam
     """
     track = dict(track or {})
     margin = params.rmax_km / 111.0 + 0.5
-    data = _read_region(path, events, margin)
+    data = _read_region(path, events, margin, native_input=native_input)
     rows, profiles = [], []
     if data is None:
         return rows, profiles, track
+    if input_sources is not None:
+        input_sources.add(data["input_source"])
     lat, lon = data["lat"], data["lon"]
     if first_guess_field not in ("truth", "input"):
         raise ValueError(f"tc_structure: first_guess_field must be truth or input, not {first_guess_field!r}")
@@ -415,6 +443,8 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     seed = int(eval_config.get("seed", DEFAULT_SEED))
     bands = eval_config.get("lead_bands") or DEFAULT_BANDS
     arm = run_label or eval_config.get("run_label") or predictions_dir.name
+    native_input = bool(eval_config.get("native_input", True))  # rule 41; False reproduces old tables
+    input_sources: set[str] = set()
 
     files = _discover(predictions_dir)
     steps = eval_config.get("steps")
@@ -444,7 +474,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             Path(path), ymd, step, evs, params, arm=arm, storm_edge_km=storm_edge_km,
             storm_max_pmin_hpa=storm_max_pmin, track_km_per_24h=track_speed,
             track=tracks.get(ymd), first_guess_field=fg_field, best_track=best_track,
-            bt_search_km=bt_search_km)
+            bt_search_km=bt_search_km, native_input=native_input, input_sources=input_sources)
         base = len(rows)
         rows += r
         profs += [(base + i, vt) for i, vt in p]
@@ -462,7 +492,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
 
     summary = aggregate(rows, bands, n_boot, seed, params.pressure_ref_hpa)
     summary["arm"] = arm
-    summary["input_source"] = _input_source(files[0][0])
+    input_source = "; ".join(sorted(input_sources)) or _input_source(files[0][0], native_input)
+    if is_interpolated(input_source):
+        warn_fallback(LOG, "tc_structure", input_source)
+    summary["input_source"] = input_source
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=float) + "\n")
     meta = {
         "evaluator": "tc_structure", "git_commit": _git_commit(), "arm": arm,
@@ -470,7 +503,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "files": [str(f[0]) for f in files], "events": [e.name for e in events],
         "params": asdict(params), "storm_edge_km": storm_edge_km,
         "storm_max_pmin_hpa": storm_max_pmin, "track_km_per_24h": track_speed,
-        "input_source": _input_source(files[0][0]),
+        "input_source": input_source, "native_input": native_input,
         "first_guess_field": fg_field, "best_track_cache": str(bt_cache or ""),
         "best_track_search_km": bt_search_km,
         "n_boot": n_boot, "seed": seed,

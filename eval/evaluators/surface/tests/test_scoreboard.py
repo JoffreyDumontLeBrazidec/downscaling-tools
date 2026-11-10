@@ -70,3 +70,38 @@ def test_format_surface_loss_for_scoreboard():
     assert format_surface_loss_for_scoreboard({"weighted_nmse": 0.17}) == "0.1700"
     assert format_surface_loss_for_scoreboard({"weighted_mse": 1.23e-5}) == "1.230000e-05"
     assert format_surface_loss_for_scoreboard({}) == "na"
+
+
+def test_input_surface_row_from_the_native_grid(tmp_path, monkeypatch):
+    """Rule 41: the input surface MSE row scores the native x at the nearest native point, not x_interp."""
+    import numpy as np
+    import xarray as xr
+
+    from eval.evaluators.surface.core.scoreboard import load_x_interp_surface_metrics
+
+    monkeypatch.setenv("EVAL_NATIVE_INDEX_CACHE", str(tmp_path / "idx"))
+    n, nl = 40, 8
+    lat = np.linspace(-30, 30, n)
+    states = np.array(["2t", "msl", "10u", "10v"], dtype=object)
+    y = np.zeros((1, 1, n, 4), np.float32)
+    y[..., 0] = 280.0
+    y[..., 1] = 101000.0
+    x = y[:, :, :nl].copy()
+    x[..., 0] += 2.0                       # native input: 2 K too warm
+    ds = xr.Dataset({
+        "y": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), y),
+        "y_pred": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), y),
+        "x_interp": (("sample", "ensemble_member", "grid_point_hres", "weather_state"), y + 1.0),
+        "x": (("sample", "ensemble_member", "grid_point_lres", "weather_state"), x),
+        "lat_hres": (("grid_point_hres",), lat), "lon_hres": (("grid_point_hres",), np.linspace(0, 40, n)),
+        "lat_lres": (("grid_point_lres",), np.linspace(-30, 30, nl)),
+        "lon_lres": (("grid_point_lres",), np.linspace(0, 40, nl)),
+    }, coords={"weather_state": states})
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    ds.to_netcdf(pred / "predictions_20230101_step024.nc")
+    m = load_x_interp_surface_metrics(pred)
+    assert m["input_source"] == "x (native input grid)"
+    assert m["variables"]["2t"]["mean_mse"] == pytest.approx(4.0, rel=1e-5)
+    old = load_x_interp_surface_metrics(pred, native_input=False)
+    assert "interpolated" in old["input_source"] and old["variables"]["2t"]["mean_mse"] == pytest.approx(1.0)

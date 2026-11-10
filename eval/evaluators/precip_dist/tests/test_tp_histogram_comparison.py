@@ -76,3 +76,23 @@ def test_streaming_dist_counts_negatives_in_zero_bin():
     assert d.neg == 2
     assert d.n == 4
     assert d.counts.sum() == 4
+
+
+def test_input_from_the_native_grid(tmp_path):
+    """Rule 41: a file with a native x gives the input series from x at the nearest native point."""
+    y = np.full((1, 2, 6, 1), 0.001, dtype=np.float32)
+    path = tmp_path / "predictions_20250101_step012.nc"
+    _write_nc(path, y=y, y_pred=y, x_interp=y + 0.002)
+    ds = xr.load_dataset(path)
+    ds["lat_lres"] = (("grid_point_lres",), np.array([-10.0, 10.0]))
+    ds["lon_lres"] = (("grid_point_lres",), np.array([0.0, 20.0]))
+    ds["x"] = (("sample", "ensemble_member", "grid_point_lres", "weather_state"),
+               np.array([[[[0.007], [0.009]], [[0.0], [0.0]]]], np.float32))
+    ds.to_netcdf(path)
+    info = {}
+    step_data = accumulate_tp_by_step(tmp_path, info=info)
+    assert info["input_source"] == "x (native input grid)"
+    assert step_data[12]["input"].n == 6 and np.isclose(step_data[12]["input"].max, 9.0, atol=0.05)
+    info_old = {}
+    old = accumulate_tp_by_step(tmp_path, native_input=False, info=info_old)
+    assert "interpolated" in info_old["input_source"] and np.isclose(old[12]["input"].max, 3.0, atol=0.02)
