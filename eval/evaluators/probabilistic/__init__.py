@@ -15,8 +15,10 @@ F = field - L of members and truth, P_L being one isotropic Gaussian low-pass wi
 half-power wavelength at `scale_cut_km` (400 km by default; see core/scale_split.py), and
 for the full field on the same inner points those bands use (band `full_inner`, so full,
 large and fine are comparable). The bands are NOT additive (P_L is a taper): full_inner is
-not large + fine. When the files carry the input members (x_interp), their spread per band
-is reported too, so the read can say how much large-scale spread comes from the input.
+not large + fine. When the files carry the input members, their spread per band is
+reported too, so the read can say how much large-scale spread comes from the input; the
+input is read on its own grid (rule 41: native x at the nearest native point, x_interp only
+when the file has no x; input_source in the summary JSON).
 Precipitation (tp) is in the default variables and is clipped at zero before scoring.
 
 The scores are read with the owner's rule 32 v2 (core/verdict.py, applied by `eval.cli

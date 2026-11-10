@@ -22,8 +22,11 @@ What is computed, per prediction file (one date and lead), variable and region:
   fine part ``F = field - L`` of members and truth (``band_scores_by_lead.csv``, band column
   ``full`` / ``full_inner`` / ``large`` / ``fine``; ``scale_split.py`` describes ``P_L``), and
   the inter-member spread of the low-resolution input in each band when the files carry the
-  input members (``x_interp`` with two or more members), so the read can say how much of the
-  large-scale spread comes from the input. ``full`` is the full field on every point of the
+  input members (two or more), so the read can say how much of the large-scale spread comes
+  from the input. The input is read on its own grid (rule 41): the native ``x`` at the nearest
+  native point of each output point (``eval.shared.native_input``), the same band operator
+  applied to that field; ``x_interp`` only when the file has no native ``x`` (logged, and
+  ``input_source`` says so) or ``native_input`` is off. ``full`` is the full field on every point of the
   region (minus the box-edge strip); ``full_inner`` is the full field on the SAME points the
   ``large`` and ``fine`` bands use (inside the edge margin of ``P_L``), so the three are
   comparable. The bands are NOT additive: ``P_L`` is a taper, so a score of ``full_inner`` is
@@ -59,6 +62,7 @@ from eval.evaluators.surface.core.compute import (
     _weather_state_index,
 )
 from eval.discovery.predictions import find_predictions
+from eval.shared.native_input import InputReader, is_interpolated, warn_fallback
 
 from .calibration import (
     DEFAULT_RANK_DRY_THRESHOLD_MM,
@@ -375,7 +379,7 @@ DOMAIN_BOUNDS = {"global": None, "all": None, "n.hem": [20.0, 90.0, -180.0, 180.
                  "europe": [35.0, 75.0, -25.0, 45.0]}
 
 
-def _construction(ds: xr.Dataset, n_members: int, x_in: xr.DataArray | None) -> str:
+def _construction(ds: xr.Dataset, n_members: int, x_in: InputReader | None) -> str:
     """How the file's members were made (``eval.shared.provenance.ensemble_construction``): from its attributes,
     its per-member input bundles, or whether its input members differ."""
     from eval.shared.provenance import ensemble_construction, members_differ
@@ -385,28 +389,46 @@ def _construction(ds: xr.Dataset, n_members: int, x_in: xr.DataArray | None) -> 
         da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
         if int(da.sizes["member"]) == n_members and n_members > 1:
             differ = members_differ(np.asarray(da.values))
-    elif x_in is not None:
-        differ = members_differ(np.asarray(x_in.values)) if int(x_in.sizes["member"]) == n_members else None
+    elif x_in is not None and x_in.n_members == n_members:
+        # the input members on their own points (native x or x_interp): differ or not, same answer
+        da = ds[x_in.variable]
+        if "sample" in da.dims:
+            da = da.isel(sample=0)
+        member_dims = [d for d in da.dims if d != "weather_state" and not d.startswith("grid_point")]
+        differ = members_differ(np.asarray(da.transpose(*member_dims, ...).values).reshape(n_members, -1))
     bundles = None
     if "source_bundle" in ds.variables:
         bundles = [str(b) for b in np.asarray(ds["source_bundle"].values).reshape(-1)]
     return ensemble_construction(dict(ds.attrs), n_members, input_members_differ=differ, source_bundles=bundles)
 
 
-def _input_members(ds: xr.Dataset, include_input: bool) -> tuple[xr.DataArray | None, dict[str, Any]]:
-    """The low-resolution input members on the output grid, and a note for the summary."""
+def _input_members(ds: xr.Dataset, include_input: bool, native_input: bool = True,
+                   lat: np.ndarray | None = None, lon: np.ndarray | None = None,
+                   ) -> tuple[InputReader | None, dict[str, Any]]:
+    """The low-resolution input members on the output points (rule 41: native ``x`` at the nearest native point
+    when the file has it, else ``x_interp``), and a note for the summary."""
     if not include_input:
-        return None, {"variable": INPUT_VARIABLE, "n_members": 0, "note": "input spread not requested"}
-    if INPUT_VARIABLE not in ds:
-        return None, {"variable": INPUT_VARIABLE, "n_members": 0,
-                      "note": f"files carry no {INPUT_VARIABLE}: input spread not reported"}
-    da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
-    n = int(da.sizes["member"])
+        return None, {"variable": INPUT_VARIABLE, "n_members": 0, "note": "input spread not requested",
+                      "input_source": None}
+    reader = InputReader(ds, native_input=native_input, fallback=(INPUT_VARIABLE,), lat_out=lat, lon_out=lon)
+    if not reader.available:
+        return None, {"variable": INPUT_VARIABLE, "n_members": 0, "input_source": None,
+                      "note": f"files carry no native x and no {INPUT_VARIABLE}: input spread not reported"}
+    n = reader.n_members
     if n < 2:
-        return None, {"variable": INPUT_VARIABLE, "n_members": n,
+        return None, {"variable": reader.variable, "n_members": n, "input_source": reader.source,
                       "note": "files carry one input member only: input spread not reported"}
-    return da, {"variable": INPUT_VARIABLE, "n_members": n,
-                "note": "inter-member spread of the input members per band (spread_input_rms)"}
+    return reader, {"variable": reader.variable, "n_members": n, "input_source": reader.source,
+                    "note": "inter-member spread of the input members per band (spread_input_rms)"}
+
+
+def _input_field(reader: InputReader, ws_index: dict[str, int], field: str) -> np.ndarray | None:
+    """One field of the input members on the output points (``_select_field`` for an ``InputReader``)."""
+    if field in ws_index:
+        return reader.channel(ws_index[field])
+    if field == "10ff" and "10u" in ws_index and "10v" in ws_index:
+        return np.hypot(reader.channel(ws_index["10u"]), reader.channel(ws_index["10v"]))
+    return None
 
 
 # ---------------------------------------------------------------------- main entry
@@ -431,6 +453,7 @@ def compute_probabilistic_scores(
     ratio_bootstrap_resamples: int = RATIO_BOOTSTRAP_RESAMPLES,
     ratio_bootstrap_seed: int = RATIO_BOOTSTRAP_SEED,
     include_input: bool = True,
+    native_input: bool = True,
 ) -> dict[str, Any]:
     """Compute local probabilistic scores and write CSV/JSON artifacts.
 
@@ -448,6 +471,9 @@ def compute_probabilistic_scores(
     and of the false-drizzle / missed-rain rates, in mm (the files hold metres; converted
     here). ``ratio_bootstrap_resamples`` / ``ratio_bootstrap_seed`` fix the bootstrap of the
     corrected spread/RMSE over dates.
+
+    ``native_input`` (default on, rule 41): the input members' spread is read from the native ``x`` at the
+    nearest native point of each output point; off (or a file without ``x``) reads ``x_interp`` as before.
     """
     predictions_dir = Path(predictions_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -479,6 +505,7 @@ def compute_probabilistic_scores(
     missing_fields: set[str] = set()
     clipped_fields: set[str] = set()
     input_note: dict[str, Any] = {}
+    input_sources: set[str] = set()
     constructions: set[str] = set()
     operator: LowPassOperator | None = None
     operator_key: tuple | None = None
@@ -493,13 +520,15 @@ def compute_probabilistic_scores(
             y_true = _to_member_point_weather(ds["y"], ds, label="y")
             if y_true.sizes["member"] > 1:
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
-            x_in, note = _input_members(ds, include_input)
-            input_note = input_note or note
-            constructions.add(_construction(ds, int(y_pred.sizes["member"]), x_in))
             ws_index = _weather_state_index(ds)
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
             lat, lon = _lat_lon(ds, n_points)
+            x_in, note = _input_members(ds, include_input, native_input, lat, lon)
+            input_note = input_note or note
+            if note.get("input_source"):
+                input_sources.add(note["input_source"])
+            constructions.add(_construction(ds, int(y_pred.sizes["member"]), x_in))
             edge = box_edge_mask(lat, lon, float(box_edge_deg))
             domain_masks = {name: _domain_mask(name, lat, lon) & edge for name in domain_names}
 
@@ -534,7 +563,7 @@ def compute_probabilistic_scores(
                     truth_point = truth_values[0]
                 else:
                     truth_point = np.asarray(truth_values).reshape(-1)
-                input_values = _clip_precip(field, _select_field(x_in, ws_index, field)) if x_in is not None else None
+                input_values = _clip_precip(field, _input_field(x_in, ws_index, field)) if x_in is not None else None
                 n_members = int(pred_values.shape[0])
                 n_members_seen.add(n_members)
 
@@ -607,6 +636,11 @@ def compute_probabilistic_scores(
     if "tp" in wanted_missing:
         LOG.warning("probabilistic: the files carry no tp (precipitation is in every run by the owner's rule); "
                     "tp rows are missing from %s", output_dir)
+
+    input_note = {**input_note, "input_source": sorted(input_sources)} if input_note else input_note
+    for src in sorted(input_sources):
+        if is_interpolated(src):
+            warn_fallback(LOG, "probabilistic", src)
 
     summary_rows = _summarize(rows)
     calibration_rows = [
@@ -718,10 +752,11 @@ def compute_probabilistic_scores(
                                                  "(files in metres: 0.1 mm = 1e-4 m); also defines the "
                                                  "false-drizzle and missed-rain rates"},
         "input_members": input_note,
+        "input_source": sorted(input_sources),
         "headline_metrics": _headline_metrics(summary_rows, calibration_rows),
         "provenance": _provenance(constructions, n_members, domain_names, spread_ddof,
                                   sorted({str(p.date) for p in pred_files}),
-                                  sorted({int(p.step) for p in pred_files})),
+                                  sorted({int(p.step) for p in pred_files}), sorted(input_sources)),
     }
     for line in payload["provenance"]["warnings"]:
         LOG.warning("probabilistic: %s", line)
@@ -729,7 +764,8 @@ def compute_probabilistic_scores(
     return payload
 
 
-def _provenance(constructions: set[str], n_members: int, domain_names, spread_ddof: int, dates, steps) -> dict:
+def _provenance(constructions: set[str], n_members: int, domain_names, spread_ddof: int, dates, steps,
+                input_sources=()) -> dict:
     """The provenance block of this evaluator (audit 5 Nov 2026): gridded scores against the forecast target,
     so diagnostic rows under rule 34, never the headline."""
     from eval.shared.provenance import provenance
@@ -742,7 +778,8 @@ def _provenance(constructions: set[str], n_members: int, domain_names, spread_dd
         verifying_field="gridded forecast target y, member 0 (the control of the target ensemble) on the output "
                         "grid: a forecast, NOT observations",
         against_observations=False, ensemble=construction,
-        competitor_rows={"input": "input members' spread only (spread_input_rms); no input CRPS row here"},
+        competitor_rows={"input": "input members' spread only (spread_input_rms); no input CRPS row here; input "
+                                  f"from {'; '.join(input_sources) or 'none'}"},
         weight_form="area per point = cos(lat) x longitude spacing of the point's ring (surface.core.compute."
                     "_point_area_weights; an area_weight variable in the file takes precedence), normalised",
         spread_form=f"spread = area-weighted mean of the member SD (ddof {int(spread_ddof)}); spread_rms = root of "
