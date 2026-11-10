@@ -173,11 +173,13 @@ def _default_paths() -> dict[str, str]:
         "up_matrix": os.path.join(inter, "interpol_O320_to_O1280_linear.mat.npz"),
         "down_matrix": os.path.join(inter, "interpol_o1280_to_o320_linear.mat.npz"),
         "residual_stats": os.path.join(resid, "o1280_dict_0_72.npy"),
-        "forcings_zarr": (
+        "forcings_zarr": os.environ.get(
+            "O1280_FORCINGS_ZARR",
             "/home/mlx/ai-ml/datasets/"
-            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr"
+            "downscaling-od-cf-enfh-0001-mars-o1280-2003-2023-12h-v3-forcings.zarr",
         ),
-        "knn_cache": "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz",
+        "knn_cache": os.environ.get("O1280_KNN32_FILE",
+                                    "/home/ecm5702/hpcperm/data/static/o1280_knn32.npz"),
     }
 
 
@@ -1025,7 +1027,7 @@ def run(
                         # No input counterpart: the interpolated driver is identically zero
                         # and the residual is the raw field. Truth from the GRIB if given.
                         x_interp = 0.0
-                        if precip_truth_tpl:
+                        if precip_truth_tpl and not regional:
                             y_state = _read_precip_truth(
                                 precip_truth_tpl.format(date=date), int(lead), lat_f, lon_f, state,
                             )

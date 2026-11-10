@@ -223,6 +223,28 @@ def _build_box(lat: np.ndarray, lon180: np.ndarray, box, radii_km, adj_km: float
     }
 
 
+def _clip_boxes_to_extent(boxes: dict, lat: np.ndarray, lon180: np.ndarray, radii_km) -> dict:
+    """On a regional grid, shrink each box so that its padding stays inside the data.
+
+    A core point closer to the edge of the data than the largest radius would see a
+    truncated disk. Boxes left empty (e.g. the tropical Atlantic on the Europe box)
+    are dropped and logged.
+    """
+    pad_deg = float(max(radii_km)) / 111.0 + 0.5
+    lat0, lat1 = float(lat.min()) + pad_deg, float(lat.max()) - pad_deg
+    lon0, lon1 = float(lon180.min()) + pad_deg, float(lon180.max()) - pad_deg
+    out: dict[str, list[float]] = {}
+    for name, (a, b, c, d) in boxes.items():
+        box = [max(a, lat0), min(b, lat1), max(c, lon0), min(d, lon1)]
+        if box[0] >= box[1] or box[2] >= box[3]:
+            LOG.info("wind_extremes: box %s outside the regional data extent, dropped", name)
+            continue
+        if box != [a, b, c, d]:
+            LOG.info("wind_extremes: box %s clipped to %s (regional grid)", name, box)
+        out[name] = box
+    return out
+
+
 def _connected_patch(values: np.ndarray, adjacency, seed: int, threshold: float) -> int:
     """Size of the connected set of points above threshold that contains seed."""
     if values[seed] < threshold:
@@ -465,6 +487,7 @@ def run(
     t0 = time.time()
     up = sps.load_npz(paths["up_matrix"]).tocsr() if input_source == "up_matrix" else None
 
+    boxes_requested = dict(boxes)
     box_static: dict[str, dict] = {}
     up_box: dict[str, Any] = {}
     point_area_km2 = None
@@ -520,6 +543,11 @@ def run(
                 else:
                     point_area_km2 = float(SPHERE_AREA_KM2 / lat.size)
             if not box_static:
+                if regional:
+                    boxes = _clip_boxes_to_extent(boxes, lat, lon180, radii_km)
+                    if not boxes:
+                        raise RuntimeError(
+                            f"{file_path.name}: no wind_extremes box lies inside the data extent")
                 for name, box in boxes.items():
                     t_box = time.time()
                     try:
@@ -600,7 +628,7 @@ def run(
             "input_source": "x_interp" if (regional or up is None) else "up_matrix",
             "point_area_km2": point_area_km2,
             "regional": bool(regional),
-            "boxes_skipped": [b for b in boxes if b not in box_static],
+            "boxes_skipped": [b for b in boxes_requested if b not in box_static],
         },
         "boxes": {name: {"box": [float(v) for v in boxes[name]],
                          "n_core_points": st["n_core"],

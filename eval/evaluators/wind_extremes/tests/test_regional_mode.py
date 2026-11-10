@@ -61,5 +61,14 @@ def test_regional_skips_boxes_outside_and_clips_partial_ones(tmp_path):
     r = _payload(runner.run(rdir, {}, cfg, output_dir=rdir / "wx"))
     assert sorted(r["config"]["boxes_skipped"]) == ["europe", "open_north_atlantic"]
     assert list(r["boxes"]) == ["west_tropical_atlantic"]
-    # [10, 32, -85, -55] clipped to the cut's east edge at -58: 22 rows x 27 columns.
-    assert r["boxes"]["west_tropical_atlantic"]["n_core_points"] == 22 * 27
+    # [10, 32, -85, -55] clipped inside the cut (lat 10..40, lon -100..-58, 1-degree points at
+    # half degrees) so that the padding of the largest disk stays inside the data
+    # (_clip_boxes_to_extent): every edge at least radius/111 + margin from the data edge.
+    import numpy as np
+
+    box = r["boxes"]["west_tropical_atlantic"]["box"]
+    pad = 120.0 / 111.0
+    assert box[0] >= 10.5 + pad and box[3] <= -58.5 - pad and box[1] == 32.0 and box[2] == -85.0
+    lat, lon = world["lat_h"], np.where(world["lon_h"] > 180, world["lon_h"] - 360, world["lon_h"])
+    core = (lat >= box[0]) & (lat <= box[1]) & (lon >= box[2]) & (lon <= box[3])
+    assert r["boxes"]["west_tropical_atlantic"]["n_core_points"] == int(core.sum())

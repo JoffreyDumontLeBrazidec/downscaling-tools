@@ -144,8 +144,8 @@ def run(
                             argv = [
                                 "--run", f"{arm}={predictions_dir}",
                                 "--title", f"{arm}=" + (
-                                    f"{model_word} (O1280)" if not checkpoint
-                                    else f"{model_word} (O1280, {Path(str(checkpoint)).name})"
+                                    f"{model_word} ({{hres}})" if not checkpoint
+                                    else f"{model_word} ({{hres}}, {Path(str(checkpoint)).name})"
                                 ),
                                 "--variable", variable,
                                 "--field", field,

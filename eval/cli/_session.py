@@ -43,6 +43,16 @@ class Session:
     lane_overrides: dict = field(default_factory=dict)
 
 
+def _predict_reads_bundles(lane_config: dict) -> bool:
+    """False when predict.input_source is zarr_split: no bundle root to resolve."""
+    from eval.config.predict_input import InputSourceError, normalize_input_source
+
+    try:
+        return normalize_input_source((lane_config.get("predict") or {}).get("input_source")) is None
+    except InputSourceError:
+        return True  # load_lane has already refused a malformed value
+
+
 def _output_dir_for(subcommand: str, args: argparse.Namespace, host_config: dict,
                     lane_name: str, lane_config: dict) -> Path:
     """Where this command writes: an explicit flag when given, else a timestamped run directory."""
@@ -168,7 +178,11 @@ def run_lane_command(args: argparse.Namespace, command: Command) -> None:
     # --- Resolve output dir ---
     output_dir = _output_dir_for(subcommand, args, host_config, lane_name, lane_config)
 
-    if subcommand in ("run", "predict") and "predict" in lane_config:
+    if (
+        subcommand in ("run", "predict")
+        and "predict" in lane_config
+        and _predict_reads_bundles(lane_config)
+    ):
         input_root = _resolve_predict_input_root(
             args, lane_config, host_config, output_dir,
             prepare_bundles=False,

@@ -21,7 +21,9 @@ eval_config keys (all optional):
 - steps (default [24]), dates, members (labels, default all), variables
   (default 10u, 10v, ws, 2t, msl; those absent from the files are skipped);
 - method (linear; nearest only to reproduce old nearest-neighbour reads), res_deg (0.07),
-  margin_deg (1.0).
+  margin_deg (1.0);
+- target_note: the sentence naming the bins where the ratio should be 1, written into bins.md
+  and the judge's read (default: the o320 -> o1280 band, TARGET_NOTE). Another lane sets its own.
 """
 from __future__ import annotations
 
@@ -42,6 +44,7 @@ from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, Sampler, S
 LOG = logging.getLogger(__name__)
 
 DEFAULT_VARIABLES = ["10u", "10v", "ws", "2t", "msl"]
+TARGET_NOTE = "target 1 from 125 km to 31 km; below 31 km the truth is empty (model against model only)"
 COMPOSITES = {"ws": ("10u", "10v")}
 BIN_COLS = ["scope", "variable", "bin_lo_km", "bin_hi_km", "bin_centre_km",
             "amp_resid_pred", "amp_resid_true", "ratio_resid",
@@ -163,7 +166,7 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                 meta = {"box": box, "box_chosen_by": how, "extent_sampled": list(extent),
                         "grid": [spec.ny, spec.nx], "res_deg": res_deg, "method": method,
                         "dx_km": dx, "dy_km": dy, "dx_at_lat": smp.lat0,
-                        "n_bins": int(spec.wavelength_km.size)}
+                        "n_bins": int(spec.wavelength_km.size), "source_pad_deg": smp.pad_deg}
                 if la1 - la0 > 35.0:
                     meta["note"] = (f"the box spans {la1 - la0:.0f} degrees of latitude and dx is taken at "
                                     f"{smp.lat0:.0f} N, so the wavelength axis is approximate; model/truth "
@@ -263,7 +266,7 @@ def write_table(rows, path, label: str, meta: dict) -> None:
     lines = [f"# Per-bin amplitude ratios, {label}", "",
              f"Box {meta.get('box')} ({meta.get('box_chosen_by')}), {meta.get('method')} sampling at "
              f"{meta.get('res_deg')} deg, grid {meta.get('grid')}. AMPLITUDE ratios (not power), per bin; "
-             "target 1 from 125 km to 31 km; below 31 km the truth is empty (model against model only).", ""]
+             f"{meta.get('target_note', TARGET_NOTE)}.", ""]
     if meta.get("input_source"):
         lines += [f"Input spectrum from: {'; '.join(meta['input_source'])} (rule 41: the input is never "
                   "interpolated to the output grid before scoring).", ""]
@@ -305,6 +308,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     spec, sums, counts, meta = accumulate(files, variables, members, method, res_deg, margin_deg,
                                           eval_config.get("box"), clip_nonnegative=clip)
     meta["clip_nonnegative"] = list(clip)
+    meta["target_note"] = str(eval_config.get("target_note") or TARGET_NOTE)
     if not sums:
         raise ValueError(f"box_spectra: none of {variables} is in the files of {predictions_dir}")
     rows = bin_rows(spec, sums, counts)

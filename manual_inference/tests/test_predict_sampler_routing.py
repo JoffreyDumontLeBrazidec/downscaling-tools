@@ -131,3 +131,115 @@ def test_real_scheduler_builds_the_declared_split():
     assert len(sigmas) == 22 and sigmas[-1] == 0.0
     assert abs(sigmas[5] - 10.0) < 1e-9  # five exponential steps from 1000 reach the transition
     assert abs(sigmas[1] - 398.10717055349727) < 1e-9
+
+
+# --------------------------------------------------------------------------- flow_map (jumps)
+# A flow-map run (MeanFlow / iMF) samples by a few jumps from sigma 80. Its predict_step must
+# receive exactly these two dicts (sampler_spec.py), on the keyword path and on the loose path.
+
+from manual_inference.prediction.sampler_spec import (  # noqa: E402
+    SamplerConfigError,
+    describe_sampler,
+    normalize_flow_map_sampler,
+    normalize_sampler_json,
+)
+
+FLOW_MAP_LANE = {"schedule_type": "flow_map", "num_steps": 2, "sigma_max": 80.0, "sigma_min": 0.0, "sampler": "jumps"}
+FLOW_MAP_NS = {"schedule_type": "flow_map", "num_steps": 2, "sigma_max": 80.0, "sigma_min": 0.0}
+FLOW_MAP_SP = {"sampler": "jumps"}
+
+
+class _RecordingFlowMapModel:
+    """Stub flow-map checkpoint: predict_step records exactly the kwargs it receives."""
+
+    def __init__(self):
+        self.calls = []
+
+    def predict_step(self, batch, model_comm_group=None, noise_scheduler_params=None, sampler_params=None, **kwargs):
+        self.calls.append({"noise_scheduler_params": noise_scheduler_params,
+                           "sampler_params": sampler_params, "kwargs": kwargs})
+        return "y"
+
+
+class _RecordingLooseModel:
+    """Stub checkpoint without the dict parameters: every key arrives loose."""
+
+    def __init__(self):
+        self.calls = []
+
+    def predict_step(self, batch, model_comm_group=None, **kwargs):
+        self.calls.append(kwargs)
+        return "y"
+
+
+def _route(model, extra_args):
+    return _predict_with_compatible_kwargs(inference_model=model, batch={}, model_comm_group=None,
+                                           extra_args=dict(extra_args))
+
+
+def test_flow_map_keyword_path_direct_and_through_interface():
+    for wrap in (lambda m: m, _Interface):
+        model = _RecordingFlowMapModel()
+        assert _route(wrap(model), FLOW_MAP_LANE) == "y"
+        (call,) = model.calls
+        assert call["noise_scheduler_params"] == FLOW_MAP_NS
+        assert call["sampler_params"] == FLOW_MAP_SP
+        assert call["kwargs"] == {}
+
+
+def test_flow_map_loose_path_passes_the_same_keys():
+    model = _RecordingLooseModel()
+    _route(_Interface(model), FLOW_MAP_LANE)
+    (call,) = model.calls
+    assert call == {**FLOW_MAP_NS, **FLOW_MAP_SP}
+
+
+def test_flow_map_defaults_are_filled_and_types_canonical():
+    model = _RecordingFlowMapModel()
+    _route(model, {"schedule_type": "flow_map", "num_steps": 4, "sigma_max": 80})
+    (call,) = model.calls
+    assert call["noise_scheduler_params"] == {"schedule_type": "flow_map", "num_steps": 4,
+                                              "sigma_max": 80.0, "sigma_min": 0.0}
+    assert call["sampler_params"] == {"sampler": "jumps"}
+
+
+def test_flow_map_extra_args_interface_gets_canonical_block():
+    out = _route(_LegacyInterface(), FLOW_MAP_LANE)
+    assert out["extra_args"] == FLOW_MAP_LANE
+
+
+@pytest.mark.parametrize("bad", [
+    {"S_churn": 0.0}, {"S_min": 0.75}, {"S_max": 80.0}, {"S_noise": 1.0},
+])
+def test_flow_map_rejects_churn_keys(bad):
+    with pytest.raises(SamplerConfigError, match="churn"):
+        normalize_flow_map_sampler({**FLOW_MAP_LANE, **bad})
+    with pytest.raises(SamplerConfigError, match="churn"):
+        _route(_RecordingFlowMapModel(), {**FLOW_MAP_LANE, **bad})
+
+
+@pytest.mark.parametrize("bad,match", [
+    ({"rho": 7.0}, "takes only"),
+    ({"autoguide_checkpoint": "/x.ckpt", "autoguide_weight": 1.5}, "takes only"),
+    ({"switch_checkpoint": "/x.ckpt"}, "takes only"),
+    ({"sampler": "heun"}, "jumps"),
+    ({"num_steps": 0}, "num_steps"),
+    ({"num_steps": 2.0}, "num_steps"),
+    ({"sigma_min": 90.0}, "sigma_min"),
+])
+def test_flow_map_rejects_other_keys_and_bad_values(bad, match):
+    with pytest.raises(SamplerConfigError, match=match):
+        normalize_flow_map_sampler({**FLOW_MAP_LANE, **bad})
+
+
+def test_edm_blocks_are_untouched_by_the_flow_map_rules():
+    assert normalize_flow_map_sampler(FASTLANE_SAMPLER) == FASTLANE_SAMPLER
+    raw = '{"num_steps": 30, "S_churn": 0}'
+    assert normalize_sampler_json(raw) == raw
+
+
+def test_sampler_description_for_the_read_header():
+    assert describe_sampler(FLOW_MAP_LANE) == "jumps 2 from sigma 80"
+    edm30 = {"schedule_type": "karras", "num_steps": 30, "sigma_max": 80.0, "sigma_min": 0.03,
+             "rho": 7.0, "sampler": "heun", "S_churn": 0.0}
+    assert describe_sampler(edm30) == "heun karras 30 steps from sigma 80 to 0.03, rho 7, churn 0"

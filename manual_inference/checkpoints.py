@@ -140,7 +140,7 @@ def to_omegaconf(obj):
     return OmegaConf.create(_coerce_to_container(obj))
 
 
-def get_datamodule(config, graph_data):
+def get_datamodule(config, graph_data, task=None):
     # Compatibility: old stacks expose AnemoiDatasetsDataModule, newer stacks
     # expose DownscalingAnemoiDatasetsDataModule.
     try:
@@ -148,6 +148,16 @@ def get_datamodule(config, graph_data):
     except ImportError:
         from anemoi.training.data.datamodule import AnemoiDatasetsDataModule as DataModuleCls
 
+    # Task-based stacks (e.g. the flow-map testbed tree) take (config, task), the task being
+    # pickled in the checkpoint's hyper_parameters["task"]; passing graph_data there fails later
+    # with "'HeteroData' has no attribute 'get_offsets'".
+    if "task" in inspect.signature(DataModuleCls.__init__).parameters:
+        if task is None:
+            raise ValueError(
+                f"{DataModuleCls.__name__} takes a task; the checkpoint carries none in "
+                "hyper_parameters['task']"
+            )
+        return DataModuleCls(config, task)
     try:
         datamodule = DataModuleCls(config, graph_data)
     except TypeError:

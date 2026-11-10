@@ -1,0 +1,27 @@
+base: o320_o1280_e2_flowmap
+
+# The EDM comparison row of o320_o1280_e2_flowmap: the parent EDM checkpoint, Heun on a
+# Karras schedule of 30 steps from sigma 80 (59 network calls), churn off. Same lane, dates,
+# leads, members and rule-31 seeds as the flow-map rows, so member k of both rows is drawn
+# from the same seed and the comparison is of samplers from the same start sigma.
+# Added 2026-11-02 (flow-map recap note, section 21, item I1).
+#
+#   python -m eval.cli predict --lane o320_o1280_e2_flowmap_edm30 --host jupiter \
+#     --checkpoint <parent EDM base ckpt> --opt predict.ema=ema10000 --output-dir <edm30 dir>
+# (inputs from the E2 zarr test split, inherited predict.input_source)
+#
+# schedule_type "karras" is the plain Karras schedule of the downscaling fork's
+# NOISE_SCHEDULERS (used before as {"schedule_type": "karras", "num_steps": 40, ...},
+# docs completed_epics/checkpoint-eval-pipeline 20260402). If a checkpoint's runtime lacks
+# it, the same schedule is experimental_piecewise with num_steps_high 0 and
+# sigma_transition = sigma_max (as tc_o320_o1280_m7_kar30s1k.yaml).
+
+predict:
+  sampler:
+    schedule_type: "karras"
+    num_steps: 30
+    sigma_max: 80.0
+    sigma_min: 0.03
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0

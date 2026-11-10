@@ -493,13 +493,18 @@ def load_inference_model(
 
     device, model_comm_group, global_rank, local_rank, world_size = setup_distributed(config)
     extra_args = json.loads(config.extra_args_json) if config.extra_args_json else {}
+    # ema only when set: the legacy ds load_objects (KEYSTONE_LEGACY_DS) has no such parameter
+    ema_kwargs = {"ema": config.ema} if config.ema else {}
     inference_model, datamodule, _, _ = _load_objects(
         ckpt_path=str(config.checkpoint_path),
         device=device,
         validation_frequency=config.validation_frequency,
         precision=config.precision,
         num_gpus_per_model_override=config.num_gpus_per_model,
+        **ema_kwargs,
     )
+    if config.ema:
+        LOG.info("weights: %s (EMA) of %s", config.ema, config.checkpoint_path.name)
     # O1280-safe model-parallel inference. Checkpoints bake shard_strategy="heads" on the
     # encoder/decoder mappers + processor; its all_to_all_transpose materialises full QKV over
     # the ENTIRE grid on EVERY rank -> OOM on A100-40GB regardless of rank count AND regardless

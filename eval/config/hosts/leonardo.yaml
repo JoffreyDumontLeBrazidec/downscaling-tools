@@ -1,0 +1,32 @@
+# CINECA LEONARDO booster (4x A100 64 GB per node, x86_64): predict and judge of the o96 -> o320
+# flow-map lane, whose testbed runs trained here. Added 2026-11-03 for the flow-map judge reads
+# (agent-work/20261103-flowmap-judge-reads); the paths are that read environment.
+#
+# The model code is the flow-map testbed tree (branch exp/flowmap-o96o320-sfc-evalcli-20261103: the
+# surface training commit 01ab41a1 plus the eval.predict keyword adapter). It must come first on
+# PYTHONPATH because the editable installs of the venv point at other sandbox worktrees. The
+# checkpoint configs carry absolute Leonardo data paths, so no DATA_DIR / GRID_DIR export is needed.
+# Leonardo has no MARS, FDB or metview: evaluators that need ECMWF reference archives (tc with GRIB
+# truth, spectra_ecmwf templates) cannot run here.
+code_root: /leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/downscaling-tools
+scratch_root: /leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/scratch
+perm_root: /leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/scratch
+venv: /leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261002-flowmap-o96o320/venv
+
+scheduler:
+  qos: normal
+  extra_directives:
+    - "--account=DestE_340_26"
+    - "--partition=boost_usr_prod"
+  default_time: "04:00:00"
+  default_mem: 120G
+  default_cpus: 8
+
+environment_setup:
+  module_loads: []
+  exports:
+    PYTHONPATH: /leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/anemoi-core-evalcli/models/src:/leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/anemoi-core-evalcli/training/src:/leonardo_work/DestE_340_26/users/jdumontl/agent-work/20261103-flowmap-judge-reads/anemoi-core-evalcli/graphs/src
+    MI_DEACCUMULATE_LRES: "off"
+    OMP_NUM_THREADS: "4"
+    MKL_NUM_THREADS: "4"
+  venv_activate: /leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261002-flowmap-o96o320/venv/bin/activate

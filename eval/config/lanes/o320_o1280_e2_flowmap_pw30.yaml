@@ -1,0 +1,30 @@
+base: o320_o1280_e2_flowmap
+
+# The standard EDM row of o320_o1280_e2_flowmap: the parent EDM checkpoint with the 30-step
+# piecewise sampler from sigma 1e5 of the run-judging protocol (10 exponential steps down to
+# sigma 10, 20 Karras steps to 0.03, Heun, churn off; 59 network calls). It is what a flow-map
+# run at 1-4 calls is measured against as the real cost of the EDM model, beside the EDM-30
+# row from sigma 80 (o320_o1280_e2_flowmap_edm30). Same dates, leads, members and rule-31
+# seeds as the flow-map rows. Added 2026-11-03 (flow-map recap note, section 21.3).
+#
+#   python -m eval.cli predict --lane o320_o1280_e2_flowmap_pw30 --host jupiter \
+#     --checkpoint <parent EDM base ckpt> --opt predict.ema=ema10000 --output-dir <pw30 dir>
+# (inputs from the E2 zarr test split, inherited predict.input_source)
+
+predict:
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
