@@ -9,6 +9,14 @@ Resumable: stage 2 skips existing *_sh files on resubmission.
 
 Reference spectra (truth/input) are computed once and saved to reference_dir
 for reuse across runs.  Only prediction spectra are recomputed each time.
+
+Input curve (rule 41, owner 9 Nov 2026): when the prediction files carry the native
+input x on lat_lres/lon_lres, the input spectrum is taken from x on its own reduced
+Gaussian grid (O96/O320/O1280, staged by _input_bundle_stager.py --predictions-dir onto
+that grid's template, transformed at its own truncation TCo<N-1>) and kept under
+<reference_dir>/input_native/. Without x it falls back to x_interp with a warning.
+``native_input: false`` reproduces the old x_interp curve. run_meta.json records the
+input source and the input reference directory the plotter reads.
 """
 from __future__ import annotations
 
@@ -170,9 +178,40 @@ def run(
     )
 
     # --- Reference spectra (truth + input): compute once, save to reference_dir ---
+    # Rule 41 (owner, 9 Nov 2026): the input spectrum comes from the native input x on its
+    # own reduced Gaussian grid (transformed at its own truncation), never from x_interp,
+    # whenever the files carry x. native_input: false reproduces the old x_interp curve.
+    native_input = bool(eval_config.get("native_input", True))
+    run_meta: dict = {"native_input": native_input, "input_source": [], "input_reference_dir": ""}
     if ref_path is not None:
         for var_name, var_label in [("y", "truth"), ("x_interp", "input")]:
+            if var_label == "input" and native_input:
+                n_native = _native_input_points(predictions_dir)
+                if n_native is not None:
+                    run_meta.update(_native_input_reference(
+                        predictions_dir=predictions_dir, ref_path=ref_path, lane_config=lane_config,
+                        eval_config=eval_config, n_native=n_native, weather_states=weather_states,
+                        weather_states_str=weather_states_str, dates=dates, steps=steps, members=members,
+                        date_list=date_list, step_list=step_list, member_list=member_list,
+                        staging_source=template_grib_root or template_root,
+                    ))
+                    continue
             var_ref_dir = ref_path / var_label / window_key
+            if var_label == "input":
+                run_meta["input_reference_dir"] = str(var_ref_dir / "spectra")
+                if _has_var_in_predictions(predictions_dir, var_name):
+                    run_meta["input_source"] = [
+                        "x_interp (input interpolated to the output grid; no native x in the file)"
+                        if native_input else
+                        "x_interp (input interpolated to the output grid; native_input: false)"]
+                    if native_input:
+                        LOG.warning(
+                            "spectra_ecmwf: input spectrum from x_interp (no native x in the files); rule 41: "
+                            "the input/truth ratio is then a smoothed-input diagnostic, not the input's spectrum")
+                elif eval_config.get("input_bundles_dir"):
+                    run_meta["input_source"] = ["input bundles (input_bundles_dir)"]
+                else:
+                    run_meta["input_source"] = ["none (the files carry neither x nor x_interp)"]
             var_amp_dir = var_ref_dir / "spectra"
             status = _validated_cache(
                 var_amp_dir,
@@ -235,8 +274,114 @@ def run(
                 truncation=truncation,
             )
 
+    # Where the input curve came from (rule 41); the plotter reads input_reference_dir.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "run_meta.json").write_text(json.dumps(run_meta, indent=2) + "\n", encoding="utf-8")
     return output_dir
 
+
+def _native_input_points(predictions_dir: Path) -> int | None:
+    """Point count of the native input when the first prediction file carries x on lat_lres/lon_lres."""
+    pred_files = sorted(predictions_dir.glob("predictions_*.nc"))
+    if not pred_files:
+        return None
+    import xarray as xr
+    with xr.open_dataset(pred_files[0]) as ds:
+        if "x" in ds.variables and "lat_lres" in ds.variables:
+            return int(ds["lat_lres"].size)
+    return None
+
+
+def _octahedral_n(n_points: int) -> int | None:
+    """N of the full octahedral reduced Gaussian grid O<N> holding n_points (4N^2 + 36N), else None."""
+    n = int(round((-36.0 + (36.0**2 + 16.0 * n_points) ** 0.5) / 8.0))
+    return n if n > 0 and 4 * n * n + 36 * n == n_points else None
+
+
+def _native_input_grid(lane_config: dict, n_points: int) -> tuple[str, int]:
+    """(grid, truncation) of the native input: O<N> analysed at TCo<N-1>, its own truncation.
+
+    The grid is read off the point count and checked against the lane's prepml.input.grid
+    when the lane records one. A point count that is no full octahedral grid (a regional
+    file) cannot be transformed on the sphere and stops here.
+    """
+    n = _octahedral_n(n_points)
+    if n is None:
+        raise ValueError(
+            f"spectra_ecmwf: the native input x has {n_points} points, which is no full octahedral "
+            "O<N> grid (a regional file?); its spectrum cannot be taken on the sphere. "
+            "Set native_input: false to use x_interp instead (rule 41: not quotable as the input's spectrum)."
+        )
+    lane_grid = _normalise_octahedral_grid(
+        (lane_config.get("prepml", {}).get("input", {}) or {}).get("grid", "")
+    )
+    if lane_grid and lane_grid != f"O{n}":
+        raise ValueError(
+            f"spectra_ecmwf: the native input x is on O{n} but the lane's prepml.input.grid is {lane_grid}"
+        )
+    return f"O{n}", n - 1
+
+
+def _native_input_reference(
+    *,
+    predictions_dir: Path,
+    ref_path: Path,
+    lane_config: dict,
+    eval_config: dict,
+    n_native: int,
+    weather_states: list[str],
+    weather_states_str: str,
+    dates: list[str],
+    steps: list[int],
+    members: list[int],
+    date_list: str,
+    step_list: str,
+    member_list: str,
+    staging_source: str,
+) -> dict:
+    """Input reference from the native x on its own grid and truncation (rule 41).
+
+    Kept under <reference_dir>/input_native/, never under input/, so a cache of the old
+    x_interp curve can never be reused as the native one or mixed with it. The wavenumber
+    axis is the total wavenumber, so the native curve lines up with truth and model and
+    simply ends at the input's own truncation.
+    """
+    grid, native_truncation = _native_input_grid(lane_config, n_native)
+    template_grib = eval_config.get("input_template_grib", "") or \
+        f"/home/ecm5702/hpcperm/data/{grid.lower()}-template.grib"
+    native_key = _window_key(
+        dates=dates, steps=steps, members=members, truncation=native_truncation,
+        staging_source=f"native_x:{template_grib}|{staging_source}",
+    )
+    var_ref_dir = ref_path / "input_native" / native_key
+    var_amp_dir = var_ref_dir / "spectra"
+    meta = {
+        "input_source": ["x (native input grid)"],
+        "input_reference_dir": str(var_amp_dir),
+        "input_grid": grid,
+        "input_truncation": native_truncation,
+        "input_template_grib": template_grib,
+    }
+    status = _validated_cache(var_amp_dir, weather_states, truncation=native_truncation,
+                              dates=dates, steps=steps, members=members)
+    if status == CACHE_VALID:
+        LOG.info("spectra_ecmwf: native input reference cached at %s — skipping", var_amp_dir)
+        return meta
+    LOG.info("spectra_ecmwf: input spectrum from the native x on %s at T%d → %s",
+             grid, native_truncation, var_ref_dir)
+    _run_input_bundle_pipeline(
+        bundles_dir=None,
+        predictions_dir=predictions_dir,
+        output_dir=var_ref_dir,
+        template_grib=template_grib,
+        weather_states=weather_states,
+        weather_states_str=weather_states_str,
+        date_list=date_list,
+        step_list=step_list,
+        member_list=member_list,
+        truncation=native_truncation,
+    )
+    return meta
 
 
 def _has_var_in_predictions(predictions_dir: Path, var_name: str) -> bool:
@@ -476,7 +621,7 @@ def _run_pipeline(
 
 def _run_input_bundle_pipeline(
     *,
-    bundles_dir: Path,
+    bundles_dir: Path | None,
     output_dir: Path,
     template_grib: str,
     weather_states: list[str],
@@ -485,18 +630,28 @@ def _run_input_bundle_pipeline(
     step_list: str,
     member_list: str = "1",
     truncation: int,
+    predictions_dir: Path | None = None,
 ) -> None:
-    """3-stage pipeline for O96 input bundles: stage GRIBs → gptosp → amplitudes."""
+    """3-stage pipeline for the input on its own grid: stage GRIBs → gptosp → amplitudes.
+
+    The fields come from PrepML input bundles (bundles_dir) or, with predictions_dir,
+    from the native input x of the prediction files (rule 41).
+    """
     grb_dir = output_dir / "grb"
     sh_dir  = output_dir / "spectral_harmonics"
     amp_dir = output_dir / "spectra"
     for d in (grb_dir, sh_dir, amp_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    LOG.info("=== spectra_ecmwf [input] 1/3: stage O96 GRIBs from bundles ===")
+    if predictions_dir is not None:
+        LOG.info("=== spectra_ecmwf [input] 1/3: stage native-grid GRIBs from x of the predictions ===")
+        source = ["--predictions-dir", str(predictions_dir)]
+    else:
+        LOG.info("=== spectra_ecmwf [input] 1/3: stage O96 GRIBs from bundles ===")
+        source = ["--bundles-dir", str(bundles_dir)]
     cmd = [
         sys.executable, str(_HERE / "_input_bundle_stager.py"),
-        "--bundles-dir",    str(bundles_dir),
+        *source,
         "--out-dir",        str(grb_dir),
         "--weather-states", weather_states_str,
         "--date-list",      date_list,
