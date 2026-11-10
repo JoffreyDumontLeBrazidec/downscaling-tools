@@ -4,13 +4,16 @@ The ladder's prediction files already carry everything needed, so neither refere
 single forward pass:
 
   y_pred     the model, 10 members            -> the curves already plotted
-  x_interp   the EEFO O96 INPUT interpolated onto the O320 target grid
+  x          the EEFO O96 INPUT on its own grid (lat_lres/lon_lres)
+  x_interp   the same INPUT interpolated onto the O320 target grid
   y          the ENFO O320 TARGET, 10 members
 
 `compute_probabilistic_scores` collapses the truth to `y` MEMBER 0 and scores every forecast
 member against it. So, on exactly that support:
 
-  EEFO input  = score x_interp  -> "what you get with no downscaling at all"
+  EEFO input  = score x at the nearest native point of each target point (rule 41: the input on its
+                own grid, never interpolated; x_interp only when a file has no x, with a warning)
+                -> "what you get with no downscaling at all"
   ENFO target = score y members -> two ENFO members vs each other, i.e. how far apart the target
                 ensemble's own members are. That is the floor a member-matched score can reach:
                 truth is ONE member, so no forecast can beat the ensemble's internal distance.
@@ -29,6 +32,8 @@ import json
 
 import numpy as np
 import xarray as xr
+
+from eval.shared.native_input import SOURCE_NATIVE, SOURCE_INTERP, has_native_input, nearest_native_index
 
 SRC = Path(sys.argv[1])          # a rung's predictions dir
 DST_ROOT = Path(sys.argv[2])     # where the two reference dirs go
@@ -65,7 +70,19 @@ def build(role: str, name: str) -> None:
     for f in sorted(SRC.glob("predictions_*.nc")):
         with xr.open_dataset(f, decode_timedelta=False) as ds:
             if role == "input":
-                pred_v, truth_v = ds["x_interp"].values, ds["y"].values
+                truth_v = ds["y"].values
+                if has_native_input(ds):
+                    # rule 41: native values at the nearest native point of each target point, laid out as y
+                    idx = nearest_native_index(ds["lat_lres"].values.reshape(-1), ds["lon_lres"].values.reshape(-1),
+                                               ds["lat_hres"].values.reshape(-1), ds["lon_hres"].values.reshape(-1))
+                    order = [("grid_point_lres" if d == "grid_point_hres" else d) for d in ds["y"].dims]
+                    pred_v = np.take(ds["x"].transpose(*order).values, idx, axis=order.index("grid_point_lres"))
+                    source = SOURCE_NATIVE
+                else:
+                    pred_v, source = ds["x_interp"].values, SOURCE_INTERP
+                    print("WARNING %s: input reference from %s; rule 41 says the input is scored on its own "
+                          "grid, so this reference is smoothed and not quotable against the model" % (f.name, source),
+                          flush=True)
             else:
                 # ENFO target: forecast = members 1..N-1, truth = member 0 repeated to match.
                 # Member 0 MUST be excluded from the forecast -- it is the truth, and leaving
@@ -99,9 +116,11 @@ def build(role: str, name: str) -> None:
             new.attrs = dict(ds.attrs)
             new.attrs["reference_kind"] = name
             new.attrs["reference_role"] = role
+            if role == "input":
+                new.attrs["input_source"] = source
             new.attrs["reference_note"] = (
-                "the lane INPUT, interpolated onto the target grid and scored as if it "
-                "were the forecast -- what you get with no downscaling at all"
+                "the lane INPUT (%s) scored as if "
+                "it were the forecast -- what you get with no downscaling at all" % source
                 if role == "input" else
                 "the lane TARGET ensemble, members 1..N scored against member 0; member 0 "
                 "is the verifying truth and MUST stay out of the forecast")
