@@ -276,7 +276,10 @@ texture:
 # the input (native O320 x at the nearest native point, rule 41), truth and HRES. Cache global9_2023_v1:
 # `eval.cli obs fetch` on Atos over the whole globe (box -90,90,-180,180), the 30 seed-locked dates of 2023
 # of e2_2023_v1, leads 12-72 h, 2t, 10ff, msl, 12 h and 24 h tp and the SEEPS climatology; copy it to
-# Jupiter before reading there. The model and truth rows use the O1280 orography (default h_o1280).
+# Jupiter before reading there. The model and truth rows use the O1280 orography (default h_o1280); the input row
+# uses the eefh hindcast's own O320 orography (h_o320_eefh, added with `obs fetch --add-height
+# o320_eefh=/home/ecm5702/hpcperm/data/station_caches/orography_O320_eefh.grib`), not h_o320, which is the
+# O1280 orography interpolated to O320 (144 m RMS from the eefh one at the stations).
 # The first cache path that exists on the host is used; none existing stops obs_points with an error.
 # Run:   python -m eval.cli evaluate --lane o320_o1280 --host <atos|jupiter> --only obs_points \
 #          --predictions-dir <dir of predictions_<date>_step<NNN>.nc, all leads> --run-label <label>
@@ -285,6 +288,7 @@ obs_points:
     atos: /home/ecm5702/hpcperm/data/station_caches/global9_2023_v1
     jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/global9_2023_v1
   vars: [2t, 10ff, msl, tp]
+  input_height_column: h_o320_eefh
 
 # zoom_maps (added 2026-09-02 as membermaps, renamed 2026-09-29): the four-panel
 # case-inspection maps, as an evaluator rather than a hand-written sbatch. Default
