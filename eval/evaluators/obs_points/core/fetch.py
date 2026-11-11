@@ -38,8 +38,8 @@ that orography: a GRIB file of z (geopotential, any grid) or an anemoi zarr data
 (row 0, its own latitudes/longitudes), both divided by g. With ``--dates`` it goes into the files of that
 fetch; without, into every obs_<var>.csv already in --out, in place (e.g. h_o2560 for the 4 km lane, whose
 model rows obs_points corrects with ``model_height_column: h_o2560``).
-A second fetch into an existing cache merges: rows of new (valid, stnid) are added to obs_<var>.csv, rows already
-there are replaced by the new ones (hres_<var>.csv by date, lead, stnid), h_<name> columns of an earlier
+A second fetch into an existing cache merges: the rows of every valid time it fetched replace all the old rows of
+that time in obs_<var>.csv (hres_<var>.csv by date and lead), rows of other times are kept, h_<name> columns of an earlier
 --add-height are filled for the new rows from their recorded source, and the manifest merges dates, leads, rows,
 stations per valid time and the STVL periods.
 """
@@ -361,11 +361,12 @@ def valid_hours(var, leads):
     return list(range(lo, max(leads) + 1, 12))
 
 
-def write_merged(path, new, keys, log, *, float_format="%.4f", refill=None) -> int:
+def write_merged(path, new, keys, log, *, float_format="%.4f", refill=None, by=None) -> int:
     """Write ``new`` to ``path``; when the file exists (a second fetch into the same cache), merge instead of
-    overwriting: rows of new keys are added, rows whose ``keys`` (e.g. valid, stnid) are already there are
-    replaced by the new ones. ``refill(frame, columns)`` may fill columns the old file has and the new rows lack
-    (the h_<name> columns of an earlier --add-height). Returns the number of rows written."""
+    overwriting: every old row of a time the new fetch covers (``by``: valid, or date and lead for HRES; default
+    every key but the station) is dropped, so a report the new fetch rejected does not survive, and the new rows
+    are added; rows of the other times are kept. ``refill(frame, columns)`` may fill columns the old file has and
+    the new rows lack (the h_<name> columns of an earlier --add-height). Returns the number of rows written."""
     import pandas as pd
 
     ids = {c: str for c in ("valid", "stnid", "date")}
@@ -379,6 +380,9 @@ def write_merged(path, new, keys, log, *, float_format="%.4f", refill=None) -> i
         if missing and refill is not None:
             new = refill(new, missing)
         n_old = len(old)
+        by = list(by or [k for k in keys if k != "stnid"])
+        covered = pd.MultiIndex.from_frame(new[by].astype(str).drop_duplicates())
+        old = old[~pd.MultiIndex.from_frame(old[by].astype(str)).isin(covered)]
         new = pd.concat([old, new], ignore_index=True).drop_duplicates(subset=keys, keep="last")
         log.append(f"{path.name}: merged into the existing file ({n_old} rows before, {len(new)} after)")
         print(log[-1], flush=True)
