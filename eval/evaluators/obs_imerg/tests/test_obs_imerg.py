@@ -186,3 +186,18 @@ def test_input_row_from_the_native_grid(setup):
                                    df_old[df_old.row == "model"].set_index(key).sort_index().fcrps)
     meta_old = json.loads((old / "run_meta.json").read_text())
     assert "interpolated" in meta_old["input_source"][0] and any("rule 41" in w for w in meta_old["warnings"])
+
+
+def test_imerg_window_is_compared_with_the_model_window(setup):
+    """A lane accum_hours (or file attribute) that differs from the IMERG window stops the run; an unrecorded
+    model window is a warning; the summary counts the dates scored."""
+    tmp, pred, cfg = setup
+    with pytest.raises(ValueError, match="model tp window is 6 h"):
+        obs_imerg.run(pred, {}, {**cfg, "accum_hours": 6}, output_dir=tmp / "w6")
+    out = obs_imerg.run(pred, {}, {**cfg, "accum_hours": 12}, output_dir=tmp / "w12")
+    assert not any("tp window" in w for w in json.loads((out / "run_meta.json").read_text())["warnings"])
+    out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "w0")
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert any("recorded neither in the lane block" in w for w in meta["warnings"])
+    assert meta["dates_scored"] == sorted(DATES) and "19 %" in meta["config"]["weighting"]
+    assert f"Dates scored: {len(DATES)}." in (out / "summary.md").read_text()
