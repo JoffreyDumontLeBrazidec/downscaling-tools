@@ -627,3 +627,129 @@ def test_tp_obs_var_scores_tp_against_the_named_series(tmp_path):
     num = [c for c in a.columns if a[c].dtype.kind == "f"]
     pd.testing.assert_frame_equal(a[num].reset_index(drop=True), b[num].reset_index(drop=True))
     assert json.loads((out / "run_meta.json").read_text())["tp_obs_var"] == "tp6"
+
+
+# ----------------------------------------------------------------------------- global caches (11 Nov 2026)
+def test_valid_hours_6h_windows_end_at_every_lead():
+    """6 h tp (the 4 km lane) needs windows ending at the leads; 12 h and 24 h keep their 12-hourly windows."""
+    from argparse import Namespace
+
+    from eval.evaluators.obs_points.core.fetch import valid_hours, variables_from_args
+
+    leads = [12, 24, 36, 48, 60, 72]
+    assert valid_hours("tp6", leads) == leads
+    assert valid_hours("tp6", [0, 6, 12]) == [6, 12]
+    assert valid_hours("tp3", [36, 12, 12]) == [12, 36]
+    assert valid_hours("tp", leads) == [0, 12, 24, 36, 48, 60, 72]
+    assert valid_hours("tp24", leads) == [24, 36, 48, 60, 72]
+    assert valid_hours("2t", [24, 12]) == [12, 24]
+    assert variables_from_args(Namespace(vars="tp", tp_periods="6")) == ["tp6"]
+
+
+def _orography_zarr(path, la, lo, h):
+    import zarr
+
+    g = zarr.open_group(str(path), mode="w")
+    data = np.zeros((1, 2, 1, la.size), np.float32)
+    data[0, 1, 0] = h * 9.80665  # geopotential
+    for name, a in (("data", data), ("latitudes", la), ("longitudes", lo)):
+        (g.create_dataset if hasattr(g, "create_dataset") else g.create_array)(name, data=a)
+    g.attrs["variables"] = ["2t", "z"]
+    return path
+
+
+def test_add_height_in_place_from_an_anemoi_zarr(tmp_path):
+    """obs fetch --add-height o2560=<zarr> adds h_o2560 (nearest point, z / g) to every obs file, in place, off Atos."""
+    from eval.cli import main
+    from eval.evaluators.obs_points.core.stations import xyz
+
+    cache = _cache(tmp_path)
+    la, lo = _grid()
+    h = 1000.0 + 10.0 * la + lo  # unique per point
+    z = _orography_zarr(tmp_path / "oro.zarr", la, np.mod(lo, 360.0), h)
+    before = pd.read_csv(cache / "obs_2t.csv", dtype={"valid": str, "stnid": str})
+    main(["obs", "fetch", "--add-height", f"o2560={z}", "--out", str(cache)])
+    idx = StationMatcher(la, lo).tree.query(xyz(before.lat, before.lon))[1]
+    for v in ("2t", "10ff", "msl", "tp"):
+        assert "h_o2560" in pd.read_csv(cache / f"obs_{v}.csv").columns
+    after = pd.read_csv(cache / "obs_2t.csv", dtype={"valid": str, "stnid": str})
+    np.testing.assert_allclose(after.h_o2560, h[idx], atol=1e-3)
+    pd.testing.assert_frame_equal(after.drop(columns="h_o2560"), before, check_dtype=False, atol=1e-4)  # %.4f
+    meta = json.loads((cache / "cache_meta.json").read_text())
+    assert meta["heights"]["o2560"]["points"] == la.size and meta["cache_version"] == 1
+    with pytest.raises(SystemExit, match="NAME=SOURCE|<name>=<source>"):
+        main(["obs", "fetch", "--add-height", "o2560", "--out", str(cache)])
+
+
+def test_height_source_reads_a_grib_of_z(tmp_path):
+    eccodes = pytest.importorskip("eccodes")
+    from eval.evaluators.obs_points.core.fetch import height_source
+
+    gid = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib2")
+    for k, v in (("Ni", 3), ("Nj", 2), ("latitudeOfFirstGridPointInDegrees", 10.0),
+                 ("latitudeOfLastGridPointInDegrees", 9.0), ("longitudeOfFirstGridPointInDegrees", 350.0),
+                 ("longitudeOfLastGridPointInDegrees", 352.0), ("iDirectionIncrementInDegrees", 1.0),
+                 ("jDirectionIncrementInDegrees", 1.0), ("shortName", "z")):
+        eccodes.codes_set(gid, k, v)
+    h = np.array([0.0, 100.0, 200.0, 300.0, 400.0, 5000.0])
+    eccodes.codes_set_values(gid, h * 9.80665)
+    p = tmp_path / "oro.grib"
+    with open(p, "wb") as f:
+        eccodes.codes_write(gid, f)
+    eccodes.codes_release(gid)
+    tree, hh = height_source(p)
+    np.testing.assert_allclose(hh, h, atol=0.5)
+    from eval.evaluators.obs_points.core.stations import xyz
+    assert hh[tree.query(xyz([9.1], [-7.9]))[1][0]] == pytest.approx(5000.0, abs=0.5)  # 352 E = 8 W
+
+
+def test_model_height_column_corrects_model_and_truth_rows(tmp_path):
+    """model_height_column: h_o2560 is used for the model and truth rows' 2t lapse correction and the height
+    classes, exactly as h_o1280 is by default; a column the cache lacks is a clear error."""
+    import shutil
+
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "p", noise=0.5, seed=13)
+    for v in ("2t", "10ff", "msl", "tp"):
+        o = pd.read_csv(cache / f"obs_{v}.csv")
+        o["h_o2560"] = o["h_o1280"] + 150.0 * (o.index % 2)
+        o.to_csv(cache / f"obs_{v}.csv", index=False)
+    swapped = tmp_path / "swapped"
+    shutil.copytree(cache, swapped)
+    for v in ("2t", "10ff", "msl", "tp"):
+        o = pd.read_csv(swapped / f"obs_{v}.csv")
+        o["h_o1280"] = o["h_o2560"]
+        o.to_csv(swapped / f"obs_{v}.csv", index=False)
+    cfg = {"vars": ["2t"], "radii": [0], "min_stations": 10, "max_km": 100.0, "regions": {"all": None},
+           "height_classes": {"all_dz<100m": [0.0, 100.0]}}
+    a = obs_points.run(pred, {}, {**cfg, "cache": str(cache), "model_height_column": "h_o2560"},
+                       output_dir=tmp_path / "a", run_label="A")
+    b = obs_points.run(pred, {}, {**cfg, "cache": str(swapped)}, output_dir=tmp_path / "b", run_label="B")
+    d = obs_points.run(pred, {}, {**cfg, "cache": str(cache)}, output_dir=tmp_path / "d", run_label="D")
+    ta, tb, td = (pd.read_csv(x / "scores_per_date.csv") for x in (a, b, d))
+    num = [c for c in ta.columns if ta[c].dtype.kind == "f"]
+    pd.testing.assert_frame_equal(ta[num], tb[num])
+    lapse = (td.variant == "lapse") & td.row.isin(["model", "truth"])
+    assert not np.allclose(ta[lapse].fcrps, td[lapse].fcrps)
+    raw_in = (td.variant == "raw") & (td.region == "all")
+    np.testing.assert_allclose(ta[raw_in].fcrps, td[raw_in].fcrps)  # raw rows do not depend on the height
+    meta = json.loads((a / "run_meta.json").read_text())
+    assert meta["model_height_column"] == "h_o2560"
+    assert json.loads((d / "run_meta.json").read_text())["model_height_column"] == "h_o1280"
+    with pytest.raises(ValueError, match="model_height_column 'h_o9999'"):
+        obs_points.run(pred, {}, {**cfg, "cache": str(cache), "model_height_column": "h_o9999"},
+                       output_dir=tmp_path / "e", run_label="E")
+
+
+def test_cli_accepts_a_negative_box_value(monkeypatch, tmp_path):
+    """--box -90,90,-180,180 failed in argparse ("expected one argument", jobs 38692873/38692874)."""
+    import socket
+
+    from eval.cli import join_negative_box, main
+
+    assert join_negative_box(["obs", "fetch", "--box", "-90,90,-180,180", "--out", "x"]) == [
+        "obs", "fetch", "--box=-90,90,-180,180", "--out", "x"]
+    assert join_negative_box(["--box", "9,71,-81,41"]) == ["--box", "9,71,-81,41"]
+    monkeypatch.setattr(socket, "gethostname", lambda: "jpbl-s01-02")
+    with pytest.raises(SystemExit, match="Atos only"):  # parsed: it reaches the Atos check
+        main(["obs", "fetch", "--dates", "20230101", "--box", "-90,90,-180,180", "--out", str(tmp_path / "c")])

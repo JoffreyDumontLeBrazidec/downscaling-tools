@@ -29,7 +29,8 @@ DEFAULT_REGIONS = {
     "25-40N": [25.0, 40.0, -180.0, 180.0],
     "10-25N": [10.0, 25.0, -180.0, 180.0],
 }
-# Subsets of "all" by |O1280 orography - station height|, in metres, [lo, hi).
+# Subsets of "all" by |model orography (cache column model_height_column, default h_o1280) - station height|,
+# in metres, [lo, hi).
 DEFAULT_HEIGHT_CLASSES = {"all_dz<100m": [0.0, 100.0], "all_dz>=300m": [300.0, 1.0e9]}
 DEFAULT_THRESHOLDS = (5.0, 10.0, 20.0)  # mm per 12 h
 DEFAULT_RADII = (0.0, 18.0, 36.0)  # km, tp only; 0 = the nearest grid point
@@ -261,7 +262,8 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     thresholds = cfg["thresholds"] if is_tp else ()
     radii = cfg["radii"] if is_tp else (0.0,)
     elev = o.elevation.to_numpy(np.float64)
-    dz_abs = np.abs(o.h_o1280.to_numpy(np.float64) - elev)
+    h_model = o[cfg.get("model_height_column", "h_o1280")].to_numpy(np.float64)  # orography of the output grid
+    dz_abs = np.abs(h_model - elev)
     rows, ranks = [], []
     for r in radii:
         ball = None if r == 0 else matcher.discs(idx, r)
@@ -280,7 +282,7 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
             vals["hres"] = hr
         variants = [("raw", vals)]
         if var == "2t" and r == 0 and cfg["lapse_rate"]:
-            dz = {"model": o.h_o1280.to_numpy() - elev, "truth": o.h_o1280.to_numpy() - elev,
+            dz = {"model": h_model - elev, "truth": h_model - elev,
                   "input": o[input_h].to_numpy() - elev}
             if "hres" in vals:
                 dz["hres"] = (hel if hel is not None else np.full(elev.size, np.nan)) - elev
@@ -334,6 +336,10 @@ def resolve_config(eval_config: dict) -> dict:
         # the cache series scored as the model's tp: "tp" (12 h windows, the default) or e.g. "tp6" (6 h windows ending
         # at valid time, the 4 km lane whose files hold 6 h tp); anything but "tp" turns SEEPS and the 12 h window audit off
         "tp_obs_var": str(eval_config.get("tp_obs_var", "tp")),
+        # cache column of the output grid's orography at the station, for the model and truth rows' 2t height
+        # correction and the height classes: h_o1280 (the default, 9 km output) or e.g. h_o2560 (the 4 km lane;
+        # added to a cache with `obs fetch --add-height o2560=<orography>`)
+        "model_height_column": str(eval_config.get("model_height_column", "h_o1280")),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
     }
@@ -365,6 +371,12 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     seeps_clim = load_seeps_clim(cache_dir) if cfg["seeps"] and "tp24" in obs and "tp" in cfg["vars"] else None
     if cfg["seeps"] and seeps_clim is None:
         LOG.info("obs_points: no 24 h tp or SEEPS climatology in the cache; SEEPS skipped")
+    lacking = sorted(v for v, o in obs.items() if cfg["model_height_column"] not in o.columns)
+    if lacking:
+        raise ValueError(f"obs_points: model_height_column {cfg['model_height_column']!r} is not in the cache {cache_dir} "
+                         f"(obs files of {lacking}); add it with `python3 -m eval.cli obs fetch --add-height "
+                         f"{cfg['model_height_column'][2:]}=<orography GRIB or zarr> --out {cache_dir}`, or set "
+                         "model_height_column to a column the cache has")
     missing_vars = [v for v in cfg["vars"] if v not in obs]
     if missing_vars:
         LOG.warning("obs_points: no observations in %s for %s", cache_dir, missing_vars)
@@ -488,6 +500,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "files": files, "stations_per_file": {k: v for k, v in sorted(stations.items())},
         "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
         "input_source": sorted(input_sources), "tp_obs_var": cfg["tp_obs_var"], "input_height_column": input_h,
+        "model_height_column": cfg["model_height_column"],
         "provenance": provenance(
             verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest output-grid point "
                             f"within {cfg['max_km']:g} km for model and truth, nearest point of the input's own grid "
@@ -499,7 +512,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                          else "quaver station-density weights (weighted mean over stations)"),
             spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
                         "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M); SE = over dates",
-            domain_bounds={**cfg["regions"], **{k: f"|h_o1280 - h_station| in {v} m"
+            domain_bounds={**cfg["regions"], **{k: f"|{cfg['model_height_column']} - h_station| in {v} m"
                                                 for k, v in cfg["height_classes"].items()}},
             dates=sorted({p.date for p in preds}),
             leads=sorted({p.step for p in preds}), members=sorted(members),

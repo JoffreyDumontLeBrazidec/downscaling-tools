@@ -11,7 +11,8 @@ score at each threshold with the observed exceedance counts. The deterministic s
 mean (bias, RMSE, MAE, correlation) and the member-mean MAE are kept as extra columns. A single
 field's fair CRPS is its MAE and its spread is zero; every table labels these rows "single field".
 2 m temperature is also scored with quaver's lapse-rate height correction (truth and model at the
-O1280 orography, input at the O320 orography, HRES at its own). tp is also scored as disc means
+output grid's orography, ``model_height_column``, default O1280; input at its own grid's orography; HRES
+at its own). tp is also scored as disc means
 around the station's grid point (``radii``). When the cache holds 24 h tp and the SEEPS station
 climatology (``obs fetch --tp-periods 12,24 --seeps``), 24 h tp (the sum of two consecutive 12 h files of
 the same date, leads 24 h and later) is scored as variable ``tp24`` on the stations that pass quaver's
@@ -30,8 +31,15 @@ Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
   vars           Default [2t, 10ff, msl, tp].
   regions        Mapping name -> [lat0, lat1, lon0, lon1] (lon -180..180, half-open) or null for every
                  station. Default: all, europe (35-75 N, 12.5 W-42.5 E, quaver's), 40-70N, 25-40N, 10-25N.
-  height_classes Mapping name -> [lo, hi) in metres of |O1280 orography - station height|, scored as
+  height_classes Mapping name -> [lo, hi) in metres of |model orography - station height|, scored as
                  extra regions. Default all_dz<100m [0, 100] and all_dz>=300m [300, 1e9].
+  model_height_column
+                 Cache column of the output grid's orography at the station, used for the model and truth
+                 rows' 2t height correction and for the height classes. Default h_o1280 (9 km output); the 4 km
+                 lane sets h_o2560 (``obs fetch --add-height o2560=<orography> --out <cache>``). A column the
+                 cache lacks is an error.
+  tp_obs_var     The cache series the model tp is scored against: tp (12 h, the default) or tp6 (6 h windows
+                 ending at valid time, the 4 km lane); anything but tp turns SEEPS and the 12 h window audit off.
   thresholds     tp thresholds in mm per 12 h for twCRPS, Brier and counts. Default [5, 10, 20].
   radii          tp disc radii in km (0 = nearest grid point). Default [0, 18, 36].
   max_km         Largest station-to-grid-point distance kept. Default 15.
