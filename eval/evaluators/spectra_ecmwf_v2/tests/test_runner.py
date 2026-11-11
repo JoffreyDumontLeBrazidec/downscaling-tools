@@ -476,3 +476,25 @@ def test_plotter_falls_back_to_the_old_layout(tmp_path: Path) -> None:
     kwargs = mock_build.call_args.kwargs
     assert kwargs["truth_amp_dir"] == ref / "truth" / "spectra"
     assert kwargs["input_amp_dir"] == ref / "input" / "spectra"
+
+
+def test_input_cache_key_includes_the_input_source(tmp_path: Path) -> None:
+    """x_interp from the predictions and the native input bundles never share an input reference directory."""
+    lane_config = {"predict": {"dates": ["20230829"], "steps": [120]}, "prepml": {"input": {"grid": "O320"}}}
+    dirs = {}
+    for has_xi in (True, False):
+        pred = tmp_path / f"pred{has_xi}"
+        pred.mkdir()
+        eval_config = {"weather_states": ["2t"], "members": [1], "reference_dir": str(tmp_path / "ref"),
+                       "input_bundles_dir": str(tmp_path / "bundles"), "input_template_grib": "t.grib"}
+        with (
+            patch.object(runner.socket, "gethostname", return_value="ac-test"),
+            patch.object(runner, "_run_pipeline"),
+            patch.object(runner, "_run_input_bundle_pipeline"),
+            patch.object(runner, "_native_input_points", return_value=None),
+            patch.object(runner, "_has_var_in_predictions", side_effect=lambda d, v: v == "y" or has_xi),
+        ):
+            out = runner.run(pred, lane_config, eval_config, output_dir=tmp_path / f"out{has_xi}")
+        dirs[has_xi] = json.loads((out / "run_meta.json").read_text())["input_reference_dir"]
+    assert dirs[True] != dirs[False]
+    assert all(Path(d).parent.parent == (tmp_path / "ref" / "input").resolve() for d in dirs.values())

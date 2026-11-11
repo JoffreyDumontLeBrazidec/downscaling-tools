@@ -198,6 +198,13 @@ def run(
                     continue
             var_ref_dir = ref_path / var_label / window_key
             if var_label == "input":
+                # the input source belongs in the key: x_interp from the predictions and the native bundles of
+                # input_bundles_dir give different curves for the same window and must never share a cache
+                src_tag = ("x_interp" if _has_var_in_predictions(predictions_dir, var_name)
+                           else f"input_bundles:{eval_config.get('input_bundles_dir', '')}")
+                var_ref_dir = ref_path / var_label / _window_key(
+                    dates=dates, steps=steps, members=members, truncation=truncation,
+                    staging_source=f"{src_tag}|{template_grib_root or template_root}")
                 run_meta["input_reference_dir"] = str(var_ref_dir / "spectra")
                 if _has_var_in_predictions(predictions_dir, var_name):
                     run_meta["input_source"] = [
