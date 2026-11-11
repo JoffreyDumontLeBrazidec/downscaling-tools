@@ -122,3 +122,73 @@ def test_stratified_input_columns_come_from_the_native_x(tmp_path: Path, monkeyp
     d = json.loads((out / "coherence_by_surface.json").read_text())
     assert d["input_source"] == [runner.INPUT_NATIVE]
     assert d["rows"][0]["interp_correlation"] > 0.99
+
+
+def _harmonic_field(lat, lon, degrees=(20, 60), seed=0) -> np.ndarray:
+    """A field with power at the given spherical-harmonic degrees only, evaluated at the points."""
+    import healpy as hp
+
+    lmax = max(degrees)
+    rng = np.random.default_rng(seed)
+    alm = np.zeros(hp.Alm.getsize(lmax), dtype=np.complex128)
+    for ell in degrees:
+        for m in range(ell + 1):
+            alm[hp.Alm.getidx(lmax, ell, m)] = rng.standard_normal() + (1j * rng.standard_normal() if m else 0.0)
+    fine = hp.alm2map(alm, 512, lmax=lmax)
+    return hp.get_interp_val(fine, np.deg2rad(90.0 - lat), np.deg2rad(np.mod(lon, 360.0)))
+
+
+def test_native_input_curves_keep_a_known_spectrum(tmp_path: Path) -> None:
+    """The native input on its own HEALPix map (one pixel per native point, nearest point) keeps the amplitude
+    of the degrees it resolves (input/truth ~1 at l = 20 and 60), NaN beyond 3 native grid lengths; the
+    residual of member k is taken against x_interp_members[k]."""
+    import netCDF4
+
+    hla, hlo = _fibonacci(200_000)
+    lla, llo = _fibonacci(20_000)
+    truth, native = _harmonic_field(hla, hlo), _harmonic_field(lla, llo)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    n_m = 2
+    with netCDF4.Dataset(str(pred / "predictions_20230826_step024.nc"), "w") as d:
+        d.createDimension("sample", 1)
+        d.createDimension("ensemble_member", n_m)
+        d.createDimension("grid_point", hla.size)
+        d.createDimension("grid_point_lres", lla.size)
+        d.createDimension("weather_state", 1)
+        d.createVariable("lat_hres", "f8", ("grid_point",))[:] = hla
+        d.createVariable("lon_hres", "f8", ("grid_point",))[:] = hlo
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = lla
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = llo
+        v = d.createVariable("weather_state", str, ("weather_state",))
+        v[0] = "2t"
+        full = ("sample", "ensemble_member", "grid_point", "weather_state")
+        d.createVariable("y", "f4", ("sample", "grid_point", "weather_state"))[:] = truth[None, :, None]
+        d.createVariable("y_pred", "f4", full)[:] = np.stack([truth] * n_m)[None, :, :, None]
+        d.createVariable("x_interp", "f4", ("sample", "grid_point", "weather_state"))[:] = 0.0
+        d.createVariable("x_interp_members", "f4", full)[:] = np.stack([truth] * n_m)[None, :, :, None]
+        d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))[:] = \
+            np.stack([native] * n_m)[None, :, :, None]
+    out = runner.run(pred, {}, {"weather_states": ["2t"], "nside": 64, "lmax": 128,
+                                "bands": [{"name": "low", "lo": 15, "hi": 25}, {"name": "all", "lo": 1, "hi": 128}]},
+                     output_dir=tmp_path / "out")
+    payload = json.loads((out / "coherence.json").read_text())
+    im = payload["input_map"]
+    assert payload["residual_reference"] == ["x_interp_members"]
+    assert 35 <= im["nside_in"] <= 45 and im["lmax_in"] == min(2 * im["nside_in"], 128)
+    c = payload["curves"]["2t"]
+    ri = np.array(c["interp_amplitude_ratio"], dtype=float)
+    ci = np.array(c["interp_coherence"], dtype=float)
+    for ell in (20, 60):
+        assert abs(ri[ell] - 1.0) < 0.08 and ci[ell] > 0.95, (ell, ri[ell], ci[ell])
+    ell = np.arange(ri.size)
+    wl = 2 * np.pi * runner.EARTH_RADIUS_KM / np.sqrt(np.maximum(ell * (ell + 1.0), 1e-9))
+    assert np.isnan(ri[(wl < im["min_wavelength_km"]) & (ell > 0)]).all() and np.isnan(ri[im["lmax_in"] + 1:]).all()
+    bands = {b["band"]: b for b in payload["band_summary"]}
+    assert "interp_coherence" in bands["low"] and "interp_coherence" not in bands["all"]   # 'all' reaches past
+    import csv
+    with open(out / "curves.csv") as fh:
+        rows = [r for r in csv.DictReader(fh) if r["scope"] == "all"]
+    p_rt = np.array([float(r["P_resid_true"]) for r in rows])
+    p_t = np.array([float(r["P_true"]) for r in rows])
+    assert p_rt.max() < 1e-8 * p_t.max()   # y - x_interp_members[k] = 0 (against x_interp, all zero, it is y)

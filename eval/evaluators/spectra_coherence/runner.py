@@ -37,11 +37,20 @@ COMPETITOR: the coherence and amplitude ratio of the input with the truth per de
 are not a residual quantity (the residual curves below are, and stay on x_interp). So under
 rule 41 (owner, 9 Nov 2026: the input is scored on its own grid, never interpolated to the
 output grid first) they come from the native input ``x`` on ``lat_lres/lon_lres`` whenever
-the file carries it, sampled at the analysis-map pixel centres with the operator
-box_spectra uses for its native input (linear, barycentric over the native points'
-triangulation; see _input_sampler.py), not from ``x_interp``. Without a native x they fall
-back to ``x_interp``, with a warning. ``native_input: false`` reproduces the old curves.
-coherence.json records ``input_source``.
+the file carries it, not from ``x_interp``. Sampling a coarse input (O320, 28 km between
+points) at the pixel centres of the fine analysis map smooths it: linear sampling damps the
+wind amplitude at 119 km to 0.669, nearest to 0.744. So the input gets its OWN HEALPix map,
+at the nside whose pixel area equals the area per native point (one pixel per native point;
+187 for a global O320 input, a RING nside need not be a power of two), each pixel taking its
+nearest native point: no averaging. Its harmonic coefficients a_lm are physical quantities,
+so P_interp(l) and the cross with the truth's a_lm (from the fine truth map, at the input
+map's lmax) sit on the same degrees as the truth's power. The input curves are written up to
+lmax_in = min(2 nside_in, lmax) and only at wavelengths of at least 3 native grid lengths
+(the median distance between neighbouring native points, as obs_points measures it); other
+degrees are NaN, and a band that reaches past them gets no input values. coherence.json
+records ``input_source`` and ``input_map`` (nside_in, lmax_in, the wavelength limit).
+Without a native x the input curves fall back to ``x_interp`` on the analysis map, with a
+warning. ``native_input: false`` reproduces the old curves.
 
 Residual (rule 14 of the run-judging protocol): with the interpolated input present, the
 amplitude ratio of the residual is also written per degree,
@@ -50,8 +59,10 @@ amplitude ratio of the residual is also written per degree,
 
 (the transform is linear, so this is the spectrum of y_pred - x_interp over that of
 y - x_interp), next to the input over truth R_interp(l) and the aligned part C(l) x R(l).
-The residual is a residual DEFINITION, so it stays against ``x_interp`` (y - x_interp is what
-the model learns), also when the input curves come from the native x.
+The residual is a residual DEFINITION, so it stays against the interpolated input (y - x_interp is
+what the model learns), also when the input curves come from the native x. Member k's residual is
+taken against its own ``x_interp_members[k]`` when the file carries it, else against ``x_interp``
+(coherence.json ``residual_reference``).
 ``curves.csv`` holds every per-degree quantity in long form (one row per scope, state and
 degree; scope ``all`` pools every file and member, scope ``YYYYMMDD`` one date) with the
 wavelength 2 pi a / sqrt(l (l + 1)) in km. Per-date rows are written with ``per_date: true``.
@@ -152,6 +163,59 @@ def _native_sampler(ds, nside: int, valid: np.ndarray, cache: dict):
         theta, phi = hp.pix2ang(nside, np.flatnonzero(valid), nest=False)
         cache[key] = SphereLinearSampler(lat_in, lon_in, 90.0 - np.degrees(theta), np.degrees(phi))
     return cache[key]
+
+
+INPUT_MIN_GRID_LENGTHS = 3.0
+
+
+def _native_input_map(ds, lat, lon, nside: int, valid: np.ndarray, lmax: int, cache: dict) -> dict:
+    """The native input's own HEALPix map (rule 41; module docstring): nside_in with one pixel per native point
+    over the output grid's footprint, the valid pixels (those holding output points), the nearest native point
+    of each valid pixel centre, lmax_in and the degrees kept (wavelength >= 3 native grid lengths)."""
+    import healpy as hp
+    from scipy.spatial import cKDTree
+
+    from eval.shared.native_input import _xyz, native_spacing_km
+
+    lat_in = np.asarray(ds["lat_lres"].values, dtype=np.float64).reshape(-1)
+    lon_in = np.asarray(ds["lon_lres"].values, dtype=np.float64).reshape(-1)
+    key = (nside, int(valid.sum()), lat_in.size, float(lat_in[0]), float(lat_in[-1]), float(lon_in[0]),
+           float(lon_in[-1]))
+    if key in cache:
+        return cache[key]
+    npix = hp.nside2npix(nside)
+    cov = float(valid.sum()) / npix
+    pix_in = hp.ang2pix(nside, np.deg2rad(90.0 - lat_in), np.deg2rad(np.mod(lon_in, 360.0)))
+    n_in = int(valid[pix_in].sum())            # native points over the output grid's footprint
+    nside_in = max(4, int(round(np.sqrt(n_in / (12.0 * max(cov, 1e-9))))))
+    _, _, valid_in, npix_in, cov_in = _healpix_binner(lat, lon, nside_in)
+    theta, phi = hp.pix2ang(nside_in, np.flatnonzero(valid_in))
+    _, nearest = cKDTree(_xyz(lat_in, lon_in)).query(_xyz(90.0 - np.degrees(theta), np.degrees(phi)))
+    km = native_spacing_km(lat_in, lon_in)
+    lmax_in = int(min(2 * nside_in, lmax))
+    ell = np.arange(lmax_in + 1, dtype=np.float64)
+    with np.errstate(divide="ignore"):
+        wl = 2.0 * np.pi * EARTH_RADIUS_KM / np.sqrt(ell * (ell + 1.0))
+    keep = wl >= INPUT_MIN_GRID_LENGTHS * km
+    cache[key] = {"nside_in": nside_in, "npix_in": npix_in, "valid_in": valid_in, "cov_in": cov_in,
+                  "nearest": nearest, "lmax_in": lmax_in, "keep": keep, "native_spacing_km": km,
+                  "min_wavelength_km": INPUT_MIN_GRID_LENGTHS * km}
+    return cache[key]
+
+
+def _native_input_terms(values, a_t_in, cov: float, im: dict, lmax: int) -> tuple[np.ndarray, np.ndarray]:
+    """P_interp(l) and X_interp_true(l) of the native input on its own map, NaN where not kept and above lmax_in."""
+    m = np.zeros(im["npix_in"], dtype=np.float64)
+    m[im["valid_in"]] = np.asarray(values, dtype=np.float64)[im["nearest"]]
+    m[im["valid_in"]] -= np.mean(m[im["valid_in"]])
+    a_i = _alm(m, im["lmax_in"])
+    p = np.full(lmax + 1, np.nan)
+    x = np.full(lmax + 1, np.nan)
+    n = im["lmax_in"] + 1
+    p[:n] = np.where(im["keep"], _auto_cross(a_i, a_i, im["lmax_in"]) / max(im["cov_in"], 1e-6), np.nan)
+    x[:n] = np.where(im["keep"], _auto_cross(a_i, a_t_in, im["lmax_in"]) / max(np.sqrt(cov * im["cov_in"]), 1e-6),
+                     np.nan)
+    return p, x
 
 
 def _sampled_map(values, sampler, valid, npix):
@@ -305,7 +369,9 @@ def run(
     n_date: dict[tuple[str, str], int] = {}
     have_interp = False
     input_sources: set[str] = set()
-    samplers: dict = {}
+    input_maps: dict = {}
+    input_map_meta: dict = {}
+    resid_refs: set[str] = set()
     coverage = None
 
     for file_path in files:
@@ -337,7 +403,14 @@ def run(
             file_native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
             file_has_interp = file_native or "x_interp" in ds
             have_interp = have_interp or file_has_interp
-            sampler = _native_sampler(ds, nside, valid, samplers) if file_native else None
+            im = _native_input_map(ds, lat, lon, nside, valid, lmax, input_maps) if file_native else None
+            if im is not None:
+                input_map_meta = {k: (float(v) if isinstance(v, (float, np.floating)) else v) for k, v in im.items()
+                                  if k in ("nside_in", "lmax_in", "native_spacing_km", "min_wavelength_km", "cov_in")}
+            # residual reference: member k's own interpolated input when the file carries one per member
+            resid_name = "x_interp_members" if "x_interp_members" in ds else ("x_interp" if "x_interp" in ds else None)
+            if resid_name:
+                resid_refs.add(resid_name)
             if file_native:
                 input_sources.add(INPUT_NATIVE)
             elif file_has_interp:
@@ -354,9 +427,11 @@ def run(
                     interp = _input_member(ds["x"], member_idx)
                 else:
                     interp = _select_member(ds["x_interp"], member_idx) if file_has_interp else None
-                # the residuals stay defined against x_interp (a residual definition, not the input row)
-                resid_ref = (interp if not file_native else
-                             _select_member(ds["x_interp"], member_idx) if "x_interp" in ds else None)
+                # the residuals stay defined against the interpolated input (a residual definition, not the
+                # input row): x_interp_members[k] when present, else x_interp
+                same_ref = not file_native and resid_name == "x_interp"
+                resid_ref = (interp if same_ref else
+                             _input_member(ds[resid_name], member_idx) if resid_name else None)
 
                 for state in states:
                     si = idx_of.get(state)
@@ -384,15 +459,17 @@ def run(
 
                     terms = [("P_true", p_true), ("P_pred", p_pred), ("X_pred_true", x_pt)]
 
-                    if interp is not None:
-                        m_i = (_sampled_map(interp[:, si], sampler, valid, npix) if file_native
-                               else _healpix_map(interp[:, si], pix, counts, valid, npix))
-                        a_i = _alm(m_i, lmax)
+                    if interp is not None and file_native:
+                        a_t_in = _alm(m_t, im["lmax_in"])
+                        p_int, x_it = _native_input_terms(interp[:, si], a_t_in, cov, im, lmax)
+                        terms += [("P_interp", p_int), ("X_interp_true", x_it)]
+                    elif interp is not None:
+                        a_i = _alm(_healpix_map(interp[:, si], pix, counts, valid, npix), lmax)
                         p_int = _auto_cross(a_i, a_i, lmax) / max(cov, 1e-6)
                         x_it = _auto_cross(a_i, a_t, lmax) / max(cov, 1e-6)
                         terms += [("P_interp", p_int), ("X_interp_true", x_it)]
                     if resid_ref is not None:
-                        a_r = a_i if (interp is not None and not file_native) else _alm(
+                        a_r = a_i if (interp is not None and same_ref) else _alm(
                             _healpix_map(resid_ref[:, si], pix, counts, valid, npix), lmax)
                         d_p, d_t = a_p - a_r, a_t - a_r
                         p_rp = _auto_cross(d_p, d_p, lmax) / max(cov, 1e-6)
@@ -506,7 +583,7 @@ def run(
                 "error_floor_phase_only": 1.0 - C**2,
                 "share_of_truth_variance": pt / float(np.sum(mean["P_true"][ell >= 1])),
             }
-            if "P_interp" in mean:
+            if "P_interp" in mean and np.all(np.isfinite(mean["P_interp"][sel])):
                 pi = float(np.sum(mean["P_interp"][sel]))
                 xi = float(np.sum(mean["X_interp_true"][sel]))
                 Ri = float(np.sqrt(pi / pt))
@@ -535,6 +612,8 @@ def run(
         "has_interp_baseline": have_interp,
         "native_input": native_input,
         "input_source": sorted(input_sources),
+        "input_map": input_map_meta or None,
+        "residual_reference": sorted(resid_refs),
         "bands": [{"name": n_, "lo": lo, "hi": hi} for n_, lo, hi in bands],
         "band_summary": band_rows,
         "curves": curves,
