@@ -498,3 +498,18 @@ def test_input_cache_key_includes_the_input_source(tmp_path: Path) -> None:
         dirs[has_xi] = json.loads((out / "run_meta.json").read_text())["input_reference_dir"]
     assert dirs[True] != dirs[False]
     assert all(Path(d).parent.parent == (tmp_path / "ref" / "input").resolve() for d in dirs.values())
+
+
+def test_native_input_key_includes_the_input(tmp_path: Path) -> None:
+    """Two prediction sets with different native x over the same window get different input fingerprints."""
+    import xarray as xr
+
+    fps = []
+    for k, scale in enumerate((1.0, 1.0, 2.0)):
+        d = tmp_path / f"p{k}"
+        d.mkdir()
+        x = np.arange(3 * 50 * 2, dtype=np.float32).reshape(1, 3, 50, 2) * scale
+        xr.Dataset({"x": (("sample", "ensemble_member", "grid_point_lres", "weather_state"), x)}).to_netcdf(
+            d / "predictions_20230829_step024.nc")
+        fps.append(runner._input_fingerprint(d, "x", {"prepml": {"input": {"class": "od", "stream": "eefh"}}}))
+    assert fps[0] == fps[1] != fps[2] and "stream=eefh" in fps[0]

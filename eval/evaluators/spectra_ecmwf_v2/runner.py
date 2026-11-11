@@ -200,7 +200,8 @@ def run(
             if var_label == "input":
                 # the input source belongs in the key: x_interp from the predictions and the native bundles of
                 # input_bundles_dir give different curves for the same window and must never share a cache
-                src_tag = ("x_interp" if _has_var_in_predictions(predictions_dir, var_name)
+                src_tag = (f"x_interp:{_input_fingerprint(predictions_dir, var_name, lane_config)}"
+                           if _has_var_in_predictions(predictions_dir, var_name)
                            else f"input_bundles:{eval_config.get('input_bundles_dir', '')}")
                 var_ref_dir = ref_path / var_label / _window_key(
                     dates=dates, steps=steps, members=members, truncation=truncation,
@@ -358,7 +359,8 @@ def _native_input_reference(
         f"/home/ecm5702/hpcperm/data/{grid.lower()}-template.grib"
     native_key = _window_key(
         dates=dates, steps=steps, members=members, truncation=native_truncation,
-        staging_source=f"native_x:{template_grib}|{staging_source}",
+        staging_source=f"native_x:{_input_fingerprint(predictions_dir, 'x', lane_config)}|{template_grib}|"
+                       f"{staging_source}",
     )
     var_ref_dir = ref_path / "input_native" / native_key
     var_amp_dir = var_ref_dir / "spectra"
@@ -389,6 +391,32 @@ def _native_input_reference(
         truncation=native_truncation,
     )
     return meta
+
+
+def _input_fingerprint(predictions_dir: Path, var_name: str, lane_config: dict) -> str:
+    """Which input a reference is computed from, for its cache key: the lane's prepml input (class, stream, type,
+    expver, grid) and a hash of a sample of ``var_name`` in the first prediction file (member 0, every state, up
+    to 4096 evenly spaced points), so that two runs driven by different inputs over the same window never share
+    an input reference."""
+    import numpy as np
+    import xarray as xr
+
+    lane_in = (lane_config.get("prepml", {}) or {}).get("input", {}) or {}
+    desc = ",".join(f"{k}={lane_in[k]}" for k in ("class", "stream", "type", "expver", "grid") if k in lane_in)
+    pred_files = sorted(predictions_dir.glob("predictions_*.nc"))
+    digest = "none"
+    if pred_files:
+        with xr.open_dataset(pred_files[0]) as ds:
+            if var_name in ds:
+                da = ds[var_name]
+                for d in ("sample", "ensemble_member"):
+                    if d in da.dims:
+                        da = da.isel({d: 0})
+                point = [d for d in da.dims if d != "weather_state"][0]
+                idx = np.unique(np.linspace(0, da.sizes[point] - 1, min(4096, da.sizes[point])).astype(int))
+                vals = np.ascontiguousarray(np.asarray(da.isel({point: idx}).values, dtype=np.float32))
+                digest = hashlib.blake2b(vals.tobytes(), digest_size=6).hexdigest()
+    return f"{desc}|{var_name}:{digest}"
 
 
 def _has_var_in_predictions(predictions_dir: Path, var_name: str) -> bool:
