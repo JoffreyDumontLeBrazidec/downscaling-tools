@@ -146,8 +146,11 @@ class InputSpectrum:
     FFT cells are binned with the reference's bin edges, and the power is put on the reference's scale: with
     ``Spectrum.fft``'s normalisation the mean |F|^2 of a cell grows with the number of grid points, so the
     power is multiplied by (dx dy) / (dx_ref dy_ref), which makes it a per-area density on both grids. Bins whose
-    centre wavelength is below ``min_wavelength_km`` (about 3 native grid lengths, where the native grid no
-    longer resolves a wave) or that hold no FFT cell of the coarse grid are NaN.
+    centre wavelength is below ``min_wavelength_km`` or that hold no FFT cell of the coarse grid are NaN. The
+    runner sets the limit at 6 native grid lengths where the native grid is coarsest in the box: the nearest
+    native point is displaced from its grid point by up to half a grid length, and that jitter adds power near
+    the native scale (on the O320 points of E2 with a known filter, the ratio expected 0.726 at 119 km reads
+    1.09; at 6 coarsest grid lengths and above the bins are within 2 %).
     """
 
     def __init__(self, ref: Spectrum, ny: int, nx: int, dx_km: float, dy_km: float, *, min_wavelength_km: float,

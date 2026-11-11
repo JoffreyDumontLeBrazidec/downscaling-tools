@@ -179,8 +179,9 @@ def _plane_waves(lat, lon):
 
 def test_native_input_spectrum_of_a_known_field(tmp_path):
     """The input spectrum on a grid at the input's own spacing keeps the amplitude of a field the native grid
-    resolves (input/truth ~1 at 600, 250 and 120 km), where linear sampling onto the fine grid damps the 120 km
-    wave; bins below 3 native grid lengths are NaN. The residual takes member k's own x_interp_members[k]."""
+    resolves (input/truth ~1 at 600 and 250 km), where linear sampling onto the fine grid damps a 120 km wave;
+    bins below 6 native grid lengths are NaN. The model residual of member k takes x_interp_members[k], the truth
+    residual x_interp."""
     from eval.evaluators.box_spectra.core.spectrum import Sampler, Spectrum
 
     pred = tmp_path / "pred"
@@ -204,18 +205,19 @@ def test_native_input_spectrum_of_a_known_field(tmp_path):
         x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
         x[0] = np.repeat(_plane_waves(nat[:, 0], nat[:, 1])[None, :, None], 2, 0).repeat(3, 2)
         xm = d.createVariable("x_interp_members", "f4", ("sample", "ensemble_member", "grid_point_hres", "weather_state"))
-        xm[0] = d["y"][0]   # member k's input = the truth: residual true = 0 everywhere
+        xm[0] = d["y"][0]   # member k's input = the prediction: model residual 0; the truth's x_interp is noise
     out = box_spectra.run(pred, {}, {"variables": ["2t"]}, output_dir=tmp_path / "bs")
     meta = json.loads((out / "run_meta.json").read_text())
-    assert meta["residual_reference"] == ["x_interp_members"]
+    assert meta["residual_reference"] == ["model: x_interp_members; truth: x_interp"]
     rows = [r for r in runner.read_bins(out / "bins.csv") if r["scope"] == "all"]
     wl = np.array([float(r["bin_centre_km"]) for r in rows])
     ratio = np.array([float(r["ratio_interp_to_truth"]) for r in rows])
     amp_t = np.array([float(r["amp_truth_full"]) for r in rows])
-    assert np.allclose([float(r["amp_resid_true"]) for r in rows], 0.0, atol=1e-6)  # against x_interp_members
+    assert np.allclose([float(r["amp_resid_pred"]) for r in rows], 0.0, atol=1e-6)   # y_pred - x_interp_members
+    assert min(float(r["amp_resid_true"]) for r in rows) > 0.0                        # y - x_interp, not 0
     lim = meta["input_spectrum"]["min_wavelength_km"]
-    assert 50.0 < lim < 90.0 and np.isnan(ratio[wl < lim]).all() and np.isfinite(ratio[wl >= lim]).all()
-    for lam in (600.0, 250.0, 120.0):  # the bin holding the wave: the truth's peak near its wavelength
+    assert 120.0 < lim < 250.0 and np.isnan(ratio[wl < lim]).all() and np.isfinite(ratio[wl >= lim]).all()
+    for lam in (600.0, 250.0):  # the bin holding the wave: the truth's peak near its wavelength
         near = np.flatnonzero(np.abs(np.log(wl / lam)) < np.log(1.35))
         k = near[np.argmax(amp_t[near])]
         assert abs(ratio[k] - 1.0) < 0.06, (lam, wl[k], ratio[k])
@@ -229,3 +231,68 @@ def test_native_input_spectrum_of_a_known_field(tmp_path):
     near = np.flatnonzero(np.abs(np.log(spec.wavelength_km / 120.0)) < np.log(1.35))
     k = near[np.argmax(p_t[near])]
     assert np.sqrt(p_o[k] / p_t[k]) < 0.95   # 0.93 here, against ~1 on the native-spacing grid
+
+
+def _octahedral(N: int, box):
+    """The points of the octahedral O<N> grid (4i + 16 points on row i from the pole) inside box + 2 degrees."""
+    la0, la1, lo0, lo1 = box
+    lats, lons = [], []
+    for i in range(1, N + 1):
+        n, la = 4 * i + 16, 90.0 - (i - 0.5) * 90.0 / N
+        if la0 - 2 <= la <= la1 + 2:
+            lo = (np.arange(n) * 360.0 / n + 180.0) % 360.0 - 180.0
+            m = (lo >= lo0 - 2) & (lo <= lo1 + 2)
+            lats.append(np.full(m.sum(), la))
+            lons.append(lo[m])
+    return np.concatenate(lats), np.concatenate(lons)
+
+
+def native_input_accuracy(box=(10.0, 70.0, -80.0, 40.0), n_waves=300, seed=3, filter_km=90.0):
+    """Bin by bin over E2: (wavelength, expected input/truth, InputSpectrum's input/truth) for a random field of
+    plane waves (amplitude k^-1.3, 45-1500 km) on the O1280 points as the truth, and the same field times the
+    known filter H(k) = exp(-(k filter_km)^4) on the O320 points as the input. Expected = the filtered field seen
+    through the truth's own operator. Returns the arrays and the input description."""
+    from eval.evaluators.box_spectra.core.spectrum import KM_PER_DEG, NBINS, Sampler, Spectrum
+
+    lat, lon = _octahedral(1280, box)
+    lat_in, lon_in = _octahedral(320, box)
+    ext = (box[0] + 1, box[1] - 1, box[2] + 1, box[3] - 1)
+    smp = Sampler(lat, lon, ext, 0.07)
+    dx, dy = smp.dx_dy_km()
+    spec = Spectrum(len(smp.gy), len(smp.gx), dx, dy, nbins=NBINS)
+    meta = {"extent_sampled": list(ext), "dx_km": dx, "dy_km": dy}
+    smp_in, spec_in, info = runner.native_input_spectrum(lat_in, lon_in, spec, meta, 0.07)
+    rng = np.random.default_rng(seed)
+    kk = np.exp(rng.uniform(np.log(1 / 1500.0), np.log(1 / 45.0), n_waves))
+    th, ph = rng.uniform(0, 2 * np.pi, n_waves), rng.uniform(0, 2 * np.pi, n_waves)
+    amp, c0 = kk ** -1.3, np.cos(np.deg2rad(smp.lat0))
+
+    def field(la, lo, a):
+        x, y = lo * KM_PER_DEG * c0, la * KM_PER_DEG
+        out = np.zeros(la.size)
+        for s0 in range(0, n_waves, 25):
+            j = slice(s0, s0 + 25)
+            out += (a[j] * np.cos(2 * np.pi * (np.outer(x, kk[j] * np.cos(th[j])) + np.outer(y, kk[j] * np.sin(th[j])))
+                                  + ph[j])).sum(1)
+        return out
+
+    h = np.exp(-(kk * filter_km) ** 4)
+    p_t = spec.power(spec.fft(smp(field(lat, lon, amp))))
+    expected = np.sqrt(spec.power(spec.fft(smp(field(lat, lon, amp * h)))) / p_t)
+    full = np.zeros(lat_in.size)
+    full[smp_in.src_idx] = field(lat_in[smp_in.src_idx], lon_in[smp_in.src_idx], amp * h)
+    got = np.sqrt(spec_in.power(spec_in.fft(smp_in(full))) / p_t)
+    return spec.wavelength_km, expected, got, info
+
+
+def test_native_input_spectrum_on_the_octahedral_e2_points():
+    """On the O1280 / O320 points of E2 with a known input filter, every bin InputSpectrum reports is within 3 %
+    of the expected input/truth ratio; the bins below 6 coarsest native grid lengths (about 270 km) are NaN,
+    where the nearest-point jitter reads the 119 km ratio 0.726 as about 1.09."""
+    wl, expected, got, info = native_input_accuracy()
+    assert 40.0 < info["coarsest_spacing_km"] < 50.0 and 25.0 < info["native_spacing_km"] < 40.0
+    kept = np.isfinite(got)
+    assert np.array_equal(kept, wl >= info["min_wavelength_km"])
+    sel = kept & (wl < 1400.0)   # the field holds waves of 45-1500 km only
+    err = got[sel] / expected[sel] - 1.0
+    assert sel.sum() >= 8 and np.abs(err).max() < 0.03, dict(zip(np.round(wl[sel]), np.round(err, 3)))
