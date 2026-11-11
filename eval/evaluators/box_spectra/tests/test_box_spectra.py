@@ -168,3 +168,64 @@ def test_target_note_from_lane_block(tmp_path):
     assert "target 1 from 400 km to 125 km." in (out / "bins.md").read_text()
     default = box_spectra.run(pred, {}, {"variables": ["2t"]}, output_dir=tmp_path / "bs0")
     assert runner.TARGET_NOTE in (default / "bins.md").read_text()
+
+
+def _plane_waves(lat, lon):
+    """Three east-west waves of 600, 250 and 120 km (amplitudes 3, 2, 1) in x = lon * 111.195 km * cos 40."""
+    x = np.asarray(lon) * 111.195 * np.cos(np.radians(40.0))
+    return (3.0 * np.cos(2 * np.pi * x / 600.0) + 2.0 * np.cos(2 * np.pi * x / 250.0 + 1.0)
+            + 1.0 * np.cos(2 * np.pi * x / 120.0 + 2.0) + 0.0 * np.asarray(lat))
+
+
+def test_native_input_spectrum_of_a_known_field(tmp_path):
+    """The input spectrum on a grid at the input's own spacing keeps the amplitude of a field the native grid
+    resolves (input/truth ~1 at 600, 250 and 120 km), where linear sampling onto the fine grid damps the 120 km
+    wave; bins below 3 native grid lengths are NaN. The residual takes member k's own x_interp_members[k]."""
+    from eval.evaluators.box_spectra.core.spectrum import Sampler, Spectrum
+
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    path = pred / "predictions_20230226_step024.nc"
+    _write(path, mode="truth", seed=3)
+    # native grid: 0.25 degree rows, every other row shifted by half a step (an unstructured point set)
+    rows = []
+    for i, la in enumerate(np.arange(34.0, 46.0 + 1e-9, 0.25)):
+        lo = np.arange(-31.0, -14.0 + 1e-9, 0.25) + (0.125 if i % 2 else 0.0)
+        rows.append(np.column_stack([np.full(lo.size, la), lo]))
+    nat = np.concatenate(rows)
+    with nc.Dataset(str(path), "a") as d:
+        hla, hlo = np.asarray(d["lat_hres"][:]), (np.asarray(d["lon_hres"][:]) + 180.0) % 360.0 - 180.0
+        truth = _plane_waves(hla, hlo)
+        d["y"][0] = np.repeat(truth[None, :, None], 2, 0).repeat(3, 2)
+        d["y_pred"][0] = d["y"][0]
+        d.createDimension("grid_point_lres", nat.shape[0])
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = nat[:, 0]
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(nat[:, 1], 360.0)
+        x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+        x[0] = np.repeat(_plane_waves(nat[:, 0], nat[:, 1])[None, :, None], 2, 0).repeat(3, 2)
+        xm = d.createVariable("x_interp_members", "f4", ("sample", "ensemble_member", "grid_point_hres", "weather_state"))
+        xm[0] = d["y"][0]   # member k's input = the truth: residual true = 0 everywhere
+    out = box_spectra.run(pred, {}, {"variables": ["2t"]}, output_dir=tmp_path / "bs")
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["residual_reference"] == ["x_interp_members"]
+    rows = [r for r in runner.read_bins(out / "bins.csv") if r["scope"] == "all"]
+    wl = np.array([float(r["bin_centre_km"]) for r in rows])
+    ratio = np.array([float(r["ratio_interp_to_truth"]) for r in rows])
+    amp_t = np.array([float(r["amp_truth_full"]) for r in rows])
+    assert np.allclose([float(r["amp_resid_true"]) for r in rows], 0.0, atol=1e-6)  # against x_interp_members
+    lim = meta["input_spectrum"]["min_wavelength_km"]
+    assert 50.0 < lim < 90.0 and np.isnan(ratio[wl < lim]).all() and np.isfinite(ratio[wl >= lim]).all()
+    for lam in (600.0, 250.0, 120.0):  # the bin holding the wave: the truth's peak near its wavelength
+        near = np.flatnonzero(np.abs(np.log(wl / lam)) < np.log(1.35))
+        k = near[np.argmax(amp_t[near])]
+        assert abs(ratio[k] - 1.0) < 0.06, (lam, wl[k], ratio[k])
+    # the old operator: linear sampling of the native points onto the fine grid damps the 120 km wave
+    ext = tuple(meta["extent_sampled"])
+    fine = Sampler(hla, hlo, ext, 0.07)
+    old = Sampler(nat[:, 0], nat[:, 1], ext, 0.07)
+    spec = Spectrum(len(fine.gy), len(fine.gx), *fine.dx_dy_km())
+    p_t = spec.power(spec.fft(fine(truth)))
+    p_o = spec.power(spec.fft(old(_plane_waves(nat[:, 0], nat[:, 1]))))
+    near = np.flatnonzero(np.abs(np.log(spec.wavelength_km / 120.0)) < np.log(1.35))
+    k = near[np.argmax(p_t[near])]
+    assert np.sqrt(p_o[k] / p_t[k]) < 0.95   # 0.93 here, against ~1 on the native-spacing grid
