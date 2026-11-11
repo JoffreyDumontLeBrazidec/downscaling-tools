@@ -49,6 +49,27 @@ class Imerg:
         self.valid = {str(v): i for i, v in enumerate(self.ds["valid"][:])}
         self.accum_h = int(getattr(self.ds, "accum_hours", 12))
 
+    def check_window(self, eval_config: dict, pred_path) -> str | None:
+        """Compare the IMERG window with the model tp window: the lane block's ``accum_hours``, else the prediction
+        file's attribute ``accum_hours`` (or ``tp_accum_hours``). A mismatch stops the run; when neither records
+        the window, the returned warning says the windows were not compared."""
+        import netCDF4
+
+        hours, where = eval_config.get("accum_hours"), "lane block accum_hours"
+        if hours is None:
+            with netCDF4.Dataset(str(pred_path)) as ds:
+                for a in ("accum_hours", "tp_accum_hours"):
+                    if a in ds.ncattrs():
+                        hours, where = ds.getncattr(a), f"file attribute {a}"
+                        break
+        if hours is None:
+            return (f"WARN the model tp window is recorded neither in the lane block (accum_hours) nor in the files; "
+                    f"it is assumed to be the IMERG window ({self.accum_h} h)")
+        if int(hours) != self.accum_h:
+            raise ValueError(f"obs_imerg: the model tp window is {int(hours)} h ({where}) but the IMERG file holds "
+                             f"{self.accum_h} h windows")
+        return None
+
     def at(self, valid):
         i = self.valid.get(valid)
         return None if i is None else np.asarray(self.ds["tp"][i, :], np.float64)
@@ -107,6 +128,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     if not preds:
         raise FileNotFoundError(f"No prediction files to read in {predictions_dir}")
     rows, ranks, log, files, members = [], [], [], [], set()
+    window_note = imerg.check_window(eval_config, preds[0].path)
+    if window_note:
+        log.append(window_note)
     constructions, kinds_seen = set(), {}
     var = str(eval_config.get("var", "tp"))
     # rule 41: the input row from the native x, at the nearest native point of each IMERG/output point
@@ -181,7 +205,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "imerg_file": str(imerg_path), "imerg_attrs": {k: str(imerg.ds.getncattr(k)) for k in imerg.ds.ncattrs()},
             "regions": regions, "thresholds": list(thresholds), "members": sorted(members),
             "dates": sorted({p.date for p in preds}), "steps": sorted({p.step for p in preds}), "files": files,
-            "config": {"weighting": "none (O1280 points, nearly equal area)", "native_input": native_input},
+            "config": {"weighting": "none (O1280 points; areas differ by up to 19 % between 25 N and 60 N)",
+                       "native_input": native_input},
+            "dates_scored": sorted(set(df.date.astype(str))),
+            "tp_obs_var": "tp" if imerg.accum_h == 12 else f"tp{imerg.accum_h}",
             "input_source": sorted(input_sources),
             "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
             "provenance": provenance(
@@ -189,8 +216,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                                 f"({imerg_path.name}); satellite estimate, not a station observation; input row "
                                 f"from {'; '.join(sorted(input_sources))} (nearest native point per IMERG point)",
                 against_observations=True, ensemble=construction, competitor_rows=competitor,
-                weight_form="unweighted mean over O1280 points (within 25-60 N the point areas differ by under "
-                            "10 %, so no ring weights)",
+                weight_form="unweighted mean over O1280 points (no ring weights; the area of an O1280 point grows "
+                            "by about 19 % from 25 N to 60 N, so the northern points weigh slightly less than "
+                            "their area)",
                 spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
                             "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M); SE = over dates",
                 domain_bounds=regions, dates=sorted({p.date for p in preds}),
