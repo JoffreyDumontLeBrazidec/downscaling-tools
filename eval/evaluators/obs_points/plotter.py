@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.evaluators.obs_points.core.summary import VAR_UNITS, tail_name
+from eval.evaluators.obs_points.core.summary import VAR_UNITS, tail_name, var_unit
 
 LOG = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def plot_scores(results_dir, summ, pr, meta, var, variant, radius, regions):
     if not regions:
         return []
     leads = sorted(set(s.lead))
-    unit = VAR_UNITS.get(var, "")
+    unit = var_unit(var, meta)
     panels = [("fcrps", f"Fair CRPS ({unit})"), ("ssr_corrected", "Spread / skill, corrected"),
               ("paired", f"Paired fair CRPS difference ({unit})")]
     if "seeps" in s.columns and s["seeps"].notna().any():

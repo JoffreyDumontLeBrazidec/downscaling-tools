@@ -100,6 +100,8 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
         "fcrps": _wmean(fair_crps(ens, obs), w),
         "spread": _wmean(ens.std(0, ddof=1), w) if m > 1 else 0.0,
         "spread_rms": spread_rms,
+        # spread/skill against observations with no observation-error term: the observation error adds to the
+        # RMSE but not to the spread, so a reliable ensemble reads below 1 (summary.SSR_NOTE)
         "ssr_corrected": spread_rms / rmse * np.sqrt((m + 1) / m) if m > 1 and rmse > 0 else np.nan,
     }
     for t in thresholds:
