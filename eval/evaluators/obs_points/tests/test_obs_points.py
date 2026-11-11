@@ -574,7 +574,10 @@ def test_input_is_scored_on_its_native_grid(tmp_path):
     _, _, fields_old, prov_old = read_fields(f, ["2t"], native_input=False)
     assert "interpolated" in prov_old["input_grid"]["source"]
     assert fields_old["2t"]["input"].shape[-1] == fields_old["2t"]["model"].shape[-1]
-    assert input_height_column(la, lo) == "h_o320"  # 1-degree spacing: the coarse column
+    with pytest.raises(ValueError, match="coarser than O320"):  # 1-degree spacing (~80-110 km): no column
+        input_height_column(la, lo)
+    q = np.meshgrid(np.arange(30.0, 40.0, 0.25), np.arange(0.0, 10.0, 0.25), indexing="ij")
+    assert input_height_column(q[0].ravel(), q[1].ravel()) == "h_o320"  # ~25 km, as O320
 
 
 def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
@@ -591,7 +594,7 @@ def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
             d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la
             d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(lo, 360.0)
             x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
-            base = np.zeros((la.size, 5)); base[:, 0] = 280.0; base[:, 3] = 101000.0
+            base = np.zeros((la.size, 5)); base[:, 0] = 280.0; base[:, 3] = 101000.0 + 10.0 * la  # not constant
             x[0] = np.stack([base] * 5)
     cfg = {"cache": str(cache), "vars": ["msl"], "max_km": 100.0, "min_stations": 20, "radii": [0],
            "regions": {"all": None}, "height_classes": {}, "box_edge_deg": 3.0}  # wide strip: stations sit >= 1 deg in
@@ -753,3 +756,167 @@ def test_cli_accepts_a_negative_box_value(monkeypatch, tmp_path):
     monkeypatch.setattr(socket, "gethostname", lambda: "jpbl-s01-02")
     with pytest.raises(SystemExit, match="Atos only"):  # parsed: it reaches the Atos check
         main(["obs", "fetch", "--dates", "20230101", "--box", "-90,90,-180,180", "--out", str(tmp_path / "c")])
+
+
+# ----------------------------------------------------------------------------- review of 11 Nov 2026
+def _add_native_x(pred, step_deg=0.4):  # ~22-38 km between points: guessed as O320
+    """Native input x (5 identical members, = truth + 1 K on 2t) on a regular grid of ``step_deg``."""
+    lat1, lon1 = np.arange(30.0, 60.0 + 1e-9, step_deg), np.arange(-20.0, 20.0 + 1e-9, step_deg)
+    LA, LO = np.meshgrid(lat1, lon1, indexing="ij")
+    la, lo = LA.ravel(), LO.ravel()
+    for f in sorted(pred.glob("*.nc")):
+        with nc.Dataset(str(f), "a") as d:
+            d.createDimension("grid_point_lres", la.size)
+            d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la
+            d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(lo, 360.0)
+            x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+            t = _truth(la, lo, "20230101", 24)
+            base = np.stack([t["2t"] + 1.0, t["10u"], t["10v"], t["msl"], t["tp"]], -1)
+            x[0] = np.stack([base] * 5)
+
+
+def test_input_height_column_config_and_warning(tmp_path):
+    """input_height_column picks the input row's height column; unset, the guess is logged as a WARNING."""
+    import shutil
+
+    cache = _cache(tmp_path)
+    for v in ("2t", "10ff", "msl", "tp"):
+        o = pd.read_csv(cache / f"obs_{v}.csv")
+        o["h_o320_eefh"] = o["h_o320"] - 100.0 + 30.0 * (o.index % 4)
+        o.to_csv(cache / f"obs_{v}.csv", index=False)
+    swapped = tmp_path / "swapped"
+    shutil.copytree(cache, swapped)
+    for v in ("2t", "10ff", "msl", "tp"):
+        o = pd.read_csv(swapped / f"obs_{v}.csv")
+        o["h_o320"] = o["h_o320_eefh"]
+        o.to_csv(swapped / f"obs_{v}.csv", index=False)
+    pred = _pred(tmp_path, "p", noise=0.5, seed=17)
+    _add_native_x(pred)
+    cfg = {"vars": ["2t"], "radii": [0], "min_stations": 10, "max_km": 100.0, "regions": {"all": None},
+           "height_classes": {}}
+    a = obs_points.run(pred, {}, {**cfg, "cache": str(cache), "input_height_column": "h_o320_eefh"},
+                       output_dir=tmp_path / "a", run_label="A")
+    b = obs_points.run(pred, {}, {**cfg, "cache": str(swapped)}, output_dir=tmp_path / "b", run_label="B")
+    ta, tb = (pd.read_csv(x / "scores_per_date.csv") for x in (a, b))
+    num = [c for c in ta.columns if ta[c].dtype.kind == "f"]
+    pd.testing.assert_frame_equal(ta[num], tb[num])
+    ma, mb = (json.loads((x / "run_meta.json").read_text()) for x in (a, b))
+    assert ma["input_height_column"] == "h_o320_eefh" and ma["input_height_column_from"].startswith("config")
+    assert mb["input_height_column"] == "h_o320" and mb["input_height_column_from"].startswith("guessed")
+    assert any("input row 2t height correction uses cache column h_o320" in w for w in mb["warnings"])
+    assert not any("input row 2t height correction" in w for w in ma["warnings"])
+    with pytest.raises(ValueError, match="input_height_column 'h_nope'"):
+        obs_points.run(pred, {}, {**cfg, "cache": str(cache), "input_height_column": "h_nope"},
+                       output_dir=tmp_path / "c", run_label="C")
+    # no native x and no input_height_column: still h_o320, but no longer silently
+    plain = _pred(tmp_path, "plain", noise=0.5, seed=17)
+    d = obs_points.run(plain, {}, {**cfg, "cache": str(cache)}, output_dir=tmp_path / "d", run_label="D")
+    md = json.loads((d / "run_meta.json").read_text())
+    assert md["input_height_column"] == "h_o320" and md["input_height_column_from"].startswith("assumed")
+    assert any("uses cache column h_o320 (assumed" in w for w in md["warnings"])
+
+
+def test_degenerate_input_channel_drops_only_the_input_row(tmp_path):
+    """An all-zero tp input (output-only channel) and an all-NaN msl input: the input row of that variable is
+    dropped with a warning; model and truth are still scored on the same stations as before."""
+    from eval.evaluators.obs_points.runner import degenerate_input
+
+    assert degenerate_input(np.zeros(5)) and degenerate_input(np.full(5, np.nan)) and degenerate_input(np.full(5, 3.0))
+    assert not degenerate_input(np.array([0.0, 0.0, 1.0]))
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "p", noise=0.5, seed=19)
+    cfg = {"cache": str(cache), "vars": ["2t", "msl", "tp"], "radii": [0], "min_stations": 10, "max_km": 100.0,
+           "regions": {"all": None}, "height_classes": {}}
+    ref = pd.read_csv(obs_points.run(pred, {}, cfg, output_dir=tmp_path / "ref", run_label="R") / "scores_per_date.csv")
+    for f in sorted(pred.glob("*.nc")):
+        with nc.Dataset(str(f), "a") as d:
+            x = d["x_interp"][:]
+            x[0, :, 4] = 0.0
+            x[0, :, 3] = np.nan
+            d["x_interp"][:] = x
+    out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "o", run_label="O")
+    df = pd.read_csv(out / "scores_per_date.csv")
+    assert set(df[df["var"] == "tp"].row) == {"model", "truth"} and set(df[df["var"] == "msl"].row) == {"model", "truth"}
+    assert "input" in set(df[df["var"] == "2t"].row)
+    keys = ["var", "variant", "radius_km", "region", "lead", "date", "row"]
+    m = df[df.row != "input"].merge(ref[ref.row != "input"], on=keys, suffixes=("", "_ref"))
+    assert len(m) == len(df[df.row != "input"]) and (m.n == m.n_ref).all()
+    np.testing.assert_allclose(m.fcrps, m.fcrps_ref)
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert set(meta["degenerate_input"]) == {"msl", "tp"} and len(meta["degenerate_input"]["tp"]) == 6
+    assert any("input row of tp dropped in 6 of 6 files" in w for w in meta["warnings"])
+
+
+def test_paired_rows_of_the_same_kind_only_and_summary_header(tmp_path):
+    """An ensemble is paired with a single field on the ensemble-mean metrics only; the header counts the dates
+    scored and the tp unit follows tp_obs_var; spread/skill carries the no-observation-error label."""
+    from eval.evaluators.obs_points.core.summary import SSR_NOTE, paired, var_unit
+
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "p", noise=0.5, seed=23)
+    cfg = {"cache": str(cache), "vars": ["2t", "tp"], "radii": [0], "min_stations": 10, "max_km": 100.0,
+           "regions": {"all": None}, "height_classes": {}, "dates": DATES[:2]}
+    out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "o", run_label="O")
+    pr = pd.read_csv(out / "paired.csv")
+    mixed = pr[pr.pair.isin(["model-truth", "model-hres", "model-input"])]
+    assert len(mixed) and set(mixed.metric) <= {"mae_mean", "rmse_mean", "corr_mean"}
+    assert (mixed.kinds.str.startswith("ensemble vs single field")).all()
+    same = pr[pr.pair == "truth-input"]
+    assert "fcrps" in set(same.metric) and (same.kinds == "same kind").all()
+    md = (out / "summary.md").read_text()
+    assert "Dates scored: 2." in md and SSR_NOTE in md and "model-truth | fair CRPS" not in md
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert meta["spread_skill"] == SSR_NOTE and meta["dates_scored"] == DATES[:2]
+    assert var_unit("tp", {"tp_obs_var": "tp6"}) == "mm / 6 h" and var_unit("tp", {}) == "mm / 12 h"
+    df = pd.DataFrame({"var": "2t", "variant": "raw", "radius_km": 0, "region": "all", "lead": 24,
+                       "date": ["a", "a", "b", "b"], "row": ["model", "input", "model", "input"],
+                       "kind": ["ensemble", "ensemble (input members)"] * 2, "fcrps": [1.0, 2.0, 1.0, 3.0],
+                       "mae_mean": 1.0, "rmse_mean": 1.0, "corr_mean": 0.5})
+    p = paired(df)
+    assert "fcrps" in set(p.metric) and float(p[p.metric == "fcrps"]["mean"].iloc[0]) == pytest.approx(-1.5)
+
+
+def test_second_fetch_merges_rows_and_manifest(tmp_path):
+    """write_merged adds new (valid, stnid) rows, replaces repeated ones, refills a height column; merge_stvl
+    keeps the periods of both fetches."""
+    from eval.evaluators.obs_points.core.fetch import merge_stvl, write_merged
+
+    p = tmp_path / "obs_tp.csv"
+    old = pd.DataFrame({"valid": ["2024110112"] * 2, "lat": [1.0, 2.0], "lon": [0.0, 0.0], "stnid": ["01", "02"],
+                        "elevation": 0.0, "obs": [1.0, 2.0], "h_o2560": [5.0, 6.0]})
+    old.to_csv(p, index=False)
+    new = pd.DataFrame({"valid": ["2024110112", "2024110200"], "lat": [2.0, 1.0], "lon": [0.0, 0.0],
+                        "stnid": ["02", "01"], "elevation": 0.0, "obs": [9.0, 3.0]})
+    seen = []
+
+    def refill(frame, cols):
+        seen.append(cols)
+        frame["h_o2560"] = 7.0
+        return frame
+
+    log = []
+    assert write_merged(p, new, ["valid", "stnid"], log, refill=refill) == 3
+    m = pd.read_csv(p, dtype={"valid": str, "stnid": str}).sort_values(["valid", "stnid"]).reset_index(drop=True)
+    assert m.stnid.tolist() == ["01", "02", "01"] and m.obs.tolist() == [1.0, 9.0, 3.0]
+    assert m.h_o2560.tolist() == [5.0, 7.0, 7.0] and seen == [["h_o2560"]] and "merged" in log[0]
+    s = merge_stvl({"observation": {"table": "observation", "period_h": {"tp": 12, "tp24": 24}}, "hres": {"t": 1}},
+                   {"observation": {"table": "observation", "period_h": {"tp6": 6}}, "hres": None})
+    assert s["observation"]["period_h"] == {"tp": 12, "tp24": 24, "tp6": 6} and s["hres"] == {"t": 1}
+
+
+def test_member_sample_reads_a_subset(tmp_path):
+    """file_provenance tests member differences on a sample of points, with the same answer as the full array."""
+    from eval.evaluators.obs_points.runner import member_sample
+    from eval.shared.provenance import members_differ
+
+    with nc.Dataset(str(tmp_path / "f.nc"), "w") as d:
+        d.createDimension("sample", 1); d.createDimension("ensemble_member", 3)
+        d.createDimension("grid_point_hres", 10000); d.createDimension("weather_state", 2)
+        v = d.createVariable("x_interp_members", "f4", ("sample", "ensemble_member", "grid_point_hres", "weather_state"))
+        a = np.zeros((1, 3, 10000, 2), np.float32); a[0, 1, ::7, 1] = 1.0
+        v[:] = a
+        same = d.createVariable("y_members", "f4", ("sample", "ensemble_member", "grid_point_hres", "weather_state"))
+        same[:] = np.zeros((1, 3, 10000, 2), np.float32)
+        s = member_sample(d["x_interp_members"], 10000, n_sample=500)
+        assert s.shape == (3, 500, 2) and members_differ(s) == members_differ(a[0])
+        assert not members_differ(member_sample(d["y_members"], 10000, n_sample=500))

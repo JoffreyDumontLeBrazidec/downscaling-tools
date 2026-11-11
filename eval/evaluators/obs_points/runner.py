@@ -9,12 +9,14 @@ from pathlib import Path
 import numpy as np
 
 from eval.shared.edge_strip import resolve_box_edge_deg
+from eval.shared.native_input import native_spacing_km
+from eval.shared.precip.sources import is_degenerate_channel
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
     LIMITS, StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache, xyz,
 )
-from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
+from eval.evaluators.obs_points.core.summary import SSR_NOTE, paired, summarise, write_summary_md
 from eval.shared.provenance import (
     ENSEMBLE_RULE, SINGLE_FIELD, ensemble_construction, is_single_input, members_differ, provenance,
 )
@@ -66,7 +68,7 @@ def file_provenance(ds, n_model: int) -> dict:
         differ[row] = None  # None: the file carries one field only (no member axis, or members fewer than M)
         for name in names:
             if name in ds.variables:
-                a = np.asarray(ds[name][0], np.float64).reshape(-1, n, len(ds.dimensions["weather_state"]))
+                a = member_sample(ds[name], n)
                 if a.shape[0] == n_model and n_model > 1:
                     differ[row] = members_differ(a)
                 break
@@ -77,6 +79,22 @@ def file_provenance(ds, n_model: int) -> dict:
     return {"attrs": attrs, "ensemble_rows": ens,
             "model": ensemble_construction(attrs, n_model, input_members_differ=differ["input"],
                                            source_bundles=bundles)}
+
+
+SAMPLE_POINTS = 4096
+
+
+def member_sample(var, n_points: int, n_sample: int = SAMPLE_POINTS) -> np.ndarray:
+    """(members, points, channels) of the first sample of a netCDF variable at up to ``n_sample`` evenly spaced
+    grid points: enough to tell whether the members differ, without reading the whole array as float64."""
+    ax = next((i for i, d in enumerate(var.dimensions) if i > 0 and var.shape[i] == n_points), None)
+    if ax is None:
+        raise ValueError(f"{var.name}: no axis of {n_points} grid points in {var.dimensions}")
+    idx = np.unique(np.linspace(0, n_points - 1, min(n_sample, n_points)).astype(int))
+    sel = [0] + [slice(None)] * (var.ndim - 1)
+    sel[ax] = idx
+    a = np.asarray(var[tuple(sel)], np.float64)
+    return a.reshape(-1, idx.size, var.shape[-1])
 
 
 def read_fields(path, variables, *, ensembles: bool = True, native_input: bool = True):
@@ -108,7 +126,7 @@ def read_fields(path, variables, *, ensembles: bool = True, native_input: bool =
                "input": "x" if native else ("x_interp_members" if "x_interp_members" in ds.variables else "x_interp"),
                "truth": "y_members" if "y_members" in ds.variables else "y"}
         if native:
-            a = np.asarray(ds["x"][0], np.float64).reshape(-1, in_n, len(ws))
+            a = member_sample(ds["x"], in_n)
             m = int(ds["y_pred"].shape[1])
             prov["ensemble_rows"]["input"] = bool(ensembles and a.shape[0] == m and m > 1 and members_differ(a))
             prov["input_grid"] = {"source": "x (native input grid)", "points": in_n,
@@ -143,15 +161,48 @@ def read_fields(path, variables, *, ensembles: bool = True, native_input: bool =
 
 
 def input_height_column(lat, lon) -> str:
-    """Cache column of the model height at the station for the native input grid: ``h_o1280`` when the input
-    grid's point spacing is near O1280's (about 9 km), ``h_o320`` near O320's (about 35 km)."""
-    from scipy.spatial import cKDTree
+    """Guess of the cache column of the input model's height at the station, from the native input grid's point
+    spacing: ``h_o1280`` near O1280's (about 7 km), ``h_o320`` near O320's (about 28 km). Only a guess: on the
+    9 km lane the input is the eefh hindcast, whose own O320 orography (``h_o320_eefh``) is much smoother than
+    ``h_o320`` (the O1280 orography interpolated to O320); set ``input_height_column`` in the lane block. A grid
+    coarser than O320 (O96: about 92 km) has no cache column and is an error."""
+    km = native_spacing_km(lat, lon)
+    if km < 20.0:
+        return "h_o1280"
+    if km < 50.0:
+        return "h_o320"
+    raise ValueError(f"obs_points: the native input grid is coarser than O320 ({km:.0f} km between points); no "
+                     "cache column holds its orography. Add one with `obs fetch --add-height <name>=<orography>` "
+                     "and set input_height_column: h_<name> in the lane block")
 
-    k = min(2000, lat.size)
-    sel = np.linspace(0, lat.size - 1, k).astype(int)
-    d, _ = cKDTree(xyz(lat, lon)).query(xyz(lat[sel], lon[sel]), k=2)
-    km = float(np.median(d[:, 1])) * 6371.0
-    return "h_o1280" if km < 20.0 else "h_o320"
+
+def degenerate_input(a) -> bool:
+    """True when an input channel carries no data: all NaN, all zero (``is_degenerate_channel``; e.g. tp on the
+    prepml 4 km route, an output-only channel) or one constant value."""
+    a = np.asarray(a, np.float64)
+    if is_degenerate_channel(a):
+        return True
+    f = a[np.isfinite(a)]
+    return bool(f.max() == f.min())
+
+
+def require_column(obs: dict, column: str, key: str, cache_dir) -> None:
+    """Stop with a clear message when an obs file of the cache lacks a configured height column."""
+    lacking = sorted(v for v, o in obs.items() if column not in o.columns)
+    if lacking:
+        raise ValueError(f"obs_points: {key} {column!r} is not in the cache {cache_dir} (obs files of {lacking}); "
+                         f"add it with `python3 -m eval.cli obs fetch --add-height {column[2:]}=<orography GRIB or "
+                         f"zarr> --out {cache_dir}`, or set {key} to a column the cache has")
+
+
+def note_height_guess(log: list, column: str, how: str, obs: dict) -> None:
+    """WARNING for an input height column that the lane block did not set."""
+    log.append(f"WARN input row 2t height correction uses cache column {column} ({how}); set input_height_column "
+               "in the lane block (h_o320_eefh on the 9 km lane, h_o1280 on the 4 km lane)")
+    for v, o in obs.items():
+        if column not in o.columns:
+            raise ValueError(f"obs_points: the input height column {column!r} is not in the cache (obs_{v}.csv); "
+                             "set input_height_column")
 
 
 def row_kinds(prov: dict) -> dict:
@@ -215,7 +266,10 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None, input_
     ov, opv = j.obs.to_numpy(np.float64), j.obs_prev.to_numpy(np.float64)
     idx_in = idx if input_matcher is None else input_matcher.match(j.lat.to_numpy(), j.lon.to_numpy(), np.inf)[0]
     out = []
-    for row, f in (("truth", fields["truth"]), ("input", fields["input"]), ("model", fields["model"])):
+    for row in ("truth", "input", "model"):
+        if row not in fields:  # a degenerate input channel is not a row (run())
+            continue
+        f = fields[row]
         x = (f.mean(0) if f.ndim == 2 else f)[idx_in if row == "input" else idx]
         if x.std() == 0 or ov.std() == 0 or opv.std() == 0:
             log.append(f"window audit skipped for {date} +{lead} h {row}: a constant series")
@@ -276,14 +330,16 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                 return np.array([a[b].mean() for b in bl])
             return np.stack([a[:, b].mean(1) for b in bl], 1)
 
-        vals = {"model": at(fields["model"]), "input": at(fields["input"], idx_in, ball_in),
-                "truth": at(fields["truth"])}
+        vals = {"model": at(fields["model"]), "truth": at(fields["truth"])}
+        if "input" in fields:  # absent when the file's input channel is degenerate (all zero / NaN / constant)
+            vals["input"] = at(fields["input"], idx_in, ball_in)
         if hr is not None and r == 0:
             vals["hres"] = hr
         variants = [("raw", vals)]
         if var == "2t" and r == 0 and cfg["lapse_rate"]:
-            dz = {"model": h_model - elev, "truth": h_model - elev,
-                  "input": o[input_h].to_numpy() - elev}
+            dz = {"model": h_model - elev, "truth": h_model - elev}
+            if "input" in vals:
+                dz["input"] = o[input_h].to_numpy() - elev
             if "hres" in vals:
                 dz["hres"] = (hel if hel is not None else np.full(elev.size, np.nan)) - elev
             variants.append(("lapse", {k: x + cfg["lapse_rate"] * np.asarray(dz[k], np.float64) for k, x in vals.items()}))
@@ -340,6 +396,11 @@ def resolve_config(eval_config: dict) -> dict:
         # correction and the height classes: h_o1280 (the default, 9 km output) or e.g. h_o2560 (the 4 km lane;
         # added to a cache with `obs fetch --add-height o2560=<orography>`)
         "model_height_column": str(eval_config.get("model_height_column", "h_o1280")),
+        # cache column of the INPUT model's orography at the station, for the input row's 2t height correction:
+        # h_o320_eefh on the 9 km lane (the eefh hindcast's own O320 orography), h_o1280 on the 4 km lane.
+        # Unset: guessed from the native grid spacing (input_height_column()) with a WARNING
+        "input_height_column": (str(eval_config["input_height_column"])
+                                if eval_config.get("input_height_column") else None),
         "dates": [str(d) for d in eval_config.get("dates", [])],
         "steps": [int(s) for s in eval_config.get("steps", [])],
     }
@@ -371,12 +432,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     seeps_clim = load_seeps_clim(cache_dir) if cfg["seeps"] and "tp24" in obs and "tp" in cfg["vars"] else None
     if cfg["seeps"] and seeps_clim is None:
         LOG.info("obs_points: no 24 h tp or SEEPS climatology in the cache; SEEPS skipped")
-    lacking = sorted(v for v, o in obs.items() if cfg["model_height_column"] not in o.columns)
-    if lacking:
-        raise ValueError(f"obs_points: model_height_column {cfg['model_height_column']!r} is not in the cache {cache_dir} "
-                         f"(obs files of {lacking}); add it with `python3 -m eval.cli obs fetch --add-height "
-                         f"{cfg['model_height_column'][2:]}=<orography GRIB or zarr> --out {cache_dir}`, or set "
-                         "model_height_column to a column the cache has")
+    require_column(obs, cfg["model_height_column"], "model_height_column", cache_dir)
+    if cfg["input_height_column"]:
+        require_column(obs, cfg["input_height_column"], "input_height_column", cache_dir)
     missing_vars = [v for v in cfg["vars"] if v not in obs]
     if missing_vars:
         LOG.warning("obs_points: no observations in %s for %s", cache_dir, missing_vars)
@@ -389,7 +447,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     members = set()
     stations = defaultdict(list)
     matcher = input_matcher = None
-    input_h, input_sources = "h_o320", set()
+    input_h, input_sources = cfg["input_height_column"], set()
+    input_h_how = "config (input_height_column)" if input_h else None
+    degenerate = defaultdict(list)  # var -> files whose input channel carries no data
     constructions, kinds_seen = set(), {}
     prev = {}  # tp of the previous lead of the same date, for the 24 h windows of SEEPS
     for p in preds:
@@ -398,18 +458,29 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         g = prov["input_grid"]
         input_sources.add(g["source"])
         if g["lat"] is None:
-            input_matcher, input_h = None, "h_o320"
+            input_matcher = None
+            if not cfg["input_height_column"] and input_h_how is None:
+                input_h, input_h_how = "h_o320", "assumed (no native x and no input_height_column)"
+                note_height_guess(log, input_h, input_h_how, obs)
         elif input_matcher is None or not input_matcher.same_grid(g["lat"], g["lon"]):
             # edge_deg=0: the station set (incl. the box-edge strip drop) is decided by the output-grid matcher
             # alone; the input matcher only gives each kept station its nearest native point (same stations)
             input_matcher = StationMatcher(g["lat"], g["lon"], 0.0)
-            input_h = input_height_column(g["lat"], g["lon"])
+            if not cfg["input_height_column"]:
+                guess = input_height_column(g["lat"], g["lon"])
+                if guess != input_h:
+                    input_h, input_h_how = guess, "guessed from the native grid spacing"
+                    note_height_guess(log, input_h, input_h_how, obs)
         kinds = row_kinds(prov)
         constructions.add(prov["model"])
         for row, kind in kinds.items():
             kinds_seen.setdefault(row, set()).add(kind)
         if matcher is None or not matcher.same_grid(lat, lon):
             matcher = StationMatcher(lat, lon, cfg["box_edge_deg"])
+        for v in list(fields):
+            if degenerate_input(fields[v]["input"]):
+                degenerate[v].append(p.path.name)
+                fields[v] = {k: a for k, a in fields[v].items() if k != "input"}
         for v, f in fields.items():
             members.add(int(f["model"].shape[0]))
             r, k, nst = score_valid(v, f, obs[v], hres.get(v), matcher, date=p.date, lead=p.step, cfg=cfg,
@@ -431,7 +502,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             if before is None and p.step >= 24:
                 log.append(f"WARN {p.date}: no +{p.step - 12} h file, so no 24 h SEEPS window ending at +{p.step} h")
             if before is not None:
-                f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"]}
+                f24 = {k: fields["tp"][k] + before[k] for k in fields["tp"] if k in before}
                 r, k, nst = score_valid("tp24", f24, obs["tp24"], None, matcher, date=p.date, lead=p.step,
                                         cfg=cfg, seeps_clim=seeps_clim, kinds=kinds, input_matcher=input_matcher,
                                         input_h=input_h)
@@ -446,6 +517,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_points: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_points: no station sample reached min_stations; nothing scored")
+    for v, names in sorted(degenerate.items()):
+        log.append(f"WARN input row of {v} dropped in {len(names)} of {len(files)} files: the input channel carries "
+                   "no data (all zero, all NaN or constant, e.g. an output-only channel); the other rows are scored")
     for src_name in sorted(input_sources):
         if "interpolated" in src_name:
             log.append(f"WARN input row = {src_name}: rule 41 says the input is scored on its own grid; this "
@@ -500,7 +574,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         "files": files, "stations_per_file": {k: v for k, v in sorted(stations.items())},
         "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
         "input_source": sorted(input_sources), "tp_obs_var": cfg["tp_obs_var"], "input_height_column": input_h,
-        "model_height_column": cfg["model_height_column"],
+        "dates_scored": sorted(set(df.date.astype(str))), "spread_skill": SSR_NOTE,
+        "model_height_column": cfg["model_height_column"], "input_height_column_from": input_h_how,
+        "degenerate_input": {v: names for v, names in sorted(degenerate.items())},
         "provenance": provenance(
             verifying_field=f"station observations (SYNOP / STVL cache {cache_dir.name}; nearest output-grid point "
                             f"within {cfg['max_km']:g} km for model and truth, nearest point of the input's own grid "
@@ -511,7 +587,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             weight_form=("unweighted mean over stations" if cfg["weighting"] == "none"
                          else "quaver station-density weights (weighted mean over stations)"),
             spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
-                        "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M); SE = over dates",
+                        "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M), " + SSR_NOTE + "; SE = over dates",
             domain_bounds={**cfg["regions"], **{k: f"|{cfg['model_height_column']} - h_station| in {v} m"
                                                 for k, v in cfg["height_classes"].items()}},
             dates=sorted({p.date for p in preds}),

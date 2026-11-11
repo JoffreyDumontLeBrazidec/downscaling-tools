@@ -82,6 +82,17 @@ def _xyz(lat, lon) -> np.ndarray:
     return np.stack([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)], -1)
 
 
+def native_spacing_km(lat, lon, k: int = 2000) -> float:
+    """Median distance [km] from a point of the grid to its nearest neighbour, over up to ``k`` evenly spaced
+    points: about 7 km on O1280, 28 km on O320, 92 km on O96 (the native point spacing)."""
+    from scipy.spatial import cKDTree
+
+    lat, lon = np.asarray(lat, np.float64).reshape(-1), np.asarray(lon, np.float64).reshape(-1)
+    sel = np.linspace(0, lat.size - 1, min(k, lat.size)).astype(int)
+    d, _ = cKDTree(_xyz(lat, lon)).query(_xyz(lat[sel], lon[sel]), k=2)
+    return float(np.median(d[:, 1])) * 6371.0
+
+
 def _key(*arrays: np.ndarray) -> str:
     h = hashlib.blake2b(digest_size=20)
     for a in arrays:
