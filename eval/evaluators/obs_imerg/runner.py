@@ -11,7 +11,7 @@ from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import ensemble_scores, rank_counts
 from eval.evaluators.obs_points.core.stations import resolve_cache, wrap_lon
 from eval.evaluators.obs_points.core.summary import paired, summarise, write_summary_md
-from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, rank_seed, read_fields, row_kinds
+from eval.evaluators.obs_points.runner import ROW_KIND, ENSEMBLE_KIND, degenerate_input, rank_seed, read_fields, row_kinds
 from eval.evaluators.precip_read.core.metrics import EDGES
 from eval.shared.edge_strip import box_edge_mask, resolve_box_edge_deg
 from eval.shared.native_input import is_interpolated, nearest_native_index, warn_fallback
@@ -136,6 +136,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     # rule 41: the input row from the native x, at the nearest native point of each IMERG/output point
     native_input = bool(eval_config.get("native_input", True))
     input_sources: set[str] = set()
+    degenerate: list[str] = []   # files whose input channel carries no data (obs_points.runner.degenerate_input)
     H = {}
     for p in preds:
         valid = (pd.Timestamp(p.date) + pd.Timedelta(hours=p.step)).strftime("%Y%m%d%H")
@@ -159,7 +160,11 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             kinds_seen.setdefault(row, set()).add(kind)
         imerg.check_grid(lat, lon)
         members.add(int(f["model"].shape[0]))
-        r, k, h = score_file({"model": f["model"], "input": f["input"], "truth": f["truth"]}, ref, lat, lon,
+        rows_in = {"model": f["model"], "input": f["input"], "truth": f["truth"]}
+        if degenerate_input(f["input"]):   # all zero / NaN / constant (an output-only channel): no input row
+            degenerate.append(p.path.name)
+            del rows_in["input"]
+        r, k, h = score_file(rows_in, ref, lat, lon,
                              regions=regions, thresholds=thresholds, date=p.date, lead=p.step,
                              min_points=int(eval_config.get("min_points", 1000)), kinds=kinds,
                              box_edge_deg=resolve_box_edge_deg(eval_config))
@@ -173,6 +178,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
         LOG.info("obs_imerg: scored %s +%03d h", p.date, p.step)
     if not rows:
         raise RuntimeError("obs_imerg: nothing scored (no IMERG field for any file?)")
+    if degenerate:
+        log.append(f"WARN input row of {var} dropped in {len(degenerate)} of {len(files)} files: the input channel "
+                   "carries no data (all zero, all NaN or constant, e.g. an output-only channel); the other rows are scored")
     for src in sorted(input_sources):
         if is_interpolated(src):
             log.append(warn_fallback(LOG, "obs_imerg", src))
@@ -209,7 +217,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                        "native_input": native_input},
             "dates_scored": sorted(set(df.date.astype(str))),
             "tp_obs_var": "tp" if imerg.accum_h == 12 else f"tp{imerg.accum_h}",
-            "input_source": sorted(input_sources),
+            "input_source": sorted(input_sources), "degenerate_input": {var: degenerate} if degenerate else {},
             "rows": {k: row_kind.get(k, ROW_KIND.get(k, "")) for k in sorted(set(df.row))},
             "provenance": provenance(
                 verifying_field=f"IMERG Final V07B {imerg.accum_h} h precipitation on the same O1280 points "

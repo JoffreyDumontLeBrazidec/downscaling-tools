@@ -167,7 +167,8 @@ def test_input_row_from_the_native_grid(setup):
             d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la_l
             d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = np.mod(lo_l, 360.0)
             x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
-            x[0, :, :, 0] = 0.002  # 2 mm everywhere in every member; x_interp is 0.8 x truth
+            x[0, :, :, 0] = np.broadcast_to(0.001 + 0.002 * (la_l - 19.0) / 47.0, (4, la_l.size))  # 1-3 mm (a constant
+            # input channel is degenerate and gets no row); x_interp is 0.8 x truth
     out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "nat", run_label="N")
     df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
     assert (df.groupby(["region", "lead", "date"]).n.nunique() == 1).all()   # same points for every row
@@ -201,3 +202,21 @@ def test_imerg_window_is_compared_with_the_model_window(setup):
     assert any("recorded neither in the lane block" in w for w in meta["warnings"])
     assert meta["dates_scored"] == sorted(DATES) and "19 %" in meta["config"]["weighting"]
     assert f"Dates scored: {len(DATES)}." in (out / "summary.md").read_text()
+
+
+def test_degenerate_input_channel_drops_the_input_row(setup):
+    """An all-zero input tp (an output-only channel) is no input row; model and truth are scored as before."""
+    tmp, pred, cfg = setup
+    ref = pd.read_csv(obs_imerg.run(pred, {}, cfg, output_dir=tmp / "r") / "scores_per_date.csv", dtype={"date": str})
+    for f in sorted(pred.glob("*.nc")):
+        with nc.Dataset(str(f), "a") as d:
+            d["x_interp"][0, :, 0] = 0.0
+    out = obs_imerg.run(pred, {}, cfg, output_dir=tmp / "z")
+    df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
+    assert set(df.row) == {"model", "truth"}
+    keys = ["region", "lead", "date", "row"]
+    m = df.merge(ref[ref.row != "input"], on=keys, suffixes=("", "_ref"))
+    assert len(m) == len(df) and (m.n == m.n_ref).all()
+    meta = json.loads((out / "run_meta.json").read_text())
+    assert len(meta["degenerate_input"]["tp"]) == len(DATES) * len(STEPS)
+    assert any("input row of tp dropped" in w for w in meta["warnings"])
