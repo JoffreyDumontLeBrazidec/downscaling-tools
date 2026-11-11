@@ -101,12 +101,21 @@ surface:
 # (quaver analysis-departure check, eval.cli obs fetch --add-analysis).
 # Run:   python -m eval.cli evaluate --lane o1280_o2560 --host <jupiter|atos> --only obs_points \
 #          --predictions-dir <dir of predictions_<date>_step<NNN>.nc> --run-label <label>
+# model_height_column (added 2026-11-11): the model and truth rows are on the O2560 grid, so their 2t height
+# correction and the height classes use the O2560 orography (cache column h_o2560, added with
+# `obs fetch --add-height o2560=/home/ecm5702/hpcperm/data/station_caches/orography_O2560.grib`, MARS rd i4ql z),
+# as quaver did for the 4 km model rows; the input row keeps h_o1280 (its own O1280 grid).
 obs_points:
   cache:
     atos: /home/ecm5702/hpcperm/data/station_caches/o2560_obs12_20241101_12
     jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/o2560_obs12_20241101_12
+  # Global alternative (same 12 dates and leads, every station of the globe, tp 6/12/24 h and SEEPS):
+  # cache:
+  #   atos: /home/ecm5702/hpcperm/data/station_caches/global4_20241101_12_v1
+  #   jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/global4_20241101_12_v1
   vars: [2t, 10ff, msl, tp]
   tp_obs_var: tp6
+  model_height_column: h_o2560
 
 regions:
   showcase:
