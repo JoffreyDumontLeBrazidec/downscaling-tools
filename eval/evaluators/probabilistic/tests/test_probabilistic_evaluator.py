@@ -435,3 +435,24 @@ def test_no_residual_bands_without_scale_split(tmp_path: Path) -> None:
     assert not (out_dir / "residual_bands_by_lead.csv").exists()
     payload = json.loads((out_dir / "probabilistic_summary.json").read_text())
     assert payload["residual_bands_csv"] is None and "scale_split off" in payload["residual_bands_note"]
+
+
+def test_residual_reference_is_the_members_own_input():
+    """Member k's residual is taken against x_interp_members[k] when the file has it, else against x_interp."""
+    import numpy as np
+    import xarray as xr
+
+    from eval.evaluators.probabilistic.core.scoring import _input_reference
+
+    n, m = 50, 3
+    ds = xr.Dataset(
+        {"lat_hres": ("grid_point_hres", np.linspace(-10, 10, n)), "lon_hres": ("grid_point_hres", np.zeros(n)),
+         "x_interp": (("sample", "grid_point_hres", "weather_state"), np.zeros((1, n, 1))),
+         "x_interp_members": (("sample", "ensemble_member", "grid_point_hres", "weather_state"),
+                              np.arange(m, dtype=float)[None, :, None, None] * np.ones((1, m, n, 1)))})
+    da, note = _input_reference(ds, m)
+    assert note.startswith("x_interp_members") and np.allclose(da.values[:, 0, 0], [0.0, 1.0, 2.0])
+    da, note = _input_reference(ds.drop_vars("x_interp_members"), m)
+    assert note.startswith("x_interp:") and da.sizes["member"] == 1
+    da, note = _input_reference(ds, 5)   # members do not match: falls back to x_interp
+    assert note.startswith("x_interp:")

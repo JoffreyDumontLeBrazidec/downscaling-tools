@@ -454,14 +454,21 @@ def _input_field(reader: InputReader, ws_index: dict[str, int], field: str) -> n
 
 
 def _input_reference(ds: xr.Dataset, n_pred: int) -> tuple[xr.DataArray | None, str]:
-    """The input on the output grid for the residuals: one member, or one per prediction member."""
+    """The input on the output grid for the residuals: member k's own interpolated input
+    (``x_interp_members[k]``) when the file carries one per prediction member, else ``x_interp`` (one member, or
+    one per prediction member). The note names the variable used."""
+    if "x_interp_members" in ds:
+        da = _to_member_point_weather(ds["x_interp_members"], ds, label="x_interp_members")
+        if int(da.sizes["member"]) == n_pred:
+            return da, "x_interp_members: input member k paired with prediction member k"
     if INPUT_VARIABLE not in ds:
         return None, f"files carry no {INPUT_VARIABLE}: no residual bands"
     da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
     n = int(da.sizes["member"])
     if n not in (1, n_pred):
         return None, f"{INPUT_VARIABLE} has {n} members for {n_pred} prediction members: no residual bands"
-    return da, ("one input for every member" if n == 1 else "input member k paired with prediction member k")
+    return da, (f"{INPUT_VARIABLE}: one input for every member" if n == 1
+                else f"{INPUT_VARIABLE}: input member k paired with prediction member k")
 
 
 class PooledResiduals:
@@ -644,7 +651,8 @@ def compute_probabilistic_scores(
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
             x_ref = None
             if scale_split:
-                # the residual reference stays x_interp (a residual definition, not the input row; rule 41)
+                # the residual reference stays the interpolated input (a residual definition, not the input row;
+                # rule 41): member k's own x_interp_members[k] when the file has them, else x_interp
                 x_ref, residual_note = _input_reference(ds, int(y_pred.sizes["member"]))
             ws_index = _weather_state_index(ds)
             n_points = int(y_pred.sizes["grid_point_hres"])
