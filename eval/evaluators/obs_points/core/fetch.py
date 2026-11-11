@@ -126,12 +126,14 @@ def height_source(src):
 
 
 def parse_heights(specs):
-    """{name: source} from ``--add-height`` values ``<name>=<source>`` (name: lower-case letters and digits)."""
+    """{name: source} from ``--add-height`` values ``<name>=<source>`` (name: lower-case letters, digits and _)."""
+    import re
+
     out = {}
     for s in specs or ():
         name, sep, src = s.partition("=")
         name = name.strip().lower()
-        if not sep or not name.isalnum() or not src.strip():
+        if not sep or not re.fullmatch(r"[a-z0-9_]+", name) or not src.strip():
             raise SystemExit(f"--add-height expects <name>=<source>, e.g. o2560=/path/orography_O2560.grib; got {s!r}")
         out[name] = src.strip()
     return out

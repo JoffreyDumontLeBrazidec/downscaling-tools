@@ -682,6 +682,8 @@ def test_add_height_in_place_from_an_anemoi_zarr(tmp_path):
     assert meta["heights"]["o2560"]["points"] == la.size and meta["cache_version"] == 1
     with pytest.raises(SystemExit, match="NAME=SOURCE|<name>=<source>"):
         main(["obs", "fetch", "--add-height", "o2560", "--out", str(cache)])
+    from eval.evaluators.obs_points.core.fetch import parse_heights
+    assert parse_heights(["o320_eefh=/a.grib", "O2560=/b"]) == {"o320_eefh": "/a.grib", "o2560": "/b"}
 
 
 def test_height_source_reads_a_grib_of_z(tmp_path):
