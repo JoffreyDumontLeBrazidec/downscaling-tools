@@ -134,3 +134,31 @@ def test_input_from_the_native_grid(tmp_path):
     assert "interpolated" in info["input_source"] and not np.allclose(xi_old, 4.0)
     out = run(pred, {}, {}, output_dir=tmp_path / "out")
     assert json.loads((out / "run_meta.json").read_text())["input_source"] == ["x (native input grid)"]
+
+
+def test_input_member_is_the_control_when_the_file_says_so(tmp_path):
+    """The input row is one member: the control when the file names it, else member 0, stated in run_meta."""
+    from eval.evaluators.precip_read.runner import read_tp, run
+
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    path = pred / "predictions_20230101_step024.nc"
+    _write(path, mode="truth")
+    with nc.Dataset(str(path), "a") as d:
+        la, lo = np.asarray(d["lat_hres"][:]), np.asarray(d["lon_hres"][:])
+        d.createDimension("grid_point_lres", la.size)
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = la
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = lo
+        x = d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))
+        x[:] = 0.0
+        for k in range(3):
+            x[0, k, :, 1] = 0.001 * (k + 1)   # member k: (k + 1) mm everywhere
+    info = {}
+    _, _, _, xi, _ = read_tp(path, info=info)
+    assert np.allclose(xi, 1.0) and "not the control" in info["input_member"]
+    out = run(pred, {}, {}, output_dir=tmp_path / "o")
+    assert "not the control" in json.loads((out / "run_meta.json").read_text())["input_member"][0]
+    with nc.Dataset(str(path), "a") as d:
+        d.control_member = 2
+    _, _, _, xi, _ = read_tp(path, info=info)
+    assert np.allclose(xi, 3.0) and "the control (file attribute control_member)" in info["input_member"]
