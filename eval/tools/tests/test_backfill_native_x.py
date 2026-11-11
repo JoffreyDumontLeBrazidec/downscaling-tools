@@ -39,7 +39,8 @@ def _member_fields(lat, lon, rng_seed=0):
 
 
 def _make_case(tmp_path: Path, *, separate_tp: bool, swap: bool = False, tp_scale: float = 1.0,
-               clip_attr: bool = True) -> Path:
+               clip_attr: bool = True, swap_tp: bool = False, msl_noise: float = 0.0, dup_row: bool = False,
+               store_fake: str | None = FAKE) -> Path:
     lla, llo, hla, hlo = _grids()
     nat = _member_fields(lla, llo)
     variables = ["2t", "msl", "z_500"] + ([] if separate_tp else ["tp"])
@@ -49,8 +50,11 @@ def _make_case(tmp_path: Path, *, separate_tp: bool, swap: bool = False, tp_scal
             data[1, j] = nat[v] * (tp_scale if v == "tp" else 1.0)
     if swap:
         data[1] = data[1][:, [1, 0, 2, 3], :]
-    row_map = [{"hdate": "20241031", "lead": 12, "fake": "1900-08-07T23:00:00"},
-               {"hdate": HDATE, "lead": LEAD, "fake": FAKE}]
+    if swap_tp and not separate_tp:   # the rain of members 0 and 1 exchanged, msl untouched
+        jt = variables.index("tp")
+        data[1, jt] = data[1, jt][[1, 0, 2, 3]]
+    row_map = [{"hdate": "20241031" if not dup_row else HDATE, "lead": 12, "fake": "1900-08-07T23:00:00"},
+               {"hdate": HDATE, "lead": LEAD, **({"fake": store_fake} if store_fake else {})}]
 
     def store(path, vars_, arr):
         g = zarr.open_group(str(path), mode="w")
@@ -70,6 +74,8 @@ def _make_case(tmp_path: Path, *, separate_tp: bool, swap: bool = False, tp_scal
     _, nn = cKDTree(bf._xyz(lla, llo)).query(bf._xyz(hla, hlo))
     states = ["2t", "msl", "tp"]
     xim = np.stack([np.clip(nat[s], 0, None) if s == "tp" else nat[s] for s in states], -1)[:, nn, :]
+    if msl_noise:   # x_interp_members msl less like the native members: same-member correlation drops
+        xim[:, :, 1] += msl_noise * np.random.default_rng(5).standard_normal(xim[:, :, 1].shape)
     pred = tmp_path / "pred" / "ROW_L012"
     pred.mkdir(parents=True)
     path = pred / f"predictions_{HDATE}_step{LEAD:03d}.nc"
@@ -163,3 +169,36 @@ def test_help_runs() -> None:
     out = subprocess.run([sys.executable, "-m", "eval.tools.backfill_native_x", "--help"],
                          capture_output=True, text=True, cwd=Path(__file__).resolve().parents[3])
     assert out.returncode == 0 and "--apply" in out.stdout
+
+
+def test_weak_same_member_msl_correlation_aborts(tmp_path: Path) -> None:
+    """Best match on the diagonal is not enough: the same-member msl correlation must be at least 0.98."""
+    path = _make_case(tmp_path, separate_tp=False, msl_noise=250.0)
+    r = bf.process(path, do_apply=True, store=None, tp_store=None)
+    assert r["action"] == "abort" and "pairing on msl failed" in r["why"]
+    p = json.loads(r["why"].split("failed: ", 1)[1])
+    assert p["best_match_ok"] and p["diag_min"] < 0.98
+
+
+def test_rain_of_swapped_members_aborts(tmp_path: Path) -> None:
+    """msl pairs, but the rain of members 0 and 1 is exchanged in the store: the per-member tp check refuses."""
+    path = _make_case(tmp_path, separate_tp=False, swap_tp=True)
+    r = bf.process(path, do_apply=True, store=None, tp_store=None)
+    assert r["action"] == "abort" and "per-member tp correlation" in r["why"]
+    ok = bf.process(_make_case(tmp_path / "b", separate_tp=False), do_apply=False, store=None, tp_store=None)
+    assert ok["rain_check"]["made"] and ok["rain_check"]["corr_min"] > 0.9
+
+
+def test_repeated_row_keys_abort(tmp_path: Path) -> None:
+    path = _make_case(tmp_path, separate_tp=False, dup_row=True)
+    r = bf.process(path, do_apply=False, store=None, tp_store=None)
+    assert r["action"] == "abort" and "repeated (hdate, lead)" in r["why"]
+
+
+def test_missing_fake_date_fails_unless_allowed(tmp_path: Path) -> None:
+    path = _make_case(tmp_path, separate_tp=False, store_fake=None)
+    r = bf.process(path, do_apply=False, store=None, tp_store=None)
+    assert r["action"] == "abort" and "fake-date check cannot be made" in r["why"]
+    r = bf.process(path, do_apply=False, store=None, tp_store=None, allow_missing_fake_date=True)
+    assert r["action"].startswith("dry-run") and r["fake_date_check"].startswith("not made")
+    assert bf.main([str(path), "--allow-missing-fake-date"]) == 0 and bf.main([str(path)]) == 1

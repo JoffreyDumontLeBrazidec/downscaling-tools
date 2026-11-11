@@ -21,14 +21,19 @@ in its attributes ``member_store`` and ``member_tp_store``; ``--store``/``--tp-s
 Draw k (0-based, ensemble_member k+1) is conditioned on store member index k (input member pf k+1).
 
 Built-in checks, per file, before anything is written (a failed check aborts that file):
-  * pairing, on msl only (never on rain): the native x of every member is mapped to the output
+  * pairing, on msl (never decided on rain): the native x of every member is mapped to the output
     points by nearest native point, and its deviation from the member mean must correlate best
     with the deviation of x_interp_members[k] (or, without x_interp_members, of y_pred[k]) for
-    the same k;
+    the same k, with that same-member correlation at least 0.98 for every k;
+  * rain, where tp is in the file and x_interp_members is present: per member k, the mapped tp of
+    x member k must correlate at least 0.9 with tp of x_interp_members[k] (a check of the member
+    and the row, made after the msl pairing; skipped with a note when either field is constant);
   * units: per weather state, the mapped x must match x_interp_members (or x_interp) in mean
     and spread (tp and cp in metres, as the file stores them); tp and cp are clipped at 0 when
     the file's input members were (attribute precip_clipped_input_members), as the predictor did;
-  * the row: the store row of (date, lead) must carry the file's fake date when both record one.
+  * the row: the (hdate, lead) keys of the store's row_map must be unique, and the store row of
+    (date, lead) must carry the file's fake date. When the file or the row records no fake date the
+    check cannot be made and the file is refused, unless ``--allow-missing-fake-date`` is given.
 
 Usage: python -m eval.tools.backfill_native_x PATH [PATH ...] [--apply] [--workers N] [--report R.json]
 PATH is a predictions_<date>_step<lead>.nc file or a directory of them.
@@ -47,6 +52,9 @@ import numpy as np
 PRED_RE = re.compile(r"predictions_(\d{8})_step(\d{3})\.nc$")
 PRECIP = ("tp", "cp")
 PAIRING_STATE = "msl"
+PAIRING_MIN_DIAG = 0.98      # same-member msl correlation required for every member
+RAIN_STATE = "tp"
+RAIN_MIN_CORR = 0.9          # per-member tp correlation of x against x_interp_members
 CHECK_BANDS = 4              # contiguous bands of output points read for the checks
 CHECK_BAND_POINTS = 100_000
 TOOL = "eval/tools/backfill_native_x.py"
@@ -83,7 +91,12 @@ class _Store:
         attrs = dict(self.g.attrs)
         self.variables = [str(v) for v in attrs["variables"]]
         self.row_map = list(attrs["row_map"])
-        self.rows = {(str(r["hdate"]), int(r["lead"])): i for i, r in enumerate(self.row_map)}
+        keys = [(str(r["hdate"]), int(r["lead"])) for r in self.row_map]
+        if len(set(keys)) != len(keys):
+            dup = sorted({k for k in keys if keys.count(k) > 1})
+            raise CheckFailed(f"{self.path}: row_map has repeated (hdate, lead) keys {dup[:5]}; the row of a file "
+                             "is not unique")
+        self.rows = {k: i for i, k in enumerate(keys)}
         self.members = attrs.get("members")
         self.lat = np.asarray(self.g["latitudes"][:], dtype=np.float64)
         self.lon = np.asarray(self.g["longitudes"][:], dtype=np.float64)
@@ -123,7 +136,8 @@ def _read_bands(var, bands, n_lead: int) -> np.ndarray:
 def pairing_check(x_msl_mapped: np.ndarray, ref_msl: np.ndarray) -> dict:
     """Correlation of member deviations (member minus member mean), x (rows) against the reference (columns).
 
-    Passes when every member k of the reference correlates best with x member k.
+    Passes when every member k of the reference correlates best with x member k AND that same-member
+    correlation is at least PAIRING_MIN_DIAG for every k.
     """
     a = x_msl_mapped - x_msl_mapped.mean(axis=0, keepdims=True)
     b = ref_msl - ref_msl.mean(axis=0, keepdims=True)
@@ -135,13 +149,30 @@ def pairing_check(x_msl_mapped: np.ndarray, ref_msl: np.ndarray) -> dict:
     best = corr.argmax(axis=1)
     n = corr.shape[0]
     off = corr[~np.eye(n, dtype=bool)] if n > 1 else np.array([np.nan])
+    best_ok = bool(np.array_equal(best, np.arange(n)))
     return {
-        "ok": bool(np.array_equal(best, np.arange(n))),
+        "ok": best_ok and float(np.diag(corr).min()) >= PAIRING_MIN_DIAG,
+        "best_match_ok": best_ok, "min_required": PAIRING_MIN_DIAG,
         "diag_min": float(np.diag(corr).min()),
         "diag_mean": float(np.diag(corr).mean()),
         "offdiag_max": float(np.nanmax(off)),
         "best_match": [int(v) for v in best],
     }
+
+
+def rain_check(x_tp_mapped: np.ndarray, ref_tp: np.ndarray) -> dict:
+    """Per member k, the correlation of the mapped tp of x member k with tp of x_interp_members[k]."""
+    corr = []
+    for a, b in zip(np.asarray(x_tp_mapped, np.float64), np.asarray(ref_tp, np.float64)):
+        ok_ = np.isfinite(a) & np.isfinite(b)
+        a, b = a[ok_], b[ok_]
+        corr.append(float(np.corrcoef(a, b)[0, 1]) if a.size > 1 and a.std() > 0 and b.std() > 0 else float("nan"))
+    c = np.array(corr)
+    if not np.isfinite(c).all():
+        return {"ok": True, "made": False, "why": "a constant tp field (no rain correlation to check)",
+                "corr": corr}
+    return {"ok": bool(c.min() >= RAIN_MIN_CORR), "made": True, "min_required": RAIN_MIN_CORR,
+            "corr_min": float(c.min()), "corr": corr}
 
 
 def units_check(x_mapped: np.ndarray, ref: np.ndarray, states: list[str]) -> dict:
@@ -162,7 +193,8 @@ def units_check(x_mapped: np.ndarray, ref: np.ndarray, states: list[str]) -> dic
     return out
 
 
-def prepare(path: Path, store_override: str | None = None, tp_override: str | None = None, stores=None) -> dict:
+def prepare(path: Path, store_override: str | None = None, tp_override: str | None = None, stores=None, *,
+            allow_missing_fake_date: bool = False) -> dict:
     """Read and check one file; return the plan (arrays included) or raise CheckFailed."""
     import netCDF4
 
@@ -213,6 +245,13 @@ def prepare(path: Path, store_override: str | None = None, tp_override: str | No
     if fake and entry.get("fake"):
         if str(entry["fake"])[:19] != str(fake)[:19]:
             raise CheckFailed(f"store row {row} has fake date {entry['fake']}, the file {fake}")
+        fake_check = "made"
+    elif allow_missing_fake_date:
+        fake_check = (f"not made (--allow-missing-fake-date): file fake_date {fake!r}, "
+                      f"store row fake {entry.get('fake')!r}")
+    else:
+        raise CheckFailed(f"the fake-date check cannot be made (file fake_date {fake!r}, store row {row} fake "
+                          f"{entry.get('fake')!r}); pass --allow-missing-fake-date to accept the row unchecked")
     if main.n_members != n_m:
         raise CheckFailed(f"store has {main.n_members} members, the file {n_m} draws")
     tp_row = None
@@ -245,6 +284,10 @@ def prepare(path: Path, store_override: str | None = None, tp_override: str | No
     jm = states.index(PAIRING_STATE)
     pairing = pairing_check(x_mapped[:, :, jm], ref_pair[:, :, jm])
     pairing["reference"] = ref_name
+    rain = None
+    if has_members and RAIN_STATE in states:
+        jr = states.index(RAIN_STATE)
+        rain = rain_check(x_mapped[:, :, jr], ref_pair[:, :, jr])
     units = units_check(x_mapped if has_members else x_mapped.mean(axis=0, keepdims=True), ref_units, states)
     bad_units = [s for s, u in units.items() if not u["ok"]]
     plan = {
@@ -253,11 +296,14 @@ def prepare(path: Path, store_override: str | None = None, tp_override: str | No
         "store_row_entry": {k: entry.get(k) for k in ("hdate", "lead", "fake", "row", "store_row") if k in entry},
         "fake_date": str(fake) if fake else None, "store_members": main.members,
         "n_members": n_m, "n_points_lres": int(main.lat.size), "states": states, "state_source": source,
-        "precip_clipped": clipped, "pairing": pairing, "units_reference": unit_name, "units": units,
+        "precip_clipped": clipped, "pairing": pairing, "rain_check": rain, "fake_date_check": fake_check,
+        "units_reference": unit_name, "units": units,
         "x_megabytes": round(x.nbytes / 2**20, 1),
     }
     if not pairing["ok"]:
         raise CheckFailed(f"member pairing on msl failed: {json.dumps(pairing)}")
+    if rain is not None and not rain["ok"]:
+        raise CheckFailed(f"per-member tp correlation with x_interp_members below {RAIN_MIN_CORR}: {json.dumps(rain)}")
     if bad_units:
         raise CheckFailed(f"units differ from {unit_name} for {bad_units}: {json.dumps({s: units[s] for s in bad_units})}")
     plan["_x"], plan["_lat"], plan["_lon"], plan["_probe"] = x, main.lat, main.lon, y_pred_probe
@@ -286,7 +332,8 @@ def apply(plan: dict) -> None:
                                    "on lat_lres/lon_lres; added by " + TOOL)
         v[0] = plan["_x"]
         meta = {k: plan[k] for k in ("store", "tp_store", "row", "tp_row", "hdate", "lead", "store_row_entry",
-                                     "fake_date", "store_members", "state_source", "precip_clipped")}
+                                     "fake_date", "fake_date_check", "store_members", "state_source", "precip_clipped",
+                                     "rain_check")}
         meta.update(tool=TOOL, utc=_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     rule="rule 41: the input is scored on its own grid",
                     pairing="draw k (0-based) conditioned on store member index k (input member pf k+1)")
@@ -318,9 +365,10 @@ def _public(plan: dict) -> dict:
     return {k: v for k, v in plan.items() if not k.startswith("_")}
 
 
-def process(path: Path, *, do_apply: bool, store: str | None, tp_store: str | None, stores=None) -> dict:
+def process(path: Path, *, do_apply: bool, store: str | None, tp_store: str | None, stores=None,
+            allow_missing_fake_date: bool = False) -> dict:
     try:
-        plan = prepare(path, store, tp_store, stores)
+        plan = prepare(path, store, tp_store, stores, allow_missing_fake_date=allow_missing_fake_date)
     except CheckFailed as exc:
         return {"file": str(path), "action": "abort", "why": str(exc)}
     if plan["action"] == "skip":
@@ -334,9 +382,10 @@ def process(path: Path, *, do_apply: bool, store: str | None, tp_store: str | No
 
 
 def _worker(args):
-    path, do_apply, store, tp_store = args
+    path, do_apply, store, tp_store, allow_fake = args
     try:
-        return process(Path(path), do_apply=do_apply, store=store, tp_store=tp_store)
+        return process(Path(path), do_apply=do_apply, store=store, tp_store=tp_store,
+                       allow_missing_fake_date=allow_fake)
     except Exception as exc:  # noqa: BLE001 - report every failure per file, keep the others going
         return {"file": str(path), "action": "error", "why": f"{type(exc).__name__}: {exc}"}
 
@@ -364,10 +413,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tp-store", help="tp/cp member store (default: the file's member_tp_store attribute)")
     ap.add_argument("--workers", type=int, default=1, help="files processed in parallel (default 1)")
     ap.add_argument("--report", help="write the per-file results to this JSON file")
+    ap.add_argument("--allow-missing-fake-date", action="store_true",
+                    help="accept a file whose fake-date check cannot be made (no fake_date in the file or the row)")
     args = ap.parse_args(argv)
 
     files = _expand(args.paths)
-    jobs = [(str(f), args.apply, args.store, args.tp_store) for f in files]
+    jobs = [(str(f), args.apply, args.store, args.tp_store, args.allow_missing_fake_date) for f in files]
     print(f"backfill_native_x: {len(files)} file(s), {'APPLY' if args.apply else 'DRY RUN'}", flush=True)
     results = []
     if args.workers > 1:
