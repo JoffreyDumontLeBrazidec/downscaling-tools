@@ -38,6 +38,10 @@ that orography: a GRIB file of z (geopotential, any grid) or an anemoi zarr data
 (row 0, its own latitudes/longitudes), both divided by g. With ``--dates`` it goes into the files of that
 fetch; without, into every obs_<var>.csv already in --out, in place (e.g. h_o2560 for the 4 km lane, whose
 model rows obs_points corrects with ``model_height_column: h_o2560``).
+A second fetch into an existing cache merges: rows of new (valid, stnid) are added to obs_<var>.csv, rows already
+there are replaced by the new ones (hres_<var>.csv by date, lead, stnid), h_<name> columns of an earlier
+--add-height are filled for the new rows from their recorded source, and the manifest merges dates, leads, rows,
+stations per valid time and the STVL periods.
 """
 import argparse
 import datetime as dt
@@ -355,11 +359,64 @@ def valid_hours(var, leads):
     return list(range(lo, max(leads) + 1, 12))
 
 
+def write_merged(path, new, keys, log, *, float_format="%.4f", refill=None) -> int:
+    """Write ``new`` to ``path``; when the file exists (a second fetch into the same cache), merge instead of
+    overwriting: rows of new keys are added, rows whose ``keys`` (e.g. valid, stnid) are already there are
+    replaced by the new ones. ``refill(frame, columns)`` may fill columns the old file has and the new rows lack
+    (the h_<name> columns of an earlier --add-height). Returns the number of rows written."""
+    import pandas as pd
+
+    ids = {c: str for c in ("valid", "stnid", "date")}
+    if path.exists():
+        old = pd.read_csv(path, dtype=ids)
+        new = new.copy()
+        for c in ids:
+            if c in new.columns:
+                new[c] = new[c].astype(str)
+        missing = [c for c in old.columns if c not in new.columns]
+        if missing and refill is not None:
+            new = refill(new, missing)
+        n_old = len(old)
+        new = pd.concat([old, new], ignore_index=True).drop_duplicates(subset=keys, keep="last")
+        log.append(f"{path.name}: merged into the existing file ({n_old} rows before, {len(new)} after)")
+        print(log[-1], flush=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    new.to_csv(tmp, index=False, float_format=float_format)
+    tmp.replace(path)
+    return int(len(new))
+
+
+def merge_stvl(old, new):
+    """The ``stvl`` manifest entry of two fetches into one cache: periods and tables of both."""
+    if not old or not new:
+        return new or old
+    out = {**old, **new}
+    po = (old.get("observation") or {}).get("period_h", {})
+    pn = (new.get("observation") or {}).get("period_h", {})
+    if old.get("observation") or new.get("observation"):
+        out["observation"] = {**(old.get("observation") or {}), **(new.get("observation") or {}),
+                              "period_h": {**po, **pn}}
+    out["hres"] = new.get("hres") or old.get("hres")
+    return out
+
+
 def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True, heights=None):
     import pandas as pd
 
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     log, rows, per_valid = [], {}, {}
+    mp = out / "cache_meta.json"
+    known_heights = (json.loads(mp.read_text()).get("heights") or {}) if mp.exists() else {}
+
+    def refill(frame, columns):  # h_<name> of an earlier --add-height, for the new rows of a second fetch
+        for c in columns:
+            info = known_heights.get(c[2:]) if c.startswith("h_") else None
+            if info and Path(info["source"]).exists():
+                frame = add_height_columns(frame, {c[2:]: height_source(info["source"])})
+                log.append(f"{c}: filled for the new rows from {info['source']}")
+            else:
+                log.append(f"WARN {c}: in the existing file but not in the new rows (left empty)")
+        return frame
     trees = {g: orography(out, g, log) for g in ("O1280", "O320")} if variables else {}
     extra = {n: height_source(s) for n, s in (heights or {}).items()} if variables else {}
     height_info = {n: height_meta(n, heights[n], extra[n][1], log) for n in extra}
@@ -384,8 +441,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
             height_info[n].setdefault("files", []).append(f"obs_{var}.csv")
         if an_check:
             obs = drop_gross(add_analysis_column(obs, var, out, trees["O1280"][0], log), var, log, "fetch")
-        obs.to_csv(out / f"obs_{var}.csv", index=False, float_format="%.4f")
-        rows[f"obs_{var}.csv"] = int(len(obs))
+        rows[f"obs_{var}.csv"] = write_merged(out / f"obs_{var}.csv", obs, ["valid", "stnid"], log, refill=refill)
         if not hres or var == "tp24":
             continue
         frames = []
@@ -397,8 +453,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
                     frames.append(df)
         if frames:
             h = pd.concat(frames, ignore_index=True)
-            h.to_csv(out / f"hres_{var}.csv", index=False, float_format="%.4f")
-            rows[f"hres_{var}.csv"] = int(len(h))
+            rows[f"hres_{var}.csv"] = write_merged(out / f"hres_{var}.csv", h, ["date", "lead", "stnid"], log)
     if seeps:
         frames, per_valid["seeps_clim_tp24"] = [], {}
         for v in sorted({dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=h)
@@ -410,8 +465,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
                 frames.append(df)
         if frames:
             c = pd.concat(frames, ignore_index=True)
-            c.to_csv(out / "seeps_clim_tp24.csv", index=False, float_format="%.5f")
-            rows["seeps_clim_tp24.csv"] = int(len(c))
+            rows["seeps_clim_tp24.csv"] = write_merged(out / "seeps_clim_tp24.csv", c, ["valid", "stnid"], log,
+                                                       float_format="%.5f")
     with open(out / "fetch_log.txt", "a") as f:
         f.write("\n".join(log) + "\n")
     meta = {
@@ -435,8 +490,13 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
     if path.exists():  # a second fetch into the same cache: keep what is there, add or replace the new entries
         old = json.loads(path.read_text())
         this = {k: meta[k] for k in ("created", "host", "dates", "leads", "vars")} | {"seeps": seeps}
-        for k in ("rows", "stations_per_valid", "limits", "heights"):
+        for k in ("rows", "limits", "heights"):
             meta[k] = {**old.get(k, {}), **meta[k]}
+        spv = dict(old.get("stations_per_valid", {}))
+        for v, d in meta["stations_per_valid"].items():
+            spv[v] = {**spv.get(v, {}), **d}
+        meta["stations_per_valid"] = spv
+        meta["stvl"] = merge_stvl(old.get("stvl"), meta["stvl"])
         meta["vars"] = sorted(set(old.get("vars", [])) | set(meta["vars"]))
         meta["history"] = old.get("history", [{k: old.get(k) for k in ("created", "host", "dates", "leads", "vars")}])
         meta["history"].append(this)
