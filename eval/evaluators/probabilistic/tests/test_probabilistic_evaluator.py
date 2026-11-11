@@ -438,7 +438,8 @@ def test_no_residual_bands_without_scale_split(tmp_path: Path) -> None:
 
 
 def test_residual_reference_is_the_members_own_input():
-    """Member k's residual is taken against x_interp_members[k] when the file has it, else against x_interp."""
+    """Member k's model residual is taken against x_interp_members[k] when the file has it; the truth residual
+    always against x_interp."""
     import numpy as np
     import xarray as xr
 
@@ -450,9 +451,29 @@ def test_residual_reference_is_the_members_own_input():
          "x_interp": (("sample", "grid_point_hres", "weather_state"), np.zeros((1, n, 1))),
          "x_interp_members": (("sample", "ensemble_member", "grid_point_hres", "weather_state"),
                               np.arange(m, dtype=float)[None, :, None, None] * np.ones((1, m, n, 1)))})
-    da, note = _input_reference(ds, m)
-    assert note.startswith("x_interp_members") and np.allclose(da.values[:, 0, 0], [0.0, 1.0, 2.0])
-    da, note = _input_reference(ds.drop_vars("x_interp_members"), m)
-    assert note.startswith("x_interp:") and da.sizes["member"] == 1
-    da, note = _input_reference(ds, 5)   # members do not match: falls back to x_interp
-    assert note.startswith("x_interp:")
+    da, truth_ref, note = _input_reference(ds, m)
+    assert note.startswith("model: x_interp_members") and np.allclose(da.values[:, 0, 0], [0.0, 1.0, 2.0])
+    assert truth_ref.sizes["member"] == 1 and np.allclose(truth_ref.values, 0.0)   # the truth keeps x_interp
+    da, truth_ref, note = _input_reference(ds.drop_vars("x_interp_members"), m)
+    assert note.startswith("model and truth: x_interp") and da.sizes["member"] == 1 and truth_ref is da
+    da, truth_ref, note = _input_reference(ds, 5)   # members do not match: falls back to x_interp
+    assert note.startswith("model and truth: x_interp")
+
+
+def test_residual_bands_take_the_truth_against_its_own_input():
+    """The model residual uses the model reference (x_interp_members), the truth residual x_interp."""
+    import numpy as np
+
+    from eval.evaluators.probabilistic.core.scoring import _residual_band_values
+
+    class Zero:
+        def apply(self, r):
+            return np.zeros_like(r)
+
+    pred = np.array([[5.0, 5.0], [6.0, 6.0]])
+    truth = np.array([4.0, 4.0])
+    model_ref = np.array([[1.0, 1.0], [2.0, 2.0]])
+    truth_ref = np.array([[3.0, 3.0]])
+    b = _residual_band_values(pred, truth, model_ref, Zero(), np.zeros_like(pred), np.zeros(2), truth_ref_values=truth_ref)
+    full_m, full_t = b["full_inner"]
+    assert np.allclose(full_m, 4.0) and np.allclose(full_t, 1.0)
