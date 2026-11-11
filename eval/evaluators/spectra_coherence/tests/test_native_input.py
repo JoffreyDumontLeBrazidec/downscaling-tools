@@ -122,3 +122,90 @@ def test_stratified_input_columns_come_from_the_native_x(tmp_path: Path, monkeyp
     d = json.loads((out / "coherence_by_surface.json").read_text())
     assert d["input_source"] == [runner.INPUT_NATIVE]
     assert d["rows"][0]["interp_correlation"] > 0.99
+
+
+
+def _octahedral(N: int) -> tuple[np.ndarray, np.ndarray]:
+    """The global octahedral O<N> grid: 4i + 16 points on row i from each pole."""
+    lats, lons = [], []
+    for i in range(1, N + 1):
+        n, la = 4 * i + 16, 90.0 - (i - 0.5) * 90.0 / N
+        lo = np.arange(n) * 360.0 / n
+        lats += [np.full(n, la), np.full(n, -la)]
+        lons += [lo, lo]
+    return np.concatenate(lats), np.concatenate(lons)
+
+
+def test_native_input_curves_of_a_known_filter(tmp_path: Path) -> None:
+    """Global truth on O320 points; input = the same field times a known filter H(l), truncated at l = 79, on O80
+    points. The input curves (own map, truth at the displaced positions) give amplitude ratio H(l) and coherence
+    ~1 at the degrees kept (6 native grid lengths, the input's truncation), NaN beyond; the model residual of
+    member k is taken against x_interp_members[k], the truth residual against x_interp."""
+    import csv
+
+    import healpy as hp
+    import netCDF4
+
+    np.random.seed(7)
+    lt = 300
+    ell = np.arange(lt + 1.0)
+    cl = (ell + 10.0) ** -3.0
+    cl[0] = 0.0
+    alm_t = hp.synalm(cl, lmax=lt)
+    h = np.exp(-(ell / 80.0) ** 4)
+    h[80:] = 0.0
+    mt, mi = hp.alm2map(alm_t, 512, lmax=lt), hp.alm2map(hp.almxfl(alm_t, h), 512, lmax=lt)
+    hla, hlo = _octahedral(320)
+    lla, llo = _octahedral(80)
+    truth = hp.get_interp_val(mt, np.deg2rad(90.0 - hla), np.deg2rad(hlo))
+    native = hp.get_interp_val(mi, np.deg2rad(90.0 - lla), np.deg2rad(llo))
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    n_m = 2
+    with netCDF4.Dataset(str(pred / "predictions_20230826_step024.nc"), "w") as d:
+        d.createDimension("sample", 1)
+        d.createDimension("ensemble_member", n_m)
+        d.createDimension("grid_point", hla.size)
+        d.createDimension("grid_point_lres", lla.size)
+        d.createDimension("weather_state", 1)
+        d.createVariable("lat_hres", "f8", ("grid_point",))[:] = hla
+        d.createVariable("lon_hres", "f8", ("grid_point",))[:] = hlo
+        d.createVariable("lat_lres", "f8", ("grid_point_lres",))[:] = lla
+        d.createVariable("lon_lres", "f8", ("grid_point_lres",))[:] = llo
+        v = d.createVariable("weather_state", str, ("weather_state",))
+        v[0] = "2t"
+        full = ("sample", "ensemble_member", "grid_point", "weather_state")
+        d.createVariable("y", "f4", ("sample", "grid_point", "weather_state"))[:] = truth[None, :, None]
+        d.createVariable("y_pred", "f4", full)[:] = np.stack([truth] * n_m)[None, :, :, None]
+        d.createVariable("x_interp", "f4", ("sample", "grid_point", "weather_state"))[:] = 0.0
+        d.createVariable("x_interp_members", "f4", full)[:] = np.stack([truth] * n_m)[None, :, :, None]
+        d.createVariable("x", "f4", ("sample", "ensemble_member", "grid_point_lres", "weather_state"))[:] = \
+            np.stack([native] * n_m)[None, :, :, None]
+    edges = [(5, 15), (15, 25), (25, 35), (35, 45)]
+    bands = [{"name": f"b{lo}", "lo": lo, "hi": hi} for lo, hi in edges] + [{"name": "all", "lo": 1, "hi": 200}]
+    out = runner.run(pred, {}, {"weather_states": ["2t"], "nside": 128, "lmax": 256, "bands": bands},
+                     output_dir=tmp_path / "out")
+    payload = json.loads((out / "coherence.json").read_text())
+    im = payload["input_map"]
+    assert payload["residual_reference"] == ["model: x_interp_members; truth: x_interp"]
+    assert im["truncation"] == 79 and im["lmax_in"] == 79 and 40 <= im["nside_in"] <= 55
+    c = payload["curves"]["2t"]
+    ri = np.array(c["interp_amplitude_ratio"], dtype=float)
+    ci = np.array(c["interp_coherence"], dtype=float)
+    lk = int(im["l_keep_max"])
+    assert 45 <= lk <= 79 and np.isnan(ri[lk + 1:]).all() and np.isfinite(ri[1:lk + 1]).all()
+    assert np.isfinite(ci[1:lk + 1]).all()
+    got = {b["band"]: b for b in payload["band_summary"]}
+    for lo, hi in edges:   # band sums of power, as the band rows form them
+        s_ = slice(lo, hi)
+        expected = np.sqrt(np.sum(h[s_] ** 2 * cl[s_] * (2 * ell[s_] + 1)) / np.sum(cl[s_] * (2 * ell[s_] + 1)))
+        b = got[f"b{lo}"]
+        assert abs(b["interp_amplitude_ratio"] / expected - 1.0) < 0.03 and b["interp_coherence"] > 0.98, (lo, b)
+    assert "interp_coherence" not in got["all"]   # 'all' reaches past the kept degrees
+    with open(out / "curves.csv") as fh:
+        rows = [r for r in csv.DictReader(fh) if r["scope"] == "all"]
+    p_rp = np.array([float(r["P_resid_pred"]) for r in rows])
+    p_rt = np.array([float(r["P_resid_true"]) for r in rows])
+    p_t = np.array([float(r["P_true"]) for r in rows])
+    assert p_rp.max() < 1e-8 * p_t.max()          # y_pred - x_interp_members[k] = 0
+    np.testing.assert_allclose(p_rt, p_t, rtol=1e-6)   # y - x_interp, with x_interp = 0 here

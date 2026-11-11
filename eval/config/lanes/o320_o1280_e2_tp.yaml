@@ -71,6 +71,7 @@ obs_points:
   radii: [0, 18, 36]           # km, tp disc means; 0 = nearest grid point
   max_km: 15.0
   lapse_rate: 0.0065           # K/m, quaver
+  input_height_column: h_o320_eefh  # the eefh hindcast's own O320 orography (input model), not h_o320 (O1280 interpolated)
   min_stations: 30
   weighting: none              # or station_density (quaver's kernel)
   seeps: true                  # 24 h SEEPS (tp24 + seeps_clim_tp24.csv in the cache)

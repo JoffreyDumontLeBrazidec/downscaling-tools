@@ -12,8 +12,10 @@ Writes into <cache dir>:
                   2t [K], 10ff [m/s], msl [Pa] at valid = date + lead; tp [mm per 12 h] for windows ENDING at
                   date + 0..max lead every 12 h (the extra early window serves the accumulation-window check);
                   tp24 [mm per 24 h] (``--tp-periods`` includes 24) for windows ending at date + 24..max lead
-                  every 12 h, for SEEPS; h_o1280 / h_o320 = height [m] of the nearest O1280 / O320 grid point
-                  (2t height correction)
+                  every 12 h, for SEEPS; tp<N> with N under 12 (``--tp-periods 6`` gives tp6, the 4 km lane's
+                  6 h tp) [mm per N h] for windows ending at every lead of at least N h;
+                  h_o1280 / h_o320 = height [m] of the nearest O1280 / O320 grid point (2t height correction);
+                  h_<name> (``--add-height <name>=<source>``) the same from another orography, e.g. h_o2560
   hres_<var>.csv  operational HRES at the stations from STVL's model table (date, lead, stnid, hres, hres_elevation),
                   a reference row; skipped per (date, lead) when STVL holds nothing (msl and tp are absent for 2023)
   orography_O1280.grib, orography_O320.grib (reused when present), fetch_log.txt
@@ -31,6 +33,15 @@ station and time, and quaver's analysis-departure check (toss_with_analysis): th
 (``stations.ANL_DEP_MAX``). quaver does not height-correct the analysis 2t before this check; neither do we.
 ``--add-analysis`` adds the ``an`` column to an existing cache in place (caches before 9 Nov 2026 lack it:
 on 1-12 Nov 2024 they kept 68-89 msl reports near 91,000 Pa and a 63-97 m/s wind station per lead).
+``--add-height <name>=<source>`` (repeatable) adds column ``h_<name>``, the height [m] of the nearest point of
+that orography: a GRIB file of z (geopotential, any grid) or an anemoi zarr dataset with a ``z`` variable
+(row 0, its own latitudes/longitudes), both divided by g. With ``--dates`` it goes into the files of that
+fetch; without, into every obs_<var>.csv already in --out, in place (e.g. h_o2560 for the 4 km lane, whose
+model rows obs_points corrects with ``model_height_column: h_o2560``).
+A second fetch into an existing cache merges: the rows of every valid time it fetched replace all the old rows of
+that time in obs_<var>.csv (hres_<var>.csv by date and lead), rows of other times are kept, h_<name> columns of an earlier
+--add-height are filled for the new rows from their recorded source, and the manifest merges dates, leads, rows,
+stations per valid time and the STVL periods.
 """
 import argparse
 import datetime as dt
@@ -77,6 +88,100 @@ def orography(out, grid, log):
     lat, lon = f.geography.latitudes(), f.geography.longitudes()
     lon = ((np.asarray(lon) + 180.0) % 360.0) - 180.0
     return cKDTree(xyz(np.asarray(lat), lon)), f.to_numpy().ravel() / G
+
+
+def height_source(src):
+    """(cKDTree, height [m]) of an extra orography: a GRIB file of z (geopotential, any grid) or an anemoi zarr
+    dataset with a ``z`` variable (row 0 of ``data``, its own latitudes/longitudes); both divided by g."""
+    from scipy.spatial import cKDTree
+
+    src = Path(src)
+    if not src.exists():
+        raise SystemExit(f"--add-height: no orography source at {src}")
+    if src.is_dir():  # anemoi zarr dataset: data (dates, variables, ensemble, values), attrs["variables"]
+        import zarr
+
+        root = zarr.open(str(src), mode="r")
+        names = list(root.attrs["variables"])
+        if "z" not in names:
+            raise ValueError(f"{src}: no variable z among {names}")
+        z = np.asarray(root["data"][0, names.index("z")], np.float64).reshape(-1, root["latitudes"].shape[0])[0]
+        lat, lon = np.asarray(root["latitudes"][:], np.float64), np.asarray(root["longitudes"][:], np.float64)
+    else:
+        import eccodes  # directly, not earthkit: its field API differs between the module and the venv versions
+
+        with open(src, "rb") as f:
+            while (gid := eccodes.codes_grib_new_from_file(f)) is not None:
+                try:
+                    if eccodes.codes_get(gid, "shortName") == "z":
+                        lat, lon, z = (np.asarray(eccodes.codes_get_double_array(gid, k), np.float64)
+                                       for k in ("latitudes", "longitudes", "values"))
+                        break
+                finally:
+                    eccodes.codes_release(gid)
+            else:
+                raise ValueError(f"{src}: no z (geopotential) field")
+    lon = ((lon + 180.0) % 360.0) - 180.0
+    return cKDTree(xyz(lat, lon)), z / G
+
+
+def parse_heights(specs):
+    """{name: source} from ``--add-height`` values ``<name>=<source>`` (name: lower-case letters, digits and _)."""
+    import re
+
+    out = {}
+    for s in specs or ():
+        name, sep, src = s.partition("=")
+        name = name.strip().lower()
+        if not sep or not re.fullmatch(r"[a-z0-9_]+", name) or not src.strip():
+            raise SystemExit(f"--add-height expects <name>=<source>, e.g. o2560=/path/orography_O2560.grib; got {s!r}")
+        out[name] = src.strip()
+    return out
+
+
+def add_height_columns(obs, sources):
+    """Column h_<name> per orography in ``sources`` (name -> (tree, height)): the height of the nearest point."""
+    p = xyz(obs.lat.to_numpy(), obs.lon.to_numpy())
+    for name, (tree, h) in sources.items():
+        obs[f"h_{name}"] = h[tree.query(p)[1]]
+    return obs
+
+
+def height_meta(name, src, h, log):
+    log.append(f"height h_{name}: {src}, {h.size} points, {np.nanmin(h):.1f} to {np.nanmax(h):.1f} m")
+    print(log[-1], flush=True)
+    return {"source": str(Path(src).resolve()), "points": int(h.size), "min_m": round(float(np.nanmin(h)), 1),
+            "max_m": round(float(np.nanmax(h)), 1), "nearest point": True,
+            "added": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def add_height(out, heights):
+    """Add the columns h_<name> of ``heights`` (name -> source) to every obs_<var>.csv of an existing cache, in place."""
+    import pandas as pd
+
+    out = Path(out); log = []
+    files = sorted(out.glob("obs_*.csv"))
+    if not files:
+        raise SystemExit(f"obs fetch --add-height: no obs_<var>.csv in {out}")
+    sources, info = {}, {}
+    for name, src in heights.items():
+        sources[name] = height_source(src)
+        info[name] = height_meta(name, src, sources[name][1], log)
+    for p in files:
+        o = add_height_columns(pd.read_csv(p, dtype={"valid": str, "stnid": str}), sources)
+        tmp = p.with_suffix(".csv.tmp")
+        o.to_csv(tmp, index=False, float_format="%.4f")
+        tmp.replace(p)  # a crash mid-write leaves the old file whole
+        log.append(f"height {', '.join('h_' + n for n in sources)}: {p.name}, {len(o)} rows")
+    for name in info:
+        info[name]["files"] = [p.name for p in files]
+    with open(out / "fetch_log.txt", "a") as f:
+        f.write("\n".join(log) + "\n")
+    mp = out / "cache_meta.json"
+    meta = json.loads(mp.read_text()) if mp.exists() else {}
+    meta["heights"] = {**meta.get("heights", {}), **info}
+    mp.write_text(json.dumps(meta, indent=2))
+    return info
 
 
 def analysis_fields(out, valid, log, grid="O1280"):
@@ -244,20 +349,83 @@ def seeps_clim_at(valid, box):
 
 
 def valid_hours(var, leads):
-    """Hours after the 00 UTC date at which the cache holds observations of ``var``."""
+    """Hours after the 00 UTC date at which the cache holds observations of ``var``: the leads; for 12 h tp the
+    windows ending every 12 h from 0, for 24 h from 24; for a period under 12 h (6 h tp of the 4 km lane) the
+    windows ending at each lead of at least one period."""
     _, period = _stvl_param(var)
     if period is None:
         return sorted(set(leads))
+    if period < 12:
+        return sorted(h for h in set(leads) if h >= period)
     lo = 0 if period == 12 else period
     return list(range(lo, max(leads) + 1, 12))
 
 
-def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True):
+def write_merged(path, new, keys, log, *, float_format="%.4f", refill=None, by=None) -> int:
+    """Write ``new`` to ``path``; when the file exists (a second fetch into the same cache), merge instead of
+    overwriting: every old row of a time the new fetch covers (``by``: valid, or date and lead for HRES; default
+    every key but the station) is dropped, so a report the new fetch rejected does not survive, and the new rows
+    are added; rows of the other times are kept. ``refill(frame, columns)`` may fill columns the old file has and
+    the new rows lack (the h_<name> columns of an earlier --add-height). Returns the number of rows written."""
+    import pandas as pd
+
+    ids = {c: str for c in ("valid", "stnid", "date")}
+    if path.exists():
+        old = pd.read_csv(path, dtype=ids)
+        new = new.copy()
+        for c in ids:
+            if c in new.columns:
+                new[c] = new[c].astype(str)
+        missing = [c for c in old.columns if c not in new.columns]
+        if missing and refill is not None:
+            new = refill(new, missing)
+        n_old = len(old)
+        by = list(by or [k for k in keys if k != "stnid"])
+        covered = pd.MultiIndex.from_frame(new[by].astype(str).drop_duplicates())
+        old = old[~pd.MultiIndex.from_frame(old[by].astype(str)).isin(covered)]
+        new = pd.concat([old, new], ignore_index=True).drop_duplicates(subset=keys, keep="last")
+        log.append(f"{path.name}: merged into the existing file ({n_old} rows before, {len(new)} after)")
+        print(log[-1], flush=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    new.to_csv(tmp, index=False, float_format=float_format)
+    tmp.replace(path)
+    return int(len(new))
+
+
+def merge_stvl(old, new):
+    """The ``stvl`` manifest entry of two fetches into one cache: periods and tables of both."""
+    if not old or not new:
+        return new or old
+    out = {**old, **new}
+    po = (old.get("observation") or {}).get("period_h", {})
+    pn = (new.get("observation") or {}).get("period_h", {})
+    if old.get("observation") or new.get("observation"):
+        out["observation"] = {**(old.get("observation") or {}), **(new.get("observation") or {}),
+                              "period_h": {**po, **pn}}
+    out["hres"] = new.get("hres") or old.get("hres")
+    return out
+
+
+def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True, heights=None):
     import pandas as pd
 
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     log, rows, per_valid = [], {}, {}
+    mp = out / "cache_meta.json"
+    known_heights = (json.loads(mp.read_text()).get("heights") or {}) if mp.exists() else {}
+
+    def refill(frame, columns):  # h_<name> of an earlier --add-height, for the new rows of a second fetch
+        for c in columns:
+            info = known_heights.get(c[2:]) if c.startswith("h_") else None
+            if info and Path(info["source"]).exists():
+                frame = add_height_columns(frame, {c[2:]: height_source(info["source"])})
+                log.append(f"{c}: filled for the new rows from {info['source']}")
+            else:
+                log.append(f"WARN {c}: in the existing file but not in the new rows (left empty)")
+        return frame
     trees = {g: orography(out, g, log) for g in ("O1280", "O320")} if variables else {}
+    extra = {n: height_source(s) for n, s in (heights or {}).items()} if variables else {}
+    height_info = {n: height_meta(n, heights[n], extra[n][1], log) for n in extra}
     for var in variables:
         valids = sorted({dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=h)
                          for d in dates for h in valid_hours(var, leads)})
@@ -274,10 +442,12 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
         p = xyz(obs.lat.to_numpy(), obs.lon.to_numpy())
         for g, (tree, h) in trees.items():
             obs[f"h_{g.lower()}"] = h[tree.query(p)[1]]
+        obs = add_height_columns(obs, extra)
+        for n in extra:
+            height_info[n].setdefault("files", []).append(f"obs_{var}.csv")
         if an_check:
             obs = drop_gross(add_analysis_column(obs, var, out, trees["O1280"][0], log), var, log, "fetch")
-        obs.to_csv(out / f"obs_{var}.csv", index=False, float_format="%.4f")
-        rows[f"obs_{var}.csv"] = int(len(obs))
+        rows[f"obs_{var}.csv"] = write_merged(out / f"obs_{var}.csv", obs, ["valid", "stnid"], log, refill=refill)
         if not hres or var == "tp24":
             continue
         frames = []
@@ -289,8 +459,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
                     frames.append(df)
         if frames:
             h = pd.concat(frames, ignore_index=True)
-            h.to_csv(out / f"hres_{var}.csv", index=False, float_format="%.4f")
-            rows[f"hres_{var}.csv"] = int(len(h))
+            rows[f"hres_{var}.csv"] = write_merged(out / f"hres_{var}.csv", h, ["date", "lead", "stnid"], log)
     if seeps:
         frames, per_valid["seeps_clim_tp24"] = [], {}
         for v in sorted({dt.datetime.strptime(d, "%Y%m%d") + dt.timedelta(hours=h)
@@ -302,8 +471,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
                 frames.append(df)
         if frames:
             c = pd.concat(frames, ignore_index=True)
-            c.to_csv(out / "seeps_clim_tp24.csv", index=False, float_format="%.5f")
-            rows["seeps_clim_tp24.csv"] = int(len(c))
+            rows["seeps_clim_tp24.csv"] = write_merged(out / "seeps_clim_tp24.csv", c, ["valid", "stnid"], log,
+                                                       float_format="%.5f")
     with open(out / "fetch_log.txt", "a") as f:
         f.write("\n".join(log) + "\n")
     meta = {
@@ -318,7 +487,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
                             "period_h": {v: _stvl_param(v)[1] for v in variables if _stvl_param(v)[1]}},
             "hres": None if not hres else {"table": "model", "model": HRES_MODEL}},
         "orography": "mars class=od stream=enfo type=pf number=1 date=2024-01-01 step=0 param=z, grids O1280 and O320",
-        "rows": rows, "stations_per_valid": per_valid, "source": "STVL via vtb",
+        "rows": rows, "stations_per_valid": per_valid, "source": "STVL via vtb", "heights": height_info,
     }
     if seeps:
         meta["seeps_climatology"] = {"table": "climatology", "climat": "rodw", **SEEPS_CLIM, "model": SEEPS_MODEL,
@@ -327,8 +496,13 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
     if path.exists():  # a second fetch into the same cache: keep what is there, add or replace the new entries
         old = json.loads(path.read_text())
         this = {k: meta[k] for k in ("created", "host", "dates", "leads", "vars")} | {"seeps": seeps}
-        for k in ("rows", "stations_per_valid", "limits"):
+        for k in ("rows", "limits", "heights"):
             meta[k] = {**old.get(k, {}), **meta[k]}
+        spv = dict(old.get("stations_per_valid", {}))
+        for v, d in meta["stations_per_valid"].items():
+            spv[v] = {**spv.get(v, {}), **d}
+        meta["stations_per_valid"] = spv
+        meta["stvl"] = merge_stvl(old.get("stvl"), meta["stvl"])
         meta["vars"] = sorted(set(old.get("vars", [])) | set(meta["vars"]))
         meta["history"] = old.get("history", [{k: old.get(k) for k in ("created", "host", "dates", "leads", "vars")}])
         meta["history"].append(this)
@@ -342,7 +516,7 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
 
 
 def add_args(ap):
-    ap.add_argument("--dates", help="comma-separated YYYYMMDD (00 UTC runs); required unless --add-analysis")
+    ap.add_argument("--dates", help="comma-separated YYYYMMDD (00 UTC runs); required unless --add-analysis or --add-height alone")
     ap.add_argument("--leads", default="12,24,36,48,60,72")
     ap.add_argument("--vars", default="2t,10ff,msl,tp")
     ap.add_argument("--tp-periods", default="12", help="tp accumulations in hours: 12 gives tp, 24 adds tp24 (SEEPS)")
@@ -354,6 +528,10 @@ def add_args(ap):
                     help="skip quaver's analysis-departure check (no od oper an retrieval, no 'an' column)")
     ap.add_argument("--add-analysis", action="store_true",
                     help="only add the 'an' column to the obs files already in --out and drop the gross errors")
+    ap.add_argument("--add-height", action="append", default=[], metavar="NAME=SOURCE",
+                    help="add column h_NAME, the height [m] of the nearest point of an orography (GRIB of z on any "
+                         "grid, or an anemoi zarr with z), e.g. o2560=orography_O2560.grib; repeatable. With --dates "
+                         "into the files fetched; without, into every obs_<var>.csv already in --out, in place")
     ap.add_argument("--out", required=True, help="cache directory (created)")
 
 
@@ -368,14 +546,18 @@ def variables_from_args(a):
 
 
 def run_from_args(a):
+    heights = parse_heights(getattr(a, "add_height", None))
+    if heights and not a.dates and not a.add_analysis:
+        return add_height(a.out, heights)  # reads local files only: runs on any cluster
     require_atos()
     if a.add_analysis:
-        return add_analysis(a.out, variables_from_args(a))
+        done = add_analysis(a.out, variables_from_args(a))
+        return (done, add_height(a.out, heights)) if heights else done
     if not a.dates:
         raise SystemExit("obs fetch: --dates is required")
     return fetch_cache(a.dates.split(","), [int(x) for x in a.leads.split(",")], variables_from_args(a),
                        [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres, seeps=a.seeps,
-                       an_check=not a.no_an_check)
+                       an_check=not a.no_an_check, heights=heights)
 
 
 def main(argv=None):

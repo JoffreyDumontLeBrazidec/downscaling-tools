@@ -5,7 +5,18 @@ regular grid (core/spectrum.py) and three fields are compared with the truth, bi
 
     full field   y_pred                 over  y                (``ratio_full``)
     residual     y_pred - x_interp      over  y - x_interp     (``ratio_resid``)
-    input        x_interp               over  y                (``ratio_interp_to_truth``)
+    input        x                      over  y                (``ratio_interp_to_truth``)
+
+The model residual of member k is taken against member k's own interpolated input
+(``x_interp_members[k]``) when the file carries it; the truth residual stays y - x_interp, because y is
+the control (or single) truth and x_interp its own input (run_meta ``residual_reference``). The input
+row is the native input ``x`` when the file has it (rule 41), sampled on a regular grid at its own point
+spacing and put on the same wavelength bins (core/spectrum.py ``InputSpectrum``). It is reported only in
+bins of at least 6 native grid lengths, with the grid length taken where the native grid is coarsest in
+the box (``native_spacing_km(coarsest=True)``: 45 km for O320 over E2), and NaN below (run_meta
+``input_spectrum``): on the octahedral O1280 / O320 point sets of E2, with a known input filter, the bins
+kept are within 2 % and the next ones off by 7-50 % (tests). Without a native x it is ``x_interp`` on the
+fine grid, with a warning.
 
 plus the coherence of the prediction with the truth, cross / sqrt(power x power), and the
 aligned part = coherence x full-field amplitude ratio (judge a gain on the aligned part, never
@@ -39,8 +50,9 @@ import numpy as np
 from eval.discovery.predictions import find_predictions
 from eval.shared.edge_strip import inner_bounds, resolve_box_edge_deg
 from eval.shared import regions
+from eval.shared.native_input import native_spacing_km
 
-from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, Sampler, Spectrum
+from .core.spectrum import NBINS, SPEC_EDGE_MARGIN_DEG, SPEC_RES_DEG, InputSpectrum, Sampler, Spectrum
 
 LOG = logging.getLogger(__name__)
 
@@ -53,6 +65,7 @@ BIN_COLS = ["scope", "variable", "bin_lo_km", "bin_hi_km", "bin_centre_km",
             "amp_interp", "ratio_interp_to_truth", "coherence", "aligned", "n_draws"]
 # accumulated powers per (scope, variable)
 TERMS = ("pred", "truth", "interp", "resid_pred", "resid_true", "pred_x_truth")
+INPUT_MIN_GRID_LENGTHS = 6.0   # the native input spectrum is reported at wavelengths of at least 6 grid lengths
 NAMED_BOXES = {"e2": regions.E2, "north_atlantic": regions.NORTH_ATLANTIC,
                "tc_atlantic": regions.TC_ATLANTIC, "alps": regions.ALPS}
 
@@ -144,14 +157,37 @@ def _contiguous(lon: np.ndarray, west: float) -> np.ndarray:
     return west + np.mod(lon - west, 360.0)
 
 
+def native_input_spectrum(lat_in, lon_in, spec, meta: dict, res_deg: float):
+    """(sampler, InputSpectrum, description) of the native input over the sampled extent (rule 41): a regular
+    grid of steps of about the native spacing, nearest native point, spanning exactly the fine grid's length
+    (n_in x step_in = n x step, so both FFTs share their fundamental and low wavenumbers), reported down to
+    INPUT_MIN_GRID_LENGTHS times the spacing where the native grid is coarsest in the box."""
+    km_in = native_spacing_km(lat_in, lon_in)
+    km_coarse = native_spacing_km(lat_in, lon_in, coarsest=True)
+    ny_in = max(4, round(spec.ny * meta["dy_km"] / km_in))
+    nx_in = max(4, round(spec.nx * meta["dx_km"] / km_in))
+    smp_in = Sampler(lat_in, lon_in, tuple(meta["extent_sampled"]), spec.ny * res_deg / ny_in, method="nearest",
+                     res_lon=spec.nx * res_deg / nx_in)
+    dxi, dyi = smp_in.dx_dy_km()
+    spec_in = InputSpectrum(spec, len(smp_in.gy), len(smp_in.gx), dxi, dyi,
+                            min_wavelength_km=INPUT_MIN_GRID_LENGTHS * km_coarse,
+                            ref_dx_km=meta["dx_km"], ref_dy_km=meta["dy_km"])
+    info = {"grid": "regular grid at the native spacing, nearest native point", "native_spacing_km": km_in,
+            "coarsest_spacing_km": km_coarse, "dx_km": dxi, "dy_km": dyi, "shape": [len(smp_in.gy), len(smp_in.gx)],
+            "min_wavelength_km": spec_in.min_wavelength_km,
+            "note": f"input/truth NaN below {INPUT_MIN_GRID_LENGTHS:g} native grid lengths (coarsest spacing)"}
+    return smp_in, spec_in, info
+
+
 def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec, clip_nonnegative=(),
                box_edge_deg: float | None = None):
     """Sum of the powers per (scope, variable) over draws; returns (spectrum, sums, counts, meta)."""
     sums: dict[tuple[str, str], dict[str, np.ndarray]] = {}
     counts: dict[tuple[str, str], int] = {}
-    smp = spec = smp_in = None
+    smp = spec = smp_in = spec_in = None
     meta: dict = {}
     input_sources: set[str] = set()
+    resid_refs: set[str] = set()
     for pf in files:
         f = _File(pf.path)
         try:
@@ -185,14 +221,17 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                                     "ratios stay fair (one operator for every field)")
                 LOG.info("box_spectra: %s box %s, grid %d x %d", how, box, spec.ny, spec.nx)
             if f.native and smp_in is None:
-                # the input sampled from ITS OWN grid onto the same regular grid, same method (rule 41)
-                smp_in = Sampler(f.lat_in, _contiguous(f.lon_in, meta["box"][2]), tuple(meta["extent_sampled"]),
-                                 res_deg, method=method)
+                smp_in, spec_in, meta["input_spectrum"] = native_input_spectrum(
+                    f.lat_in, _contiguous(f.lon_in, meta["box"][2]), spec, meta, res_deg)
             elif f.lat.shape != grid_lat.shape or np.abs(f.lat - grid_lat).max() > 1e-6 \
                     or np.abs(f.lon - grid_lon).max() > 1e-6:
                 raise ValueError(f"{pf.path}: point set differs from the first file's")
             idx = smp.src_idx
             mems = [m for m in f.members if not members or m in members]
+            # the model residual of member k against its own interpolated input when the file carries one per
+            # member; the truth residual against x_interp (y is the control or single truth, x_interp its input)
+            ref_name = "x_interp_members" if "x_interp_members" in f.ds.variables else "x_interp"
+            resid_refs.add(f"model: {ref_name}; truth: x_interp")
             for var in variables:
                 if not f.has(var):
                     continue
@@ -206,18 +245,21 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                         return smp(full)
                     y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
                     Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
+                    Fxm = Fx if ref_name == "x_interp" else spec.fft(grid(ref_name))
                     # input spectrum: from the native input when the file has it (rule 41); the residual
                     # terms stay defined against x_interp (y - x_interp is what the model learns)
                     if f.native and smp_in is not None:
                         full_in = np.zeros(f.lat_in.size)
                         full_in[smp_in.src_idx] = f.field("x", m, var, smp_in.src_idx)
-                        Fin = spec.fft(smp_in(full_in))
+                        if var in clip_nonnegative:
+                            full_in = np.maximum(full_in, 0.0)
+                        p_in = spec_in.power(spec_in.fft(smp_in(full_in)))
                         input_sources.add("x (native input grid)")
                     else:
-                        Fin = Fx
+                        p_in = spec.power(Fx)
                         input_sources.add("x_interp (input interpolated to the output grid)")
                     terms = {"pred": spec.power(Fp), "truth": spec.power(Fy),
-                             "interp": spec.power(Fin), "resid_pred": spec.power(Fp - Fx),
+                             "interp": p_in, "resid_pred": spec.power(Fp - Fxm),
                              "resid_true": spec.power(Fy - Fx), "pred_x_truth": spec.cross(Fp, Fy)}
                     for scope in ("all", pf.date):
                         acc = sums.setdefault((scope, var), {t: 0.0 for t in TERMS})
@@ -228,6 +270,7 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
         finally:
             f.close()
     meta["input_source"] = sorted(input_sources)
+    meta["residual_reference"] = sorted(resid_refs)
     if any("interpolated" in s_ for s_ in input_sources):
         LOG.warning("box_spectra: input spectrum from x_interp (no native x in the files); rule 41: the input/truth "
                     "ratio is then a smoothed-input diagnostic, not the input's spectrum")
@@ -282,6 +325,14 @@ def write_table(rows, path, label: str, meta: dict) -> None:
     if meta.get("input_source"):
         lines += [f"Input spectrum from: {'; '.join(meta['input_source'])} (rule 41: the input is never "
                   "interpolated to the output grid before scoring).", ""]
+    if meta.get("input_spectrum"):
+        i = meta["input_spectrum"]
+        lines += [f"input/truth: the native input on a regular grid at its own spacing ({i['native_spacing_km']:.0f} km, "
+                  f"nearest native point), on the same bins; blank below {i['min_wavelength_km']:.0f} km "
+                  "(6 native grid lengths where the grid is coarsest).", ""]
+    if meta.get("residual_reference"):
+        lines += [f"Residuals against: {'; '.join(meta['residual_reference'])} (the model's member k against its "
+                  "own input member when the file carries x_interp_members; the truth against x_interp).", ""]
     if meta.get("note"):
         lines += [f"Note: {meta['note']}.", ""]
     for var in sorted({r["variable"] for r in rows if r["scope"] == "all"}):
@@ -290,8 +341,9 @@ def write_table(rows, path, label: str, meta: dict) -> None:
                   "| km | residual | full field | input/truth | coherence | aligned |",
                   "|---|---|---|---|---|---|"]
         for r in sub:
+            ri = float(r['ratio_interp_to_truth'])
             lines.append(f"| {float(r['bin_centre_km']):.1f} | {float(r['ratio_resid']):.3f} | "
-                         f"{float(r['ratio_full']):.3f} | {float(r['ratio_interp_to_truth']):.3f} | "
+                         f"{float(r['ratio_full']):.3f} | {'' if np.isnan(ri) else f'{ri:.3f}'} | "
                          f"{float(r['coherence']):.3f} | {float(r['aligned']):.3f} |")
         lines.append("")
     Path(path).write_text("\n".join(lines))
