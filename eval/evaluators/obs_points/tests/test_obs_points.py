@@ -879,13 +879,14 @@ def test_paired_rows_of_the_same_kind_only_and_summary_header(tmp_path):
 
 
 def test_second_fetch_merges_rows_and_manifest(tmp_path):
-    """write_merged adds new (valid, stnid) rows, replaces repeated ones, refills a height column; merge_stvl
-    keeps the periods of both fetches."""
+    """write_merged replaces every old row of a valid time the new fetch covers (a station the new fetch rejected
+    does not survive), keeps the other times, refills a height column; merge_stvl keeps the periods of both."""
     from eval.evaluators.obs_points.core.fetch import merge_stvl, write_merged
 
     p = tmp_path / "obs_tp.csv"
-    old = pd.DataFrame({"valid": ["2024110112"] * 2, "lat": [1.0, 2.0], "lon": [0.0, 0.0], "stnid": ["01", "02"],
-                        "elevation": 0.0, "obs": [1.0, 2.0], "h_o2560": [5.0, 6.0]})
+    old = pd.DataFrame({"valid": ["2024110112"] * 2 + ["2024110100"], "lat": [1.0, 2.0, 1.0], "lon": 0.0,
+                        "stnid": ["01", "02", "01"], "elevation": 0.0, "obs": [1.0, 2.0, 4.0],
+                        "h_o2560": [5.0, 6.0, 5.0]})
     old.to_csv(p, index=False)
     new = pd.DataFrame({"valid": ["2024110112", "2024110200"], "lat": [2.0, 1.0], "lon": [0.0, 0.0],
                         "stnid": ["02", "01"], "elevation": 0.0, "obs": [9.0, 3.0]})
@@ -899,8 +900,17 @@ def test_second_fetch_merges_rows_and_manifest(tmp_path):
     log = []
     assert write_merged(p, new, ["valid", "stnid"], log, refill=refill) == 3
     m = pd.read_csv(p, dtype={"valid": str, "stnid": str}).sort_values(["valid", "stnid"]).reset_index(drop=True)
-    assert m.stnid.tolist() == ["01", "02", "01"] and m.obs.tolist() == [1.0, 9.0, 3.0]
+    # 2024110112: the new fetch kept only station 02, so the old 01 of that time is gone; 2024110100 is untouched
+    assert list(zip(m.valid, m.stnid, m.obs)) == [("2024110100", "01", 4.0), ("2024110112", "02", 9.0),
+                                                 ("2024110200", "01", 3.0)]
     assert m.h_o2560.tolist() == [5.0, 7.0, 7.0] and seen == [["h_o2560"]] and "merged" in log[0]
+    h = tmp_path / "hres_tp.csv"
+    pd.DataFrame({"date": ["20241101"] * 3, "lead": [12, 12, 24], "stnid": ["01", "02", "01"],
+                  "hres": [1.0, 2.0, 3.0]}).to_csv(h, index=False)
+    write_merged(h, pd.DataFrame({"date": ["20241101"], "lead": [12], "stnid": ["02"], "hres": [8.0]}),
+                 ["date", "lead", "stnid"], [])
+    hh = pd.read_csv(h, dtype={"date": str, "stnid": str}).sort_values(["lead", "stnid"])
+    assert list(zip(hh.lead, hh.stnid, hh.hres)) == [(12, "02", 8.0), (24, "01", 3.0)]
     s = merge_stvl({"observation": {"table": "observation", "period_h": {"tp": 12, "tp24": 24}}, "hres": {"t": 1}},
                    {"observation": {"table": "observation", "period_h": {"tp6": 6}}, "hres": None})
     assert s["observation"]["period_h"] == {"tp": 12, "tp24": 24, "tp6": 6} and s["hres"] == {"t": 1}
@@ -922,3 +932,16 @@ def test_member_sample_reads_a_subset(tmp_path):
         s = member_sample(d["x_interp_members"], 10000, n_sample=500)
         assert s.shape == (3, 500, 2) and members_differ(s) == members_differ(a[0])
         assert not members_differ(member_sample(d["y_members"], 10000, n_sample=500))
+
+
+def test_compare_unit_follows_tp_obs_var(tmp_path):
+    """obs compare labels tp with the runs' window (mm / 6 h for tp6)."""
+    from eval.evaluators.obs_points.core.summary import write_compare_md
+
+    tab = pd.DataFrame({"var": "tp", "variant": "raw", "radius_km": 0.0, "region": "all", "lead": [12, 24],
+                        "metric": "fcrps", "mean": -0.1, "se": 0.01, "wins": 3, "dates": 4, "mean_n": 100.0})
+    meta = {"label_a": "A", "label_b": "B", "row": "model", "tp_obs_var": "tp6"}
+    write_compare_md(tab, meta, tmp_path / "c.md")
+    assert "## tp raw (mm / 6 h)" in (tmp_path / "c.md").read_text()
+    write_compare_md(tab, {**meta, "tp_obs_var": "tp"}, tmp_path / "d.md")
+    assert "## tp raw (mm / 12 h)" in (tmp_path / "d.md").read_text()

@@ -253,7 +253,7 @@ def write_compare_md(tab, meta, path, *, region=None):
     t = tab[(tab.region == region) & (tab.metric.str.startswith(("fcrps", "twcrps", "brier", "seeps")))]
     leads = sorted(set(tab.lead))
     for (v, var_, r), q in t.groupby(["var", "variant", "radius_km"], sort=False):
-        lines += [f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({VAR_UNITS.get(v, '')})", "",
+        lines += [f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({var_unit(v, meta)})", "",
                   "| score | " + " | ".join(f"+{l} h" for l in leads) + " |", "|---|" + "---|" * len(leads)]
         for met, qq in q.groupby("metric", sort=False):
             qq = qq.set_index("lead")

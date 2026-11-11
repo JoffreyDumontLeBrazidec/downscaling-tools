@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.evaluators.obs_points.core.summary import VAR_UNITS, tail_name, var_unit
+from eval.evaluators.obs_points.core.summary import tail_name, var_unit
 
 LOG = logging.getLogger(__name__)
 
@@ -278,7 +278,7 @@ def plot_compare(out_dir, tab, meta, region=None):
             ax.set_title(f"{v} {var_}: {name}\n{int(q['dates'].max())} dates, ~{ns:,.0f} {unit_name}", fontsize=9.5)
             _lead_axis(ax, leads)
             ax.set_xlabel("Lead time (h)")
-            unit = "" if met.startswith(("brier", "seeps")) else f" ({VAR_UNITS.get(v, '')})"
+            unit = "" if met.startswith(("brier", "seeps")) else f" ({var_unit(v, meta)})"
             ax.set_ylabel(f"{la} - {lb}{unit}")
         for ax in list(axes.flat)[len(panels):]:
             ax.set_visible(False)
