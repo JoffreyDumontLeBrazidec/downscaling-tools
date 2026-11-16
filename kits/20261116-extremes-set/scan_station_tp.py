@@ -6,7 +6,7 @@ Atos only (STVL through vtb), reads only. For every 12 h window ending at 00 and
 one-report-per-station rule as ``eval.cli obs fetch`` (``obs_at``), and writes
 
   <out>/counts_<start>_<end>.csv   valid (YYYYMMDDHH = end of the window), n (reports), n_ge10, n_ge20, n_ge50,
-                                   n_ge100, max_mm, and the same counts per zone:
+                                   n_ge100, max_mm, and zone_<z>_n / _ge20 / _ge50 / _ge100 per zone z:
                                    t = 30 S-30 N, n = north of 30 N, s = south of 30 S
   <out>/exceed_<start>_<end>.csv   every report of at least --keep-mm (default 20): valid, lat, lon, stnid, obs
   <out>/scan_<start>_<end>.done    written last
@@ -47,7 +47,7 @@ def main():
     thr = (10.0, 20.0, 50.0, 100.0)
     head = ["valid", "n", "n_ge10", "n_ge20", "n_ge50", "n_ge100", "max_mm"]
     for z in "tns":
-        head += [f"{z}_n", f"{z}_ge20", f"{z}_ge50", f"{z}_ge100"]
+        head += [f"zone_{z}_n", f"zone_{z}_ge20", f"zone_{z}_ge50", f"zone_{z}_ge100"]
     with open(out / f"counts_{tag}.csv", "w") as fc, open(out / f"exceed_{tag}.csv", "w") as fe:
         fc.write(",".join(head) + "\n")
         fe.write("valid,lat,lon,stnid,obs\n")

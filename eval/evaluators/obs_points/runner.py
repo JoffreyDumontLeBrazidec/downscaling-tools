@@ -313,7 +313,9 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     if var.startswith("tp") and hr is not None and hres_pool is not None:
         hres_pool.setdefault(var, []).append((hr, ov))  # the metres audit is decided once per run
     is_tp = var == "tp"
-    thresholds = cfg["thresholds"] if is_tp else ()
+    # tp: the rain thresholds (mm per window); 10ff: the opt-in wind thresholds (m/s; default none). The score
+    # columns are named by the value alone (twcrps20), so read them with the row's variable.
+    thresholds = cfg["thresholds"] if is_tp else (cfg.get("wind_thresholds", ()) if var == "10ff" else ())
     radii = cfg["radii"] if is_tp else (0.0,)
     elev = o.elevation.to_numpy(np.float64)
     h_model = o[cfg.get("model_height_column", "h_o1280")].to_numpy(np.float64)  # orography of the output grid
@@ -380,6 +382,8 @@ def resolve_config(eval_config: dict) -> dict:
         "height_classes": dict(eval_config.get("height_classes", DEFAULT_HEIGHT_CLASSES) or {}),
         "thresholds": tuple(float(t) for t in eval_config.get("thresholds", DEFAULT_THRESHOLDS)),
         "radii": tuple(float(r) for r in eval_config.get("radii", DEFAULT_RADII)),
+        # fair twCRPS and Brier of 10ff above these speeds [m/s] (strong-wind tail; none by default)
+        "wind_thresholds": tuple(float(t) for t in eval_config.get("wind_thresholds", ()) or ()),
         "max_km": float(eval_config.get("max_km", 15.0)),
         "box_edge_deg": resolve_box_edge_deg(eval_config),
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
