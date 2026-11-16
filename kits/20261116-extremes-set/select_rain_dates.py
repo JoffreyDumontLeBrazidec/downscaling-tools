@@ -8,7 +8,9 @@ An event = EVENT_MIN or more stations with THR mm or more in one 12 h window, li
 A start date d (00 UTC) owns the six windows ending d+12..d+72 h; its value = number of events, ties by stations in events.
 Greedy choice: SPACING days or more between chosen dates and from the cyclone dates (--tc-dates), at most PER_MONTH
 dates per calendar month; first the best MIN_S dates whose main zone is s, then the best MIN_T whose main zone is t,
-then the best overall up to N_DATES. Cyclone dates that hold an event are listed with tag "both" and are not counted
+then the best MIN_W dates of December to February whose main zone is n (added 16 Nov 11:10 UTC after the first
+selection on the real scan held no date between December and February; observations only, no forecast was read;
+--min-w 0 gives the first selection), then the best overall up to N_DATES. Cyclone dates that hold an event are listed with tag "both" and are not counted
 in N_DATES.
 
     python3 select_rain_dates.py --scan DIR --tc-dates tc_dates.csv --out DIR
@@ -28,7 +30,7 @@ import numpy as np
 
 LEADS = (12, 24, 36, 48, 60, 72)
 P = dict(first="20240101", last="20250927", thr=50.0, event_min=5, link_km=300.0, spacing_days=5, tc_spacing_days=3,
-         per_month=2, min_s=3, min_t=6, n_dates=20)
+         per_month=2, min_s=3, min_t=6, min_w=3, n_dates=20)
 
 
 def zone(lat):
@@ -137,12 +139,12 @@ def main():
             return False
         return sum(1 for c in chosen if (c.year, c.month) == (day.year, day.month)) < p["per_month"]
 
-    def pick(n, main=None):
+    def pick(n, main=None, months=None):
         got = 0
         while got < n:
             best, key = None, None
             for day, c in cand.items():
-                if day in chosen or not free(day) or (main and c["main"] != main):
+                if day in chosen or not free(day) or (main and c["main"] != main) or (months and day.month not in months):
                     continue
                 k = (c["n_events"], c["n_stations"], -day.toordinal())
                 if key is None or k > key:
@@ -155,6 +157,7 @@ def main():
 
     got_s = pick(p["min_s"], "s")
     got_t = pick(p["min_t"], "t")
+    got_w = pick(p["min_w"], "n", months=(12, 1, 2))
     pick(p["n_dates"] - len(chosen))
     chosen.sort()
     out = Path(a.out)
@@ -181,7 +184,7 @@ def main():
         months[c.strftime("%Y%m")] += 1
     summary = dict(parameters=p, scan_files=[Path(x).name for x in files], windows_with_reports=len(rows),
                    windows_with_events=len(ev), candidate_dates=len(cand), rain_dates=len(chosen), south_first=got_s,
-                   tropics_first=got_t, main_zone={z: sum(1 for c in chosen if cand[c]["main"] == z) for z in "nts"},
+                   tropics_first=got_t, north_winter_first=got_w, main_zone={z: sum(1 for c in chosen if cand[c]["main"] == z) for z in "nts"},
                    per_month=dict(sorted(months.items())), tc_dates_with_events=len(both), tc_dates=len(tc),
                    events_on_rain_dates=sum(cand[c]["n_events"] for c in chosen),
                    event_stations_on_rain_dates=sum(cand[c]["n_stations"] for c in chosen))
