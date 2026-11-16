@@ -68,6 +68,25 @@ spectra_ecmwf:
 surface:
   weighting: "truth-std"
 
+# Station observations (added 2026-11-16): ensemble scores of the 100 km run at STVL SYNOP stations, next to the
+# input, truth and HRES rows (rule 34: fair CRPS is presented against stations). Cache global100_2022_v1: the eight
+# 2022 dates of the flow-map member reads (o96_o320_flowmap; docs support/20261104_ens_member_o96), every station
+# of the globe, leads 12/24/48/72 h, 2t 10ff msl, tp 12 h (the window the 100 km files hold) and 24 h with the
+# SEEPS climatology, analysis column an. It does not cover the 2023 Idalia dates of this base lane.
+# Heights: those reads take their input from eefh (hindcast of the 2024 runs) on O96 and their truth from enfh on
+# O320, so the input row uses h_o96_eefh (eefh z retrieved at grid=O96, the input's own interpolation; eefo z at O96
+# of 2023 is identical) and the model and truth rows use h_o320_enfh (enfh z on O320; the lane's in_hres_z and enfo
+# z at O320 differ from it by at most 0.23 m).
+# Run:   python -m eval.cli evaluate --lane o96_o320_flowmap --host <atos|jupiter> --only obs_points \
+#          --predictions-dir <dir of predictions_<date>_step<NNN>.nc> --run-label <label>
+obs_points:
+  cache:
+    atos: /home/ecm5702/hpcperm/data/station_caches/global100_2022_v1
+    jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/global100_2022_v1
+  vars: [2t, 10ff, msl, tp]
+  model_height_column: h_o320_enfh
+  input_height_column: h_o96_eefh
+
 regions:
   interesting:
     amazon_forest: [-15.0, 5.0, -75.0, -45.0]
