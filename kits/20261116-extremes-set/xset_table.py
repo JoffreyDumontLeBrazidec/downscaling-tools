@@ -123,10 +123,10 @@ def station_lines(tabs, ref, tags):
     regions = sorted(set(tabs[ref].region))
     for block, var, variant, rad, col, evcol in specs:
         for region in regions:
-            if block != "bulk" and region not in ("all", "tropics_30S_30N", "north_30N"):
+            if block != "bulk" and region not in ("all", "tropics_30S_30N", "north_30N", "europe", "north_america", "east_asia"):
                 continue
             for sname, dset in subsets.items():
-                if block == "bulk" and sname != "all dates" and region != "all":
+                if sname != "all dates" and region != "all":
                     continue
                 per = None
                 for lab, df in frames.items():

@@ -7,4 +7,4 @@ K=$A/downscaling-tools/kits/20261116-extremes-set
 module load python3 >/dev/null 2>&1
 rows="--row ENS9=$A/scores/ENS9"; for l in "$@"; do rows="$rows --row $l=$A/scores/$l"; done
 python3 $K/xset_table.py $rows --ref ENS9 --dates $K/lists/dates_xset1.csv --hist $A/hist --out $A/table
-echo "TABLE_DONE $A/table/xset_table.md $(date -u +%FT%TZ)"
+echo "[table] finished $(date -u +%FT%TZ)"
