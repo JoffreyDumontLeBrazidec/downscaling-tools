@@ -1,9 +1,10 @@
 #!/bin/bash
 # Submit the Atos chain of a date list, GROUP dates per job: retrieval, then input stores (afterok), then evaluation
 # points and 9 km ensemble rows (afterok, and after the station cache job when one is given).
-# Usage: bash xset_chain_submit.sh <csv with a "date" header or one yyyymmdd per line> [GROUP=2] [CACHE_JOBID|none] [noret]
-#   noret = the retrievals of these dates are already submitted or done: the store job starts at once and waits for
-#           nothing (it fails on a missing .ok file; resubmit it then).
+# Usage: bash xset_chain_submit.sh <csv with a "date" header or one yyyymmdd per line> [GROUP=2] [CACHE_JOBID|none] [MODE=ret]
+#   MODE ret            submit the retrievals too
+#        noret          the GRIB files are complete: the store job starts at once (it fails on a missing .ok file)
+#        after:ID[:ID]  the retrievals are already submitted as these job ids: every store job waits for all of them
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p /ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set/logs
@@ -13,6 +14,7 @@ go() {
   local dep=""
   if [[ $MODE == ret ]]; then
     r=$(sbatch --parsable --job-name=xset_ret_$tag "$HERE/xset_retrieve.sbatch" "$@"); dep="--dependency=afterok:$r"
+  elif [[ $MODE == after:* ]]; then r=${MODE#after:}; dep="--dependency=afterok:$r"
   else r=none; fi
   b=$(sbatch --parsable $dep --job-name=xset_bin_$tag "$HERE/xset_build_in.sbatch" "$@")
   dep="--dependency=afterok:$b"; [[ $CJ != none ]] && dep="$dep,afterok:$CJ"
