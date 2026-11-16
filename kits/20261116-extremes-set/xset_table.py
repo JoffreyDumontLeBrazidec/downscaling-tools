@@ -9,7 +9,8 @@ Each DIR holds obs_points/scores_per_date.csv (xset_score_stations.py), tc_cases
 directory (they are the same in every directory). Conventions (docs note 20261116_extremes_cyclone_eval_set.md s3.2,
 detectable-effect note s1):
   * station and IMERG lines: value = sum over dates and leads of (points x score) / sum of points; difference to the
-    reference row in % = ratio of sums - 1; SE = delete-one-date jackknife; six leads pooled.
+    reference row in % = ratio of sums - 1; six leads pooled; SE = delete-one-block jackknife, a block = a chain of
+    start dates 5 days or less apart (they see the same weather and the same storms; set_blocks()).
   * cyclone lines: value = mean over cases; difference = mean of the paired case differences (hPa, m/s, km);
     SE = delete-one-storm jackknife.
   * detectable effect (MDE) = (t0.975 + t0.80, units - 1 degrees of freedom) x SE: the true difference found with 80 %
@@ -26,6 +27,25 @@ import numpy as np
 import pandas as pd
 
 LEADS = (12, 24, 36, 48, 60, 72)
+BLOCK_GAP_DAYS = 5
+BLOCK = {}          # start date -> block label; filled by set_blocks()
+
+
+def set_blocks(dates):
+    """Start dates closer than BLOCK_GAP_DAYS + 1 days see the same weather (and the same storms): a chain of such dates
+    is ONE unit of the date jackknife (block label = its first date). Without this the SE of the date lines is too small."""
+    import datetime as dt
+    ds = sorted(dates)
+    lab = None
+    for i, d in enumerate(ds):
+        if i == 0 or (dt.datetime.strptime(d, "%Y%m%d") - dt.datetime.strptime(ds[i - 1], "%Y%m%d")).days > BLOCK_GAP_DAYS:
+            lab = d
+        BLOCK[d] = lab
+
+
+def by_block(x):
+    """Sum a per-date Series or DataFrame (index = date) over the date blocks."""
+    return x.groupby(lambda d: BLOCK.get(d, d)).sum()
 
 
 def tq(n):
@@ -126,9 +146,10 @@ def station_lines(tabs, ref, tags):
                 for lab in frames:
                     if f"s_{lab}" in per:
                         agg[f"S_{lab}"] = (per[f"s_{lab}"] * nref).groupby(level="date").sum()
-                events = per[f"e_{ref}"].groupby(level="date").sum() if evcol else None
+                events = by_block(per[f"e_{ref}"].groupby(level="date").sum()) if evcol else None
+                agg = by_block(agg)
                 name = f"{var} {col}" + (f" disc {rad:g} km" if rad else "") + f" [{region}]" + ("" if same else " (station counts differ)")
-                out += ratio_lines(block, name, sname, agg, rows, ref, "dates", events)
+                out += ratio_lines(block, name, sname, agg, rows, ref, "date blocks", events)
                 if evcol:   # frequency bias of the tail: forecast frequency / observed frequency
                     fcol = col.replace("twcrps", "fc_freq_gt").replace("brier", "fc_freq_gt")
                     if col.startswith("twcrps") and rad == 0.0:
@@ -138,13 +159,13 @@ def station_lines(tabs, ref, tags):
                                 q = q[q.date.isin(dset)]
                             if fcol not in q or q.empty:
                                 continue
-                            g = q.assign(f=q[fcol] * q.n).groupby("date")[["f", evcol]].sum()
+                            g = by_block(q.assign(f=q[fcol] * q.n).groupby("date")[["f", evcol]].sum())
                             f, e = g["f"].to_numpy(), g[evcol].to_numpy()
                             if e.sum() <= 0:
                                 continue
                             v, se = jackknife(lambda k: f[k].sum() / e[k].sum() if e[k].sum() > 0 else np.nan, len(g))
                             out.append(line(block, f"{var} frequency ratio > {col[6:]} (forecast / observed) [{region}]", sname,
-                                            lab, ref, v, np.nan, np.nan, "ratio", se, len(g), "dates", float(e.sum()), eff(e)))
+                                            lab, ref, v, np.nan, np.nan, "ratio", se, len(g), "date blocks", float(e.sum()), eff(e)))
     return out
 
 
@@ -216,9 +237,9 @@ def imerg_lines(tabs, ref):
             for lab in frames:
                 if f"s_{lab}" in per:
                     agg[f"S_{lab}"] = (per[f"s_{lab}"] * nref).groupby(level="date").sum()
-            events = per[f"e_{ref}"].groupby(level="date").sum() if evcol else None
-            out += ratio_lines("IMERG", f"tp {col} in {'cyclone' if kind == 'tc' else 'heavy-rain'} discs", "all dates", agg,
-                               list(frames), ref, "dates", events)
+            events = by_block(per[f"e_{ref}"].groupby(level="date").sum()) if evcol else None
+            out += ratio_lines("IMERG", f"tp {col} in {'cyclone' if kind == 'tc' else 'heavy-rain'} discs", "all dates", by_block(agg),
+                               list(frames), ref, "date blocks", events)
     return out
 
 
@@ -257,20 +278,22 @@ def hist_lines(hist_dir, rows, ref):
                         c = h[var][gi].sum(0)
                         e = h["tp_edges" if var == "tp" else "ws_edges"]
                         num.append(c[e[:-1] >= thr].sum()); den.append(c.sum())
-                    return np.asarray(num, np.float64), np.asarray(den, np.float64)
+                    g = by_block(pd.DataFrame({"num": np.asarray(num, np.float64), "den": np.asarray(den, np.float64)}, index=common))
+                    return g["num"].to_numpy(), g["den"].to_numpy()
 
                 nb, db = share(ref)
+                nblk = len(nb)
                 for lab in data:
                     na, da = share(lab)
                     name = f"{'12 h rain' if var == 'tp' else '10 m wind'} share of grid points >= {thr:g} {'mm' if var == 'tp' else 'm/s'} [{gname}]"
                     if lab == ref:
-                        v, se = jackknife(lambda k: nb[k].sum() / db[k].sum(), len(common))
-                        out.append(line("global tails", name, "all dates", lab, ref, v, v, 0.0, "value", se, len(common), "dates", nb.sum(), eff(nb)))
+                        v, se = jackknife(lambda k: nb[k].sum() / db[k].sum(), nblk)
+                        out.append(line("global tails", name, "all dates", lab, ref, v, v, 0.0, "value", se, nblk, "date blocks", nb.sum(), eff(nb)))
                     else:
                         d, se = jackknife(lambda k: 100.0 * ((na[k].sum() / da[k].sum()) / (nb[k].sum() / db[k].sum()) - 1.0)
-                                          if nb[k].sum() > 0 else np.nan, len(common))
+                                          if nb[k].sum() > 0 else np.nan, nblk)
                         out.append(line("global tails", name, "all dates", lab, ref, na.sum() / da.sum(), nb.sum() / db.sum(), d, "%", se,
-                                        len(common), "dates", nb.sum(), eff(nb)))
+                                        nblk, "date blocks", nb.sum(), eff(nb)))
     return out
 
 
@@ -288,6 +311,7 @@ def main():
     a = ap.parse_args()
     rows = dict(r.split("=", 1) for r in a.row)
     tags = {r["date"]: r["tag"] for r in csv.DictReader(open(a.dates))}
+    set_blocks(tags)
     lines = []
     st = {lab: pd.read_csv(Path(d) / "obs_points" / "scores_per_date.csv", dtype={"date": str}) for lab, d in rows.items()
           if (Path(d) / "obs_points" / "scores_per_date.csv").exists()}
@@ -310,7 +334,8 @@ def main():
     with open(out / "xset_table.md", "w") as f:
         f.write(f"# XSET-1 table (reference row {a.ref}; rows {', '.join(rows)}; INPUT and CF9 from the reference files)\n\n")
         f.write("diff = row against the reference (%, or the unit shown); SE by jackknife over the units; MDE = detectable effect "
-                "(80 % power, 5 % two-sided). Lines with eff under 12 are not usable for a verdict.\n")
+                "(80 % power, 5 % two-sided). A date block = start dates 5 days or less apart, one unit. Lines with eff under 12 are "
+                "not usable for a verdict.\n")
         for block in df.block.unique():
             b = df[df.block == block]
             f.write(f"\n## {block}\n\n| score | subset | row | value | reference | diff | SE | MDE | units | events | eff |\n|---|---|---|---|---|---|---|---|---|---|---|\n")

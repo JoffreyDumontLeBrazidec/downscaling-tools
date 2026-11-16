@@ -6,9 +6,11 @@ tail: fair twCRPS, fair Brier, observed count and forecast frequency above 20, 5
 point and as 18 and 36 km disc means; wind tail: the same above 15 and 20 m/s. The input row is the native O320 x of the
 files (rule 41), height-corrected with the eefo orography column. Global point set: no box-edge strip.
 
-    python3 xset_score_stations.py --pred DIR --label GL512_500k --cache CACHE --out DIR [--input-height h_o320_eefo]
+    python3 xset_score_stations.py --pred DIR --label GL512_500k --cache CACHE --out DIR
 
-Writes DIR/obs_points/ (scores_per_date.csv is what xset_table.py reads).
+The input orography can differ between model cycles (48r1 to 11 Nov 2024, 49r1 after): the evaluator runs once per cycle
+with that cycle's cache column (h_o320_eefo_48r1, h_o320_eefo_49r1) and the per-date lines are concatenated (exact: the
+lines are per date). Writes DIR/obs_points_<cycle>/ and DIR/obs_points/scores_per_date.csv (what xset_table.py reads).
 """
 import argparse
 import logging
@@ -37,14 +39,39 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--cache", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--input-height", default="h_o320_eefo")
+    ap.add_argument("--dates-csv", default=str(Path(__file__).parent / "lists" / "dates_xset1.csv"),
+                    help="date list with a cycle column: the input row's height column is chosen per model cycle")
+    ap.add_argument("--input-height", default="h_o320_eefo_{cycle}",
+                    help="cache column of the input orography; {cycle} is replaced by the date's cycle (48r1, 49r1)")
     ap.add_argument("--overwrite", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO)
+    import csv
+    import re
+
+    import pandas as pd
     from eval.evaluators import obs_points
-    out = obs_points.run(a.pred, {}, config(a.cache, a.input_height), output_dir=Path(a.out) / "obs_points",
-                         run_label=a.label, overwrite=a.overwrite)
-    print("STATIONS_DONE", a.label, out, flush=True)
+    have = {re.match(r"predictions_(\d{8})_step", f.name).group(1) for f in Path(a.pred).glob("predictions_*_step*.nc")}
+    cycles = {}
+    for r in csv.DictReader(open(a.dates_csv)):
+        if r["date"] in have:
+            cycles.setdefault(r["cycle"] if "{cycle}" in a.input_height else "all", []).append(r["date"])
+    missing = have - {d for v in cycles.values() for d in v}
+    if missing:
+        raise SystemExit(f"prediction dates not in {a.dates_csv}: {sorted(missing)}")
+    out = Path(a.out)
+    parts = []
+    for cyc, dates in sorted(cycles.items()):
+        cfg = config(a.cache, a.input_height.format(cycle=cyc))
+        cfg["dates"] = dates
+        o = obs_points.run(a.pred, {}, cfg, output_dir=out / f"obs_points_{cyc}", run_label=a.label, overwrite=a.overwrite)
+        df = pd.read_csv(Path(o) / "scores_per_date.csv", dtype={"date": str})
+        df["cycle"] = cyc
+        parts.append(df)
+        print(f"STATIONS {a.label} cycle {cyc}: {len(dates)} dates, {len(df)} lines, input height {cfg['input_height_column']}", flush=True)
+    (out / "obs_points").mkdir(parents=True, exist_ok=True)
+    pd.concat(parts, ignore_index=True).to_csv(out / "obs_points" / "scores_per_date.csv", index=False)
+    print("STATIONS_DONE", a.label, out / "obs_points" / "scores_per_date.csv", flush=True)
 
 
 if __name__ == "__main__":
