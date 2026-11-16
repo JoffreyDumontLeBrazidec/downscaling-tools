@@ -945,3 +945,22 @@ def test_compare_unit_follows_tp_obs_var(tmp_path):
     assert "## tp raw (mm / 6 h)" in (tmp_path / "c.md").read_text()
     write_compare_md(tab, {**meta, "tp_obs_var": "tp"}, tmp_path / "d.md")
     assert "## tp raw (mm / 12 h)" in (tmp_path / "d.md").read_text()
+
+
+def test_wind_thresholds_and_forecast_frequency(tmp_path):
+    """Opt-in ``wind_thresholds`` give 10ff its own tail columns; every threshold also carries the mean forecast
+    exceedance probability fc_freq_gt<t>, which with n_obs_gt<t> / n is the frequency bias of the tail."""
+    ens = np.array([[1.0, 6.0, 12.0], [3.0, 8.0, 2.0]])
+    out = ensemble_scores(ens, np.array([2.0, 7.0, 9.0]), thresholds=(5.0,))
+    assert out["n_obs_gt5"] == 2 and out["fc_freq_gt5"] == pytest.approx((0 + 1 + 0.5) / 3)
+    cache = _cache(tmp_path)
+    pred = _pred(tmp_path, "w", noise=1.0, seed=2)
+    base = {"cache": str(cache), "vars": ["10ff", "tp"], "max_km": 100.0, "min_stations": 20, "radii": [0],
+            "regions": {"all": None}, "height_classes": {}}
+    df0 = pd.read_csv(obs_points.run(pred, {}, base, output_dir=tmp_path / "o0", run_label="A") / "scores_per_date.csv")
+    assert df0[df0["var"] == "10ff"].twcrps5.isna().all() and df0[df0["var"] == "tp"].fc_freq_gt5.notna().all()
+    cfg = {**base, "wind_thresholds": [4.0]}
+    df = pd.read_csv(obs_points.run(pred, {}, cfg, output_dir=tmp_path / "o1", run_label="A") / "scores_per_date.csv")
+    w = df[df["var"] == "10ff"]
+    assert w.twcrps4.notna().all() and w.fc_freq_gt4.between(0, 1).all() and (w.n_obs_gt4 > 0).any()
+    assert df[df["var"] == "tp"].twcrps4.isna().all()   # the wind threshold stays on the wind rows
