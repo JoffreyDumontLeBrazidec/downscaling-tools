@@ -113,6 +113,24 @@ obs_points:
   # cache:
   #   atos: /home/ecm5702/hpcperm/data/station_caches/global4_20241101_12_v1
   #   jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/global4_20241101_12_v1
+  # Wide out-of-training set W (40 dates 20241113-20241222, box 10-70 N 80 W-40 E, leads 24/48/72 h; tp6 windows
+  # ending at the leads, an column, h_o2560; added 2026-11-16):
+  # cache:
+  #   atos: /home/ecm5702/hpcperm/data/station_caches/o2560_wide_W_v1
+  #   jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/o2560_wide_W_v1
+  # Wide out-of-training set T (26 dates of 2023: 14-19 Jan, 19-26 Jun, 13-24 Jul; same box, leads and columns):
+  # cache:
+  #   atos: /home/ecm5702/hpcperm/data/station_caches/o2560_wide_T_v1
+  #   jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/o2560_wide_T_v1
+  # Global 2025 out-of-sample set (the 31 base dates of the 4 km tropical cyclone study, Aug-Oct 2025, leads 12-72 h,
+  # tp 6/12/24 h and SEEPS). Its truth is MARS rd iekm, whose O2560 orography differs from i4ql (up to 107 m on the
+  # coasts of Greenland and on Svalbard; orography_O2560_iekm.README.md): with this cache set
+  # model_height_column: h_o2560_iekm (the 2025 truth's own orography; the model and truth rows share the column).
+  # The input row keeps h_o1280: the 2025 enfo O1280 z equals the h_o1280 source within 0.24 m.
+  # cache:
+  #   atos: /home/ecm5702/hpcperm/data/station_caches/global4_2025_tc31_v1
+  #   jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/station_caches/global4_2025_tc31_v1
+  # model_height_column: h_o2560_iekm
   vars: [2t, 10ff, msl, tp]
   tp_obs_var: tp6
   model_height_column: h_o2560
