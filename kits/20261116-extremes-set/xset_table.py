@@ -317,7 +317,9 @@ def main():
           if (Path(d) / "obs_points" / "scores_per_date.csv").exists()}
     if a.ref in st:
         lines += station_lines(st, a.ref, tags)
-    tc = {lab: pd.read_csv(Path(d) / "tc_cases_scored.csv", dtype={"date": str}) for lab, d in rows.items()
+    # keep_default_na=False: pandas would read the basin code "NA" (North Atlantic) as a missing value
+    tc = {lab: pd.read_csv(Path(d) / "tc_cases_scored.csv", dtype={"date": str, "basin": str, "sid": str, "name": str},
+                           keep_default_na=False, na_values=["", "nan"]) for lab, d in rows.items()
           if (Path(d) / "tc_cases_scored.csv").exists()}
     if a.ref in tc:
         lines += tc_lines(tc, a.ref)
