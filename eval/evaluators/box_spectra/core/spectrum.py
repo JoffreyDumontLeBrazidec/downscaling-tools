@@ -25,10 +25,11 @@ class Sampler:
     """Sampling of the unstructured points on a regular lat/lon grid; weights built once."""
 
     def __init__(self, lat: np.ndarray, lon: np.ndarray, extent, res: float, lat_scale: float = 1.2,
-                 method: str = "linear"):
+                 method: str = "linear", res_lon: float | None = None):
         from scipy.spatial import cKDTree
         lat_min, lat_max, lon_min, lon_max = extent
-        self.gx = np.arange(lon_min, lon_max + 1e-9, res)
+        self.res_lon = res if res_lon is None else float(res_lon)   # longitude step (default: res)
+        self.gx = np.arange(lon_min, lon_max + 1e-9, self.res_lon)
         self.gy = np.arange(lat_min, lat_max + 1e-9, res)
         GX, GY = np.meshgrid(self.gx, self.gy)
         self.shape = GY.shape
@@ -80,7 +81,7 @@ class Sampler:
         return np.sum(values[self.verts] * self.w, axis=1).reshape(self.shape)
 
     def dx_dy_km(self) -> tuple[float, float]:
-        return (self.res * KM_PER_DEG * np.cos(np.deg2rad(self.lat0)), self.res * KM_PER_DEG)
+        return (self.res_lon * KM_PER_DEG * np.cos(np.deg2rad(self.lat0)), self.res * KM_PER_DEG)
 
 
 class Spectrum:
@@ -100,6 +101,7 @@ class Spectrum:
         kmax = min(0.5 / dx_km, 0.5 / dy_km)                 # Nyquist (cycles/km)
         kmin = 1.0 / min(nx * dx_km, ny * dy_km)              # one wave across the shorter side
         edges = np.geomspace(kmin, kmax, nbins + 1)
+        self.edges = edges
         self.wavelength_km = 1.0 / np.sqrt(edges[:-1] * edges[1:])   # bin centres (geometric)
         self.band_lo_km = 1.0 / edges[1:]
         self.band_hi_km = 1.0 / edges[:-1]
@@ -130,3 +132,50 @@ class Spectrum:
         sel = self.bin >= 0
         s = np.bincount(self.bin[sel], weights=p[sel], minlength=self.nbins)
         return (s / np.maximum(self.counts, 1.0))[self.keep]
+
+
+class InputSpectrum:
+    """The input's spectrum on the wavelength bins of a reference ``Spectrum`` (rule 41).
+
+    Linear (or nearest) sampling of a coarse input, e.g. O320 (28 km between points), onto the fine 0.07-degree
+    grid of the truth smooths it: the interpolation acts as a low-pass filter on the input alone (wind amplitude
+    ratio at 119 km 0.669 linear, 0.744 nearest). Here the input is instead sampled, nearest point, on a regular
+    grid at ITS OWN point spacing (``Sampler(..., method="nearest", res_lon=...)`` with steps equal to the native
+    spacing in km, and spanning the reference grid's exact length so that the low wavenumbers coincide), where
+    nearly every grid point takes a distinct native value, so nothing is averaged. Its
+    FFT cells are binned with the reference's bin edges, and the power is put on the reference's scale: with
+    ``Spectrum.fft``'s normalisation the mean |F|^2 of a cell grows with the number of grid points, so the
+    power is multiplied by (dx dy) / (dx_ref dy_ref), which makes it a per-area density on both grids. Bins whose
+    centre wavelength is below ``min_wavelength_km`` or that hold no FFT cell of the coarse grid are NaN. The
+    runner sets the limit at 6 native grid lengths where the native grid is coarsest in the box: the nearest
+    native point is displaced from its grid point by up to half a grid length, and that jitter adds power near
+    the native scale (on the O320 points of E2 with a known filter, the ratio expected 0.726 at 119 km reads
+    1.09; at 6 coarsest grid lengths and above the bins are within 2 %).
+    """
+
+    def __init__(self, ref: Spectrum, ny: int, nx: int, dx_km: float, dy_km: float, *, min_wavelength_km: float,
+                 ref_dx_km: float, ref_dy_km: float):
+        self.ny, self.nx = ny, nx
+        self.win = np.hanning(ny)[:, None] * np.hanning(nx)[None, :]
+        self.win_power = float(np.mean(self.win ** 2))
+        KX, KY = np.meshgrid(np.fft.fftfreq(nx, d=dx_km), np.fft.fftfreq(ny, d=dy_km))
+        k = np.hypot(KX, KY).ravel()
+        b = np.digitize(k, ref.edges) - 1
+        self.bin = np.where((b >= 0) & (b < ref.nbins) & (k > 0), b, -1)
+        self.nbins, self.keep = ref.nbins, ref.keep
+        counts = np.bincount(self.bin[self.bin >= 0], minlength=ref.nbins).astype(np.float64)
+        self.counts = counts
+        self.scale = (dx_km * dy_km) / (ref_dx_km * ref_dy_km)
+        self.min_wavelength_km = float(min_wavelength_km)
+        self.valid = (counts[ref.keep] > 0) & (ref.wavelength_km >= self.min_wavelength_km)
+
+    def fft(self, grid: np.ndarray) -> np.ndarray:
+        a = (grid - np.mean(grid)) * self.win
+        return np.fft.fft2(a) / np.sqrt(self.win_power * self.nx * self.ny)
+
+    def power(self, F: np.ndarray) -> np.ndarray:
+        p = (np.abs(F) ** 2).ravel()
+        sel = self.bin >= 0
+        s = np.bincount(self.bin[sel], weights=p[sel], minlength=self.nbins)
+        out = (s / np.maximum(self.counts, 1.0))[self.keep] * self.scale
+        return np.where(self.valid, out, np.nan)

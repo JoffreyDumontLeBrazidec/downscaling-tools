@@ -453,15 +453,25 @@ def _input_field(reader: InputReader, ws_index: dict[str, int], field: str) -> n
     return None
 
 
-def _input_reference(ds: xr.Dataset, n_pred: int) -> tuple[xr.DataArray | None, str]:
-    """The input on the output grid for the residuals: one member, or one per prediction member."""
+def _input_reference(ds: xr.Dataset, n_pred: int) -> tuple[xr.DataArray | None, xr.DataArray | None, str]:
+    """The inputs on the output grid for the residuals: (model reference, truth reference, note).
+
+    The truth residual is y - x_interp: y is the control (or single) truth and x_interp its own input. The model
+    residual of member k is y_pred[k] - x_interp_members[k] when the file carries one interpolated input per
+    prediction member, else y_pred[k] - x_interp (one input for every member, or one per member)."""
     if INPUT_VARIABLE not in ds:
-        return None, f"files carry no {INPUT_VARIABLE}: no residual bands"
-    da = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
-    n = int(da.sizes["member"])
+        return None, None, f"files carry no {INPUT_VARIABLE}: no residual bands"
+    truth_ref = _to_member_point_weather(ds[INPUT_VARIABLE], ds, label=INPUT_VARIABLE)
+    n = int(truth_ref.sizes["member"])
     if n not in (1, n_pred):
-        return None, f"{INPUT_VARIABLE} has {n} members for {n_pred} prediction members: no residual bands"
-    return da, ("one input for every member" if n == 1 else "input member k paired with prediction member k")
+        return None, None, f"{INPUT_VARIABLE} has {n} members for {n_pred} prediction members: no residual bands"
+    if "x_interp_members" in ds:
+        da = _to_member_point_weather(ds["x_interp_members"], ds, label="x_interp_members")
+        if int(da.sizes["member"]) == n_pred:
+            return da, truth_ref, (f"model: x_interp_members (input member k with prediction member k); "
+                                   f"truth: {INPUT_VARIABLE}")
+    return truth_ref, truth_ref, (f"model and truth: {INPUT_VARIABLE} (one input for every member)" if n == 1
+                                  else f"model and truth: {INPUT_VARIABLE} (input member k with prediction member k)")
 
 
 class PooledResiduals:
@@ -518,16 +528,22 @@ def _residual_band_values(
     operator: LowPassOperator,
     large_pred: np.ndarray,
     large_truth: np.ndarray,
+    truth_ref_values: np.ndarray | None = None,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """``{band: (model residuals (m, n), truth residuals (k, n))}`` against the input, per inner band.
 
-    ``ref_values`` holds one input (k = 1, used for every member) or one per member (k = m).
+    ``ref_values`` holds the model's input: one (used for every member) or one per member. ``truth_ref_values``
+    holds the truth's input (x_interp; default: ``ref_values``), one or one per member.
     The large part of a residual is ``P_L(pred) - P_L(input)``: ``P_L`` is linear, so the
     members' large parts already computed for the band scores are reused.
     """
     large_ref = np.stack([operator.apply(r) for r in ref_values])
-    full_m, full_t = pred_values - ref_values, truth_point[None] - ref_values
-    large_m, large_t = large_pred - large_ref, large_truth[None] - large_ref
+    if truth_ref_values is None or truth_ref_values is ref_values:
+        truth_ref_values, large_tref = ref_values, large_ref
+    else:
+        large_tref = np.stack([operator.apply(r) for r in truth_ref_values])
+    full_m, full_t = pred_values - ref_values, truth_point[None] - truth_ref_values
+    large_m, large_t = large_pred - large_ref, large_truth[None] - large_tref
     return {"full_inner": (full_m, full_t), "large": (large_m, large_t),
             "fine": (full_m - large_m, full_t - large_t)}
 
@@ -642,10 +658,12 @@ def compute_probabilistic_scores(
             y_true = _to_member_point_weather(ds["y"], ds, label="y")
             if y_true.sizes["member"] > 1:
                 y_true = y_true.isel(member=0, drop=True).expand_dims(member=[0])
-            x_ref = None
+            x_ref = x_ref_truth = None
             if scale_split:
-                # the residual reference stays x_interp (a residual definition, not the input row; rule 41)
-                x_ref, residual_note = _input_reference(ds, int(y_pred.sizes["member"]))
+                # the residual references stay the interpolated input (a residual definition, not the input row;
+                # rule 41): the model's member k against x_interp_members[k] when the file has them, the truth
+                # (control or single truth) against x_interp, its own input
+                x_ref, x_ref_truth, residual_note = _input_reference(ds, int(y_pred.sizes["member"]))
             ws_index = _weather_state_index(ds)
             n_points = int(y_pred.sizes["grid_point_hres"])
             weights = _area_weights(ds, n_points)
@@ -697,9 +715,15 @@ def compute_probabilistic_scores(
                 ref_values = _clip_precip(field, _select_field(x_ref, ws_index, field), clip_fields) if x_ref is not None else None
                 if ref_values is not None and ref_values.shape[0] > 1 and np.array_equal(ref_values, np.broadcast_to(ref_values[:1], ref_values.shape), equal_nan=True):
                     ref_values = ref_values[:1]      # one input copied per member (conv/ files): low-pass it once
+                truth_ref_values = ref_values
+                if x_ref_truth is not None and x_ref_truth is not x_ref:
+                    truth_ref_values = _clip_precip(field, _select_field(x_ref_truth, ws_index, field), clip_fields)
+                    if truth_ref_values.shape[0] > 1 and np.array_equal(truth_ref_values, np.broadcast_to(truth_ref_values[:1], truth_ref_values.shape), equal_nan=True):
+                        truth_ref_values = truth_ref_values[:1]
                 if ref_values is not None and operator is not None:
                     res_bands = _residual_band_values(pred_values, truth_point, ref_values, operator,
-                                                      bands["large"][0], bands["large"][1])
+                                                      bands["large"][0], bands["large"][1],
+                                                      truth_ref_values=truth_ref_values)
                     for band, (model_res, truth_res) in res_bands.items():
                         for domain_name, mask in band_masks.items():
                             valid = mask & np.all(np.isfinite(model_res), axis=0) & np.all(np.isfinite(truth_res), axis=0)

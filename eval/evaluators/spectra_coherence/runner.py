@@ -37,11 +37,26 @@ COMPETITOR: the coherence and amplitude ratio of the input with the truth per de
 are not a residual quantity (the residual curves below are, and stay on x_interp). So under
 rule 41 (owner, 9 Nov 2026: the input is scored on its own grid, never interpolated to the
 output grid first) they come from the native input ``x`` on ``lat_lres/lon_lres`` whenever
-the file carries it, sampled at the analysis-map pixel centres with the operator
-box_spectra uses for its native input (linear, barycentric over the native points'
-triangulation; see _input_sampler.py), not from ``x_interp``. Without a native x they fall
-back to ``x_interp``, with a warning. ``native_input: false`` reproduces the old curves.
-coherence.json records ``input_source``.
+the file carries it, not from ``x_interp``. Sampling a coarse input (O320, 28 km between
+points) at the pixel centres of the fine analysis map smooths it: linear sampling damps the
+wind amplitude at 119 km to 0.669, nearest to 0.744. So the input gets its OWN HEALPix map,
+at the nside whose pixel area equals the area per native point (one pixel per native point;
+187 for a global O320 input, a RING nside need not be a power of two), each pixel taking its
+nearest native point: no averaging. A nearest point sits up to half a grid length away from
+its pixel centre, and that displacement alone decorrelates the input from a truth taken at the
+pixel centres (coherence 0.83 near the input's truncation for an input that IS the filtered
+truth). So the truth of the input curves is taken at the same displaced positions: each pixel
+of the input map takes the truth at the output point nearest to that pixel's native point
+(``P_true_in``), and the input's amplitude ratio and coherence are formed against that map
+(the same operator for both). The curves are written up to lmax_in = min(2 nside_in, the
+input's truncation N - 1 of an octahedral O<N> grid, lmax) and only at wavelengths of at
+least 6 native grid lengths (the median distance between neighbouring native points, as
+obs_points measures it); other degrees are NaN, and a band that reaches past them gets no
+input values. On a global O1280 truth and O320 input with a known filter this keeps the
+amplitude ratio within 1 % and the coherence above 0.98 (tests). coherence.json records
+``input_source`` and ``input_map`` (nside_in, lmax_in, truncation, the wavelength limit).
+Without a native x the input curves fall back to ``x_interp`` on the analysis map, with a
+warning. ``native_input: false`` reproduces the old curves.
 
 Residual (rule 14 of the run-judging protocol): with the interpolated input present, the
 amplitude ratio of the residual is also written per degree,
@@ -50,8 +65,11 @@ amplitude ratio of the residual is also written per degree,
 
 (the transform is linear, so this is the spectrum of y_pred - x_interp over that of
 y - x_interp), next to the input over truth R_interp(l) and the aligned part C(l) x R(l).
-The residual is a residual DEFINITION, so it stays against ``x_interp`` (y - x_interp is what
-the model learns), also when the input curves come from the native x.
+The residual is a residual DEFINITION, so it stays against the interpolated input (y - x_interp is
+what the model learns), also when the input curves come from the native x. The model residual of
+member k is taken against its own ``x_interp_members[k]`` when the file carries it; the truth
+residual stays y - x_interp, because y is the control (or single) truth and x_interp its own input
+(coherence.json ``residual_reference``).
 ``curves.csv`` holds every per-degree quantity in long form (one row per scope, state and
 degree; scope ``all`` pools every file and member, scope ``YYYYMMDD`` one date) with the
 wavelength 2 pi a / sqrt(l (l + 1)) in km. Per-date rows are written with ``per_date: true``.
@@ -154,6 +172,81 @@ def _native_sampler(ds, nside: int, valid: np.ndarray, cache: dict):
     return cache[key]
 
 
+INPUT_MIN_GRID_LENGTHS = 6.0
+
+
+def octahedral_truncation(lat_in: np.ndarray) -> int | None:
+    """N - 1 for a reduced Gaussian (octahedral) O<N> grid, from its row spacing of about 90/N degrees."""
+    rows = np.unique(np.round(np.asarray(lat_in, np.float64), 6))
+    if rows.size < 8:
+        return None
+    return int(round(90.0 / float(np.median(np.diff(rows))))) - 1
+
+
+def _native_input_map(ds, lat, lon, nside: int, valid: np.ndarray, lmax: int, cache: dict) -> dict:
+    """The native input's own HEALPix map (rule 41; module docstring): nside_in with one pixel per native point
+    over the output grid's footprint, the valid pixels (those holding output points), the nearest native point
+    of each valid pixel centre, the output point nearest that native point (the displaced truth), lmax_in
+    (capped at the input's truncation) and the degrees kept (wavelength >= 6 native grid lengths)."""
+    import healpy as hp
+    from scipy.spatial import cKDTree
+
+    from eval.shared.native_input import _xyz, native_spacing_km
+
+    lat_in = np.asarray(ds["lat_lres"].values, dtype=np.float64).reshape(-1)
+    lon_in = np.asarray(ds["lon_lres"].values, dtype=np.float64).reshape(-1)
+    key = (nside, int(valid.sum()), lat_in.size, float(lat_in[0]), float(lat_in[-1]), float(lon_in[0]),
+           float(lon_in[-1]))
+    if key in cache:
+        return cache[key]
+    npix = hp.nside2npix(nside)
+    cov = float(valid.sum()) / npix
+    pix_in = hp.ang2pix(nside, np.deg2rad(90.0 - lat_in), np.deg2rad(np.mod(lon_in, 360.0)))
+    n_in = int(valid[pix_in].sum())            # native points over the output grid's footprint
+    nside_in = max(4, int(round(np.sqrt(n_in / (12.0 * max(cov, 1e-9))))))
+    _, _, valid_in, npix_in, cov_in = _healpix_binner(lat, lon, nside_in)
+    theta, phi = hp.pix2ang(nside_in, np.flatnonzero(valid_in))
+    _, nearest = cKDTree(_xyz(lat_in, lon_in)).query(_xyz(90.0 - np.degrees(theta), np.degrees(phi)))
+    km = native_spacing_km(lat_in, lon_in)
+    trunc = octahedral_truncation(lat_in)
+    lmax_in = int(min(2 * nside_in, lmax, trunc if trunc else lmax))
+    # the truth of the input curves at the same displaced positions: the output point nearest each pixel's native point
+    _, truth_idx = cKDTree(_xyz(lat, lon)).query(_xyz(lat_in[nearest], lon_in[nearest]))
+    ell = np.arange(lmax_in + 1, dtype=np.float64)
+    with np.errstate(divide="ignore"):
+        wl = 2.0 * np.pi * EARTH_RADIUS_KM / np.sqrt(ell * (ell + 1.0))
+    keep = wl >= INPUT_MIN_GRID_LENGTHS * km
+    cache[key] = {"nside_in": nside_in, "npix_in": npix_in, "valid_in": valid_in, "cov_in": cov_in,
+                  "nearest": nearest, "truth_idx": truth_idx, "lmax_in": lmax_in, "truncation": trunc,
+                  "keep": keep, "native_spacing_km": km, "min_wavelength_km": INPUT_MIN_GRID_LENGTHS * km,
+                  "l_keep_max": int(np.flatnonzero(keep).max()) if keep.any() else 0}
+    return cache[key]
+
+
+def _native_input_alms(values, truth_values, im: dict) -> tuple[np.ndarray, np.ndarray]:
+    """a_lm (to lmax_in) of the native input on its own map and of the truth at the same displaced positions."""
+    out = []
+    for v, idx in ((values, im["nearest"]), (truth_values, im["truth_idx"])):
+        m = np.zeros(im["npix_in"], dtype=np.float64)
+        m[im["valid_in"]] = np.asarray(v, dtype=np.float64)[idx]
+        m[im["valid_in"]] -= np.mean(m[im["valid_in"]])
+        out.append(_alm(m, im["lmax_in"]))
+    return out[0], out[1]
+
+
+def _native_input_terms(values, truth_values, im: dict, lmax: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """P_interp(l), X_interp_true(l) and P_true_in(l) on the input's own map (truth at the displaced positions),
+    NaN where not kept and above lmax_in."""
+    a_i, a_t = _native_input_alms(values, truth_values, im)
+    n, cv = im["lmax_in"] + 1, max(im["cov_in"], 1e-6)
+    out = []
+    for a, b in ((a_i, a_i), (a_i, a_t), (a_t, a_t)):
+        v = np.full(lmax + 1, np.nan)
+        v[:n] = np.where(im["keep"], _auto_cross(a, b, im["lmax_in"]) / cv, np.nan)
+        out.append(v)
+    return out[0], out[1], out[2]
+
+
 def _sampled_map(values, sampler, valid, npix):
     """The native input on the analysis map: sampled at the valid pixels, mean-removed like _healpix_map."""
     m = np.zeros(npix, dtype=np.float64)
@@ -201,7 +294,7 @@ def curve_rows_of(scope: str, state: str, entry: dict, n: int) -> list[dict]:
     cols = {"amplitude_ratio": R, "coherence": C, "aligned": C * R,
             "P_true": mean["P_true"], "P_pred": mean["P_pred"]}
     if "P_interp" in mean:
-        Ri, Ci, _, _ = _ratio_coh_pair(mean["P_interp"], mean["P_true"], mean["X_interp_true"])
+        Ri, Ci, _, _ = _ratio_coh_pair(mean["P_interp"], mean.get("P_true_in", mean["P_true"]), mean["X_interp_true"])
         cols.update(interp_amplitude_ratio=Ri, interp_coherence=Ci, P_interp=mean["P_interp"])
     if "P_resid_pred" in mean:
         Rr, Cr, _, _ = _ratio_coh_pair(mean["P_resid_pred"], mean["P_resid_true"], mean["X_resid"])
@@ -305,7 +398,9 @@ def run(
     n_date: dict[tuple[str, str], int] = {}
     have_interp = False
     input_sources: set[str] = set()
-    samplers: dict = {}
+    input_maps: dict = {}
+    input_map_meta: dict = {}
+    resid_refs: set[str] = set()
     coverage = None
 
     for file_path in files:
@@ -337,7 +432,18 @@ def run(
             file_native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
             file_has_interp = file_native or "x_interp" in ds
             have_interp = have_interp or file_has_interp
-            sampler = _native_sampler(ds, nside, valid, samplers) if file_native else None
+            im = _native_input_map(ds, lat, lon, nside, valid, lmax, input_maps) if file_native else None
+            if im is not None:
+                input_map_meta = {k: (float(v) if isinstance(v, (float, np.floating)) else v) for k, v in im.items()
+                                  if k in ("nside_in", "lmax_in", "truncation", "native_spacing_km",
+                                           "min_wavelength_km", "cov_in", "l_keep_max")}
+                input_map_meta["truth"] = "truth at the output point nearest each pixel's native point"
+            # residual references: the model's member k against its own x_interp_members[k] when the file carries
+            # one per member; the truth (the control or single truth) against x_interp, its own input
+            resid_name = "x_interp_members" if "x_interp_members" in ds else ("x_interp" if "x_interp" in ds else None)
+            truth_ref_name = "x_interp" if "x_interp" in ds else resid_name
+            if resid_name:
+                resid_refs.add(f"model: {resid_name}; truth: {truth_ref_name}")
             if file_native:
                 input_sources.add(INPUT_NATIVE)
             elif file_has_interp:
@@ -354,9 +460,13 @@ def run(
                     interp = _input_member(ds["x"], member_idx)
                 else:
                     interp = _select_member(ds["x_interp"], member_idx) if file_has_interp else None
-                # the residuals stay defined against x_interp (a residual definition, not the input row)
-                resid_ref = (interp if not file_native else
-                             _select_member(ds["x_interp"], member_idx) if "x_interp" in ds else None)
+                # the residuals stay defined against the interpolated input (a residual definition, not the
+                # input row): x_interp_members[k] when present, else x_interp
+                same_ref = not file_native and resid_name == "x_interp"
+                resid_ref = (interp if same_ref else
+                             _input_member(ds[resid_name], member_idx) if resid_name else None)
+                truth_ref = (resid_ref if truth_ref_name == resid_name else
+                             _input_member(ds[truth_ref_name], member_idx))
 
                 for state in states:
                     si = idx_of.get(state)
@@ -372,6 +482,9 @@ def run(
                         if resid_ref is not None and resid_ref is not interp:
                             resid_ref = resid_ref.copy()
                             resid_ref[:, si] = np.maximum(resid_ref[:, si], 0.0)
+                        if truth_ref is not None and truth_ref is not resid_ref:
+                            truth_ref = truth_ref.copy()
+                            truth_ref[:, si] = np.maximum(truth_ref[:, si], 0.0)
 
                     m_t = _healpix_map(truth[:, si], pix, counts, valid, npix)
                     m_p = _healpix_map(pred[:, si], pix, counts, valid, npix)
@@ -384,17 +497,20 @@ def run(
 
                     terms = [("P_true", p_true), ("P_pred", p_pred), ("X_pred_true", x_pt)]
 
-                    if interp is not None:
-                        m_i = (_sampled_map(interp[:, si], sampler, valid, npix) if file_native
-                               else _healpix_map(interp[:, si], pix, counts, valid, npix))
-                        a_i = _alm(m_i, lmax)
+                    if interp is not None and file_native:
+                        p_int, x_it, p_tin = _native_input_terms(interp[:, si], truth[:, si], im, lmax)
+                        terms += [("P_interp", p_int), ("X_interp_true", x_it), ("P_true_in", p_tin)]
+                    elif interp is not None:
+                        a_i = _alm(_healpix_map(interp[:, si], pix, counts, valid, npix), lmax)
                         p_int = _auto_cross(a_i, a_i, lmax) / max(cov, 1e-6)
                         x_it = _auto_cross(a_i, a_t, lmax) / max(cov, 1e-6)
-                        terms += [("P_interp", p_int), ("X_interp_true", x_it)]
+                        terms += [("P_interp", p_int), ("X_interp_true", x_it), ("P_true_in", p_true)]
                     if resid_ref is not None:
-                        a_r = a_i if (interp is not None and not file_native) else _alm(
+                        a_r = a_i if (interp is not None and same_ref) else _alm(
                             _healpix_map(resid_ref[:, si], pix, counts, valid, npix), lmax)
-                        d_p, d_t = a_p - a_r, a_t - a_r
+                        a_rt = a_r if truth_ref is resid_ref else _alm(
+                            _healpix_map(truth_ref[:, si], pix, counts, valid, npix), lmax)
+                        d_p, d_t = a_p - a_r, a_t - a_rt
                         p_rp = _auto_cross(d_p, d_p, lmax) / max(cov, 1e-6)
                         p_rt = _auto_cross(d_t, d_t, lmax) / max(cov, 1e-6)
                         x_r = _auto_cross(d_p, d_t, lmax) / max(cov, 1e-6)
@@ -422,10 +538,11 @@ def run(
         mean = {k: v / n for k, v in entry.items()}
         ell = np.arange(mean["P_true"].shape[0], dtype=np.float64)
 
-        def _ratio_coh(p_other, x_other):
+        def _ratio_coh(p_other, x_other, p_ref=None):
             eps = 1e-300
-            R = np.sqrt(np.maximum(p_other, 0.0) / np.maximum(mean["P_true"], eps))
-            C = x_other / np.sqrt(np.maximum(p_other * mean["P_true"], eps))
+            p_ref = mean["P_true"] if p_ref is None else p_ref
+            R = np.sqrt(np.maximum(p_other, 0.0) / np.maximum(p_ref, eps))
+            C = x_other / np.sqrt(np.maximum(p_other * p_ref, eps))
             C = np.clip(C, -1.0, 1.0)
             E = 1.0 + R**2 - 2.0 * R * C
             return R, C, E, 1.0 - C**2
@@ -448,7 +565,7 @@ def run(
         npz_payload[f"{state}__C"] = C
 
         if "P_interp" in mean:
-            Ri, Ci, Ei, Fi = _ratio_coh(mean["P_interp"], mean["X_interp_true"])
+            Ri, Ci, Ei, Fi = _ratio_coh(mean["P_interp"], mean["X_interp_true"], mean.get("P_true_in"))
             state_out.update({
                 "P_interp": mean["P_interp"].tolist(),
                 "interp_amplitude_ratio": Ri.tolist(),
@@ -506,11 +623,12 @@ def run(
                 "error_floor_phase_only": 1.0 - C**2,
                 "share_of_truth_variance": pt / float(np.sum(mean["P_true"][ell >= 1])),
             }
-            if "P_interp" in mean:
+            if "P_interp" in mean and np.all(np.isfinite(mean["P_interp"][sel])):
                 pi = float(np.sum(mean["P_interp"][sel]))
                 xi = float(np.sum(mean["X_interp_true"][sel]))
-                Ri = float(np.sqrt(pi / pt))
-                Ci = float(np.clip(xi / np.sqrt(max(pi * pt, 1e-300)), -1.0, 1.0))
+                pti = float(np.sum(mean.get("P_true_in", mean["P_true"])[sel]))
+                Ri = float(np.sqrt(pi / pti))
+                Ci = float(np.clip(xi / np.sqrt(max(pi * pti, 1e-300)), -1.0, 1.0))
                 row.update({
                     "interp_amplitude_ratio": Ri,
                     "interp_coherence": Ci,
@@ -535,6 +653,8 @@ def run(
         "has_interp_baseline": have_interp,
         "native_input": native_input,
         "input_source": sorted(input_sources),
+        "input_map": input_map_meta or None,
+        "residual_reference": sorted(resid_refs),
         "bands": [{"name": n_, "lo": lo, "hi": hi} for n_, lo, hi in bands],
         "band_summary": band_rows,
         "curves": curves,

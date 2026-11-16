@@ -21,9 +21,12 @@ Surface classes come from the O1280 constant forcings (lsm, z), which are the ve
 fields the model does and does not receive -- the point of the test.
 
 The ``interp_*`` columns score the input as a competitor (its band correlation and
-amplitude ratio against the truth). Under rule 41 they come from the native input ``x``
-sampled at the pixel centres (runner._native_sampler, the box_spectra operator), and from
-``x_interp`` only when the file has no native x; ``input_source`` records which.
+amplitude ratio against the truth). Under rule 41 they come from the native input ``x`` on its
+own HEALPix map, against the truth at the same displaced positions (runner._native_input_map,
+the path of the coherence curves), band-passed in spectral space and drawn on the analysis map
+before the class masks; a band reaching past the input's kept degrees (runner: 6 native grid
+lengths, the input's truncation) has no interp columns. They come from ``x_interp`` only when
+the file has no native x; ``input_source`` records which.
 """
 from __future__ import annotations
 
@@ -157,7 +160,7 @@ def run_stratified(
     from eval.discovery.predictions import valid_prediction_files
     from eval.evaluators.spectra_coherence.runner import (
         INPUT_INTERP, INPUT_INTERP_OFF, INPUT_NATIVE, _alm, _healpix_binner, _healpix_map, _input_member,
-        _native_sampler, _sampled_map, _select_member,
+        _native_input_alms, _native_input_map, _select_member,
     )
 
     predictions_dir = Path(predictions_dir)
@@ -169,11 +172,12 @@ def run_stratified(
 
     classes = None
     class_info = None
-    # acc[(state, band, cls)] = [sum p*t, sum p^2, sum t^2, sum i*t, sum i^2]
+    # acc[(state, band, cls)] = [sum p*t, sum p^2, sum t^2, sum i*t', sum i^2, sum t'^2] (t' = the truth of the
+    # input columns: at the displaced positions for a native input, the truth itself otherwise)
     acc: dict[tuple, np.ndarray] = {}
     n_samples = 0
     input_sources: set[str] = set()
-    samplers: dict = {}
+    input_maps: dict = {}
 
     for file_path in files:
         with xr.open_dataset(file_path) as ds:
@@ -193,7 +197,7 @@ def run_stratified(
             # the input columns: native x on its own grid when the file has it (rule 41)
             file_native = native_input and "x" in ds.variables and "lat_lres" in ds.variables
             has_interp = file_native or "x_interp" in ds
-            sampler = _native_sampler(ds, nside, valid, samplers) if file_native else None
+            im = _native_input_map(ds, lat, lon, nside, valid, lmax, input_maps) if file_native else None
             if file_native:
                 input_sources.add(INPUT_NATIVE)
             elif has_interp:
@@ -216,25 +220,30 @@ def run_stratified(
                         continue
                     a_p = _alm(_healpix_map(pred[:, si], pix, counts, valid, npix), lmax)
                     a_t = _alm(_healpix_map(truth[:, si], pix, counts, valid, npix), lmax)
+                    a_ti, l_in = a_t, lmax
                     if interp is None:
                         a_i = None
                     elif file_native:
-                        a_i = _alm(_sampled_map(interp[:, si], sampler, valid, npix), lmax)
+                        a_i, a_ti = _native_input_alms(interp[:, si], truth[:, si], im)
+                        l_in = im["lmax_in"]
                     else:
                         a_i = _alm(_healpix_map(interp[:, si], pix, counts, valid, npix), lmax)
 
                     for bname, lo, hi in bands:
                         mp = _band_map(a_p, lo, hi, lmax, nside)
                         mt = _band_map(a_t, lo, hi, lmax, nside)
-                        mi = _band_map(a_i, lo, hi, lmax, nside) if a_i is not None else None
+                        use_i = a_i is not None and (not file_native or min(hi, lmax + 1) - 1 <= im["l_keep_max"])
+                        mi = _band_map(a_i, lo, hi, l_in, nside) if use_i else None
+                        mti = (mt if not file_native else _band_map(a_ti, lo, hi, l_in, nside)) if use_i else None
                         for cls, mask in classes.items():
                             m = mask & valid
                             p = mp[m]
                             t = mt[m]
                             vals = np.array([
                                 float(np.dot(p, t)), float(np.dot(p, p)), float(np.dot(t, t)),
-                                float(np.dot(mi[m], t)) if mi is not None else 0.0,
+                                float(np.dot(mi[m], mti[m])) if mi is not None else 0.0,
                                 float(np.dot(mi[m], mi[m])) if mi is not None else 0.0,
+                                float(np.dot(mti[m], mti[m])) if mi is not None else 0.0,
                             ])
                             key = (state, bname, cls)
                             acc[key] = vals if key not in acc else acc[key] + vals
@@ -243,7 +252,7 @@ def run_stratified(
 
     rows = []
     for (state, bname, cls), v in acc.items():
-        pt, pp, tt, it, ii = v
+        pt, pp, tt, it, ii, tti = v
         if tt <= 0 or pp <= 0:
             continue
         row = {
@@ -252,9 +261,9 @@ def run_stratified(
             "amplitude_ratio": float(np.sqrt(pp / tt)),
             "truth_band_rms": float(np.sqrt(tt)),
         }
-        if ii > 0:
-            row["interp_correlation"] = float(np.clip(it / np.sqrt(ii * tt), -1.0, 1.0))
-            row["interp_amplitude_ratio"] = float(np.sqrt(ii / tt))
+        if ii > 0 and tti > 0:
+            row["interp_correlation"] = float(np.clip(it / np.sqrt(ii * tti), -1.0, 1.0))
+            row["interp_amplitude_ratio"] = float(np.sqrt(ii / tti))
         rows.append(row)
 
     payload = {

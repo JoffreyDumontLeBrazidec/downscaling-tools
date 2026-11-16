@@ -16,10 +16,35 @@ KEYS = ["var", "variant", "radius_km", "region", "lead"]
 HEADLINE = ("fcrps", "spread", "spread_rms", "ssr_corrected", "seeps")
 SECONDARY = ("bias", "rmse_mean", "mae_mean", "mae_member", "corr_mean")
 TAIL_PREFIXES = ("twcrps", "brier", "n_obs_gt")
-# Rows of one run compared date by date: (a, b) gives a - b.
+# Rows of one run compared date by date: (a, b) gives a - b. Only rows of the same kind are paired on every
+# metric (an ensemble with an ensemble, a single field with a single field): a single field's fair CRPS is its
+# MAE, not comparable with an ensemble's fair CRPS (rule 34(e)). A pair of an ensemble and a single field keeps
+# the metrics of the ensemble mean only (MIXED_KIND_METRICS).
 DEFAULT_PAIRS = (("model", "input"), ("model", "truth"), ("truth", "input"),
                  ("model", "hres"), ("hres", "truth"), ("hres", "input"))
+MIXED_KIND_METRICS = ("mae_mean", "rmse_mean", "corr_mean")
 VAR_UNITS = {"2t": "K", "10ff": "m/s", "msl": "Pa", "tp": "mm / 12 h", "tp24": "mm / 24 h"}
+# spread/skill at stations: observation error is not added to the ensemble variance, so a reliable ensemble reads
+# below 1 (the observations scatter more than the model field)
+SSR_NOTE = "no observation-error term (a reliable ensemble reads below 1)"
+
+
+def var_unit(var: str, meta: dict | None = None) -> str:
+    """Unit of a variable in the tables; tp follows the run's tp_obs_var (tp6: mm / 6 h)."""
+    tp_obs = str((meta or {}).get("tp_obs_var") or "tp")
+    if var == "tp" and tp_obs != "tp" and tp_obs[2:].isdigit():
+        return f"mm / {int(tp_obs[2:])} h"
+    return VAR_UNITS.get(var, "")
+
+
+def pair_kinds(df, a: str, b: str) -> str:
+    """'same' when rows a and b are both ensembles or both single fields in ``df`` (column ``kind``), else 'mixed'."""
+    def ens(row):
+        k = set(df.loc[df.row == row, "kind"].astype(str)) if "kind" in df.columns else set()
+        return {x.startswith("ensemble") for x in k} or {row == "model"}
+
+    ea, eb = ens(a), ens(b)
+    return "same" if len(ea) == 1 and ea == eb else "mixed"
 
 
 def tail_name(col: str) -> str:
@@ -89,13 +114,16 @@ def paired(df, pairs=DEFAULT_PAIRS):
     for a, b in pairs:
         if a not in set(df.row) or b not in set(df.row):
             continue
-        wa = {m: wide[(m, a)] for m in mets if (m, a) in wide.columns}
-        wb = {m: wide[(m, b)] for m in mets if (m, b) in wide.columns}
-        for t in _paired_table(wa, wb, mets, KEYS):
+        same = pair_kinds(df, a, b) == "same"
+        use = mets if same else [m for m in mets if m in MIXED_KIND_METRICS]
+        wa = {m: wide[(m, a)] for m in use if (m, a) in wide.columns}
+        wb = {m: wide[(m, b)] for m in use if (m, b) in wide.columns}
+        for t in _paired_table(wa, wb, use, KEYS):
             t.insert(len(KEYS), "pair", f"{a}-{b}")
+            t["kinds"] = "same kind" if same else "ensemble vs single field: ensemble-mean metrics only"
             out.append(t)
     if not out:
-        return pd.DataFrame(columns=KEYS + ["pair", "mean", "se", "dates", "wins", "rel_mean", "metric"])
+        return pd.DataFrame(columns=KEYS + ["pair", "mean", "se", "dates", "wins", "rel_mean", "metric", "kinds"])
     return pd.concat(out, ignore_index=True)
 
 
@@ -151,19 +179,21 @@ def write_summary_md(summ, pr, meta, path, *, region="all"):
              + (", ".join(f"`{r}`" for r in single_rows)
                 + " are single fields (their fair CRPS is the mean absolute error of one field and their spread is "
                   "zero: compare them with the ensemble mean, never with an ensemble's fair CRPS). " if single_rows else "")
-             + "Deterministic columns (bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here.",
-             f"Dates: {len(meta.get('dates', []))}. Reference: `{meta.get('cache_dir') or meta.get('imerg_file')}`. "
+             + "Deterministic columns (bias, RMSE, MAE and correlation of the ensemble mean) are in summary.csv, not here. "
+             + f"Spread/skill at the stations has {SSR_NOTE}. Paired lines compare rows of the same kind only.",
+             f"Dates scored: {len(meta.get('dates_scored') or meta.get('dates', []))}. Reference: `{meta.get('cache_dir') or meta.get('imerg_file')}`. "
              "Weighting: "
              f"{meta.get('config', {}).get('weighting', 'none')}.", ""]
     if meta.get("provenance"):
         lines += provenance_lines(meta["provenance"]) + [""]
     s = summ[summ.region == region]
     for (v, var_, r), q in s.groupby(["var", "variant", "radius_km"], sort=False):
-        unit = VAR_UNITS.get(v, "")
+        unit = var_unit(v, meta)
         head = f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({unit})"
         lines += [head, "", "| row | score | " + " | ".join(f"+{l} h" for l in leads) + " |",
                   "|---|---|" + "---|" * len(leads)]
-        mets = [("fcrps", "fair CRPS"), ("ssr_corrected", "spread/skill (corrected)"), ("spread", "spread")]
+        mets = [("fcrps", "fair CRPS"), ("ssr_corrected", "spread/skill (corrected; no obs-error term)"),
+                ("spread", "spread")]
         if "seeps" in q.columns and q["seeps"].notna().any():
             mets.append(("seeps", "SEEPS (mean over members)"))
         mets += [(c, tail_name(c)) for c in q.columns
@@ -223,7 +253,7 @@ def write_compare_md(tab, meta, path, *, region=None):
     t = tab[(tab.region == region) & (tab.metric.str.startswith(("fcrps", "twcrps", "brier", "seeps")))]
     leads = sorted(set(tab.lead))
     for (v, var_, r), q in t.groupby(["var", "variant", "radius_km"], sort=False):
-        lines += [f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({VAR_UNITS.get(v, '')})", "",
+        lines += [f"## {v} {var_}" + (f", disc radius {r:g} km" if r else "") + f" ({var_unit(v, meta)})", "",
                   "| score | " + " | ".join(f"+{l} h" for l in leads) + " |", "|---|" + "---|" * len(leads)]
         for met, qq in q.groupby("metric", sort=False):
             qq = qq.set_index("lead")

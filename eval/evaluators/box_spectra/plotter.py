@@ -29,7 +29,7 @@ LADDER = [
 ]
 CURVES = [("ratio_resid", MODEL_COLOR, "-", "predicted residual / true residual"),
           ("ratio_full", MODEL_COLOR, "--", "prediction / truth (full field)"),
-          ("ratio_interp_to_truth", INPUT_COLOR, "-", "interpolated input / truth"),
+          ("ratio_interp_to_truth", INPUT_COLOR, "-", "input / truth (native x where the files have it)"),
           ("aligned", TRUTH_COLOR, ":", "aligned part (coherence x full-field ratio)")]
 
 
@@ -57,7 +57,7 @@ def grid_panels(rows: list[dict]) -> dict:
             return amplitude_in_display(var, vals)
 
         panels[var] = [Curve("Truth", wvn, amp("amp_truth_full"), role="truth"),
-                       Curve("Input (interpolated)", wvn, amp("amp_interp"), role="input"),
+                       Curve("Input", wvn, amp("amp_interp"), role="input"),
                        Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, amp("amp_pred_full"), role="model")]
     return panels
 

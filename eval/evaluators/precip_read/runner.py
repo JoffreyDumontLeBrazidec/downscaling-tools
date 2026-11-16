@@ -31,9 +31,11 @@ def read_tp(path, var: str = "tp", box_edge_deg: float | None = None, *, native_
             info: dict | None = None):
     """lat, lon (-180..180), truth, input, members (M, points) in mm, clipped at 0.
 
-    Truth and input may or may not carry an ensemble_member axis; member 0 is used when they do. The input is read
+    Truth and input may or may not carry an ensemble_member axis; for the truth member 0 is used. The input is read
     on its own grid (rule 41): the native ``x`` at the nearest native point of each output point when the file
-    carries it, else ``x_interp``; ``info["input_source"]`` says which.
+    carries it, else ``x_interp``; ``info["input_source"]`` says which. Its member is the control when the file
+    says which one that is (``input_member``); otherwise member 0, which on ENS-member files is the perturbed
+    member pf1, not the control, and ``info["input_member"]`` says so.
     On a regional (box) file the points of the box-edge strip are left out (eval.shared.edge_strip).
     """
     import netCDF4
@@ -49,13 +51,34 @@ def read_tp(path, var: str = "tp", box_edge_deg: float | None = None, *, native_
         reader = InputReader(ds, native_input=native_input, fallback=("x_interp",),
                              lat_out=np.asarray(ds["lat_hres"][:], np.float64),
                              lon_out=np.asarray(ds["lon_hres"][:], np.float64))
-        xi = np.clip(reader.channel(k, member=0), 0, None) * MM
+        member, note = input_member(ds, reader)
+        xi = np.clip(reader.channel(k, member=member), 0, None) * MM
         if info is not None:
             info["input_source"] = reader.source
+            info["input_member"] = note
     lon = np.where(lon > 180, lon - 360, lon)
     keep = box_edge_index(lat, lon, box_edge_deg)
     y, yp = y.reshape(-1, lat.size)[0], yp.reshape(-1, lat.size)
     return lat[keep], lon[keep], y[keep], xi[keep], yp[:, keep]
+
+
+def input_member(ds, reader) -> tuple[int, str]:
+    """(index, note) of the input member read as the single input row: the control when the file says which
+    member it is (attribute ``control_member``, 0-based on the input's member axis, or ``member_mode`` control,
+    where every input member is the control); else member 0, stated as such."""
+    attrs = {a: ds.getncattr(a) for a in ds.ncattrs()}
+    n = reader.n_members
+    if n <= 1:
+        return 0, f"the only input field of {reader.variable}"
+    if "control_member" in attrs:
+        i = int(attrs["control_member"])
+        if not 0 <= i < n:
+            raise ValueError(f"control_member {i} is outside the {n} input members of {reader.variable}")
+        return i, f"member {i} of {reader.variable}: the control (file attribute control_member)"
+    if str(attrs.get("member_mode", "")).lower() == "control":
+        return 0, f"member 0 of {reader.variable}: the control (member_mode control, every input member is it)"
+    return 0, (f"member 0 of {reader.variable}, of {n}: the file does not say which member is the control; on "
+               "ENS-member files this is the perturbed member pf1, not the control")
 
 
 def region_masks(lat, lon, regions: dict) -> dict:
@@ -92,6 +115,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     station, station_log = [], []
     native_input = bool(eval_config.get("native_input", True))
     input_sources: set[str] = set()
+    input_members: set[str] = set()
 
     preds = [p for p in find_predictions(predictions_dir)
              if (only_dates is None or p.date in only_dates) and (only_steps is None or p.step in only_steps)]
@@ -110,6 +134,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             lat, lon, y, xi, yp = read_tp(p.path, var, resolve_box_edge_deg(eval_config), native_input=native_input,
                                           info=info)
             input_sources.add(str(info.get("input_source")))
+            input_members.add(str(info.get("input_member")))
             members.add(int(yp.shape[0]))
             masks = region_masks(lat, lon, regions)
             npts = [int(m.sum()) for m in masks.values()]
@@ -164,7 +189,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             "thresholds": list(thresholds), "box_edge_deg": resolve_box_edge_deg(eval_config), "steps": sorted(by_step), "files": files, "cases_missing": missing,
             "obs": {**obs_cfg, "per_file": station_log} if obs_cfg else None,
             "run_label": str(eval_config.get("run_label") or kwargs.get("run_label") or ""),
-            "input_source": sorted(input_sources), "native_input": native_input}
+            "input_source": sorted(input_sources), "input_member": sorted(input_members), "native_input": native_input}
+    for note in sorted(input_members):
+        if "not the control" in note:
+            LOG.warning("precip_read: input row = %s", note)
     for src in sorted(input_sources):
         if is_interpolated(src):
             warn_fallback(LOG, "precip_read", src)

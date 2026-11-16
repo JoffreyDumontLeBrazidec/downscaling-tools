@@ -87,7 +87,10 @@ def _compare(args) -> None:
         meta = {"a": str(a_dir), "b": str(b_dir), "label_a": la, "label_b": lb, "row": args.row, "checks": checks,
                 "members": [meta_a.get("members"), meta_b.get("members")],
                 "evaluator": meta_a.get("evaluator", "obs_points"), "where": meta_a.get("where", "at stations"),
-                "sample_unit": meta_a.get("sample_unit", "stations")}
+                "sample_unit": meta_a.get("sample_unit", "stations"),
+                "tp_obs_var": meta_a.get("tp_obs_var") or "tp"}
+        if (meta_a.get("tp_obs_var") or "tp") != (meta_b.get("tp_obs_var") or "tp"):
+            checks["tp_obs_var_differs"] = [meta_a.get("tp_obs_var"), meta_b.get("tp_obs_var")]
         # the region shown: "all" for station runs, else the first region the run configured (obs_imerg)
         order = list(meta_a.get("regions") or meta_a.get("config", {}).get("regions") or [])
         present = set(tab.region) if len(tab) else set()

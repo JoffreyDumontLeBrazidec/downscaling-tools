@@ -83,6 +83,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def join_negative_box(words: list[str]) -> list[str]:
+    """``--box -90,90,-180,180`` -> ``--box=-90,90,-180,180``: argparse takes a value that starts with '-' and
+    is not a plain number for an option and stops with "expected one argument" (global station fetch jobs
+    38692873/38692874, 11 Nov 2026)."""
+    out = []
+    for w in words:
+        if out and out[-1] == "--box" and w[:1] == "-" and w[1:2].isdigit():
+            out[-1] = f"--box={w}"
+        else:
+            out.append(w)
+    return out
+
+
 def main(argv: list[str] | None = None) -> None:
     """Parse args, resolve config when the command needs a lane, and dispatch."""
     import sys
@@ -95,7 +108,7 @@ def main(argv: list[str] | None = None) -> None:
     if words and words[0] in TOMBSTONES and not {"-h", "--help"} & set(words[1:]):
         exit_with_tombstone(words[0])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(join_negative_box(words))
 
     logging.basicConfig(
         level=logging.INFO,
