@@ -18,6 +18,9 @@ counts, the *_all rule):
   4  pairing per lead: correlation across members, inside a case, of INPUT_k with ENS9_k and with model_k; median
      distance between the centres of member k in two rows (both with a closed centre).
   5  structure per lead: share of members with a closed centre, mean radius of maximum wind.
+  6  the wind added to the input member by structure of the input member (closed centre, radius of maximum wind) and
+     lead group; 7 a least-squares map of the addition on the input member and the lead; 8 mean wind by strength of
+     the best-track storm; 9 spread across members and strongest member per lead.
 """
 from __future__ import annotations
 
@@ -31,6 +34,8 @@ LEADS = (12, 24, 36, 48, 60, 72)
 GROUPS = {"+12/+24 h": (12, 24), "+36/+48 h": (36, 48), "+60/+72 h": (60, 72)}
 IN_EDGES = (0.0, 15.0, 22.0, 1e9)            # classes of the input member's wind, m/s (36 km field)
 IN_NAMES = ("input < 15", "input 15-22", "input >= 22")
+RMW_EDGES = (90.0, 140.0)                   # classes of the input member's radius of maximum wind, km
+BT_CLASSES = ((0.0, 17.0, "below 17"), (17.0, 33.0, "17-33"), (33.0, 1e9, "33 and above"))
 KEY = ["sid", "date", "lead", "member"]
 CASE = ["sid", "date", "lead"]
 
@@ -182,6 +187,75 @@ def main():
     for r in rows:
         head += [f"{r} closed %", f"{r} RMW km"]
     md += ["\n## 5. Structure per lead: members with a closed centre (%), mean radius of maximum wind (km)\n", table(head, lines)]
+
+    # ---- 6 the transfer of the input at fixed input structure (added 17 Nov 2026 after the first read)
+    st = np.where(w["found:INPUT"] != 1, 3, np.digitize(w["rmw_km:INPUT"].fillna(1e9).to_numpy(np.float64), RMW_EDGES))
+    st_names = (f"closed, RMW < {RMW_EDGES[0]:g} km", f"closed, RMW {RMW_EDGES[0]:g}-{RMW_EDGES[1]:g} km",
+                f"closed, RMW >= {RMW_EDGES[1]:g} km", "no closed centre")
+    lines = []
+    for si, sname in enumerate(st_names):
+        for gname, gl in GROUPS.items():
+            s = w[(st == si) & w["lead"].isin(gl)]
+            if len(s) < 20:
+                continue
+            ln = [sname, gname, len(s), f(s["wind_ms:INPUT"].mean())]
+            for r in rows[1:]:
+                s = s.assign(_d=s[f"wind_ms:{r}"] - s["wind_ms:INPUT"])
+                ln += [f"{f(s['_d'].mean())} ({f(jack_se(s, '_d'))})"]
+            for m in models:
+                s = s.assign(_d=s[f"wind_ms:{m}"] - s["wind_ms:ENS9"])
+                ln += [f"{f(s['_d'].mean())} ({f(jack_se(s, '_d'))})"]
+            lines.append(ln)
+    md += ["\n## 6. Wind added to the input member, by structure of the input member and lead group\n",
+           "A model without lead information should add the same at every lead inside a class (one map from input to "
+           "output). Caution on the ENS9 column: member k of ENS9 follows member k of the input less and less with lead "
+           "(table 4), so inside a class of weak or broad input members it drifts to the mean storm of the case. That is "
+           "the pairs the model is trained on, not an error of the table.\n\n",
+           table(["input member", "leads", "member lines", "mean input wind"] + [f"{r} - INPUT (SE)" for r in rows[1:]]
+                 + [f"{m} - ENS9 (SE)" for m in models], lines)]
+
+    # ---- 7 one linear map per row: does the lead enter?
+    X = np.column_stack([np.ones(len(w)), w["wind_ms:INPUT"], 1010.0 - w["pmin_hpa:INPUT"], (w["found:INPUT"] == 1).astype(float),
+                         w["rmw_km:INPUT"].fillna(200.0) / 100.0, w["lead"] / 24.0])
+    dates = w["date"].to_numpy()
+    lines = []
+    for r in rows[1:]:
+        y = (w[f"wind_ms:{r}"] - w["wind_ms:INPUT"]).to_numpy(np.float64)
+        b = np.linalg.lstsq(X, y, rcond=None)[0]
+        ud = np.unique(dates)
+        bs = np.array([np.linalg.lstsq(X[dates != d], y[dates != d], rcond=None)[0] for d in ud])
+        se = np.sqrt((len(ud) - 1) / len(ud) * ((bs - bs.mean(0)) ** 2).sum(0))
+        lines.append([r] + [f"{f(b[j], 3)} ({f(se[j], 3)})" for j in range(1, 6)])
+    md += ["\n## 7. Least-squares map of (row_k - INPUT_k) wind on the input member; coefficient (SE, delete-one-date)\n",
+           table(["row", "per m/s of input wind", "per hPa of input deficit (1010 - pmin)", "closed centre",
+                  "per 100 km of input RMW (200 km when not closed)", "per 24 h of lead"], lines)]
+
+    # ---- 8 by strength of the best-track storm
+    lines = []
+    for lo, hi, name in BT_CLASSES:
+        for gname, gl in GROUPS.items():
+            s = w[(w["bt_wind_ms"] >= lo) & (w["bt_wind_ms"] < hi) & w["lead"].isin(gl)]
+            if len(s) < 20:
+                continue
+            ln = [name, gname, len(s.drop_duplicates(CASE))] + [f(s[f"wind_ms:{r}"].mean()) for r in rows]
+            for m in models:
+                s = s.assign(_d=s[f"wind_ms:{m}"] - s["wind_ms:ENS9"])
+                ln += [f"{f(s['_d'].mean())} ({f(jack_se(s, '_d'))})"]
+            lines.append(ln)
+    md += ["\n## 8. Mean wind by strength of the best-track storm (10-minute m/s) and lead group\n",
+           table(["best track", "leads", "cases"] + rows + [f"{m} - ENS9 (SE)" for m in models], lines)]
+
+    # ---- 9 spread and strongest member per lead
+    g = w.groupby(CASE)
+    sd = g[[f"wind_ms:{r}" for r in rows]].std().reset_index()
+    mx = g[[f"wind_ms:{r}" for r in rows]].max().reset_index()
+    lines = []
+    for L in LEADS + (None,):
+        a_, b_ = (sd, mx) if L is None else (sd[sd["lead"] == L], mx[mx["lead"] == L])
+        lines.append(["all" if L is None else f"+{L}"] + [f(a_[f"wind_ms:{r}"].mean()) for r in rows]
+                     + [f(b_[f"wind_ms:{r}"].mean()) for r in rows])
+    md += ["\n## 9. Wind per lead: spread across members inside a case (sd), and the strongest member of the case\n",
+           table(["lead"] + [f"sd {r}" for r in rows] + [f"top member {r}" for r in rows], lines)]
 
     Path(a.out).write_text("\n".join(md))
     w.to_csv(Path(a.out).with_suffix(".members.csv"), index=False)
