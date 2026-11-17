@@ -12,6 +12,9 @@
 #SBATCH --hint=nomultithread
 #SBATCH --time=06:00:00
 #SBATCH --output=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/logs/%x-%j.out
+# Another set: XSET_JWORK / XSET_JOUT in xset_set.env of the submit directory (exported variables may not reach the job).
+[[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/xset_set.env" ]] && source "$SLURM_SUBMIT_DIR/xset_set.env"
+echo "[xset] set jwork ${XSET_JWORK:-XSET-1 default} jout ${XSET_JOUT:-XSET-1 default}"
 set -o pipefail; ulimit -c 0
 X=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
 K=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}/downscaling-tools/kits/20261116-extremes-set/jupiter

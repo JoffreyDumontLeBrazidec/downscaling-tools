@@ -24,18 +24,24 @@ Same seeds everywhere: `derive_draw_seed(1234, date, lead, member-1)` (rule 31);
 
 ## Environment of the XSET kit for S25
 
-Every XSET script reads these (defaults = XSET-1):
+**Exported variables do NOT reach Atos batch jobs** (`SBATCH_EXPORT=NONE` plus the ECMWF sbatch wrapper's own
+`--export`). On 17 Nov the S25 chain ran with the XSET-1 defaults and wrote into the XSET-1 work folder (incident in
+the docs note). Every XSET job now sources `xset_set.env` from the directory it was submitted from, prints
+`[xset] set work ...`, and `xset_chain_submit.sh` refuses to run when the shell names another set without that file.
+So: `cd $XSET_WORK` and submit from there, with `$XSET_WORK/xset_set.env`:
 
 ```
-# Atos
+# Atos: /ec/res4/scratch/ecm5702/agent-work/20261117-s25-set/xset_set.env
 export XSET_WORK=/ec/res4/scratch/ecm5702/agent-work/20261117-s25-set
-export XSET_LISTS=<checkout>/kits/20261117-baselines/s25/lists
+export XSET_LISTS=$XSET_WORK/downscaling-tools/kits/20261117-baselines/s25/lists
 export XSET_CACHE=$XSET_WORK/cache/s25_v1
 export XSET_DATES=$XSET_LISTS/dates_s25.csv
-# Jupiter
+# Jupiter: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-s25-set/xset_set.env
 export XSET_JWORK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-s25-set
 export XSET_JOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/s25_20261117
 ```
+Also `source` the same file in the login shell for the bash helpers (copy scripts, tables). Check the first job's
+`[xset] set work` line before submitting the rest.
 
 ## Run order
 
