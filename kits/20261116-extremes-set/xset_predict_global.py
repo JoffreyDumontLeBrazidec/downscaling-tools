@@ -49,6 +49,8 @@ MODEL_LABEL = os.environ.get("MODEL_LABEL", "db_global_512_300k")
 CFG_DIR = os.environ.get("CFG_DIR", f"{DEV}/db_global_20261027/configs")
 CFG_NAME = os.environ.get("CFG_NAME", "db_global_512_300k")
 SEED_BASE = 1234
+FORCING_TIME = os.environ.get("FORCING_TIME", "valid")
+assert FORCING_TIME in ("valid", "init"), FORCING_TIME
 SEED_FORMULA = "numpy SeedSequence([base, yyyymmdd, lead_h, member]).generate_state(1, uint32)"
 TIME_VARS = ("cos_julian_day", "sin_julian_day", "cos_local_time", "sin_local_time", "insolation")
 BOX = (10.0, 70.0, -80.0, 40.0)   # MODE=test only: the E2 crop of the reference file
@@ -349,7 +351,10 @@ def main():
         mem70 = members_of(date, lead)
         assert mem70.shape == (len(full_vars), mem70.shape[1], in_full.shape[-1]) and mem70.shape[1] >= n_mem, mem70.shape
         assert np.isfinite(mem70[:, :n_mem]).all(), f"non-finite member input {date} +{lead}"
-        in_hres = hres_in(hres_row(valid)).unsqueeze(0).to(device)
+        # FORCING_TIME=init reproduces the anemoi-inference downscaling runner defect (input_date = date - step): the five time
+        # forcings of every lead are computed at the start date. Diagnostic arm only (forcing-date check, 17 Nov 2026).
+        f_time = valid if FORCING_TIME == "valid" else dt.datetime.strptime(date, "%Y%m%d")
+        in_hres = hres_in(hres_row(f_time)).unsqueeze(0).to(device)
         tmpl = {}
         if mode == "predict":
             with netCDF4.Dataset(str(Path(os.environ["XSET_TEMPLATE"]) / name)) as d:
@@ -365,7 +370,8 @@ def main():
             pidx = np.flatnonzero(box)
         cseeds = case_seeds(date, lead, n_mem)
         if is_main:
-            LOG.info("CASE %s +%d h valid %s: %d points written, seeds %s", date, lead, valid, pidx.size, cseeds)
+            LOG.info("CASE %s +%d h valid %s forcings at %s (%s): %d points written, seeds %s", date, lead, valid, f_time,
+                     FORCING_TIME, pidx.size, cseeds)
         preds, glob_tp, glob_u, glob_v = [], [], [], []
         for km, seed in enumerate(cseeds):
             batch = {"in_lres": member_in(mem70[:, km, :]).unsqueeze(0).to(device), "in_hres": in_hres}
@@ -415,7 +421,9 @@ def main():
                      seed_formula=SEED_FORMULA, matmul=torch.get_float32_matmul_precision(), xset="XSET-1",
                      member_mode="pf", member_store=os.environ.get("XSET_IN", os.environ.get("MEMBER_IN_STORE", "")),
                      member_rule="draw k conditioned on input member eefo pf k+1 (k 0-based), seed derive_draw_seed(1234, date, lead, k)",
-                     in_hres="6 constants of the dataset anchor row + 5 time forcings computed at date + lead (anchor-checked)",
+                     in_hres="6 constants of the dataset anchor row + 5 time forcings computed at date + lead (anchor-checked)"
+                     if FORCING_TIME == "valid" else "6 constants of the dataset anchor row + 5 time forcings computed at the START date (FORCING_TIME=init, defect arm)",
+                     forcing_time=FORCING_TIME,
                      anchor=f"{anchor_date}:{anchor_lead}", tp_units="m per 12 h")
         if mode == "test":
             with netCDF4.Dataset(os.environ["TEST_REF"]) as d:

@@ -2,6 +2,7 @@
 #   GL512_500k   db_global_512_300k step 500000, EMA-2000 (the reference row of the set)
 #   GL512_450k   the same run at step 450000, EMA-2000 (the standard checkpoint since 17 Nov 2026)
 #   GL512_237k   the same run at step 237000, EMA-2000 (only for the bit-identity test against the 4 Nov member read)
+#   GL512_450k_FTINIT  GL512_450k with the 5 time forcings at the START date (emulates anemoi-inference input_date = date - step)
 # A new arm = one more case line (run directory, config, code pin, step, EMA tag); nothing else changes.
 CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
 DEVR=/e/home/jusers/dumontlebrazidec1/jupiter/dev
@@ -13,6 +14,7 @@ case "$row" in
   GL512_500k) export CKPT_STEP=500000 ;;
   GL512_450k) export CKPT_STEP=450000 ;;
   GL512_237k) export CKPT_STEP=237000 ;;
+  GL512_450k_FTINIT) export CKPT_STEP=450000 FORCING_TIME=init ;;   # forcing-date check 17 Nov: time forcings at the start date
   *) echo "FATAL unknown row '$row'"; return 1 ;;
 esac
 export RUN_DIR=$CK/checkpoint_nm50_global/db_global_512_300k CFG_DIR=$DEVR/db_global_20261027/configs CFG_NAME=db_global_512_300k
