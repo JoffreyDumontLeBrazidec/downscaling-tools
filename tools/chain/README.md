@@ -139,3 +139,25 @@ before it trains or writes a second run. `tests/test_chain_next.py` runs the sel
 `tests/toy_next_job.sh` under a fake Slurm (`tests/fake_slurm/`): one submission runs a whole chain, no progress
 stops it after three segments, progress resets the count, `CHAIN.stop`, no duplicate of a pending segment, and no
 `SLURM_*` leak into the successor's submission.
+
+## Triton kernel guard (rule 47, 17 Nov 2026)
+
+`kernel_guard.py` refuses the old (pre-bbca1748) Triton GraphTransformer kernel `anemoi/models/triton/gt.py`.
+The test is a git-blob ALLOWLIST (`ALLOWED_GT_BLOBS`, 5 fixed blobs on 17 Nov 2026, ds-trunk = `88b036167a14`):
+any other gt.py, old or hand-edited, stops the process with exit 97 before the module body runs. Not an
+ImportError, because anemoi falls back to another backend on ImportError.
+
+It is armed in four places, so no single forgotten line lets the old kernel run:
+
+| where | when | how |
+|---|---|---|
+| `chain_resolve` (chain_segment.sh) | job start, before the resolve | `$KERNEL_GUARD_PY kernel_guard.py check` (default `python` = the venv's) |
+| `chain_guard_launch.py` | every srun rank, before the entry point | import hook in-process + check |
+| `sitecustomize.py` / `python -m eval.cli` | every eval / inference interpreter | import hook |
+| every shared and run venv on the clusters | every interpreter of that venv | `python kernel_guard.py install-hook <site-packages>` writes `_ds_kernel_guard.py` + `.pth` |
+
+A job body that does not use the chain tools adds one line after activating its venv:
+`python "$TOOLS/tools/chain/kernel_guard.py" check || exit 97`.
+Inventory of files: `python3 kernel_guard.py file PATH...` (FIXED / OLD / UNLISTED-FIX-MARKERS).
+A new fixed variant joins the allowlist only after `classify` shows both markers and the one-hot bf16 gradient
+test passes (anemoi-core `models/tests/models/test_encoder_trap.py`). Tests: `tests/test_kernel_guard.py`.
