@@ -77,7 +77,8 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
 
     Headline columns: fcrps, spread (mean member SD, ddof 1), spread_rms (root of the mean member variance),
     ssr_corrected = spread_rms / rmse_mean * sqrt((M + 1) / M), and per threshold t the fair twCRPS, the fair
-    Brier score and the observed exceedance count n_obs_gt<t>. Secondary (deterministic) columns: bias,
+    Brier score, the observed exceedance count n_obs_gt<t> and the mean forecast exceedance probability
+    fc_freq_gt<t>. Secondary (deterministic) columns: bias,
     rmse_mean, mae_mean, corr_mean of the ensemble mean, mae_member. ``weights`` (summing to one, e.g.
     quaver's station-density weights) turn every station mean into a weighted mean; counts stay counts.
     """
@@ -108,6 +109,8 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
         out[f"n_obs_gt{t:g}"] = int((obs > t).sum())
         out[f"twcrps{t:g}"] = _wmean(fair_twcrps(ens, obs, t), w)
         out[f"brier{t:g}"] = _wmean(fair_brier(ens, obs, t), w)
+        # mean forecast probability of exceeding t; against n_obs_gt<t> / n it gives the frequency bias of the tail
+        out[f"fc_freq_gt{t:g}"] = _wmean((ens > t).mean(0), w)
     out.update({
         "bias": _wmean(d, w),
         "rmse_mean": rmse,
