@@ -24,7 +24,8 @@
 # (agent-work/20261030-gl512-100k-wide/kit/gl512_predict.py, PW_SCHED + PW_SAMPLER), i.e. 59 denoiser
 # calls per draw (Heun, 30 steps, Euler last step).
 #
-# Owner 2026-11-09: lead 0-360 h at 24 h steps (prepml also writes step 0, trap P5), members 1-10 of
+# Owner 2026-11-17 11:36 UTC ("only up to day 10"): lead 0-240 h at 24 h steps (was 0-360 h, owner 2026-11-09;
+# prepml also writes step 0, trap P5), members 1-10 of
 # eefo pf O320 from MARS (one draw per input member), 00 UTC 2025-09-01 .. 2025-09-30, output FDB
 # class rd stream enfo type pf.
 #
@@ -34,7 +35,7 @@ base: o320_o1280_prepml_pw40_season
 
 predict:
   members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288, 312, 336, 360]
+  steps: [24, 48, 72, 96, 120, 144, 168, 192, 216, 240]
   dates: ["20250901", "20250902", "20250903", "20250904", "20250905", "20250906", "20250907", "20250908",
           "20250909", "20250910", "20250911", "20250912", "20250913", "20250914", "20250915", "20250916",
           "20250917", "20250918", "20250919", "20250920", "20250921", "20250922", "20250923", "20250924",
