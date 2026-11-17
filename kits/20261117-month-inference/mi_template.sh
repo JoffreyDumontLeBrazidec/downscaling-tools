@@ -1,6 +1,7 @@
 #!/bin/bash
 # MI-S25: the O1280 GRIB key template of mi_encode_grib.py = od enfo pf 1, 20250901 00 UTC, step 12, the 10 surface outputs.
 set -eo pipefail
+module load ecmwf-toolbox >/dev/null 2>&1 || true
 A=${MI_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261117-month-inference}; mkdir -p $A/grib
 t=$A/grib/tmpl_o1280.grib
 [[ -s $t ]] && { echo "have $t"; exit 0; }
