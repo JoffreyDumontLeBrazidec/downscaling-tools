@@ -43,7 +43,7 @@ step_once() {   # returns 0 = done, 3 = in progress, other = error
     say "$st"
     if [[ $(val rowsmoke) == 1 ]]; then say "SMOKE_PASS model $(val model) through row $row (Jupiter XOUT/smoke/$row, log xsmoke_$(val model)-*.out)"; return 0; fi
     if [[ $(val smokejobs) != 0 ]]; then say "SMOKE in the queue"; return 3; fi
-    $J "bash $JK/xset_submit_row.sh $row smoke" || { say "SUBMIT_FAIL"; return 1; }
+    $J "XSET_FORCE=${XSET_FORCE:-0} bash $JK/xset_submit_row.sh $row smoke" || { say "SUBMIT_FAIL"; return 1; }
     return 3
   fi
   local na; na=$(ls $A/rows/$row/predictions_*_step*.nc 2>/dev/null | wc -l)
