@@ -42,9 +42,11 @@ export XSET_JOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/s25_20261117
 1. **S25 references (Atos).** Orography: copy the 49r1 GRIB of XSET-1 (`$XSET-1 work/grib/`) into `$XSET_WORK/grib/`.
    `sbatch xset_station_cache.sbatch $XSET_DATES` -> job C; `bash xset_chain_submit.sh $XSET_DATES 2 C ret` (retrieve,
    input stores, points, ENS9 rows). Check 180 ENS9 files (30 dates x 6 leads).
-2. **S25 GL512_450k (Jupiter).** `bash xset_copy_to_jupiter.sh` (stores and templates); on Jupiter
-   `sbatch --job-name=xset_GL512_450k_s25_<i> jupiter/xset_predict.sbatch GL512_450k <dates>` in groups of 5 dates;
-   copy back with `xset_copy_from_jupiter.sh GL512_450k`. ~35 min per date on 4 GH200 = ~70 GH200-h.
+2. **S25 GL512_450k (Jupiter, no new GPU run).** Taken from the MI-S25 month row (same predictor settings, rule-31
+   seeds, GlobalNoise; uint16-packed, max error span/131070): after `xset_copy_to_jupiter.sh` (templates), on Jupiter
+   `python3 s25/mi_to_rows.py --mi /e/data1/jureap-data/ecmwf/users/jdumont/outputs/month_inference_s25/rows/GL512_450k
+   --templates $XSET_JOUT/rows/ENS9 --out $XSET_JOUT --date ...` (CPU job), then `xset_copy_from_jupiter.sh GL512_450k`.
+   Fallback if MI is late: `jupiter/xset_predict.sbatch GL512_450k <dates>` (~70 GH200-h).
 3. **QM (Atos, CPU, no word needed beyond the batch).** `sbatch --array=1-12 qm/qm_extract.sbatch`, then
    `sbatch --array=1-12 qm/qm_fit.sbatch` (afterok), then `sbatch qm/qm_apply.sbatch <set work> <dates>` per set.
 4. **REG (Jupiter, his word: new training).** `reg/SETUP.md`; then rows `REG_GL512_30k` (and `REG_GL512_20k`) on both
