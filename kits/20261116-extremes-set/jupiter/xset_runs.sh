@@ -7,7 +7,7 @@
 CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
 DEVR=/e/home/jusers/dumontlebrazidec1/jupiter/dev
 XK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set
-XKIT=$XK/downscaling-tools/kits/20261116-extremes-set
+XKIT=${XKIT_OVERRIDE:-$XK/downscaling-tools/kits/20261116-extremes-set}   # XKIT_OVERRIDE: a worktree kit (forcing-date check)
 XOUT=$CK/xset1_20261116
 row=${1:?row}
 case "$row" in
