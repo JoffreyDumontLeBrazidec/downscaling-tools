@@ -56,3 +56,15 @@ row is defined (recorded in the row definition and in every file). Not yet run w
 
 The first rows `GL512_500k`, `GL512_450k`, `GL512_237k` keep their fixed lines in `jupiter/xset_runs.sh` (drawn before
 row definitions existed); `xset_row.sh` handles them like any other row.
+
+## Cyclone members per lead (17 Nov 2026)
+
+`xset_score_events.py` also writes `tc_members.csv`: one line per (case, row, member), pressure, wind, centre, radius of
+maximum wind. Member k of INPUT is the input of member k of a model row and has the number of member k of ENS9.
+
+- Rows scored before 17 Nov (ENS9, GL512_500k): `sbatch --job-name=xset_tcmem_ENS9 K/xset_tc_members.sbatch ENS9 refs`,
+  `sbatch --job-name=xset_tcmem_GL512_500k K/xset_tc_members.sbatch GL512_500k`. Output `W/scores_members/<ROW>/`; the log
+  must say `TC_SAME` (the case scores equal the ones of `W/scores/<ROW>`). Rows scored later have the file in `W/scores/<ROW>/`.
+- Read: `python3 K/xset_tc_lead_read.py --ens W/scores_members/ENS9 --row GL512_500k=W/scores_members/GL512_500k
+  --row GL512_450k=W/scores/GL512_450k --out W/tc_lead_read/tc_lead_read.md` (pandas; seconds). Tables per lead: means,
+  what each row adds to its input member, the same by class of input wind, pairing of members between rows, structure.
