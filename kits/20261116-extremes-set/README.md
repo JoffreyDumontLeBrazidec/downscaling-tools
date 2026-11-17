@@ -76,3 +76,8 @@ maximum wind. Member k of INPUT is the input of member k of a model row and has 
 - A smoke draws 2 members; the input field `x` written to the smoke file is cut to the members drawn (fixed after the
   first smoke, job 2966209, failed in the writer: 10 template members against 2 drawn).
 - The account limit on Atos is 60 running jobs for all threads together; `scontrol top` is refused. Short score jobs wait.
+- The station cache `W/cache/xset1_v1` was changed on 17 Nov 17:15-17:36 UTC by another set's job (30 dates merged,
+  20250920 / 0923 / 0927 fetched again). Rows scored before and after are compared with
+  `sbatch --job-name=xset_strk_<ROW> K/xset_station_recheck.sbatch <ROW>` (scores again into `W/scores_recheck/<ROW>`,
+  prints STATIONS_SAME or STATIONS_DIFFERENT per date). Other sets must put their folders in `xset_set.env` of the
+  submit directory: exported variables do not reach Atos batch jobs.
