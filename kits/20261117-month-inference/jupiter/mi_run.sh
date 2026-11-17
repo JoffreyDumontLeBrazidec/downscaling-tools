@@ -11,7 +11,7 @@ if [[ $MODE == xcheck ]]; then
   export XCHECK_IN=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/stores/in
   export XCHECK_ROWS=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116/rows/$1
 else
-  export SEED_BASE=${SEED_BASE:-756}
+  export SEED_BASE=${SEED_BASE:-1234}
 fi
 source $MK/downscaling-tools/kits/20261116-extremes-set/jupiter/xset_env.sh
 export OUTPUT=$MOUT/_anemoi_output; mkdir -p "$OUTPUT"

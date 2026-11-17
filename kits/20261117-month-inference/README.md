@@ -16,7 +16,7 @@ Jupiter (kit checkout in `/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20
 5. `sbatch jupiter/mi_xcheck.sbatch` gate: month path = XSET-1 GL512 500k row bit for bit, packing within bound.
 6. `sbatch --job-name=mi_GL512_450k_<i> jupiter/mi_predict.sbatch GL512_450k <dates...>` (3 dates per job, ~6 h on 4 GH200).
    Output `outputs/month_inference_s25/rows/<ROW>/<date>/pred_<date>_step<LLL>.npz` (uint16 packed, all 10 outputs) + hist/.
-   Seed base 756 = prepml jdno/jdyb base (seed-paired with them).
+   Seed base 1234 = every XSET-1 / S25 paper row (rule 31 pairing); prepml jdyb uses 756 and is not paired.
 
 Back on Atos: `mi_encode_grib.py --rowdir ... --date ... --template grib/tmpl_o1280.grib --out ... --expver <label>` -> GRIB for
 quaver source="marsfile" (scorecards kit `q_compute_ctl.py`). Never FDB (rule 30).

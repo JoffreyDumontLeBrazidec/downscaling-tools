@@ -9,8 +9,8 @@ PW_SCHED / PW_SAMPLER, anchor proof of the two input paths and the rank checks u
     value = lo + q / 65535 * (hi - lo) (max error (hi - lo) / 131070), states, seeds, attrs (json); OUTDIR/grid_o1280.npz
     holds lat / lon of the output points (the out_hres store order). tp is the raw model value (12 h window ending at the
     lead, metres; negatives kept here, clipped at the GRIB encoding);
-  * SEED_BASE from env, default 756 = the prepml base of jdno / jdyb (derive_draw_seed(756, date, lead, member 0-based)),
-    so a draw here and the prepml draw of the same (date, lead, member) start from the same seed;
+  * SEED_BASE from env, default 1234 = the base of every XSET-1 / S25 paper row (derive_draw_seed(1234, date, lead, member
+    0-based)), so every generative paper row is seed-paired (rule 31); prepml jdno / jdyb use 756 (not paired with them);
   * global tail histograms as XSET-1, to OUTDIR/hist/<ROW>_<date>_step<LLL>.npz.
 MODE=xcheck (the gate before a month): cases of XSET-1 dates, input from XCHECK_IN (the XSET stores), SEED_BASE must be 1234;
 the raw draws at the point_index of XCHECK_ROWS/predictions_<date>_step<LLL>.nc must equal that file's y_pred bit for bit
@@ -45,7 +45,7 @@ EXPECT_CODE = os.environ.get("EXPECT_CODE", "db_global_20261027/code/anemoi-core
 MODEL_LABEL = os.environ.get("MODEL_LABEL", "db_global_512_300k")
 CFG_DIR = os.environ.get("CFG_DIR", f"{DEV}/db_global_20261027/configs")
 CFG_NAME = os.environ.get("CFG_NAME", "db_global_512_300k")
-SEED_BASE = int(os.environ.get("SEED_BASE", "756"))
+SEED_BASE = int(os.environ.get("SEED_BASE", "1234"))
 SEED_FORMULA = "numpy SeedSequence([base, yyyymmdd, lead_h, member]).generate_state(1, uint32)"
 TIME_VARS = ("cos_julian_day", "sin_julian_day", "cos_local_time", "sin_local_time", "insolation")
 
