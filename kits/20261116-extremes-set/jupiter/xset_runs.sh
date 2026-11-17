@@ -14,6 +14,7 @@ case "$row" in
   GL512_500k) export CKPT_STEP=500000 ;;
   GL512_450k) export CKPT_STEP=450000 ;;
   GL512_237k) export CKPT_STEP=237000 ;;
+  GL512_450k_FT240) export CKPT_STEP=450000 FORCING_TIME=shift240 ;;   # forcings 240 h before the valid time (= the defect at prepml +240 h)
   GL512_450k_FTINIT) export CKPT_STEP=450000 FORCING_TIME=init ;;   # forcing-date check 17 Nov: time forcings at the start date
   *) echo "FATAL unknown row '$row'"; return 1 ;;
 esac

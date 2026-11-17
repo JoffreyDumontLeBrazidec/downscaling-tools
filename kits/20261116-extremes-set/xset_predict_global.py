@@ -50,7 +50,7 @@ CFG_DIR = os.environ.get("CFG_DIR", f"{DEV}/db_global_20261027/configs")
 CFG_NAME = os.environ.get("CFG_NAME", "db_global_512_300k")
 SEED_BASE = 1234
 FORCING_TIME = os.environ.get("FORCING_TIME", "valid")
-assert FORCING_TIME in ("valid", "init"), FORCING_TIME
+assert FORCING_TIME in ("valid", "init") or FORCING_TIME.startswith("shift"), FORCING_TIME   # shift<H>: valid - H hours
 SEED_FORMULA = "numpy SeedSequence([base, yyyymmdd, lead_h, member]).generate_state(1, uint32)"
 TIME_VARS = ("cos_julian_day", "sin_julian_day", "cos_local_time", "sin_local_time", "insolation")
 BOX = (10.0, 70.0, -80.0, 40.0)   # MODE=test only: the E2 crop of the reference file
@@ -353,7 +353,12 @@ def main():
         assert np.isfinite(mem70[:, :n_mem]).all(), f"non-finite member input {date} +{lead}"
         # FORCING_TIME=init reproduces the anemoi-inference downscaling runner defect (input_date = date - step): the five time
         # forcings of every lead are computed at the start date. Diagnostic arm only (forcing-date check, 17 Nov 2026).
-        f_time = valid if FORCING_TIME == "valid" else dt.datetime.strptime(date, "%Y%m%d")
+        if FORCING_TIME == "valid":
+            f_time = valid
+        elif FORCING_TIME == "init":
+            f_time = dt.datetime.strptime(date, "%Y%m%d")
+        else:   # shift<H>: what the defect gives at lead H for a 00 UTC start with 24 h steps (prepml jdyk: H = 240)
+            f_time = valid - dt.timedelta(hours=int(FORCING_TIME[5:]))
         in_hres = hres_in(hres_row(f_time)).unsqueeze(0).to(device)
         tmpl = {}
         if mode == "predict":
@@ -422,7 +427,7 @@ def main():
                      member_mode="pf", member_store=os.environ.get("XSET_IN", os.environ.get("MEMBER_IN_STORE", "")),
                      member_rule="draw k conditioned on input member eefo pf k+1 (k 0-based), seed derive_draw_seed(1234, date, lead, k)",
                      in_hres="6 constants of the dataset anchor row + 5 time forcings computed at date + lead (anchor-checked)"
-                     if FORCING_TIME == "valid" else "6 constants of the dataset anchor row + 5 time forcings computed at the START date (FORCING_TIME=init, defect arm)",
+                     if FORCING_TIME == "valid" else f"6 constants of the dataset anchor row + 5 time forcings computed at a wrong date (FORCING_TIME={FORCING_TIME}, defect arm)",
                      forcing_time=FORCING_TIME,
                      anchor=f"{anchor_date}:{anchor_lead}", tp_units="m per 12 h")
         if mode == "test":
