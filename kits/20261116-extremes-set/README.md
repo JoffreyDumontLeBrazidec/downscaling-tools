@@ -81,3 +81,12 @@ maximum wind. Member k of INPUT is the input of member k of a model row and has 
   `sbatch --job-name=xset_strk_<ROW> K/xset_station_recheck.sbatch <ROW>` (scores again into `W/scores_recheck/<ROW>`,
   prints STATIONS_SAME or STATIONS_DIFFERENT per date). Other sets must put their folders in `xset_set.env` of the
   submit directory: exported variables do not reach Atos batch jobs.
+
+## Proof state (17 Nov 2026, Jupiter)
+
+- GL512 through a row definition (`GL512_450k_def`, smoke 2968723) equals the first-row file of GL512_450k bit for bit:
+  `XSET_COMPARE IDENTICAL first 2 members, 595474 points`, all five variables.
+- FS242 (12 outputs, from-scratch paper run) smoke on its 75k export (2970004): EMA load 0 missing 0 unexpected, outputs
+  read by name at columns [0, 1, 3, 4, 9], anchor equal to the dataset sample, sanity inside the bounds, `SMOKE_PASS`.
+  A full FS242 row is then `bash K/xset_row.sh <ROW> FS242 <STEP>` (about 100 GH200-h, 1 h of scoring).
+- Not yet run with a few-step (MeanFlow) model.

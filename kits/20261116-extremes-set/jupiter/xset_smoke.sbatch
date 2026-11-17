@@ -24,6 +24,9 @@ f=$X/smoke/$row/predictions_${case%%:*}_step$(printf %03d ${case##*:}).nc
 [[ ! -e $f ]] || mv "$f" "$f.prev.$SLURM_JOB_ID"      # the predictor skips files that exist: a smoke always draws
 bash $K/xset_run.sh "$row" smoke "$case" 29591 || { echo "[xset] SMOKE_FAIL $model row $row $(date -u +%FT%TZ)"; exit 1; }
 [[ -s $f ]] || { echo "[xset] SMOKE_FAIL $model: no file $f"; exit 1; }
-echo "row=$row case=$case job=$SLURM_JOB_ID kit=$(git -C $K rev-parse --short HEAD) utc=$(date -u +%FT%TZ)" > $X/smoke/MODEL_${model}_PASS
+# kit commit without git (compute nodes have none outside the launcher's environment): read it from the checkout
+G=$(cd $K && while [[ ! -e .git && $PWD != / ]]; do cd ..; done; pwd)/.git
+h=$(cat $G/HEAD 2>/dev/null); [[ $h == ref:* ]] && h=$(cat $G/${h#ref: } 2>/dev/null || grep -m1 " ${h#ref: }\$" $G/packed-refs 2>/dev/null | cut -d' ' -f1)
+echo "row=$row case=$case job=$SLURM_JOB_ID kit=${h:0:7} utc=$(date -u +%FT%TZ)" > $X/smoke/MODEL_${model}_PASS
 cp $X/smoke/MODEL_${model}_PASS $X/smoke/$row/XSET_SMOKE_PASS
 echo "[xset] SMOKE_PASS $model row $row case $case $(date -u +%FT%TZ)"
