@@ -6,19 +6,25 @@
 #        noret          the GRIB files are complete: the store job starts at once (it fails on a missing .ok file)
 #        after:ID[:ID]  the retrievals are already submitted as these job ids: every store job waits for all of them
 set -eu
+# Atos drops the caller's environment in batch jobs: a set other than XSET-1 needs xset_set.env in the current directory
+# (the jobs source it from SLURM_SUBMIT_DIR). Refuse to submit when the shell names another set and the file does not.
+if [[ -n "${XSET_WORK:-}" && "${XSET_WORK%/}" != /ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set ]]; then
+  [[ -f "$PWD/xset_set.env" ]] && (source "$PWD/xset_set.env"; [[ "${XSET_WORK%/}" == "$(cd "$XSET_WORK" && pwd)" ]]) || {
+    echo "FATAL: XSET_WORK=$XSET_WORK but $PWD/xset_set.env is missing or names another work folder; the batch jobs would write into XSET-1" >&2; exit 2; }
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
-mkdir -p /ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set/logs
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}; mkdir -p $A/logs; LOG="-o $A/logs/%x-%j.out"
 G=${2:-2}; CJ=${3:-none}; MODE=${4:-ret}; i=0; batch=""
 go() {
   local tag=$1; shift
   local dep=""
   if [[ $MODE == ret ]]; then
-    r=$(sbatch --parsable --job-name=xset_ret_$tag "$HERE/xset_retrieve.sbatch" "$@"); dep="--dependency=afterok:$r"
+    r=$(sbatch --parsable $LOG --job-name=xset_ret_$tag "$HERE/xset_retrieve.sbatch" "$@"); dep="--dependency=afterok:$r"
   elif [[ $MODE == after:* ]]; then r=${MODE#after:}; dep="--dependency=afterok:$r"
   else r=none; fi
-  b=$(sbatch --parsable $dep --job-name=xset_bin_$tag "$HERE/xset_build_in.sbatch" "$@")
+  b=$(sbatch --parsable $LOG $dep --job-name=xset_bin_$tag "$HERE/xset_build_in.sbatch" "$@")
   dep="--dependency=afterok:$b"; [[ $CJ != none ]] && dep="$dep,afterok:$CJ"
-  w=$(sbatch --parsable $dep --job-name=xset_rows_$tag "$HERE/xset_rows.sbatch" "$@")
+  w=$(sbatch --parsable $LOG $dep --job-name=xset_rows_$tag "$HERE/xset_rows.sbatch" "$@")
   echo "CHAIN $tag dates $* : retrieve $r, stores $b, rows $w"
 }
 while IFS=, read -r d _; do
