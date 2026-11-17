@@ -13,6 +13,9 @@ MLflow dry-run path that silently starts from scratch.
 
 With --root, rank 0 writes `<root>/.chain_guard/<job>.ok` once the step matches, so the job body can prove the
 guard ran. No change to anemoi; works with pytorch_lightning and lightning.pytorch.
+
+Before anything else it arms `kernel_guard.py` (same folder) in this process and checks the Triton kernel that
+this interpreter would import: an old `anemoi/models/triton/gt.py` stops every rank with exit 97 (rule 47).
 """
 import argparse
 import os
@@ -81,8 +84,25 @@ def install(expect_step, root=None):
     return patched
 
 
+def _arm_kernel_guard():
+    """Rule 47: refuse the old Triton kernel in this process (import hook + check of the importable gt.py)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    try:
+        import kernel_guard
+    finally:
+        sys.path.remove(here)
+    kernel_guard.install_import_hook()
+    path = kernel_guard.importable_gt()
+    if path is not None:
+        blob = kernel_guard.verify_path(path)
+        if _rank() == 0:
+            sys.stderr.write("[kernel-guard] ok: fixed Triton kernel {} (blob {})\n".format(path, blob[:12]))
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    _arm_kernel_guard()
     if "--" not in argv:
         raise SystemExit("usage: chain_guard_launch.py --expect-step N [--root R] -- <entry> [args...]")
     cut = argv.index("--")

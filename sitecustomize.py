@@ -54,3 +54,19 @@ try:
 except Exception:
     # Do not block unrelated commands if earthkit is unavailable.
     pass
+
+
+def _arm_kernel_guard() -> None:
+    """Rule 47 (17 Nov 2026): refuse the old Triton kernel in every interpreter that has this repo on PYTHONPATH."""
+    import importlib.util
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "chain", "kernel_guard.py")
+    spec = importlib.util.spec_from_file_location("_ds_kernel_guard_tools", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.install_import_hook()
+
+
+# Not wrapped in try/except on purpose: a missing guard must be loud, never silent.
+_arm_kernel_guard()

@@ -4,7 +4,8 @@
 #
 #   source "$CHAIN_TOOLS/chain_segment.sh"
 #   chain_store_guard --config "$CONFIG"              # exits 49 if a store named by the config lost chunk files
-#   chain_resolve "$CKPT_ROOT" "$END_STEP"           # exits 0 if done or stopped, 3 if the state is ambiguous
+#   chain_resolve "$CKPT_ROOT" "$END_STEP"           # exits 0 if done or stopped, 3 if the state is ambiguous,
+#                                                    # 97 if the job would import the old Triton kernel (rule 47)
 #   chain_next "$CKPT_ROOT"                          # optional: queue this job file again, afterany this job
 #   if [[ $CHAIN_ACTION == fresh ]]; then start=( <the body's donor or fork overrides> )
 #   else mapfile -t start < <(chain_resume_overrides); fi
@@ -16,10 +17,19 @@
 
 CHAIN_TOOLS="${CHAIN_TOOLS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 CHAIN_PY="${CHAIN_PY:-python}"
+# Rule 47: the job's own interpreter (venv python, job PYTHONPATH) must import the FIXED Triton kernel.
+KERNEL_GUARD_PY="${KERNEL_GUARD_PY:-python}"
+
+chain_kernel_guard() {
+  "$KERNEL_GUARD_PY" "$CHAIN_TOOLS/kernel_guard.py" check || {
+    echo "[chain] segment refused: old or unknown Triton kernel on this job's import path (rule 47); nothing trained" >&2
+    exit 97; }
+}
 
 chain_resolve() {
   local root="$1" end_step="$2" out
   [[ -n "$root" && -n "$end_step" ]] || { echo "[chain] usage: chain_resolve <ckpt_root> <end_step>" >&2; exit 2; }
+  chain_kernel_guard
   out="$("$CHAIN_PY" "$CHAIN_TOOLS/chain_state.py" resolve --root "$root" --end-step "$end_step")" || {
     echo "[chain] segment refused (state above); nothing trained" >&2; exit 3; }
   eval "$out"
