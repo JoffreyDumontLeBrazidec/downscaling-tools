@@ -14,9 +14,4 @@ set -euo pipefail
 source /leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261117-corrdiff/kit/cd_env.sh
 OUT=$(cat $CD/E2V4_OUT_STORE); IN=$(cat $CD/E2V4_IN_STORE)
 NP=32; T=${SLURM_ARRAY_TASK_ID}
-for j in 0 1 2 3 4 5 6 7; do
-  P=$((T * 8 + j))
-  OMP_NUM_THREADS=4 python3 $CD_KIT/cd_export.py fill --out-store $OUT --in-store $IN --dest $CD_DATA --part $P --nparts $NP &
-done
-wait
-echo "EXPORT_TASK_DONE $T"
+

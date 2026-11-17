@@ -35,7 +35,7 @@ K=<downscaling-tools checkout at branch claude/project-thread-jqfcjw>/kits/20261
    R=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261109-global-o2560-code/anemoi-core
    git -C $R worktree add --detach $EXP/code/anemoi-core 8c12d4dec1f61da50834cfe2e4880ed644c33b83
    echo 8c12d4dec1f61da50834cfe2e4880ed644c33b83 > $EXP/CODE_PIN
-   md5sum $EXP/code/anemoi-core/models/src/anemoi/models/layers/conv/gt.py   # must be 4cf07c3e422218a3d3aab7fc769fed7f (blob 88b03616)
+   md5sum $EXP/code/anemoi-core/models/src/anemoi/models/layers/conv/gt.py   # (real path: models/src/anemoi/models/triton/gt.py) must be 4cf07c3e422218a3d3aab7fc769fed7f (blob 88b03616)
    ```
    Check that `training_approach` "deterministic" exists at this pin:
    `grep -rn '"deterministic"\|deterministic' $EXP/code/anemoi-core/training/src/anemoi/training/train/tasks/ | head`.
