@@ -5,6 +5,10 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set/logs/%x-%j.out
+# A set other than XSET-1 (S25, ...): Atos drops the caller's environment (SBATCH_EXPORT=NONE and the ECMWF sbatch
+# wrapper), so exported XSET_* never arrive. Put them in xset_set.env in the directory you submit from (17 Nov 2026).
+[[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/xset_set.env" ]] && source "$SLURM_SUBMIT_DIR/xset_set.env"
+echo "[xset] set work ${XSET_WORK:-XSET-1 default} lists ${XSET_LISTS:-default} cache ${XSET_CACHE:-default}"
 # Scores of one row of the extremes set on Atos: stations (obs_points, per model cycle), cyclones against IBTrACS and
 # IMERG discs. Row files in A/rows/<LABEL>. With "refs" as second argument the cyclone and IMERG scores of the INPUT row
 # (native x) and of the single 9 km field CF9 are written too: use it on the ENS9 row only.

@@ -5,6 +5,10 @@
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=2
 #SBATCH --output=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set/logs/%x-%j.out
+# A set other than XSET-1 (S25, ...): Atos drops the caller's environment (SBATCH_EXPORT=NONE and the ECMWF sbatch
+# wrapper), so exported XSET_* never arrive. Put them in xset_set.env in the directory you submit from (17 Nov 2026).
+[[ -n "${SLURM_SUBMIT_DIR:-}" && -f "$SLURM_SUBMIT_DIR/xset_set.env" ]] && source "$SLURM_SUBMIT_DIR/xset_set.env"
+echo "[xset] set work ${XSET_WORK:-XSET-1 default} lists ${XSET_LISTS:-default} cache ${XSET_CACHE:-default}"
 # Per-member cyclone file (tc_members.csv) of a row that was scored before 17 Nov 2026 (rows scored later have it in
 # A/scores/<LABEL>). Cyclone cases only, written to A/scores_members/<LABEL>: A/scores/<LABEL> is not touched. The
 # tc_cases_scored.csv written beside it must equal the one of A/scores/<LABEL> (printed: TC_SAME or TC_DIFFERENT).

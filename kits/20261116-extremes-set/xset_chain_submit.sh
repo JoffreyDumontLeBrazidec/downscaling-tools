@@ -6,6 +6,12 @@
 #        noret          the GRIB files are complete: the store job starts at once (it fails on a missing .ok file)
 #        after:ID[:ID]  the retrievals are already submitted as these job ids: every store job waits for all of them
 set -eu
+# Atos drops the caller's environment in batch jobs: a set other than XSET-1 needs xset_set.env in the current directory
+# (the jobs source it from SLURM_SUBMIT_DIR). Refuse to submit when the shell names another set and the file does not.
+if [[ -n "${XSET_WORK:-}" && "${XSET_WORK%/}" != /ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set ]]; then
+  [[ -f "$PWD/xset_set.env" ]] && (source "$PWD/xset_set.env"; [[ "${XSET_WORK%/}" == "$(cd "$XSET_WORK" && pwd)" ]]) || {
+    echo "FATAL: XSET_WORK=$XSET_WORK but $PWD/xset_set.env is missing or names another work folder; the batch jobs would write into XSET-1" >&2; exit 2; }
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}; mkdir -p $A/logs; LOG="-o $A/logs/%x-%j.out"
 G=${2:-2}; CJ=${3:-none}; MODE=${4:-ret}; i=0; batch=""

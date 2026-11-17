@@ -48,7 +48,7 @@ fi
 EFF_END=$LL_END_STEP
 if [[ -n "$LL_SOFT_END" && ! -f "$GO_ON_FILE" ]]; then EFF_END=$LL_SOFT_END; fi
 FLAG_LINE="[anemoi.models.models.diffusiondownscaler_encoder_processor_decoder][INFO] - Direct-only prognostic channels (out_hres not in in_lres): ['cp', 'tp']"
-EDM_LINE="[weight] preconditioning=edm sigma_data=1.0 loss weight sigma-dependent"
+EDM_LINE="[weight] preconditioning=edm sigma_data=1.0 loss weight FLAT: sigma=5e+05"
 NOISE_LINE='Training noise: mixture 0.50 x LogNormal(0.693, 0.750) + 0.50 x LogNormal(1.000, 2.500)'
 LR=${LL_LR:-5.0e-4}   # constant rate = min (16 Nov 2026: per-arm value for the batch-32 lr probe)
 FREEZE=${LL_FREEZE:-true}   # freeze_qk_gains on all 18 blocks; false for the batch-32 runs (owner 16 Nov 09:07 UTC)

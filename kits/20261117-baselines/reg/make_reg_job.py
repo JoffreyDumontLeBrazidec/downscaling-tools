@@ -53,6 +53,10 @@ job = sub(job, """    ("full resume of " + resume if resume else "from scratch (
 job = sub(job, """    "12 outputs": c["dataloader"]["training"]["datasets"]["out_hres"]["reorder"][-2:] == ["z_500", "t_850"],""",
           """    "10 outputs": c["dataloader"]["training"]["datasets"]["out_hres"]["reorder"] == ["10u", "10v", "2d", "2t", "msl", "skt", "sp", "tcw", "cp", "tp"],""", "pyres outputs")
 job = sub(job, 'source "$EXP/jobs/gs_accept.sh"', 'source "$EXP/jobs/reg_accept.sh"', "accept source")
+# deterministic objective: the EDM weight line is the FLAT one (sigma fixed at 5e5), not FS-242's sigma-dependent one
+# (REG gate 2964697 failed on this line only, 17 Nov 19:15 UTC)
+job = sub(job, 'EDM_LINE="[weight] preconditioning=edm sigma_data=1.0 loss weight sigma-dependent"',
+          'EDM_LINE="[weight] preconditioning=edm sigma_data=1.0 loss weight FLAT: sigma=5e+05"', "EDM line")
 
 acc = sub(acc, """  echo "[accept] warm-start lines (want 0, from scratch): $tl"; [[ "$tl" == 0 ]] || acc=1""",
           """  echo "[accept] warm-start lines (want > 0, warm start from $LL_WARM_FILE): $tl"; [[ "$tl" -gt 0 ]] || acc=1""", "accept warm")
