@@ -10,9 +10,9 @@
 # A second call with more dates merges into the same cache. HPCPERM is full (16 Nov 2026): the cache lives on scratch.
 # Usage: sbatch xset_station_cache.sbatch <dates csv>
 set -eo pipefail; ulimit -c 0
-A=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}
 T=$A/downscaling-tools
-C=$A/cache/xset1_v1
+C=${XSET_CACHE:-$A/cache/xset1_v1}
 module load python3 vtb ecmwf-toolbox
 export TMPDIR=$A/tmp/$SLURM_JOB_ID; mkdir -p "$TMPDIR" "$C"
 dates=$(tail -n +2 "${1:?dates csv}" | cut -d, -f1 | paste -sd,)

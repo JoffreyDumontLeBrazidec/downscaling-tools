@@ -9,8 +9,9 @@
 # IMERG discs. Row files in A/rows/<LABEL>. With "refs" as second argument the cyclone and IMERG scores of the INPUT row
 # (native x) and of the single 9 km field CF9 are written too: use it on the ENS9 row only.
 # Usage: sbatch --job-name=xset_score_<LABEL> xset_score.sbatch <LABEL> [refs]
+# Another set (17 Nov 2026): export XSET_WORK, XSET_LISTS, XSET_CACHE, XSET_DATES first (defaults = XSET-1) and pass -o.
 set -o pipefail; ulimit -c 0
-A=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}
 T=$A/downscaling-tools; K=$T/kits/20261116-extremes-set
 module load python3 vtb ecmwf-toolbox >/dev/null 2>&1
 export TMPDIR=$A/tmp/$SLURM_JOB_ID PYTHONPATH=$T:$K; mkdir -p "$TMPDIR" $A/scores
@@ -18,9 +19,10 @@ lab=${1:?row label}; refs=""; [[ ${2:-} == refs ]] && refs="--with-refs"
 n=$(ls $A/rows/$lab/predictions_*_step*.nc 2>/dev/null | wc -l)
 echo "[score] $lab: $n files, $(date -u +%FT%TZ)"
 cd $T
-python3 $K/xset_score_events.py --pred $A/rows/$lab --label $lab --tc-cases $K/lists/tc_cases.csv \
-  --rain-events $K/lists/rain_events.csv --out $A/scores/$lab $refs || { echo "[score] EVENTS_FAIL $lab"; exit 1; }
+python3 $K/xset_score_events.py --pred $A/rows/$lab --label $lab --tc-cases ${XSET_LISTS:-$K/lists}/tc_cases.csv \
+  --rain-events ${XSET_LISTS:-$K/lists}/rain_events.csv --out $A/scores/$lab $refs || { echo "[score] EVENTS_FAIL $lab"; exit 1; }
 echo "[score] events done $(date -u +%FT%TZ)"
-python3 $K/xset_score_stations.py --pred $A/rows/$lab --label $lab --cache $A/cache/xset1_v1 --out $A/scores/$lab \
+python3 $K/xset_score_stations.py --pred $A/rows/$lab --label $lab --cache ${XSET_CACHE:-$A/cache/xset1_v1} --out $A/scores/$lab \
+  --dates-csv ${XSET_DATES:-$K/lists/dates_xset1.csv} \
   --overwrite || { echo "[score] STATIONS_FAIL $lab"; exit 1; }
 echo "[score] SCORE_DONE $lab $(date -u +%FT%TZ)"

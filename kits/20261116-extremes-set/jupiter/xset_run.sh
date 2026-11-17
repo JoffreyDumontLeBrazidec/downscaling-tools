@@ -14,7 +14,7 @@ raw=$(ls $RUN_DIR/*/anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null | head -1 |
 [[ -n "$ema" ]] || { echo "FATAL no $EMA_TAG file for step $CKPT_STEP under $RUN_DIR"; exit 7; }
 [[ -n "$raw" ]] || { echo "FATAL no raw by-step file for step $CKPT_STEP under $RUN_DIR"; exit 7; }
 export EMA_FILE=$ema
-[[ "$OUTDIR" == /e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116/* ]] || { echo "FATAL OUTDIR $OUTDIR"; exit 9; }
+[[ "$OUTDIR" == "$XOUT"/* ]] || { echo "FATAL OUTDIR $OUTDIR"; exit 9; }
 echo "[xset] row=$1 mode=$MODE step=$CKPT_STEP ema=$ema sha256=$(sha256sum $ema | cut -c1-16) raw=$raw cases=$CASES members=$MEMBERS outdir=$OUTDIR kit=$(git -C $XK/downscaling-tools rev-parse --short HEAD) code=$CODE_ROOT@$(git -C $CODE_ROOT rev-parse --short HEAD) $(date -u +%FT%TZ)"
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1); export MASTER_ADDR MASTER_PORT=${4:-29591}
 mkdir -p "$OUTDIR"

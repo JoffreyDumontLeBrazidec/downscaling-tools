@@ -14,8 +14,8 @@
 #SBATCH --output=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/logs/%x-%j.out
 set -o pipefail; ulimit -c 0
 X=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
-K=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/downscaling-tools/kits/20261116-extremes-set/jupiter
-[[ -f $X/test/GL512_237k/XSET_TEST_PASS ]] || { echo "[xset] FATAL no XSET_TEST_PASS"; exit 2; }
+K=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}/downscaling-tools/kits/20261116-extremes-set/jupiter
+[[ -f /e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116/test/GL512_237k/XSET_TEST_PASS ]] || { echo "[xset] FATAL no XSET_TEST_PASS"; exit 2; }
 row=${1:?row}; shift
 cases=""; for d in "$@"; do for L in 12 24 36 48 60 72; do cases="$cases${cases:+,}$d:$L"; done; done
 bash $K/xset_run.sh "$row" predict "$cases" 29591 || { echo "[xset] PREDICT_FAIL $row $(date -u +%FT%TZ)"; exit 1; }
