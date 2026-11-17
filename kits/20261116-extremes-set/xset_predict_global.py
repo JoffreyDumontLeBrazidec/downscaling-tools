@@ -21,6 +21,10 @@ MEMBERS members; prints XSET_TEST_PASS and writes OUTDIR/XSET_TEST_PASS.
 
 Env: MODE (predict | test), CKPT_STEP, RUN_DIR, CFG_DIR, CFG_NAME, EXPECT_CODE, MODEL_LABEL, ROW_LABEL, EMA_TAG, OUTDIR, CASES
 ("YYYYMMDD:lead,..."), MEMBERS (10), PART, XSET_IN, XSET_TEMPLATE, XSET_HIST, ANCHOR; test: MEMBER_IN_STORE, TEST_REF.
+Optional: EMA_FILE, RAW_FILE (explicit export files), EXTRA_OVERRIDES (hydra, ";"-separated), XSET_SCHED_JSON,
+XSET_SAMPLER_JSON, XSET_SANITY=strict. The outputs are taken BY NAME (10u 10v 2t msl tp): a model with more outputs
+(12 with z_500 and t_850) is read unchanged; its noise tensor has another shape, so its draws are not noise-paired
+with a 10-output row even under the same seeds.
 Nothing here trains, writes a checkpoint or touches a chain.
 """
 from __future__ import annotations
@@ -70,6 +74,38 @@ PW_SCHED = {
     "low_schedule_type": "karras", "num_steps_high": 10, "num_steps_low": 20, "rho": 7.0,
 }
 PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.0, "S_noise": 1.05}
+# A row may carry another sampler (row definition, xset_define_row.sh): the whole dictionary is replaced, never merged,
+# and what was used is written in every file (attribute "sampler"). Unset = the standard above, to the letter.
+if os.environ.get("XSET_SCHED_JSON"):
+    PW_SCHED = json.loads(os.environ["XSET_SCHED_JSON"])
+if os.environ.get("XSET_SAMPLER_JSON"):
+    PW_SAMPLER = json.loads(os.environ["XSET_SAMPLER_JSON"])
+# Sanity of a draw against the 9 km control at the evaluation points: RMS difference per variable (two forecasts of the
+# same weather differ by 1-3 K, 1-4 m/s, 1-6 hPa there) and the ratio of mean rain. Logged always; fatal with
+# XSET_SANITY=strict (the smoke of a new model), where it catches a wrong normalisation, unit or variable order.
+SANITY_RMS = {"2t": 6.0, "10u": 8.0, "10v": 8.0, "msl": 2000.0}
+SANITY_TP_RATIO = (0.33, 3.0)
+
+
+def sanity(yp, y, states):
+    """yp (members, points, vars), y (points, vars) -> (dict of numbers, list of violated bounds)."""
+    out, bad = {}, []
+    for j, v in enumerate(states):
+        ok = np.isfinite(y[:, j])
+        if not ok.any():
+            continue
+        a, b = yp[:, ok, j].astype(np.float64), y[ok, j].astype(np.float64)
+        if v == "tp":
+            r = float(a.mean() / max(float(b.mean()), 1e-12))
+            out["tp_mean_ratio"] = round(r, 3)
+            if not SANITY_TP_RATIO[0] <= r <= SANITY_TP_RATIO[1]:
+                bad.append(f"tp mean ratio {r:.3g}")
+        else:
+            r = float(np.sqrt(((a - b[None]) ** 2).mean()))
+            out[f"{v}_rms"] = round(r, 3)
+            if v in SANITY_RMS and r > SANITY_RMS[v]:
+                bad.append(f"{v} rms {r:.3g} > {SANITY_RMS[v]}")
+    return out, bad
 
 
 def one_file(pattern: str, what: str) -> str:
@@ -86,6 +122,8 @@ def ema_file(step: int) -> str:
 
 
 def raw_file(step: int) -> str:
+    if os.environ.get("RAW_FILE"):
+        return os.environ["RAW_FILE"]
     return one_file(f"{RUN_DIR}/*/anemoi-by_step-epoch_*-step_{step:06d}.ckpt", "raw by-step")
 
 
@@ -276,8 +314,12 @@ def main():
     ds.per_worker_init(1, 0)
     n2i_out_model = dm.data_indices["out_hres"].model.output.name_to_index
     states = [v for v in SAVE_VARS if v in n2i_out_model]
-    assert states == list(SAVE_VARS), (states, sorted(n2i_out_model))
+    if states != list(SAVE_VARS):
+        raise SystemExit(f"FATAL: the model lacks outputs {sorted(set(SAVE_VARS) - set(states))}; it has {sorted(n2i_out_model)}")
     out_cols = [n2i_out_model[v] for v in states]
+    if is_main:
+        LOG.info("OUTPUTS model has %d (%s); written by name: %s at columns %s", len(n2i_out_model),
+                 " ".join(v for v, _ in sorted(n2i_out_model.items(), key=lambda kv: kv[1])), list(states), out_cols)
     hits = [r for r in resolve_rows(ds.datasets["out_hres"], anchor_lead) if r[1] == anchor_date]
     if len(hits) != 1:
         raise SystemExit(f"FATAL: {len(hits)} rows for the anchor {anchor_date} +{anchor_lead} h in the test split")
@@ -434,6 +476,11 @@ def main():
             else:
                 raise SystemExit("FATAL: the out-of-store path does not reproduce the reference file")
             continue
+        san, bad = sanity(yp, tmpl["y"][0], states)
+        LOG.info("SANITY %s +%d h against the 9 km control at %d points: %s%s", date, lead, pidx.size, json.dumps(san),
+                 f" VIOLATED {bad}" if bad else "")
+        if bad and os.environ.get("XSET_SANITY") == "strict":
+            raise SystemExit(f"FATAL: sanity bounds violated for {date} +{lead} h: {bad}")
         hist = tail_histograms(lat_all, np.stack(glob_tp), np.stack(glob_u), np.stack(glob_v))
         hdir = Path(os.environ["XSET_HIST"]); hdir.mkdir(parents=True, exist_ok=True)
         np.savez(hdir / f"{row_label}_{date}_step{lead:03d}.npz", **hist)

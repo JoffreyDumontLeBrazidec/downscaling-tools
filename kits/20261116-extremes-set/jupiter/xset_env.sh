@@ -5,10 +5,10 @@ set +e +u
 source /e/software/default/configs/modules.sh 2>/dev/null
 module load Stages/2025 GCCcore/.13.3.0 Python/3.12.3 git/2.45.1 >/dev/null 2>&1
 set -eo pipefail
-source /e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds/bin/activate
+source ${VENV:-/e/data1/jureap-data/ecmwf/users/jdumont/venvs/.ds}/bin/activate   # VENV: model file, optional
 DEV_ROOT=/e/home/jusers/dumontlebrazidec1/jupiter/dev
 : "${CODE_ROOT:?source xset_runs.sh first}" "${CODE_SHA_FILE:?}" "${DATASETS_SHA_FILE:?}"
-DATASETS_REPO=$DEV_ROOT/anemoi-datasets-hres-precip-ru
+DATASETS_REPO=${DATASETS_REPO:-$DEV_ROOT/anemoi-datasets-hres-precip-ru}
 [[ "$(git -C $CODE_ROOT rev-parse HEAD)" == "$(tr -d '[:space:]' < $CODE_SHA_FILE)" ]] || { echo "FATAL code sha"; return 1; }
 [[ -z "$(git -C $CODE_ROOT status --porcelain)" ]] || { echo "FATAL dirty code tree"; return 1; }
 [[ "$(git -C $DATASETS_REPO rev-parse HEAD)" == "$(tr -d '[:space:]' < $DATASETS_SHA_FILE)" ]] || { echo "FATAL datasets sha"; return 1; }

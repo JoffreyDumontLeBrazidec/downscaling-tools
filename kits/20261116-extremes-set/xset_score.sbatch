@@ -23,4 +23,7 @@ python3 $K/xset_score_events.py --pred $A/rows/$lab --label $lab --tc-cases $K/l
 echo "[score] events done $(date -u +%FT%TZ)"
 python3 $K/xset_score_stations.py --pred $A/rows/$lab --label $lab --cache $A/cache/xset1_v1 --out $A/scores/$lab \
   --overwrite || { echo "[score] STATIONS_FAIL $lab"; exit 1; }
+# tails of the row against the 9 km control and members at the evaluation points (not fatal; read with the table)
+python3 $K/xset_check_cf_vs_pf.py $A/rows/$lab > $A/scores/$lab/tail_check.txt 2>&1 || echo "[score] tail check failed (not fatal)"
+echo "$lab files=$n job=$SLURM_JOB_ID kit=$(git -C $T rev-parse --short HEAD) $(date -u +%FT%TZ)" > $A/scores/$lab/SCORE_DONE
 echo "[score] SCORE_DONE $lab $(date -u +%FT%TZ)"
