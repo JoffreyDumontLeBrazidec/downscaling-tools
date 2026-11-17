@@ -7,7 +7,7 @@
 #SBATCH --output=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set/logs/%x-%j.out
 # Input member stores of the given start dates. Usage: sbatch --job-name=xset_bin_<i> xset_build_in.sbatch <yyyymmdd> [...]
 ulimit -c 0; module load python3 ecmwf-toolbox >/dev/null 2>&1
-A=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}
 args=""; for d in "$@"; do args="$args --date $d"; done
 echo "[bin] $args $(date -u +%FT%TZ)"
 python3 $A/downscaling-tools/kits/20261116-extremes-set/xset_build_in.py \

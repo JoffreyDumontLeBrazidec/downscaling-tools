@@ -74,6 +74,16 @@ PW_SCHED = {
     "low_schedule_type": "karras", "num_steps_high": 10, "num_steps_low": 20, "rho": 7.0,
 }
 PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.0, "S_noise": 1.05}
+# SAMPLER_MODE=det (17 Nov 2026, regression baseline of the paper): a model trained with training_approach deterministic
+# (sigma fixed at 5e5) is read with ONE denoiser call at sigma 5e5: linear schedule [5e5, 1e-12], Heun's second call is
+# skipped because sigma_next <= eps_prec (1e-10), and y = y_init + (1e-12 - 5e5) (y_init - D) / 5e5 = D up to 2e-18 y_init.
+# The unit noise fed to that call still comes from the rule-31 seed of the draw (the MSE optimum ignores it).
+DET_SCHED = {"schedule_type": "linear", "num_steps": 2, "sigma_max": 500000.0, "sigma_min": 1e-12}
+DET_SAMPLER = {"sampler": "heun", "S_churn": 0.0}
+if os.environ.get("SAMPLER_MODE", "edm") == "det":
+    PW_SCHED, PW_SAMPLER = DET_SCHED, DET_SAMPLER
+elif os.environ.get("SAMPLER_MODE", "edm") != "edm":
+    raise SystemExit(f"unknown SAMPLER_MODE {os.environ.get('SAMPLER_MODE')!r} (edm | det)")
 # A row may carry another sampler (row definition, xset_define_row.sh): the whole dictionary is replaced, never merged,
 # and what was used is written in every file (attribute "sampler"). Unset = the standard above, to the letter.
 if os.environ.get("XSET_SCHED_JSON"):

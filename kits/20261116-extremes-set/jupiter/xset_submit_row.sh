@@ -6,8 +6,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 row=${1:?row}; only=${2:-}
-XOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
-XK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set
+XOUT=${XSET_JOUT:-/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116}
+XK=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}
 T=$XK/downscaling-tools
 st=$(bash $HERE/xset_row_state.sh "$row"); echo "$st"
 val() { echo "$st" | tr ' ' '\n' | grep "^$1=" | cut -d= -f2; }

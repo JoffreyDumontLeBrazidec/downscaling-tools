@@ -15,8 +15,8 @@
 #SBATCH --time=00:45:00
 #SBATCH --output=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/logs/%x-%j.out
 set -o pipefail; ulimit -c 0
-X=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
-K=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/downscaling-tools/kits/20261116-extremes-set/jupiter
+X=${XSET_JOUT:-/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116}
+K=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}/downscaling-tools/kits/20261116-extremes-set/jupiter
 [[ -f $X/test/GL512_237k/XSET_TEST_PASS ]] || { echo "[xset] FATAL no XSET_TEST_PASS"; exit 2; }
 row=${1:?row}; case=${2:-20240926:48}
 model=$(grep -m1 '^MODEL=' $X/rowdefs/$row.env | cut -d= -f2); [[ -n "$model" ]] || { echo "[xset] FATAL row $row is not defined"; exit 3; }

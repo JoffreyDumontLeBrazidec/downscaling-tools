@@ -4,9 +4,9 @@
 # rsync skips what is already there, so it can be called after each group of dates. Nothing is deleted on either side.
 # Usage: bash xset_copy_to_jupiter.sh
 set -eu
-A=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set
-XK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set
-XOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}
+XK=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}
+XOUT=${XSET_JOUT:-/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116}
 ssh jupiter "mkdir -p $XK/stores/in $XK/points $XK/cache $XOUT/rows/ENS9 $XOUT/hist $XOUT/check"
 # only complete stores (those with a check file) and complete row dates
 for f in $A/stores/check/in_*.done; do
@@ -23,6 +23,6 @@ for f in $A/check/rows_*.done; do
   rsync -a $A/points/points_${d}.npz jupiter:$XK/points/
   echo "rows $d copied"
 done
-[[ -d $A/cache/xset1_v1 ]] && rsync -a $A/cache/xset1_v1 jupiter:$XK/cache/
+C=${XSET_CACHE:-$A/cache/xset1_v1}; [[ -d $C ]] && rsync -a $C jupiter:$XK/cache/
 ssh jupiter "ls $XK/stores/in | wc -l; ls $XOUT/rows/ENS9 | wc -l; du -sh $XK/stores/in $XOUT/rows/ENS9 $XOUT/hist"
 echo "COPY_DONE $(date -u +%FT%TZ)"

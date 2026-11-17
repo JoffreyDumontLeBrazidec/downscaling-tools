@@ -4,8 +4,8 @@
 # Usage: bash xset_copy_from_jupiter.sh <ROW>
 set -eu
 row=${1:?row}
-A=/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set
-XOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
+A=${XSET_WORK:-/ec/res4/scratch/ecm5702/agent-work/20261116-extremes-set}
+XOUT=${XSET_JOUT:-/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116}
 mkdir -p $A/rows/$row $A/hist
 rsync -a --info=stats1 --exclude='*.part' jupiter:$XOUT/rows/$row/ $A/rows/$row/ | grep -E "Total transferred" || true
 rsync -a --include="${row}_*.npz" --exclude='*' jupiter:$XOUT/hist/ $A/hist/

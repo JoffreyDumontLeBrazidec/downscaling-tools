@@ -3,10 +3,10 @@
 # Usage: bash xset_row_state.sh <ROW>
 set -uo pipefail
 row=${1:?row}
-XOUT=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
+XOUT=${XSET_JOUT:-/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116}
 HERE=$(cd "$(dirname "$0")" && pwd)
 model=GL512; defined=0
-case "$row" in GL512_500k|GL512_450k|GL512_237k) defined=1 ;; esac
+case "$row" in GL512_500k|GL512_450k|GL512_237k|REG_GL512_30k|REG_GL512_20k) defined=1 ;; esac
 if [[ -f $XOUT/rowdefs/$row.env ]]; then defined=1; model=$(grep -m1 '^MODEL=' $XOUT/rowdefs/$row.env | cut -d= -f2); fi
 files=$(ls $XOUT/rows/$row/predictions_*_step*.nc 2>/dev/null | wc -l)
 part=$(ls $XOUT/rows/$row/*.part 2>/dev/null | wc -l)

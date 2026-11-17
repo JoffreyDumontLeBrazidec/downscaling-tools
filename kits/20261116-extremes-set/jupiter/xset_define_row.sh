@@ -15,8 +15,8 @@ row=${1:?row}; model=${2:?model}; step=${3:?step}; tag=${4:-ema2000}
 [[ $row =~ ^[A-Za-z0-9_]+$ && $model =~ ^[A-Za-z0-9_]+$ && $step =~ ^[0-9]+$ && $tag =~ ^[A-Za-z0-9_]+$ ]] || { echo "FATAL bad argument"; exit 2; }
 CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
 DEVR=/e/home/jusers/dumontlebrazidec1/jupiter/dev
-XOUT=$CK/xset1_20261116
-case "$row" in GL512_500k|GL512_450k|GL512_237k) echo "ROW_DEFINED $row (first row, fixed in xset_runs.sh)"; exit 0 ;; esac
+XOUT=${XSET_JOUT:-$CK/xset1_20261116}
+case "$row" in GL512_500k|GL512_450k|GL512_237k|REG_GL512_30k|REG_GL512_20k) echo "ROW_DEFINED $row (first row, fixed in xset_runs.sh)"; exit 0 ;; esac
 [[ $row != ENS9 && $row != INPUT && $row != CF9 ]] || { echo "FATAL '$row' is a reference row"; exit 2; }
 [[ -f $HERE/models/$model.env ]] || { echo "FATAL no model file $HERE/models/$model.env (copy models/TEMPLATE.env)"; exit 3; }
 source $HERE/models/$model.env
