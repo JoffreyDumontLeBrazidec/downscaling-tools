@@ -1,5 +1,6 @@
 # Extremes set XSET-1 (16 Nov 2026): the model rows of the global read on Jupiter. Source it:  source xset_runs.sh <ROW>
 #   GL512_500k   db_global_512_300k step 500000, EMA-2000 (the reference row of the set)
+#   GL512_450k   the same run at step 450000, EMA-2000 (the standard checkpoint since 17 Nov 2026)
 #   GL512_237k   the same run at step 237000, EMA-2000 (only for the bit-identity test against the 4 Nov member read)
 # A new arm = one more case line (run directory, config, code pin, step, EMA tag); nothing else changes.
 CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
@@ -10,6 +11,7 @@ XOUT=$CK/xset1_20261116
 row=${1:?row}
 case "$row" in
   GL512_500k) export CKPT_STEP=500000 ;;
+  GL512_450k) export CKPT_STEP=450000 ;;
   GL512_237k) export CKPT_STEP=237000 ;;
   *) echo "FATAL unknown row '$row'"; return 1 ;;
 esac
