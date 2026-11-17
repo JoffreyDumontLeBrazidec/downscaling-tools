@@ -68,3 +68,11 @@ maximum wind. Member k of INPUT is the input of member k of a model row and has 
 - Read: `python3 K/xset_tc_lead_read.py --ens W/scores_members/ENS9 --row GL512_500k=W/scores_members/GL512_500k
   --row GL512_450k=W/scores/GL512_450k --out W/tc_lead_read/tc_lead_read.md` (pandas; seconds). Tables per lead: means,
   what each row adds to its input member, the same by class of input wind, pairing of members between rows, structure.
+
+## Lessons of the first cluster runs (17 Nov 2026)
+
+- Start `xset_row.sh` detached (`setsid nohup bash K/xset_row.sh ... > W/logs/xset_row_<ROW>.log 2>&1 &`): the copy of a
+  row from Jupiter takes about 20 minutes and dies with the ssh session that started it. A later call resumes.
+- A smoke draws 2 members; the input field `x` written to the smoke file is cut to the members drawn (fixed after the
+  first smoke, job 2966209, failed in the writer: 10 template members against 2 drawn).
+- The account limit on Atos is 60 running jobs for all threads together; `scontrol top` is refused. Short score jobs wait.

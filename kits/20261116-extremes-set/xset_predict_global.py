@@ -496,7 +496,7 @@ def main():
         np.savez(hdir / f"{row_label}_{date}_step{lead:03d}.npz", **hist)
         tmp = outdir / (name + ".part")
         write_row_file(tmp, lat=tmpl["lat_hres"], lon=tmpl["lon_hres"], point_index=pidx, states=states, y=tmpl["y"][0],
-                       y_pred=yp, x=tmpl["x"][0], lat_lres=tmpl["lat_lres"], lon_lres=tmpl["lon_lres"],
+                       y_pred=yp, x=tmpl["x"][0][:yp.shape[0]], lat_lres=tmpl["lat_lres"], lon_lres=tmpl["lon_lres"],
                        lres_index=tmpl["lres_index"], extra={"why": tmpl["why"], "imerg_tp12": tmpl["imerg_tp12"]}, attrs=attrs)
         os.replace(tmp, outdir / name)
         records.append(dict(date=date, lead=lead, file=name))
