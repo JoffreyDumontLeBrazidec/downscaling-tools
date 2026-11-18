@@ -10,13 +10,16 @@ patches, 4 patches per sample, model_size normal, total batch 256, lr 2e-4, amp-
   - activation checkpointing (perf.songunet_checkpoint_level, PhysicsNeMo's own option; same model and loss): the
     regression U-Net on the full 864 x 1728 image runs out of memory on A100 64 GB at level 0 (batch 1 and 2) and at
     level 2 / batch 2; level 3 / batch 1 fits (24.6 GB steady, 0.57 s per sample per node; smokes 18 Nov, Leonardo)
+  - diffusion: hp.max_patch_per_gpu 4 (NVIDIA's own option, used by their hrrr_patched_diffusion_opt config: the 4 patches
+    of each sample run in 4 sub-iterations, same model and loss) + checkpoint level 1: 60.7 GB peak, 0.38 s per sample
+    per node. Level 0 or 1 without it, and max_patch 8 / level 2, run out of memory on A100 64 GB
   - training_duration (samples): REG_SAMPLES and DIFF_SAMPLES; defaults = the published values (1,000,000 and
     10,000,000); a shorter run is allowed only to meet the 27 Nov date, and the paper states it
 Input channels: GL512's own input variables (its in_lres list after `drop`), from GL512's config file.
 
     python3 make_cd_configs.py --gl512-config db_global_512_300k.yaml --data OUT.zarr --repo PHYSICSNEMO_CHECKOUT \
         --dataset-py cd_dataset.py --run-dir RUN [--reg-samples N] [--diff-samples N] [--reg-bpg 1] [--diff-bpg 4]
-        [--reg-ckpt-level 3] [--diff-ckpt-level 0]
+        [--reg-ckpt-level 3] [--diff-ckpt-level 1] [--diff-max-patch 4]
 """
 import argparse
 from pathlib import Path
@@ -38,7 +41,8 @@ def main():
     ap.add_argument("--reg-bpg", type=int, default=1)
     ap.add_argument("--diff-bpg", type=int, default=4)
     ap.add_argument("--reg-ckpt-level", type=int, default=3)
-    ap.add_argument("--diff-ckpt-level", type=int, default=0)
+    ap.add_argument("--diff-ckpt-level", type=int, default=1)
+    ap.add_argument("--diff-max-patch", type=int, default=4)
     a = ap.parse_args()
     import zarr
     gl = yaml.safe_load(open(a.gl512_config))
@@ -74,7 +78,7 @@ def main():
         "defaults": [{"dataset": "custom"}, {"model": "patched_diffusion"}, {"model_size": "normal"}, {"training": "${model}"}, "_self_"],
         "dataset": ds, "validation": val,
         "training": {"hp": {"training_duration": a.diff_samples, "total_batch_size": 256, "batch_size_per_gpu": a.diff_bpg,
-                            "patch_shape_x": 448, "patch_shape_y": 448, "patch_num": 4},
+                            "patch_shape_x": 448, "patch_shape_y": 448, "patch_num": 4, "max_patch_per_gpu": a.diff_max_patch},
                      "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4,
                               "songunet_checkpoint_level": a.diff_ckpt_level},
                      "io": {"checkpoint_dir": f"{a.run_dir}/diff", "regression_checkpoint_path": "${oc.env:CD_REG_CKPT}",

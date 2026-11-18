@@ -20,6 +20,7 @@ set -euo pipefail
 source /leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261117-corrdiff/kit/cd_env.sh
 : "${MODE:?MODE=regression or diffusion}"
 cd $CD_REPO/examples/weather/corrdiff
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # less fragmentation (diffusion peak 60.7 of 63.4 GB); no change to the maths
 EXTRA=()
 if [[ "${SMOKE:-0}" == 1 ]]; then
   EXTRA+=(training.hp.training_duration=2560 training.io.checkpoint_dir=$CD/smoke_$MODE${SMOKE_TAG:+_$SMOKE_TAG} training.io.print_progress_freq=256
