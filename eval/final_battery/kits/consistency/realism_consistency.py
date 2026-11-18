@@ -513,8 +513,9 @@ def main():
         print(process_date((dates[0], a.leads[:1], a.pred, a.truth_stores, a.outdir, a.input_stores)), flush=True)
         for f in glob.glob(os.path.join(a.outdir, f'row_{dates[0]}_*.npz')) + glob.glob(os.path.join(a.outdir, f'date_{dates[0]}.npz')):
             os.remove(f)
-    # spawn, not fork: the first date ran in this process with threaded numpy / zarr, and a forked child can inherit a
-    # held lock and hang (seen in the synthetic smoke run, 18 Nov 2026). Results do not depend on the start method.
+    # spawn, not fork: workers start without the arrays, threads and locks of the first date that ran in this process.
+    # Results do not depend on the start method. A worker killed for memory (about 5 GB each) leaves the pool waiting
+    # for ever: give the kit fewer workers rather than more.
     from multiprocessing import get_context
     with get_context('spawn').Pool(a.workers) as pool:
         for r in pool.imap_unordered(process_date, jobs):
