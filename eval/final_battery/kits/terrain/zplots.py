@@ -26,7 +26,7 @@ for i, v in enumerate(("2t", "msl", "sp", "10ff")):
         ax.set_xticks([12, 24, 36, 48, 60, 72])
         if j == 1: ax.set_xlabel("lead (h)")
 axs[0, 0].legend(fontsize=7); axs[0, 0].set_ylabel("model / truth pf ensemble std"); axs[1, 0].set_ylabel("model / truth pf ensemble std")
-fig.suptitle("Z1: ensemble std ratio GLB450e2_m / truth pf by scale and lead (mean over 30 dates, bars 2 SE); 00 UTC valid at 24/48/72 h", fontsize=9)
+fig.suptitle(f"Z1: ensemble std ratio {os.environ.get('FB_ROW', 'GLB450e2_m')} / truth pf by scale and lead (mean over 30 dates, bars 2 SE); 00 UTC valid at 24/48/72 h", fontsize=9)
 fig.tight_layout(); fig.savefig(f"{O}/z1_spread_ratio_by_scale.png", dpi=130); plt.close(fig)
 
 z2 = pd.read_csv(f"{T}/Z2_msl_move_by_lst.csv")

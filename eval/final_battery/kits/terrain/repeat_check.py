@@ -1,9 +1,11 @@
-import sys, numpy as np, netCDF4 as nc
-sys.path.insert(0, "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-realism-t2m/kit")
+import os, sys, numpy as np, netCDF4 as nc
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import realism_t2m as R
 st = R.Stat()
-d = nc.Dataset(f"{R.X}/pred/{R.ROW}_L024/predictions_20230226_step024.nc"); d.set_auto_mask(False)
-im = R.W.index("msl"); N = 814810
+# usage: repeat_check.py [DATE] [LEAD]  (default 20230226 24, the 17 Nov case)
+DATE = sys.argv[1] if len(sys.argv) > 1 else "20230226"; LEAD = int(sys.argv[2]) if len(sys.argv) > 2 else 24
+d = nc.Dataset(f"{R.X}/pred/{R.ROW}_L{LEAD:03d}/predictions_{DATE}_step{LEAD:03d}.nc"); d.set_auto_mask(False)
+im = R.states(d).index("msl"); N = st.lat.size
 for k in (0, 1):
     r = np.asarray(d["y_pred"][0, k, :, im], np.float64) - np.asarray(d["x_interp_members"][0, k, :, im], np.float64)
     h = r - st.lowpass(r); ok = np.isfinite(h)

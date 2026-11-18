@@ -26,9 +26,9 @@ def zcase(hdate, lead, st, M):
     import zarr, netCDF4 as nc
     t0 = time.time()
     fn = f"{R.X}/pred/{R.ROW}_L{lead:03d}/predictions_{hdate}_step{lead:03d}.nc"
-    iv = [R.W.index(v) for v in ("10u", "10v", "2t", "msl", "sp")]
     with nc.Dataset(fn) as d:
         d.set_auto_mask(False)
+        iv = [R.states(d).index(v) for v in ("10u", "10v", "2t", "msl", "sp")]
         yp = np.asarray(d["y_pred"][0])[:, :, iv].astype(np.float64)
         xm = np.asarray(d["x_interp_members"][0])[:, :, iv].astype(np.float64)
         yc = np.asarray(d["y"][0])[:, iv].astype(np.float64)

@@ -28,7 +28,7 @@ CTRL_VARS = ("2d", "skt", "tcw")   # no pf member truth: truth column = 9 km con
 
 
 def load_case(st, M, date, lead, var):
-    row = "GLB450e2_m10" if var in CTRL_VARS else R.ROW
+    row = os.environ.get("FB_ROW10", "GLB450e2_m10") if var in CTRL_VARS else R.ROW
     fn = f"{R.X}/pred/{row}_L{lead:03d}/predictions_{date}_step{lead:03d}.nc"
     with netCDF4.Dataset(fn) as d:
         d.set_auto_mask(False)
@@ -79,7 +79,7 @@ def sheet(st, M, out, name, region, date, lead, vars_):
                 ax.tricontour(tri, st.zhr[m], levels=np.arange(500, 5000, 500), colors="0.35", linewidths=0.3,
                               transform=ccrs.PlateCarree())
                 ax.add_feature(cfeature.COASTLINE.with_scale("50m"), linewidth=0.5, edgecolor="k")
-                lab = {"input": "input x_interp m1", "truth": "truth ctrl" if var in CTRL_VARS else "truth pf m1", "model": "GLB450e2 draw 1",
+                lab = {"input": "input x_interp m1", "truth": "truth ctrl" if var in CTRL_VARS else "truth pf m1", "model": os.environ.get("FB_ROW", "GLB450e2") + " draw 1",
                        "diff": "model minus truth"}[k]
                 v = vals[k]
                 ax.set_title(f"{var} {kind}: {lab}\nmin {v.min():.1f} max {v.max():.1f} {u}", fontsize=7.5)
@@ -87,7 +87,7 @@ def sheet(st, M, out, name, region, date, lead, vars_):
                     cb = fig.colorbar(pc, ax=list(axs[row, :3]), shrink=0.85, pad=0.01); cb.ax.tick_params(labelsize=6)
                 if c == 3:
                     cb = fig.colorbar(pc, ax=ax, shrink=0.85, pad=0.01); cb.ax.tick_params(labelsize=6)
-    fig.suptitle(f"{name}: {region} {date} +{lead} h (valid {vt}); GL512 450k EMA-2000 (GLB450e2_m); "
+    fig.suptitle(f"{name}: {region} {date} +{lead} h (valid {vt}); {os.environ.get("FB_LABEL", "GL512 450k EMA-2000")} ({R.ROW}); "
                  f"fine = 0.6-degree high-pass; grey = O1280 orography every 500 m; truth/input member 1 not paired",
                  fontsize=8.5)
     p = f"{out}/{name}.png"

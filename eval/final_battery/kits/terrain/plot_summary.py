@@ -9,7 +9,7 @@ from PIL import Image
 
 T, O = sys.argv[1], sys.argv[2]
 os.makedirs(O, exist_ok=True)
-STY = {"model": dict(color="tab:red", ls="-", marker="o", label="GLB450e2 draw k - truth pf k"),
+STY = {"model": dict(color="tab:red", ls="-", marker="o", label=os.environ.get("FB_ROW", "GLB450e2") + " draw k - truth pf k"),
        "input": dict(color="tab:blue", ls="--", marker="s", label="input x_interp k - truth pf k"),
        "floor": dict(color="k", ls="-", marker="^", label="truth pf k - truth pf k+1 (floor)")}
 
@@ -57,7 +57,7 @@ axs[0].set_title("2t effective lapse rate, land |dz|>100 m; o = 00 UTC valid, x 
 axs[1].axhline(0, color="k", lw=0.8); axs[1].axvline(-2, color="0.5", ls=":", lw=0.8)
 axs[1].set_xlabel("truth slope (K/km)"); axs[1].set_ylabel("model minus truth slope (K/km)")
 axs[1].set_title("slope error vs truth slope (inversions to the right of -2 K/km)")
-fig.suptitle(f"GLB450e2_m, 30 dates x 6 leads x 8 regions ({len(d)} points)", fontsize=9)
+fig.suptitle(f"{os.environ.get('FB_ROW', 'GLB450e2_m')}, 30 dates x 6 leads x 8 regions ({len(d)} points)", fontsize=9)
 fig.tight_layout(); save(fig, f"{O}/f2_lapse_scatter.png")
 
 # F3 O320 imprint: mean |hp 2t| and RMSE of err vs distance to nearest O320 point

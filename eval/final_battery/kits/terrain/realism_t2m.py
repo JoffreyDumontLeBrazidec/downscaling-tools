@@ -20,19 +20,22 @@ import numpy as np
 
 G = 9.80665
 RD = 287.05
-U = "/e/data1/jureap-data/ecmwf/users/jdumont"
-A = U + "/agent-work/20261104-ens-member-box"
-X = U + "/outputs/ens_member_box_20261104"
-D = U + "/datasets"
-S = U + "/agent-work/20261117-realism-t2m"
-OUT = S + "/out"
-ROW = "GLB450e2_m"
-LEADS = [12, 24, 36, 48, 60, 72]
+# Paths and the row are read from the environment (set by `python -m eval.cli final_battery`); the defaults are the
+# Jupiter values of the 17 Nov 2026 reference run (row GLB450e2_m), so the kit run by hand there is unchanged.
+_env = os.environ.get
+U = _env("FB_USER_ROOT", "/e/data1/jureap-data/ecmwf/users/jdumont")
+A = _env("FB_MEMBER_STORES", U + "/agent-work/20261104-ens-member-box")   # stores/, stores_leads/ (truth + input pf)
+X = _env("FB_PRED_ROOT", U + "/outputs/ens_member_box_20261104")          # X/pred/<ROW>_L<lead>/predictions_*.nc
+D = _env("FB_DATASETS", U + "/datasets")
+S = _env("FB_WORK", U + "/agent-work/20261117-realism-t2m")
+OUT = _env("FB_TERRAIN_OUT", S + "/out")
+ROW = _env("FB_ROW", "GLB450e2_m")
+LEADS = [int(x) for x in _env("FB_LEADS", "12 24 36 48 60 72").split()]
 W = ["10u", "10v", "2t", "msl", "sp", "tp", "cp"]
 V3 = ["2t", "msl", "sp"]
 CV = ["2t", "msl", "sp", "2d", "skt"]
 MAT = D + "/o320_o1280_europe_e2/assets/inter_mat/interpol_O320_to_O1280_linear-europe_e2_10_70N_80W_40E_halo1p5.mat.npz"
-OROG320 = U + "/station_caches/orography_O320_eefh.grib"
+OROG320 = _env("FB_OROG320", U + "/station_caches/orography_O320_eefh.grib")
 FORC = D + "/o320_o1280_europe_e2/in_hres_o1280_forcings.zarr"
 OUTV4 = D + "/o320_o1280_europe_e2_v4/out_hres_o1280.zarr"
 INV4 = D + "/o320_o1280_europe_e2_v4/in_lres_o320_halo1p5.zarr"
@@ -63,6 +66,19 @@ def season(month):
 def xyz(lat, lon):
     la, lo = np.radians(lat), np.radians(lon)
     return np.c_[np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]
+
+
+def states(d):
+    """Variable names of a prediction file, in file order (weather_state); the 7-state list W when absent.
+    Indexing by name lets rows that save more outputs (10-output rows, 12-output exports) run unchanged."""
+    if "weather_state" not in d.variables:
+        return list(W)
+    v = d["weather_state"][:]
+    try:
+        return [str(x) for x in v]
+    except Exception:  # noqa: char arrays
+        import netCDF4
+        return [str(x) for x in netCDF4.chartostring(v)]
 
 
 def load_matrix():
@@ -239,7 +255,9 @@ def do_case(hdate, lead, st=None, M=None):
         xc = d["x_interp"][0]          # (N, 7) input control
         assert np.abs(np.where(d["lon_hres"][:] < 0, d["lon_hres"][:] + 360, d["lon_hres"][:])
                       - np.where(st.lon < 0, st.lon + 360, st.lon)).max() < 1e-6
-    iv = [W.index(v) for v in V3]
+        names = states(d)
+    iv = [names.index(v) for v in V3]
+    i2t = names.index("2t")
     mod = np.moveaxis(yp[:, :, iv], 2, 0).astype(np.float64)   # (3, 10, N)
     inp = np.moveaxis(xm[:, :, iv], 2, 0).astype(np.float64)
     zi, zo, r = store_row(lead, hdate)
@@ -250,7 +268,7 @@ def do_case(hdate, lead, st=None, M=None):
     i4 = zarr.open(INV4, mode="r"); i4v = list(i4.attrs["variables"])
     tc = np.stack([o4["data"][er, o4v.index(v), 0, :] for v in CV]).astype(np.float64)       # (5, N)
     ic = np.stack([M @ i4["data"][er, i4v.index(v), 0, :].astype(np.float64) for v in CV])   # (5, N)
-    assert np.abs(tc[0] - yc[:, 2]).max() < 1e-3 and np.abs(ic[0] - xc[:, 2]).max() < 1e-3, "control mismatch"
+    assert np.abs(tc[0] - yc[:, i2t]).max() < 1e-3 and np.abs(ic[0] - xc[:, i2t]).max() < 1e-3, "control mismatch"
     ziv = list(zi.attrs["variables"])
     i2d = (M @ zi["data"][r, ziv.index("2d"), :, :].astype(np.float64).T).T   # (10, N) input member 2d
     iskt = (M @ zi["data"][r, ziv.index("skt"), :, :].astype(np.float64).T).T

@@ -10,9 +10,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import realism_t2m as R
 
-ROW10 = "GLB450e2_m10"
+# The 2d / skt / tcw read needs a row that saved those outputs. 17 Nov: the separate 10-output row GLB450e2_m10 at +12/+24 h.
+# A final model is predicted with all outputs saved, so FB_ROW10 = FB_ROW there (set by eval.cli final_battery).
+ROW10 = os.environ.get("FB_ROW10", "GLB450e2_m10")
 OUT2 = R.OUT + "/d2"
-LEADS10 = [12, 24]
+LEADS10 = [int(x) for x in os.environ.get("FB_LEADS10", "12 24").split()]
 V10 = ["10u", "10v", "2t", "msl", "sp", "tp", "cp", "2d", "skt", "tcw"]
 VS = ["2t", "2d", "skt", "tcw"]
 

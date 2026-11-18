@@ -3,16 +3,23 @@
 # Batch 2: python extract.py --lead 24 --dates 20230101,20230122 --out $W/fields24 [--no-orog]
 #   same keys, same checks; each date line ends with CHECKS_OK or CHECK_FAIL(<reasons>); files written as .part then renamed.
 import argparse, json, numpy as np, netCDF4 as nc, zarr, os, sys
-X = "/e/data1/jureap-data/ecmwf/users/jdumont/outputs/ens_member_box_20261104"
-A = "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261104-ens-member-box"
-W = "/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-realism-wind"
+# Paths and row from the environment (eval.cli final_battery); defaults = the 17 Nov Jupiter reference run.
+U = os.environ.get("FB_USER_ROOT", "/e/data1/jureap-data/ecmwf/users/jdumont")
+X = os.environ.get("FB_PRED_ROOT", U + "/outputs/ens_member_box_20261104")
+A = os.environ.get("FB_MEMBER_STORES", U + "/agent-work/20261104-ens-member-box")
+W = os.environ.get("FB_WIND_WORK", U + "/agent-work/20261117-realism-wind")
+ROW = os.environ.get("FB_ROW", "GLB450e2_m")
+F = os.environ.get("FB_FORCINGS", U + "/datasets/o320_o1280_europe_e2/in_hres_o1280_forcings.zarr")
 PAIRS = [("20230226",24),("20230829",24),("20230909",24),("20231021",24),("20231031",48),("20230111",24),("20230822",24),("20230829",72)]
 NAMES = ["10u","10v","msl"]
 ap = argparse.ArgumentParser()
 ap.add_argument("--lead", type=int, default=None); ap.add_argument("--dates", default="")
 ap.add_argument("--out", default=f"{W}/fields"); ap.add_argument("--no-orog", action="store_true")
+ap.add_argument("--orog-only", action="store_true", help="write <out>/orog.npz only (no field files)")
 a = ap.parse_args()
-if a.lead is not None:
+if a.orog_only:
+    PAIRS = []
+elif a.lead is not None:
     PAIRS = [(d, a.lead) for d in a.dates.split(",") if d]
     a.no_orog = True
 os.makedirs(a.out, exist_ok=True)
@@ -25,11 +32,11 @@ def find_row(z, fake):
     hits = [i for i, v in enumerate(d) if v == fake[:19]]
     return hits
 for date, lead in PAIRS:
-    f = f"{X}/pred/GLB450e2_m_L{lead:03d}/predictions_{date}_step{lead:03d}.nc"
+    f = f"{X}/pred/{ROW}_L{lead:03d}/predictions_{date}_step{lead:03d}.nc"
     if not os.path.exists(f):
         print("MISSING", f, "CHECK_FAIL(missing)", flush=True); continue
     fail = []
-    d = nc.Dataset(f); ws = list(d["weather_state"][:]); ix = [ws.index(n) for n in NAMES]
+    d = nc.Dataset(f); ws = [str(x) for x in d["weather_state"][:]]; ix = [ws.index(n) for n in NAMES]
     lat = d["lat_hres"][:].astype(np.float32); lon = d["lon_hres"][:].astype(np.float32)
     pred = d["y_pred"][0][:, :, ix].astype(np.float32)
     inp = d["x_interp_members"][0][:, :, ix].astype(np.float32)
@@ -65,7 +72,7 @@ for date, lead in PAIRS:
         out["truth"] = t; got = True; break
     if not got: msg += " TRUTH NOT MATCHED"; fail.append("truth_not_matched")
     msg += f" pred_vs_inp_members_mean_absdiff={[round(float(v),3) for v in np.abs(pred-inp).mean(axis=(0,1))]}"
-    path = f"{a.out}/GLB450e2_m_{date}_L{lead:03d}.npz"
+    path = f"{a.out}/{ROW}_{date}_L{lead:03d}.npz"
     with open(path + ".part", "wb") as fh:
         np.savez_compressed(fh, **out)
     os.replace(path + ".part", path)
@@ -74,15 +81,15 @@ for date, lead in PAIRS:
 if a.no_orog:
     print("done"); sys.exit(0)
 # orography and land-sea mask
-F = "/e/data1/jureap-data/ecmwf/users/jdumont/datasets/o320_o1280_europe_e2/in_hres_o1280_forcings.zarr"
 z = zarr.open(F, "r"); vs = z.attrs["variables"]; print("forcing vars", vs, "shape", z["data"].shape)
 vi = {n: vs.index(n) for n in ("z", "lsm") if n in vs}
 row = np.asarray(z["data"][0])  # (vars, ens, P)
 o = dict(lat=np.asarray(z["latitudes"][:]).astype(np.float32), lon=np.asarray(z["longitudes"][:]).astype(np.float32))
 for n, i in vi.items(): o[n] = row[i, 0].astype(np.float32)
 o["orog_m"] = o["z"] / 9.80665 if "z" in o else None
-d = nc.Dataset(f"{X}/pred/GLB450e2_m_L024/predictions_20230226_step024.nc")
+import glob as _glob
+d = nc.Dataset(sorted(_glob.glob(f"{X}/pred/{ROW}_L*/predictions_*.nc"))[0])
 print("orog points", o["lat"].shape, "dlat vs pred", float(np.abs(o["lat"] - d["lat_hres"][:]).max()), "dlon", float(np.abs(((o["lon"] - d["lon_hres"][:]) + 180) % 360 - 180).max()),
       "z range", float(o["z"].min()), float(o["z"].max()), "lsm range", float(o["lsm"].min()), float(o["lsm"].max()))
-np.savez_compressed(f"{W}/fields/orog.npz", **o)
+np.savez_compressed(f"{a.out}/orog.npz", **o)
 print("done")

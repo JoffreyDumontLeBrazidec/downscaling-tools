@@ -68,7 +68,7 @@ def png(fn, **kw):
         if os.path.getsize(fn) <= LIM: break
     print("PNG", fn, os.path.getsize(fn), flush=True)
 tag = os.path.basename(os.path.normpath(out))
-png(os.path.join(sm, "maps_box_%s.jpg" % tag), title="GLB450e2_m against truth members, %s" % tag)
+png(os.path.join(sm, "maps_box_%s.jpg" % tag), title="%s against truth members, %s" % (os.environ.get("FB_ROW", "GLB450e2_m"), tag))
 png(os.path.join(sm, "maps_europe_%s.jpg" % tag), extent=(34, 64, -14, 32), title="Europe, %s" % tag)
 png(os.path.join(sm, "maps_watl_%s.jpg" % tag), extent=(12, 46, -78, -30), title="West Atlantic, %s" % tag)
 png(os.path.join(sm, "maps_med_%s.jpg" % tag), extent=(28, 48, -8, 38), title="Mediterranean, %s" % tag)

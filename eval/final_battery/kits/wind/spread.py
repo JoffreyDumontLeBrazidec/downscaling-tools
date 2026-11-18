@@ -20,7 +20,7 @@ for T in tiles:
         wl = np.where(k > 0, 1.0 / k, 1e12)
     masks.append([T.w * ((wl >= lo_) & (wl < hi_)) for lo_, hi_ in SB])
 rows = []
-for f in sorted(glob.glob(os.path.join(a.fields, "GLB450e2_m_*_L*.npz"))):
+for f in sorted(glob.glob(os.path.join(a.fields, os.environ.get("FB_ROW", "GLB450e2_m") + "_*_L*.npz"))):
     mm = re.search(r"_(\d{8})_L(\d{3})\.npz$", f); Z = np.load(f)
     D = dict(truth=Z["truth"], model=Z["pred"], input=Z["inp"])
     for s, X in D.items():

@@ -276,7 +276,7 @@ def main():
     ap.add_argument("--only", default="")
     a = ap.parse_args()
     os.makedirs(os.path.join(a.out, "crops"), exist_ok=True)
-    files = sorted(glob.glob(os.path.join(a.fields, "GLB450e2_m_*_L*.npz")))
+    files = sorted(glob.glob(os.path.join(a.fields, os.environ.get("FB_ROW", "GLB450e2_m") + "_*_L*.npz")))
     if a.only:
         files = [f for f in files if re.search(a.only, f)]
     O = np.load(a.orog)
