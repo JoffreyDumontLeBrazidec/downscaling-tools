@@ -7,12 +7,16 @@ patches, 4 patches per sample, model_size normal, total batch 256, lr 2e-4, amp-
   - model: `regression` and `patched_diffusion` instead of the lead-time-aware variants (no lead-time label; GL512 has
     none either)
   - batch_size_per_gpu fixed (REG_BPG, DIFF_BPG) so the global batch 256 is reached by gradient accumulation on A100 64 GB
+  - activation checkpointing (perf.songunet_checkpoint_level, PhysicsNeMo's own option; same model and loss): the
+    regression U-Net on the full 864 x 1728 image runs out of memory on A100 64 GB at level 0 (batch 1 and 2) and at
+    level 2 / batch 2; level 3 / batch 1 fits (24.6 GB steady, 0.57 s per sample per node; smokes 18 Nov, Leonardo)
   - training_duration (samples): REG_SAMPLES and DIFF_SAMPLES; defaults = the published values (1,000,000 and
     10,000,000); a shorter run is allowed only to meet the 27 Nov date, and the paper states it
 Input channels: GL512's own input variables (its in_lres list after `drop`), from GL512's config file.
 
     python3 make_cd_configs.py --gl512-config db_global_512_300k.yaml --data OUT.zarr --repo PHYSICSNEMO_CHECKOUT \
-        --dataset-py cd_dataset.py --run-dir RUN [--reg-samples N] [--diff-samples N] [--reg-bpg 2] [--diff-bpg 4]
+        --dataset-py cd_dataset.py --run-dir RUN [--reg-samples N] [--diff-samples N] [--reg-bpg 1] [--diff-bpg 4]
+        [--reg-ckpt-level 3] [--diff-ckpt-level 0]
 """
 import argparse
 from pathlib import Path
@@ -31,8 +35,10 @@ def main():
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--reg-samples", type=int, default=1_000_000)
     ap.add_argument("--diff-samples", type=int, default=10_000_000)
-    ap.add_argument("--reg-bpg", type=int, default=2)
+    ap.add_argument("--reg-bpg", type=int, default=1)
     ap.add_argument("--diff-bpg", type=int, default=4)
+    ap.add_argument("--reg-ckpt-level", type=int, default=3)
+    ap.add_argument("--diff-ckpt-level", type=int, default=0)
     a = ap.parse_args()
     import zarr
     gl = yaml.safe_load(open(a.gl512_config))
@@ -56,7 +62,8 @@ def main():
         "defaults": [{"dataset": "custom"}, {"model": "regression"}, {"model_size": "normal"}, {"training": "${model}"}, "_self_"],
         "dataset": ds, "validation": val,
         "training": {"hp": {"training_duration": a.reg_samples, "total_batch_size": 256, "batch_size_per_gpu": a.reg_bpg},
-                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4},
+                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4,
+                              "songunet_checkpoint_level": a.reg_ckpt_level},
                      "io": {"checkpoint_dir": f"{a.run_dir}/reg", "save_checkpoint_freq": 50_000, "validation_freq": 10_000,
                             "print_progress_freq": 2_560}},
         "wandb": wandb,
@@ -68,7 +75,8 @@ def main():
         "dataset": ds, "validation": val,
         "training": {"hp": {"training_duration": a.diff_samples, "total_batch_size": 256, "batch_size_per_gpu": a.diff_bpg,
                             "patch_shape_x": 448, "patch_shape_y": 448, "patch_num": 4},
-                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4},
+                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4,
+                              "songunet_checkpoint_level": a.diff_ckpt_level},
                      "io": {"checkpoint_dir": f"{a.run_dir}/diff", "regression_checkpoint_path": "${oc.env:CD_REG_CKPT}",
                             "save_checkpoint_freq": 500_000, "validation_freq": 50_000, "print_progress_freq": 2_560}},
         "wandb": wandb,
