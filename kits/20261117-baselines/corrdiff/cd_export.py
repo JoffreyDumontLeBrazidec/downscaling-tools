@@ -197,8 +197,8 @@ def cmd_fill(a):
             continue
         yo = np.asarray(gout["data"][r][:, 0, :], np.float32)[oi]
         xi = np.asarray(gin["data"][r][:, 0, :], np.float32)
+        root["input"][r] = regrid(xi, wi, G.NYC, G.NXC)   # input first: a finite output marks a complete row
         root["output"][r] = regrid(yo, wo, G.NY, G.NX)
-        root["input"][r] = regrid(xi, wi, G.NYC, G.NXC)
         done += 1
         if done % 50 == 0:
             print(f"part {a.part}: {done} rows, {(time.time() - t0) / done:.2f} s/row", flush=True)
@@ -240,7 +240,8 @@ def cmd_verify(a):
     vo = variables(gout)
     oi = [vo.index(v) for v in OUT10]
     n = root["output"].shape[0]
-    bad = [r for r in range(n) if not np.isfinite(root["output"][r, :, G.NY // 2, G.NX // 2]).all()]
+    bad = [r for r in range(n) if not (np.isfinite(root["output"][r, :, G.NY // 2, G.NX // 2]).all()
+                                       and np.isfinite(root["input"][r, :, G.NYC // 2, G.NXC // 2]).all())]
     if bad:
         raise SystemExit(f"{len(bad)} rows not filled, first {bad[:10]}")
     for r in np.random.default_rng(1).choice(n, 6, replace=False):

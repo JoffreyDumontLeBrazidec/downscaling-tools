@@ -40,6 +40,10 @@ samples (x 4 patches). The smokes (`SMOKE=1`, 2,560 samples) give samples/s per 
    `python3 $CD_KIT/cd_export.py probe ...` must print `rows OK: {'train': 15870, 'valid': 864, 'test': 546}`.
 4. Export: `cd_export.py init` (login or 1-task job), `sbatch --array=0-3 cd_export.sbatch`, then `cd_export.py stats`
    and `cd_export.py verify` (`VERIFY_OK 17280 rows`).
+   The booster queue can hold the CPU array for many hours (17 Nov: 7 h, priority). Then also submit
+   `for T in 0 1 2 3 0 1 2 3; do sbatch --dependency=singleton cd_export_serial.sbatch $T; done` (lrd_all_serial: one
+   job at a time, 8 cores, 30 GB, 4 h, 8 parts per job; QOS caps 10 submitted per user). Fill is resumable, so the
+   second pass finishes what the 4 h limit cut, and the booster array can still run beside it.
 5. GL512's config (`~/dev/db_global_20261027/configs/db_global_512_300k.yaml` on Jupiter) copied to `$CD/gl512.yaml`;
    `python3 $CD_KIT/make_cd_configs.py --gl512-config $CD/gl512.yaml --data $CD_DATA --repo $CD_REPO
    --dataset-py $CD_KIT/cd_dataset.py --run-dir $CD/run` (prints the input variables; check 10 outputs).

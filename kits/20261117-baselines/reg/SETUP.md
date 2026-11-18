@@ -88,6 +88,6 @@ record it. A loss that rises over the first 200 steps is a FAIL.
 
 ## Reads
 
-Exports `$EXP/chains/reg_gl512_450k_det/.../inference-ema2000-*-step_{20000,30000}.ckpt`. Rows `REG_GL512_30k` (paper)
+Exports `$EXP/chains/reg_gl512_450k_det_r2/b8f583a2.../inference-ema2000-*-step_{20000,30000}.ckpt` (run of job 2968869; only the 30k raw by-step file is kept, the 20k row builds its trainer from it). Rows `REG_GL512_30k` (paper)
 and `REG_GL512_20k` (convergence check) in `kits/20261116-extremes-set/jupiter/xset_runs.sh`; same for S25 with the
 S25 env (`kits/20261117-baselines/README.md`). If 20k and 30k differ by more than 1 % in station CRPS, report it.
