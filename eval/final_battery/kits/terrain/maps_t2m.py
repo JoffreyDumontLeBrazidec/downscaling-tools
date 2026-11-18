@@ -17,6 +17,7 @@ import cmcrameri.cm as cmc
 from PIL import Image
 sys.path.insert(0, os.path.dirname(__file__))
 import realism_t2m as R
+LABEL = os.environ.get("FB_LABEL", "GL512 450k EMA-2000")
 
 EXT = {"alps": (4, 16, 43, 49), "norway": (4, 20, 58, 69), "iceland": (-25, -13, 63, 67),
        "s_greenland": (-55, -40, 59.5, 69), "corsica_sardinia": (7, 11, 38, 44), "pyrenees": (-2, 3.5, 41.5, 43.5)}
@@ -87,7 +88,7 @@ def sheet(st, M, out, name, region, date, lead, vars_):
                     cb = fig.colorbar(pc, ax=list(axs[row, :3]), shrink=0.85, pad=0.01); cb.ax.tick_params(labelsize=6)
                 if c == 3:
                     cb = fig.colorbar(pc, ax=ax, shrink=0.85, pad=0.01); cb.ax.tick_params(labelsize=6)
-    fig.suptitle(f"{name}: {region} {date} +{lead} h (valid {vt}); {os.environ.get("FB_LABEL", "GL512 450k EMA-2000")} ({R.ROW}); "
+    fig.suptitle(f"{name}: {region} {date} +{lead} h (valid {vt}); {LABEL} ({R.ROW}); "
                  f"fine = 0.6-degree high-pass; grey = O1280 orography every 500 m; truth/input member 1 not paired",
                  fontsize=8.5)
     p = f"{out}/{name}.png"
