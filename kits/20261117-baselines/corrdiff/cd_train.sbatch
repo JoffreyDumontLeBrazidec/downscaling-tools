@@ -3,7 +3,9 @@
 # CD_REG_CKPT=<regression .mdlus>. Resumes from the newest checkpoint in the run folder (PhysicsNeMo's own resume).
 #   sbatch --export=ALL,MODE=regression cd_train.sbatch
 #   sbatch --export=ALL,MODE=diffusion,CD_REG_CKPT=$CD/run/reg/checkpoints_regression/<file>.mdlus cd_train.sbatch
-# Smoke: add SMOKE=1 (1 node, 30 min, training_duration 2560 samples, run folder $CD/smoke_<mode>).
+# Smoke: add SMOKE=1 (1 node, 30 min, training_duration 2560 samples, run folder $CD/smoke_<mode>[_<SMOKE_TAG>]).
+# CD_OVERRIDES: extra hydra overrides, space-separated, e.g. "training.perf.songunet_checkpoint_level=2
+# training.hp.batch_size_per_gpu=2" (activation checkpointing: same model and loss, memory traded for compute).
 #SBATCH --job-name=cd_train
 #SBATCH --account=DestE_340_26
 #SBATCH --partition=boost_usr_prod
@@ -20,12 +22,13 @@ source /leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261117-corrdiff/kit/
 cd $CD_REPO/examples/weather/corrdiff
 EXTRA=()
 if [[ "${SMOKE:-0}" == 1 ]]; then
-  EXTRA+=(training.hp.training_duration=2560 training.io.checkpoint_dir=$CD/smoke_$MODE training.io.print_progress_freq=256
+  EXTRA+=(training.hp.training_duration=2560 training.io.checkpoint_dir=$CD/smoke_$MODE${SMOKE_TAG:+_$SMOKE_TAG} training.io.print_progress_freq=256
           training.io.validation_freq=1280 training.io.save_checkpoint_freq=2560)
 fi
+[[ -n "${CD_OVERRIDES:-}" ]] && read -r -a OV <<< "$CD_OVERRIDES" && EXTRA+=("${OV[@]}")
 MASTER=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
 export MASTER_ADDR=$MASTER MASTER_PORT=29511
-echo "start $(date -u) MODE=$MODE nodes=$SLURM_NNODES repo=$(git -C $CD_REPO describe --tags) data=$CD_DATA"
+echo "start $(date -u) MODE=$MODE overrides=${EXTRA[*]:-none} nodes=$SLURM_NNODES repo=$(git -C $CD_REPO describe --tags) data=$CD_DATA"
 srun --kill-on-bad-exit=1 bash -c "torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 --node_rank=\$SLURM_NODEID \
   --rdzv_backend=c10d --rdzv_endpoint=$MASTER:29511 --rdzv_id=$SLURM_JOB_ID \
   train.py --config-name=config_training_e2v4_${MODE}.yaml ${EXTRA[*]:-}"
