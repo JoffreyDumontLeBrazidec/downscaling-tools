@@ -28,7 +28,7 @@ for s, z in stores.items():
     assert json.loads(z.attrs["variables"].replace("'", '"')) if isinstance(z.attrs["variables"], str) else True
     print(s, "vars", z.attrs["variables"], "leads", z.attrs["leads"], "shape", z["data"].shape, "dates[:3]", z["dates"][:3], "e2_row[:3]", z["e2_row"][:3])
 def find_row(z, fake):
-    d = [str(np.datetime64(v, "s")) for v in z["dates"][:]]
+    d = [str(v) for v in np.asarray(z["dates"][:]).astype("datetime64[s]")]  # int seconds or datetime64 (numpy 2 refuses np.datetime64(int64, "s"))
     hits = [i for i, v in enumerate(d) if v == fake[:19]]
     return hits
 for date, lead in PAIRS:
