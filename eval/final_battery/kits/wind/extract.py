@@ -23,7 +23,7 @@ elif a.lead is not None:
     PAIRS = [(d, a.lead) for d in a.dates.split(",") if d]
     a.no_orog = True
 os.makedirs(a.out, exist_ok=True)
-stores = {s: zarr.open(f"{A}/{s}/emb_out_hres_o1280_pf.zarr", "r") for s in ("stores","stores_leads")}
+stores = {s: zarr.open(f"{A}/{s}/emb_out_hres_o1280_pf.zarr", mode="r") for s in ("stores","stores_leads")}
 for s, z in stores.items():
     assert json.loads(z.attrs["variables"].replace("'", '"')) if isinstance(z.attrs["variables"], str) else True
     print(s, "vars", z.attrs["variables"], "leads", z.attrs["leads"], "shape", z["data"].shape, "dates[:3]", z["dates"][:3], "e2_row[:3]", z["e2_row"][:3])
@@ -81,7 +81,7 @@ for date, lead in PAIRS:
 if a.no_orog:
     print("done"); sys.exit(0)
 # orography and land-sea mask
-z = zarr.open(F, "r"); vs = z.attrs["variables"]; print("forcing vars", vs, "shape", z["data"].shape)
+z = zarr.open(F, mode="r"); vs = z.attrs["variables"]; print("forcing vars", vs, "shape", z["data"].shape)
 vi = {n: vs.index(n) for n in ("z", "lsm") if n in vs}
 row = np.asarray(z["data"][0])  # (vars, ens, P)
 o = dict(lat=np.asarray(z["latitudes"][:]).astype(np.float32), lon=np.asarray(z["longitudes"][:]).astype(np.float32))
