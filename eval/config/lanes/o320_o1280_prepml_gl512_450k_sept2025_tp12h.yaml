@@ -1,0 +1,117 @@
+# o320_o1280_prepml_gl512_450k_sept2025_tp12h -- 2026-11-18 relaunch of the GL512 450k September-2025 prepml month with
+# the tp and forcing fixes (docs epics/misc/20261117_quaver_scorecards_for_paper.md s5.8-s5.9). Copy of
+# o320_o1280_prepml_gl512_450k_sept2025 (jdyk) with three changes only:
+#   1. predict.steps every 12 h (12..240) and prepml.time_step 12h: the checkpoint tp/cp are 12-h accumulations (out_hres
+#      variables_metadata period [0h, 12h]); anemoi-inference Accumulate sums every step, so at 24-h steps only every
+#      other window was counted (half the rain). Scoring still reads 24..240 every 24 h.
+#   2. prepml.venv gl512-20261118-prepml-wrap-fast-tp12h = the fast wrap (TF32, one-row LayerNorm, edge padding; 2.96x,
+#      speedup note s6) + gl512_tp_patches (tp = cp = 0 at step 0) + the forcing-date fix in the frozen runner copy
+#      season-scale-tools-frozen-20261118-forcingfix (input_date = valid date; at 12-h steps the old date - step swapped day
+#      and night in the time forcings, forcing-date note 20261117). Global-noise and rule-31 seed patches unchanged.
+#   3. nothing else (sampler, members, dates, checkpoint as jdyk).
+# Owner decision 18 Nov 08:10 UTC: stop jdyk, fix runner, relaunch.
+#
+# ---- original header of o320_o1280_prepml_gl512_450k_sept2025 follows ----
+# o320_o1280_prepml_gl512_450k_sept2025 -- September-2025 prepml month for GL512 at step 450000 (2026-11-17), a clone of
+# o320_o1280_prepml_gl512_sept2025 (the jdno month, step 318000) in which only the checkpoint changes. Expvers jdya (smoke), jdyb (month).
+#
+# Checkpoint: run db_global_512_300k (MLflow run 7bb77ac91f5f444e9132cd133713c0c3), EMA-2000
+# inference export at step 450000 (standard GL512 checkpoint since 17 Nov, rule 48), supplied on the CLI as always:
+#   /home/ecm5702/perm/checkpoints/o320_o1280/7bb77ac91f5f444e9132cd133713c0c3/inference-ema2000-anemoi-by_step-epoch_449-step_450000.ckpt  (md5 f4ec4bc3d6c263c67a677323513d9293)
+# Trained on JUPITER with anemoi-core fork 18a5415a (branch claude/project-thread-o4995j):
+# AnemoiD2ModelEncProcDec, 512 channels, EDM preconditioning, freeze_qk_gains, fixed Triton gt.py
+# (upstream bbca1748 port), surface-only outputs with tp and cp as direct predictions, O320 input
+# (eefh cf in training) plus O1280 forcings, num_gpus_per_model 4.
+#
+# The checkpoint pickles classes of that fork, so prepml must run it on the sandbox
+# ~/hpcperm/sandbox/20261109-gl512-prepml (anemoi-core worktree pinned at 18a5415a) through the wrap
+# gl512-20261109-prepml-wrap. That wrap also carries two runner patches (site/gl512_runner_patches.py):
+#   1. the sampler keys reach the model as noise_scheduler_params / sampler_params dicts. Without it
+#      the 18a5415a interface drops num_steps_high / num_steps_low and the piecewise schedule silently
+#      becomes 15/15 instead of 10/20;
+#   2. standing rule 31: each draw is seeded with derive_draw_seed(base, init date, lead, member-1),
+#      base = ANEMOI_BASE_SEED or 756, and the initial noise is one global O1280 field sliced per rank.
+#
+# Everything else follows o320_o1280_prepml_pw30_season_ft400k_ctrl (same parent, same env, ecflow gpu
+# limit 2, spectra blocks restated for the September-2025 window). The ONE deliberate sampler change is
+# S_churn 0: the 30-step churn-off piecewise EDM sampler of the GL512 read kit on Jupiter
+# (agent-work/20261030-gl512-100k-wide/kit/gl512_predict.py, PW_SCHED + PW_SAMPLER), i.e. 59 denoiser
+# calls per draw (Heun, 30 steps, Euler last step).
+#
+# Owner 2026-11-17 11:36 UTC ("only up to day 10"): lead 0-240 h at 24 h steps (was 0-360 h, owner 2026-11-09;
+# prepml also writes step 0, trap P5), members 1-10 of
+# eefo pf O320 from MARS (one draw per input member), 00 UTC 2025-09-01 .. 2025-09-30, output FDB
+# class rd stream enfo type pf.
+#
+# NOTE: the lane loader merges only two levels deep, so predict.env and predict.sampler REPLACE the
+# base blocks wholesale and are restated here in full.
+base: o320_o1280_prepml_pw40_season
+
+predict:
+  members: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  steps: [12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180, 192, 204, 216, 228, 240]
+  dates: ["20250901", "20250902", "20250903", "20250904", "20250905", "20250906", "20250907", "20250908",
+          "20250909", "20250910", "20250911", "20250912", "20250913", "20250914", "20250915", "20250916",
+          "20250917", "20250918", "20250919", "20250920", "20250921", "20250922", "20250923", "20250924",
+          "20250925", "20250926", "20250927", "20250928", "20250929", "20250930"]
+  num_gpus_per_model: 4
+  env:
+    ANEMOI_INFERENCE_NUM_CHUNKS: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_PROCESSOR: 1
+    ANEMOI_INFERENCE_NUM_CHUNKS_MAPPER: 1
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    CODEX_UNIFIED_SHARD_STRATEGY: edges
+  sampler:
+    schedule_type: "experimental_piecewise"
+    num_steps: 30
+    sigma_max: 100000.0
+    sigma_transition: 10.0
+    sigma_min: 0.03
+    high_schedule_type: "exponential"
+    low_schedule_type: "karras"
+    num_steps_high: 10
+    num_steps_low: 20
+    rho: 7.0
+    sampler: "heun"
+    S_churn: 0.0
+    S_min: 0.75
+    S_max: 100000.0
+    S_noise: 1.05
+
+prepml:
+  venv: /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261118-prepml-wrap-fast-tp12h
+  # 12-h steps: the checkpoint tp/cp windows are 12 h (see header)
+  time_step: 12h
+  # Owner 2026-08-22: at most 2 concurrent model tasks for every o320->o1280 prepml lane.
+  ecflow:
+    limits:
+      gpu: 2
+  platform:
+    gpu:
+      time: "0-06:00"
+
+# spectra_ecmwf_v2 and spectra_ecmwf: copied from o320_o1280_prepml_pw30_season_ft400k_ctrl (the
+# September-2025 driver bundles humberto_20250926_20250930, complete-grid v2 and pole-masked v1 as its
+# control; see the comments there). Restated in full because the loader merges two levels deep.
+spectra_ecmwf_v2:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/hpcperm/reference_spectra/fullgrid_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
+  input_template_grib: "/home/ecm5702/hpcperm/data/o1280-template.grib"
+
+spectra_ecmwf:
+  truncation: 1279  # O1280 nominal cubic-octahedral truncation: TCo1279
+  template_root: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf/enfo_o1280"
+  weather_states: ["10u", "10v", "2t", "msl", "t_850", "z_500"]
+  reference_dir: "/home/ecm5702/perm/reference/o320_o1280/spectra_ecmwf"
+  steps: [120]
+  members: [1]
+  truth_label: "ENFO"
+  input_label: "EEFO"
+  input_bundles_dir: "/home/ecm5702/hpcperm/data/input_data/o320_o1280/humberto_20250926_20250930"
