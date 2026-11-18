@@ -1,0 +1,11 @@
+--- season-scale-tools-fix/downscaling_unified_runner.py.orig	2026-11-17 20:10:06.000000000 +0000
++++ season-scale-tools-fix/downscaling_unified_runner.py	2026-11-17 20:10:06.000000000 +0000
+@@ -567,7 +567,7 @@
+ 
+         # --- (c) unified dict-batch predict_step ---
+         def predict_step(self, model, input_tensor_torch, date, step, **kwargs):
+-            input_date = date - step
++            input_date = date  # the valid date: forecast_stepper already yields start + step; date - step gave every lead the start-date forcings
+             low_res = input_tensor_torch
+             high_res = self._prepare_high_res_input_tensor(input_date)  # reused from fork
+             # The fork input pipeline yields 4D (batch, multi_step, grid, vars). The unified

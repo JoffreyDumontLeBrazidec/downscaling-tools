@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Shim: anemoi-inference for the GL512 wrap (dispatch to module entry on the 20261109-gl512-prepml venv).
+# `run` >1 task -> srun-launch ranks (recursion-guarded). retrieve / single-node unaffected.
+# prepml-0.125-compat: route `retrieve` to the patched checkout that adds --input-type/--target
+# (alias of --retrieve-fields-type / target). The MODEL `run` stays on the sandbox fork.
+PY="/home/ecm5702/hpcperm/sandbox/20261109-gl512-prepml/.venv-x86_64/bin/python"
+STAGING_SRC="/home/ecm5702/dev/anemoi-inference-prepml-staging/src"
+# fast wrap (2026-11-11): before a model run, pre-read the ~7,600 files the task imports (64 parallel readers), once per job
+# on the batch node; a cold Lustre start cost 3-10 min of serial imports (speedup note s3.2, s3.9). Page cache only.
+if [ "${1:-}" = "run" ] && [ -z "${CODEX_SRUN_WRAPPED:-}" ] && [ -z "${CODEX_WARMED:-}" ]; then
+    export CODEX_WARMED=1
+    bash /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261118-prepml-wrap-fast-tp12h/warm/warm_manifest.sh /home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261118-prepml-wrap-fast-tp12h/warm/manifest_gl512.txt >&2 || true
+fi
+if [ "${1:-}" = "run" ] && [ "${SLURM_NTASKS:-1}" -gt 1 ] && [ -z "${SLURM_STEP_ID:-}${SLURM_STEPID:-}" ] && [ -z "${CODEX_SRUN_WRAPPED:-}" ]; then
+    export CODEX_SRUN_WRAPPED=1
+    echo "[shim] parallel run: srun-launching ${SLURM_NTASKS:-?} tasks across ${SLURM_NNODES:-1} node(s)" >&2
+    exec srun --overlap --export=ALL,CODEX_SRUN_WRAPPED=1 --kill-on-bad-exit=1 "$0" "$@"
+fi
+if [ "${1:-}" = "retrieve" ]; then
+    exec env PYTHONPATH="${STAGING_SRC}:${PYTHONPATH:-}" "$PY" -m anemoi.inference "$@"
+fi
+exec "$PY" -m anemoi.inference "$@"

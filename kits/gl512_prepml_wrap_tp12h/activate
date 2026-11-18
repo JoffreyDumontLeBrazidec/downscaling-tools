@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# prepml runner.venv wrap for GL512 (db_global_512_300k, run 7bb77ac91f5f444e9132cd133713c0c3, EMA-2000
+# export step 318000), o320->o1280. The checkpoint was trained on anemoi-core fork 18a5415a
+# (claude/project-thread-o4995j: AnemoiD2ModelEncProcDec 512 ch, freeze_qk_gains, fixed Triton gt.py =
+# upstream bbca1748 port), so it runs on the sandbox 20261109-gl512-prepml whose anemoi-core worktree is
+# pinned at that commit. Built 2026-11-09 from hres-sandbox-20260902-prepml-wrap.
+# Source the venv DIRECTLY (not the sandbox activate.sh: its guard runs git in the ecm5702 checkout,
+# which fails under the mlx ecFlow service user). Editable installs resolve anemoi.* to the sandbox.
+# Differences from the 20260902 wrap: $WRAP/site is FIRST on PYTHONPATH; its sitecustomize.py loads the
+# shared prepml_sitecustomize_unified/sitecustomize.py unchanged and then applies gl512_draw_seeding
+# (standing rule 31: one seed per (init date, lead, member) from derive_draw_seed, one global noise field
+# sliced per rank).
+source /home/ecm5702/hpcperm/sandbox/20261109-gl512-prepml/.venv-x86_64/bin/activate
+export CODEX_PREPML_FORCE_PRECISION=float32
+export PATH="/home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261118-prepml-wrap-fast-tp12h/shim_bin:$PATH"
+_WRAP_EXTRA="/home/ecm5702/dev/anemoi-inference-configs/prepml_envs/gl512-20261118-prepml-wrap-fast-tp12h/site:/home/ecm5702/hpcperm/sandbox/20261109-gl512-prepml/season-scale-tools-frozen-20261118-forcingfix:/home/ecm5702/dev/anemoi-inference-configs/prepml_sitecustomize_unified"
+case ":${PYTHONPATH:-}:" in
+  *":${_WRAP_EXTRA}:"*) ;;
+  *) export PYTHONPATH="${_WRAP_EXTRA}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+unset _WRAP_EXTRA
+# --- gl512-20261111-prepml-wrap-fast (2026-11-11): the 20261109 wrap plus three speed settings, applied by
+# site/speed_patches.py (the exact code of the speed tests, docs epics/unified-inference/in-progress/
+# 20261110_speedup_prepml_training_inference.md s3.7-3.8): TF32 matmuls, ConditionalLayerNorm from one conditioning row,
+# lin_edge inputs zero-padded to 32 columns. 3.05x per draw on 4 A100, station scores within 0.074 % of fp32 (96 rows).
+# Use for NEW prepml experiments only; jdno (Sept 2025 month) stays on the 20261109 wrap until it ends.
+export SPEED_TF32=1 SPEED_LNROW=1 SPEED_EDGEPAD=32
+# --- gl512-20261118-prepml-wrap-fast-tp12h (2026-11-18): the fast wrap plus two fixes (docs quaver scorecards note s5.9).
+# (1) site/gl512_tp_patches.py: tp/cp = 0 at step 0 in Accumulate; the lane steps every 12 h so the 12-h tp/cp windows of the
+#     checkpoint tile the forecast. (2) season-scale-tools-frozen-20261118-forcingfix: UnifiedDownscalingRunner.predict_step
+#     uses input_date = date (valid date) for the high-res time forcings, not date - step (start date); FORCING_DATE_FIX.diff
+#     there, same change as anemoi-inference 39d5371 (agent-work/20261117-forcing-date).
