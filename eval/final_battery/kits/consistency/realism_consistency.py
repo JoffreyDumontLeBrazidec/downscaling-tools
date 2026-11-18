@@ -74,9 +74,11 @@ def static(idx, npoints, cache):
     if os.path.exists(cache):
         d = np.load(cache); return d['lsm'], d['h']
     import zarr
-    data = zarr.open(FORCINGS, mode='r')['data']
+    zf = zarr.open(FORCINGS, mode='r'); data = zf['data']
     assert data.shape[-1] == npoints, f'forcings points {data.shape} != prediction points {npoints}'
-    lsm = np.asarray(data[0, 5, 0, :])[idx]; h = (np.asarray(data[0, 10, 0, :]) / 9.80665)[idx]
+    fv = list(zf.attrs.get('variables', []))
+    il, iz = (fv.index('lsm'), fv.index('z')) if {'lsm', 'z'} <= set(fv) else (5, 10)   # 5 / 10 = the E2 forcings store order
+    lsm = np.asarray(data[0, il, 0, :])[idx]; h = (np.asarray(data[0, iz, 0, :]) / 9.80665)[idx]
     np.savez(cache, lsm=lsm, h=h)
     return lsm, h
 
@@ -511,8 +513,10 @@ def main():
         print(process_date((dates[0], a.leads[:1], a.pred, a.truth_stores, a.outdir, a.input_stores)), flush=True)
         for f in glob.glob(os.path.join(a.outdir, f'row_{dates[0]}_*.npz')) + glob.glob(os.path.join(a.outdir, f'date_{dates[0]}.npz')):
             os.remove(f)
-    from multiprocessing import Pool
-    with Pool(a.workers) as pool:
+    # spawn, not fork: the first date ran in this process with threaded numpy / zarr, and a forked child can inherit a
+    # held lock and hang (seen in the synthetic smoke run, 18 Nov 2026). Results do not depend on the start method.
+    from multiprocessing import get_context
+    with get_context('spawn').Pool(a.workers) as pool:
         for r in pool.imap_unordered(process_date, jobs):
             print(r, flush=True)
 
