@@ -333,9 +333,10 @@ def main():
     if is_main:
         hdir.mkdir(parents=True, exist_ok=True)
         gfile = outdir / "grid_o1280.npz"
-        if not gfile.exists():
-            np.savez(outdir / "grid_o1280.part.npz", lat=lat_all, lon=lon_all)
-            os.replace(outdir / "grid_o1280.part.npz", gfile)
+        if not gfile.exists():   # parallel jobs share OUTDIR: a private temporary name per process, then an atomic rename
+            gtmp = outdir / f"grid_o1280.part.{os.environ.get('SLURM_JOB_ID', 'x')}.{os.getpid()}.npz"
+            np.savez(gtmp, lat=lat_all, lon=lon_all)
+            os.replace(gtmp, gfile)
     records, xres = [], []
     n_draws = n_finite = n_skip = 0
     for date, lead in cases:
@@ -435,7 +436,7 @@ def main():
         np.savez(hdir / f"{row_label}_{date}_step{lead:03d}.npz", **hist)
         ddir.mkdir(parents=True, exist_ok=True)
         tw = time.time()
-        tmp = ddir / (name[:-4] + ".part.npz")
+        tmp = ddir / (name[:-4] + f".part.{os.environ.get('SLURM_JOB_ID', 'x')}.npz")
         np.savez(tmp, q=q, lo=lo, hi=hi, states=np.array(states), seeds=np.array(cseeds, np.int64),
                  members=np.arange(1, n_mem + 1), attrs=json.dumps(attrs))
         os.replace(tmp, ddir / name)
