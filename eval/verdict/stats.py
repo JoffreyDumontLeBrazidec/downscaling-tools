@@ -141,7 +141,7 @@ def state_better(lo: float, hi: float, noise_ok: bool) -> str:
 def combine(states: Iterable[str]) -> str:
     """Gate state from its sub-lines: FAIL if any FAIL, PASS if all PASS, MISSING if none, else INCONCLUSIVE."""
     s = list(states)
-    if not s:
+    if not s or all(x == MISSING for x in s):
         return MISSING
     if FAIL in s:
         return FAIL

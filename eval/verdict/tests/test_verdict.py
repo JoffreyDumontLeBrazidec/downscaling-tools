@@ -44,6 +44,7 @@ def test_states():
     assert S.state_better(-3, -1, False) == S.PASS
     assert S.state_better(-1, 1, True) == S.INCONCLUSIVE and S.state_better(-1, 1, False) == S.FAIL
     assert S.combine([S.PASS, S.INCONCLUSIVE]) == S.INCONCLUSIVE and S.combine([]) == S.MISSING
+    assert S.combine([S.MISSING]) == S.MISSING and S.combine([S.PASS, S.MISSING]) == S.INCONCLUSIVE
 
 
 def test_gates_csv_round_trip(tmp_path):
@@ -122,6 +123,12 @@ def test_battery_out_lines(tmp_path):
     assert [ln.state for ln in lines if ln.gate == "G-B5" and "C11" in ln.sub] == [S.PASS]
     assert _state(lines, "G-B5") == S.INCONCLUSIVE        # +84..+240 h has no diagnostic yet
     assert _state(reader_b.battery(new, ref), "G-B3") == S.FAIL
+    # n/a in the reference too does not block (GL512 450k acceptance: C14, T4 n/a, 19 Nov real-table run)
+    import json as _j
+    for d in (ok, ref):
+        js = _j.loads((d / "summary.json").read_text()); js["consistency"].append(dict(id="C14", value="", status="n/a"))
+        (d / "summary.json").write_text(_j.dumps(js))
+    assert _state(reader_b.battery(ok, ref), "G-B3") == S.PASS
     far = syn.battery(tmp_path / "far", [], c11="0.80-1.02; 0.5")
     assert [ln.state for ln in reader_b.battery(far, ref) if "C11" in ln.sub] == [S.FAIL]
 

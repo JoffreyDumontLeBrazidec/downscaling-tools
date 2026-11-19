@@ -138,7 +138,10 @@ def battery(run_root: Path, ref_root: Path) -> list[GateLine]:
                 GateLine("G-B5", "+84..+240 h", True, S.MISSING, note="no lead-to-lead diagnostic on MI rows (not built)")]
     out_r = {ln["id"] for ln in lr if ln.get("status") == "OUT"}
     out_f = {ln["id"] for ln in lf if ln.get("status") == "OUT"}
-    na_r = sorted(ln["id"] for ln in lr if ln.get("status") == "n/a")
+    na_f = {ln["id"] for ln in lf if ln.get("status") == "n/a"}
+    # a line that is n/a in the reference too (C14, T4 on GL512 450k, 19 Nov) cannot be compared: listed, not blocking
+    na_r = sorted(ln["id"] for ln in lr if ln.get("status") == "n/a" and ln["id"] not in na_f)
+    na_both = sorted(ln["id"] for ln in lr if ln.get("status") == "n/a" and ln["id"] in na_f)
     new = sorted(out_r - out_f)
     st = S.FAIL if (len(out_r) > len(out_f) or new) else S.PASS
     if na_r and st == S.PASS:
@@ -147,7 +150,8 @@ def battery(run_root: Path, ref_root: Path) -> list[GateLine]:
     out.append(GateLine("G-B3", "OUT lines", True, st, value=float(len(out_r)), ref_value=float(len(out_f)), unit="OUT lines",
                         note=f"new: {', '.join(new) or 'none'}; lead-linked: {', '.join(linked) or 'none'}; "
                              f"other: {', '.join(sorted(out_r - set(linked))) or 'none'}"
-                             + (f"; n/a: {', '.join(na_r)}" if na_r else "")))
+                             + (f"; n/a (blocks PASS): {', '.join(na_r)}" if na_r else "")
+                             + (f"; n/a in both: {', '.join(na_both)}" if na_both else "")))
     c11 = next((ln for ln in lr if ln["id"] == "C11"), None)
     c11f = next((ln for ln in lf if ln["id"] == "C11"), None)
     if c11 is None:
