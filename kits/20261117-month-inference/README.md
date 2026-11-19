@@ -21,3 +21,9 @@ Jupiter (kit checkout in `/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20
 Back on Atos: `mi_encode_grib.py --rowdir ... --date ... --template grib/tmpl_o1280.grib --out ... --expver <label>` -> GRIB for
 quaver source="marsfile" (scorecards kit `q_compute_ctl.py`). Never FDB (rule 30).
 `grib/in_sfc_pf_<date>.grib` (native O320 input, 10 sfc params, steps 12-240) is kept: it is the input row for quaver.
+
+## Sets (19 Nov 2026)
+MI-S25 = Sep 2025 (`dates_s25.txt`), MI-J25 = Jan 2025 (`dates_j25.txt`, 31 dates, owner pick 19 Nov 2026: other season, Eowyn/Herminia).
+`mi_set.sh` maps a date to its set; Jupiter input `datasets/mi_<set>_eefo_o320_pf10_l012-240/in`, output `outputs/month_inference_<set>/rows/<ROW>/`.
+`mi_predict.sbatch` takes the set from its dates (one set per job); the xcheck gate file stays in the S25 folder. Atos work dir is shared (dates differ).
+Probe: `bash mi_probe.sh 20250101 20250131`. Chain: `bash mi_chain_submit.sh dates_j25.txt 2 ret` with SBATCH_ACCOUNT=ecaifs (nf limit 100/account).

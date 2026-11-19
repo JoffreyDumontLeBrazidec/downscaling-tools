@@ -6,7 +6,8 @@ CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
 DEVR=/e/home/jusers/dumontlebrazidec1/jupiter/dev
 MK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-month-inference
 MKIT=$MK/downscaling-tools/kits/20261117-month-inference
-MOUT=$CK/month_inference_s25
+MI_SET=${MI_SET:-s25}
+MOUT=$CK/month_inference_$MI_SET
 row=${1:?row}
 case "$row" in
   GL512_450k) export CKPT_STEP=450000 ;;
@@ -18,5 +19,5 @@ export EMA_TAG=ema2000 MODEL_LABEL=db_global_512_300k_ema2000
 export EXPECT_CODE=db_global_20261027/code/anemoi-core CODE_ROOT=/e/data1/jureap-data/ecmwf/users/jdumont/db_global_20261027/code/anemoi-core
 export CODE_SHA_FILE=$DEVR/db_global_20261027/CODE_PIN DATASETS_SHA_FILE=$DEVR/db_global_20261027/DATASETS_PIN
 export ROW_LABEL=$row MEMBERS=${MEMBERS:-10}
-export MI_IN=/e/data1/jureap-data/ecmwf/users/jdumont/datasets/mi_s25_eefo_o320_pf10_l012-240/in
+export MI_IN=/e/data1/jureap-data/ecmwf/users/jdumont/datasets/mi_${MI_SET}_eefo_o320_pf10_l012-240/in
 export OUTDIR=$MOUT/rows/$row

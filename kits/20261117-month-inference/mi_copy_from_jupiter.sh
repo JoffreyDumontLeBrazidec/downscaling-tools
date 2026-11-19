@@ -1,10 +1,13 @@
 #!/bin/bash
 # MI-S25: copy one model row's finished date folders (20 npz each) from Jupiter to Atos for GRIB encoding. Run ON ac6-101/ac6-100
 # (the Jupiter ssh master). Verifies by sorted (name, size) lists, not du (du counts directory entries: 4 KB trap of 18 Nov).
-# Usage: bash mi_copy_from_jupiter.sh <ROW> [date ...]   (no dates = every date folder with 20 files on Jupiter)
+# Usage: bash mi_copy_from_jupiter.sh <ROW> [date ...]   (no dates = every date folder with 20 files on Jupiter; set = MI_SET or the
+# set of the first date, default s25; all dates of one call must belong to one set)
 set -eu
 row=${1:?row}; shift
-J=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/month_inference_s25/rows/$row
+source "$(cd "$(dirname "$0")" && pwd)/mi_set.sh"
+MI_SET=${MI_SET:-$( [[ $# -gt 0 ]] && mi_set_of $1 || echo s25)}
+J=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/month_inference_$MI_SET/rows/$row
 A=/ec/res4/scratch/ecm5702/agent-work/20261117-month-inference/rows/$row
 mkdir -p $A
 rsync -a jupiter:$J/grid_o1280.npz $A/
