@@ -146,23 +146,41 @@ def run(run_spec: str, ref_spec: str, ens9_spec: str, input_spec: str, rule: str
 
 
 def _spread_line(sub: pd.DataFrame, var: str, band: str, rule: str, members: int, nd: int) -> GateLine:
-    """G-A5: SSR = sqrt(sum n spread_rms^2 / sum n rmse^2) x sqrt((M+1)/M) within 0.10 of ENS9's, and the spread
-    ratio to ENS9 not further from 1 than GL512 450k's + 2 SE."""
+    """G-A5 (B3, 19 Nov 2026): two excesses over the reference GL512 450k, each non-inferiority with a margin in ratio units:
+    (a) |SSR_run - SSR_ENS9| - |SSR_ref - SSR_ENS9| <= G-A5_ssr; SSR = sqrt(sum n spread_rms^2 / sum n rmse^2) x sqrt((M+1)/M);
+    (b) |spread ratio_run - 1| - |spread ratio_ref - 1| <= G-A5_ratio, spread ratio = spread_rms of the run over ENS9's.
+    B1's absolute SSR rule (within 0.10 of ENS9) failed the reference itself (tp, 0.103) and its ratio rule (REF + 2 SE, SE 0.01)
+    failed a neighbour checkpoint by 3-4 SE."""
     need = [f"{c}_{r}" for c in ("spread_rms", "rmse_mean") for r in ("RUN", "REF", "ENS9")]
     if any(c not in sub for c in need):
         return GateLine("G-A5", f"{var} {band}", True, S.MISSING, note="spread_rms or rmse_mean absent")
     b = per_block(sub, need, "n", rule, square=True)
     n = len(b)
     f = math.sqrt((members + 1) / members)
-    ssr = {r: math.sqrt(b[f"spread_rms_{r}"].sum() / b[f"rmse_mean_{r}"].sum()) * f for r in ("RUN", "REF", "ENS9")}
-    vr, ve, vf = (b[f"spread_rms_{r}"].to_numpy() for r in ("RUN", "ENS9", "REF"))
-    r_run, se = S.jackknife(lambda k: math.sqrt(vr[k].sum() / ve[k].sum()), n)
-    r_ref = math.sqrt(vf.sum() / ve.sum())
-    ok_ssr = abs(ssr["RUN"] - ssr["ENS9"]) <= MARGIN["G-A5_ssr_abs"]
-    ok_ratio = abs(r_run - 1) <= abs(r_ref - 1) + MARGIN["G-A5_ratio_se"] * (se if math.isfinite(se) else 0.0)
-    st = S.PASS if ok_ssr and ok_ratio else S.FAIL
-    note = (f"SSR run {ssr['RUN']:.3f} ENS9 {ssr['ENS9']:.3f} REF {ssr['REF']:.3f}; spread ratio to ENS9 run "
-            f"{r_run:.3f} REF {r_ref:.3f}" + ("" if ok_ssr else "; SSR off ENS9 by more than 0.10")
-            + ("" if ok_ratio else "; spread ratio further from 1 than REF + 2 SE"))
-    return GateLine("G-A5", f"{var} {band}", True, st, value=r_run, ref_value=r_ref, unit="spread ratio to ENS9", se=se,
-                    margin=MARGIN["G-A5_ssr_abs"], n_dates=nd, n_blocks=n, note=note)
+    sp = {r: b[f"spread_rms_{r}"].to_numpy() for r in ("RUN", "REF", "ENS9")}
+    rm = {r: b[f"rmse_mean_{r}"].to_numpy() for r in ("RUN", "REF", "ENS9")}
+
+    def ssr(r, k):
+        return math.sqrt(sp[r][k].sum() / rm[r][k].sum()) * f
+
+    def ex_ssr(k):
+        return abs(ssr("RUN", k) - ssr("ENS9", k)) - abs(ssr("REF", k) - ssr("ENS9", k))
+
+    def ratio(r, k):
+        return math.sqrt(sp[r][k].sum() / sp["ENS9"][k].sum())
+
+    def ex_ratio(k):
+        return abs(ratio("RUN", k) - 1) - abs(ratio("REF", k) - 1)
+    e1, se1 = S.jackknife(ex_ssr, n)
+    e2, se2 = S.jackknife(ex_ratio, n)
+    m1, m2 = MARGIN["G-A5_ssr"], MARGIN["G-A5_ratio"]
+    s1 = S.state_not_worse(*S.interval(e1, se1, n), m1)
+    s2 = S.state_not_worse(*S.interval(e2, se2, n), m2)
+    st = S.combine([s1, s2])
+    al = np.ones(n, bool)
+    note = (f"SSR run {ssr('RUN', al):.3f} ENS9 {ssr('ENS9', al):.3f} REF {ssr('REF', al):.3f}; excess SSR {e1:+.3f} (m {m1}, {s1}); "
+            f"spread ratio to ENS9 run {ratio('RUN', al):.3f} REF {ratio('REF', al):.3f}, excess {e2:+.3f} (m {m2}, {s2})")
+    lo, hi = S.interval(e2, se2, n)
+    return GateLine("G-A5", f"{var} {band}", True, st, value=ratio("RUN", al), ref_value=ratio("REF", al), diff=e2,
+                    unit="spread ratio to ENS9; diff = excess of |r-1| over REF", se=se2, lo=lo, hi=hi, margin=m2,
+                    n_dates=nd, n_blocks=n, note=note)

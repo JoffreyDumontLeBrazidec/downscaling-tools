@@ -34,9 +34,14 @@ MARGIN = {
     "G-A1": {"10ff": 1.0, "tp": 2.0},
     "G-A2": {"2t": 1.0, "msl": 1.0},
     "G-A3": {"10ff": 2.0, "tp": 2.0, "2t": 2.0, "msl": 2.0},
-    "G-A5_ssr_abs": 0.10,          # |SSR run - SSR ENS9| at most this
-    "G-A5_ratio_se": 2.0,          # spread ratio: |r-1| at most |r_ref-1| + this x SE
-    "G-B1_se": 2.0,                # a bin fails when |r-1| exceeds the reference's by more than this x SE
+    # G-A5 (B3): excess over REF, ratio units. XSET-1, +12..+72 h, 42 dates / 30 blocks: 450k vs itself had |SSR - SSR_ENS9| 0.103
+    # (tp) so the absolute 0.10 failed the reference; 500k vs 450k moved the spread ratio by +0.034 (tp), FS-242 100k by +0.040 (2t).
+    "G-A5_ssr": 0.05,              # |SSR run - SSR ENS9| - |SSR REF - SSR ENS9| (500k tp: +0.018)
+    "G-A5_ratio": 0.06,            # |spread ratio run - 1| - |spread ratio REF - 1| (1.5x the largest adjacent move, 0.04)
+    # G-B1 (B3): a bin fails when the excess |r-1| - |r_ref-1| minus 2 SE is above this amplitude-ratio margin. Per-bin paired SE is
+    # 0.001-0.003 on the 2023 box rows (30 dates), so SE alone failed 500k on 7 of 8 lines for moves of 0.015-0.09 (500k tp 0.04-0.09).
+    "G-B1_margin": 0.10,
+    "G-B1_se": 2.0,
     "G-B1_adjacent": 2,            # the gate fails on this many adjacent failing bins
     "G-B1_km": (31.0, 125.0),
     "G-B1_info_band": (0.9, 1.1),  # printed, information only (owner D7, "refine later")
