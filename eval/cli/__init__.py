@@ -12,7 +12,7 @@ Groups (see ``python -m eval.cli --help``):
     tc_tracks    tctracker, tccompare
     observations obs (fetch, compare, ...)
     figures      zoom_maps, map_video, spectra
-    final        final_battery (completely trained models only; refuses without --final-model)
+    final        final_battery (completely trained models only; refuses without --final-model), verdict
     maintenance  prepml-cleanup, config
     retired      membermaps (renamed zoom_maps), report, videogen: tombstones
                  that print where the tool went and exit with status 1
@@ -32,7 +32,7 @@ from eval.cli._common import ALL_EVALUATORS, DEFAULT_HOST, GROUP_TITLES, Command
 _COMMAND_MODULES = (
     "discover", "run", "predict", "prepare", "evaluate", "judge", "scoreboard",
     "evolution", "tctracker", "tccompare", "obs", "zoom_maps", "map_video", "spectra",
-    "final_battery", "prepml_cleanup", "lane_config", "retired",
+    "final_battery", "verdict", "prepml_cleanup", "lane_config", "retired",
 )
 
 __all__ = ["ALL_EVALUATORS", "DEFAULT_HOST", "build_parser", "commands", "main"]
