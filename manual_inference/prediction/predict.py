@@ -409,6 +409,20 @@ def _predict_from_dataloader(
     lon_hres = np.asarray(datamodule.supporting_arrays["out_hres"]["longitudes"])
     lat_hres = np.asarray(datamodule.supporting_arrays["out_hres"]["latitudes"])
     dates = np.asarray(ds.datasets["out_hres"].dates[idx : idx + n_samples])
+    from . import paired_probe
+
+    if paired_probe.enabled():
+        # TD-204: model input = truth member m projected to the lres grid (forcings stay real).
+        down = paired_probe.build_down(lat_hres, lon_hres, lat_lres, lon_lres)
+        x_in_full, shared = paired_probe.replace_inputs(x_in, y, down, name_to_idx_in, name_to_idx_out)
+        logging.getLogger(__name__).info("paired probe: %d shared channels replaced by truncated truth: %s", len(shared), shared)
+        gap_dir = os.environ.get("MI_PAIRED_GAP_DIR")
+        if gap_dir:
+            os.makedirs(gap_dir, exist_ok=True)
+            paired_probe.scale_gap(
+                x_in, x_in_full, lat_lres, lon_lres, shared, name_to_idx_in,
+                os.path.join(gap_dir, f"gap_{idx:05d}.npz"),
+            )
     full_weather_states = list(name_to_idx_out.keys())
     weather_states, selected_indices = resolve_output_weather_states(
         weather_states=full_weather_states,
