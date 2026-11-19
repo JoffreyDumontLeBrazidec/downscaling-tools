@@ -24,7 +24,7 @@ HARD_GATES = {
     "G-C1": "cyclone central pressure and max wind fair CRPS vs GL512 450k (IBTrACS)",
     "G-C2": "storm centre distance from the INPUT centre vs GL512 450k",
     "G-C3": "station twCRPS 20 and 50 mm / 12 h vs GL512 450k",
-    "G-C4": "tail shares inside the GL512 450k to ENS9 interval widened by 2 SE",
+    "G-C4": "tail shares: log-ratio distance to ENS9 not worse than GL512 450k by the margin",
 }
 READER_OF = {g: g[2] for g in HARD_GATES}
 PREFLIGHT = ("P1", "P2", "P3", "P4", "P5")
@@ -46,7 +46,10 @@ MARGIN = {
     "G-C1": 3.0,
     "G-C2_se": 2.0,
     "G-C3": 3.0,                   # s4: "MDE of the set (2-4 %)"; 3 % until B3
-    "G-C4_se": 2.0,
+    # G-C4 (B3, 19 Nov 2026): excess = |ln(share_run/share_ENS9)| - |ln(share_ref/share_ENS9)|, in ln units, non-inferiority.
+    # Margins ~1.2-2x the largest move between adjacent checkpoints seen on XSET-1 (GL512 450k->500k: 0.08 / 0.10 / 0.12 for
+    # rain >= 50/100/200 mm; FS-242 100k->150k: 0.04 / 0.06 / 0.16); n = 2 checkpoint pairs, to tighten with a seed floor.
+    "G-C4": {"ws25": 0.10, "tp50": 0.10, "tp100": 0.15, "tp200": 0.20},
 }
 
 # station score selection of obs_points scores_per_date.csv (same as xset_table.py)

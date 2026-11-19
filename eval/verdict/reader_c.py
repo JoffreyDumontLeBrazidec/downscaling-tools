@@ -153,8 +153,14 @@ def _shares(hist: Path, label: str, var: str, thr: float):
 
 
 def tails(hist: Path, run_label: str, ref_label: str, ens9_label: str, rule: str = "chain") -> list[GateLine]:
-    """G-C4: global share of grid points at or above the threshold (wind 25 m/s; rain 50, 100, 200 mm / 12 h) inside
-    [min(REF, ENS9) - 2 SE, max(REF, ENS9) + 2 SE], SE = the run's share jackknifed over date blocks."""
+    """G-C4: global share of grid points at or above the threshold (wind 25 m/s; rain 50, 100, 200 mm / 12 h).
+    Excess = |ln(run/ENS9)| - |ln(REF/ENS9)| (log-ratio distance to the 9 km ensemble, run against reference, paired jackknife
+    over date blocks); non-inferiority against MARGIN["G-C4"] (ln units).
+
+    B3, 19 Nov 2026: replaces "run share inside [min(REF, ENS9) - 2 SE, max(REF, ENS9) + 2 SE]" with SE the run's own share SE.
+    That interval was 2-3 % wide while the next checkpoint of the same run moves the rain >= 50 mm share by 8.5 % (500k vs 450k),
+    so a checkpoint of equal quality failed. A log ratio punishes missing tails more than overshoot in absolute terms, so the
+    INPUT (no downscaled tails) still fails at >= 100 and 200 mm."""
     out = []
     if not hist or not Path(hist).is_dir():
         return [GateLine("G-C4", "tail shares", True, S.MISSING, note="no histogram folder given")]
@@ -162,6 +168,7 @@ def tails(hist: Path, run_label: str, ref_label: str, ens9_label: str, rule: str
         sh = {lab: _shares(hist, lab, var, thr) for lab in (run_label, ref_label, ens9_label)}
         common = sorted(set.intersection(*[set(v) for v in sh.values()]))
         sub = f"{var} >= {thr:g} {'m/s' if var == 'ws' else 'mm'}"
+        key = ("ws" if var == "ws" else "tp") + f"{thr:g}"
         if len(common) < 3:
             out.append(GateLine("G-C4", sub, True, S.MISSING, note="fewer than 3 common dates"))
             continue
@@ -170,11 +177,18 @@ def tails(hist: Path, run_label: str, ref_label: str, ens9_label: str, rule: str
             g = pd.DataFrame(sh[lab]).T.reindex(common).groupby(lambda d: blk[d]).sum()
             return g[0].to_numpy(), g[1].to_numpy()
         (na, da), (nb, db), (ne, de) = arr(run_label), arr(ref_label), arr(ens9_label)
-        s, se = S.jackknife(lambda k: na[k].sum() / da[k].sum(), len(na))
-        sr, s9 = nb.sum() / db.sum(), ne.sum() / de.sum()
-        w = MARGIN["G-C4_se"] * (se if math.isfinite(se) else 0.0)
-        lo, hi = min(sr, s9) - w, max(sr, s9) + w
-        st = S.PASS if lo <= s <= hi else S.FAIL
-        out.append(GateLine("G-C4", sub, True, st, value=s, ref_value=sr, unit="share of grid points", se=se, lo=lo, hi=hi,
-                            n_dates=len(common), n_blocks=len(na), note=f"ENS9 {s9:.3g}, REF {sr:.3g}"))
+
+        def excess(k):
+            r, f, e = na[k].sum() / da[k].sum(), nb[k].sum() / db[k].sum(), ne[k].sum() / de[k].sum()
+            if min(r, f, e) <= 0:
+                return np.nan
+            return abs(math.log(r / e)) - abs(math.log(f / e))
+        ex, se = S.jackknife(excess, len(na))
+        lo, hi = S.interval(ex, se, len(na))
+        m = MARGIN["G-C4"][key]
+        st = S.MISSING if not math.isfinite(ex) else S.state_not_worse(lo, hi, m)
+        s, sr, s9 = na.sum() / da.sum(), nb.sum() / db.sum(), ne.sum() / de.sum()
+        out.append(GateLine("G-C4", sub, True, st, value=s, ref_value=sr, diff=ex, unit="excess |ln(run/ENS9)| - |ln(REF/ENS9)|",
+                            se=se, lo=lo, hi=hi, margin=m, mde=S.mde(se, len(na)), n_dates=len(common), n_blocks=len(na),
+                            note=f"share run {s:.3g}, REF {sr:.3g}, ENS9 {s9:.3g}; run/ENS9 {s / s9:.3f}, REF/ENS9 {sr / s9:.3f}"))
     return out

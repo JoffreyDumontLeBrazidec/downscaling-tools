@@ -8,6 +8,9 @@ epics/misc/20261119_trusted_evaluation_suite.md s4).
             [--shape-run CSV --shape-ref CSV] [--texture-run JSON --texture-ref JSON] -> DIR/gates_B.csv
     verdict --reader C --out DIR --xset-run D --xset-ref D --xset-ens9 D [--hist D --hist-labels RUN,REF,ENS9]
                                                                                     -> DIR/gates_C.csv
+    verdict --reader M --out DIR --row NAME --ckpt P --ema E --sampler S --precision X --seed-base N --code-sha SHA
+            --input-stream-check PASS --instrument NAME=PRED_DIR --dates 20250901..20250930 --leads 12..240:12
+            [--members 10] [--log PATH=LINE ...]                                    -> DIR/MANIFEST.json (launch manifest)
     verdict --out DIR [--row NAME]                    merge: DIR/verdict.md, verdict.json, prints the VERDICT line
 
 S = an obs_points scores_per_date.csv, optionally ``::ROW`` (default row ``model``; ``input`` for --input).
@@ -28,12 +31,20 @@ DESCRIPTION = __doc__.split("\n\n", 1)[1] if __doc__ else SUMMARY
 def register(subparsers) -> argparse.ArgumentParser:
     p = subparsers.add_parser("verdict", help=SUMMARY, description=DESCRIPTION,
                               formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--reader", choices=("P", "A", "B", "C"), default=None, help="write one gates csv; omit to merge")
+    p.add_argument("--reader", choices=("P", "A", "B", "C", "M"), default=None, help="write one gates csv; omit to merge")
     p.add_argument("--out", type=Path, required=True, help="verdict folder (gates_*.csv, verdict.md)")
     p.add_argument("--row", default="", help="run name on verdict.md")
     p.add_argument("--blocks", choices=("fixed5", "chain", "date"), default=None,
                    help="date-block rule (default fixed5 for P/A/B on MI months, chain for C on XSET-1)")
     p.add_argument("--members", type=int, default=10, help="ensemble size for the SSR correction (default 10)")
+    g = p.add_argument_group("launch manifest (M)")
+    g.add_argument("--ckpt"); g.add_argument("--ema", default="EMA-2000"); g.add_argument("--sampler", default="")
+    g.add_argument("--precision", default=""); g.add_argument("--seed-base", type=int, default=None)
+    g.add_argument("--code-sha", default=""); g.add_argument("--input-stream-check", default="")
+    g.add_argument("--instrument", action="append", default=[], help="NAME=PRED_DIR (repeat)")
+    g.add_argument("--dates", default=""); g.add_argument("--leads", default="")
+    g.add_argument("--log", action="append", default=[], help="TOOL_LOG=REQUIRED_LINE (repeat)")
+    g.add_argument("--no-md5", action="store_true", help="do not hash the checkpoint (it is then not checkable)")
     g = p.add_argument_group("preflight (P)")
     g.add_argument("--manifest", type=Path)
     g.add_argument("--ref-manifest", type=Path)
@@ -68,6 +79,17 @@ def run(args: argparse.Namespace) -> None:
         page, line = merge.write(out, args.row)
         print(page)
         print(line)
+        return
+    if r == "M":
+        from eval.verdict import manifest
+        _need(args, "row", "ckpt", "dates", "leads", "code-sha", "input-stream-check")
+        if args.seed_base is None or not args.instrument:
+            raise SystemExit("eval.cli verdict --reader M: missing --seed-base or --instrument NAME=PRED_DIR")
+        m = manifest.build(args.row, args.ckpt, args.ema, args.sampler, args.precision, args.seed_base, args.code_sha,
+                           args.input_stream_check, dict(i.split("=", 1) for i in args.instrument),
+                           manifest.expand_dates(args.dates), manifest.expand_leads(args.leads), args.members,
+                           dict(x.split("=", 1) for x in args.log), hash_ckpt=not args.no_md5)
+        print(manifest.write(out / "MANIFEST.json", m))
         return
     rule = args.blocks or ("chain" if r == "C" else "fixed5")
     if r == "P":
