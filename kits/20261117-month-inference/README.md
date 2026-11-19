@@ -27,3 +27,4 @@ MI-S25 = Sep 2025 (`dates_s25.txt`), MI-J25 = Jan 2025 (`dates_j25.txt`, 31 date
 `mi_set.sh` maps a date to its set; Jupiter input `datasets/mi_<set>_eefo_o320_pf10_l012-240/in`, output `outputs/month_inference_<set>/rows/<ROW>/`.
 `mi_predict.sbatch` takes the set from its dates (one set per job); the xcheck gate file stays in the S25 folder. Atos work dir is shared (dates differ).
 Probe: `bash mi_probe.sh 20250101 20250131`. Chain: `bash mi_chain_submit.sh dates_j25.txt 2 ret` with SBATCH_ACCOUNT=ecaifs (nf limit 100/account).
+MI-JUL25 = Jul 2025 (`dates_jul25.txt`, 31 dates, third month, owner "go build" 19 Nov 10:18 UTC; summer). Same commands with that dates file.

@@ -12,5 +12,5 @@ for f in $A/stores/check/in_*.done; do
   rsync -a --info=stats1 $A/stores/in/$d.zarr jupiter:$J/in/ | grep -E "Total transferred|bytes/sec" | tr '\n' ' '; echo " store $d"
   rsync -a $A/stores/check/in_$d.* jupiter:$J/check/
 done
-for s in s25 j25; do ssh jupiter "ls $JD/mi_${s}_eefo_o320_pf10_l012-240/in 2>/dev/null | wc -l"; done
+for s in s25 j25 jul25; do ssh jupiter "ls $JD/mi_${s}_eefo_o320_pf10_l012-240/in 2>/dev/null | wc -l"; done
 echo "COPY_DONE $(date -u +%FT%TZ)"
