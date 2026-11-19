@@ -38,6 +38,7 @@ def _ref_tree(tmp_path: Path, s: Path) -> Path:
         w.mkdir(parents=True)
         (w / "small").symlink_to(s / "20261117_realism_wind" / f"out{lead}" / "small")
         (w / "cases.csv.gz").symlink_to(s / "20261117_realism_wind" / f"out{lead}" / "cases.csv.gz")
+        (w / "spread_dates.csv").symlink_to(s / "20261117_realism_wind" / f"out{lead}" / "small" / "spread_dates.csv")
     return out
 
 
@@ -119,3 +120,18 @@ def test_synthetic_run(tmp_path):
     assert (out / "consistency" / "edge1" / "ratios.csv").exists()
     assert (out / "wind" / "out024" / "cases.csv").exists()
     assert (out / "summary.md").exists()
+
+
+def test_acceptance_flags_missing_but_not_parts_not_run(tmp_path, capsys):
+    from eval.final_battery import acceptance
+    s = _docs_support()
+    if s is None:
+        pytest.skip("docs repo with the 17 Nov reference tables not found (set DOCS_ROOT)")
+    out = _ref_tree(tmp_path, s)
+    assert acceptance.main([str(out), str(s)]) == 0
+    (out / "terrain" / "d2" / "tables").unlink()          # part not run (7-output row): listed, not failed
+    assert acceptance.main([str(out), str(s)]) == 0
+    assert "NOT RUN terrain/d2/tables/D1_2d_skt_binned.csv" in capsys.readouterr().out
+    (out / "wind" / "out024" / "spread_dates.csv").unlink()  # part ran, file lost: fails
+    assert acceptance.main([str(out), str(s)]) == 1
+    assert "MISSING wind/out024/spread_dates.csv" in capsys.readouterr().out

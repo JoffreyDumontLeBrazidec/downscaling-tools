@@ -6,7 +6,8 @@
 <DOCS_SUPPORT> = docs epics/fine-scale-o320-o1280/in-progress/support. Every reference CSV that has a counterpart in
 <OUT> is compared cell by cell (numeric columns, rows matched on the non-numeric columns); prints the largest
 relative difference per file and ACCEPT / REJECT (tolerance 1e-3 relative, 1e-6 absolute: the CSVs are written with
-4-6 significant digits). Files absent on either side are listed, not failed.
+4-6 significant digits). A file whose part folder is absent in <OUT> is listed as NOT RUN (that part was not run,
+e.g. the 2d/skt tables on a 7-output row); a file missing inside a part folder that exists is MISSING and fails.
 """
 from __future__ import annotations
 
@@ -29,7 +30,9 @@ PAIRS = (  # (reference path under support, path under OUT)
     ("20261117_realism_consistency/results/stationary.csv", "consistency/edge1/stationary.csv"),
     ("20261117_realism_consistency/results_edge5/ratios.csv", "consistency/edge5/ratios.csv"),
     *[(f"20261117_realism_wind/out{L}/small/{n}", f"wind/out{L:03d}/small/{n}") for L in (24, 72)
-      for n in ("band_table.csv", "class_dates.csv", "spread_dates.csv", "tile_summary.csv")],
+      for n in ("band_table.csv", "class_dates.csv", "tile_summary.csv")],
+    # spread.py writes spread_dates.csv next to the accumulate outputs (layout.py); the 17 Nov copy sits in small/
+    *[(f"20261117_realism_wind/out{L}/small/spread_dates.csv", f"wind/out{L:03d}/spread_dates.csv") for L in (24, 72)],
     *[(f"20261117_realism_wind/out{L}/cases.csv.gz", f"wind/out{L:03d}/cases.csv") for L in (24, 72)],
 )
 
@@ -74,8 +77,19 @@ def main(argv=None) -> int:
     bad = 0
     for r, n in PAIRS:
         rp, np_ = sup / r, out / n
-        if not rp.exists() or not np_.exists():
-            print(f"ABSENT  {n}  (ref {'ok' if rp.exists() else 'missing'}, new {'ok' if np_.exists() else 'missing'})")
+        if not np_.exists() and np_.with_name(np_.name + ".gz").exists():
+            np_ = np_.with_name(np_.name + ".gz")
+        if not rp.exists():
+            print(f"NOREF   {n}  (reference {r} missing: check <DOCS_SUPPORT>)")
+            bad += 1
+            continue
+        if not np_.exists():
+            part = np_.parent.parent if np_.parent.name == "small" else np_.parent
+            if part.exists():
+                print(f"MISSING {n}  (its part ran, the file is not there)")
+                bad += 1
+            else:
+                print(f"NOT RUN {n}  (no {part.relative_to(out)}/ in this output)")
             continue
         w, where = compare(rp, np_)
         ok = w <= 1e-3
