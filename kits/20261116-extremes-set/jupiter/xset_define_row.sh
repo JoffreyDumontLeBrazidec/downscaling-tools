@@ -7,6 +7,9 @@
 #   EMA_TAG  which weights are read [ema2000]
 # Optional environment: EMA_FILE and RAW_FILE (the two export files, when they are not under RUN_DIR with the usual names),
 # XSET_SCHED_JSON and XSET_SAMPLER_JSON (a sampler other than the 30-step standard; recorded in every file).
+# Autoguidance (20 Nov 2026): XSET_AG_FILE = EMA export of an EARLIER step of the same run (the weak model),
+# XSET_AG_W = weight of every output [1.0 = off], XSET_AG_WMAP = JSON {"msl": 1.3, ...} per-output weights that win over
+# XSET_AG_W. D' = D + (w - 1) (D - D_weak) at every sampler call; two network calls per step, so a row costs about twice.
 # Writes XOUT/rowdefs/<ROW>.env with the files, the sha256 and the modification time of the weights. Defining the same
 # row again with the same export is a no-op; with another export it is refused (take a new row name).
 set -euo pipefail
@@ -38,6 +41,13 @@ new=$(mktemp)
   echo "EMA_SHA256=$sha"
   [[ -n "${XSET_SCHED_JSON:-}" ]] && printf 'XSET_SCHED_JSON=%q\n' "$XSET_SCHED_JSON"
   [[ -n "${XSET_SAMPLER_JSON:-}" ]] && printf 'XSET_SAMPLER_JSON=%q\n' "$XSET_SAMPLER_JSON"
+  if [[ -n "${XSET_AG_FILE:-}" ]]; then
+    [[ -f "$XSET_AG_FILE" ]] || { echo "FATAL autoguidance weak file $XSET_AG_FILE not found" >&2; exit 4; }
+    [[ "$XSET_AG_FILE" != "$ema" ]] || { echo "FATAL the autoguidance weak file is the row's own weights" >&2; exit 4; }
+    printf 'XSET_AG_FILE=%q\n' "$XSET_AG_FILE"; echo "XSET_AG_SHA256=$(sha256sum "$XSET_AG_FILE" | cut -d' ' -f1)"
+    printf 'XSET_AG_W=%q\n' "${XSET_AG_W:-1.0}"
+    [[ -n "${XSET_AG_WMAP:-}" ]] && printf 'XSET_AG_WMAP=%q\n' "$XSET_AG_WMAP"
+  fi
   true
 } > "$new"
 mkdir -p $XOUT/rowdefs

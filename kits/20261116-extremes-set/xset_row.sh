@@ -10,7 +10,8 @@
 #   --table  rows of the final table next to ENS9, INPUT and CF9 [GL512_450k and this row]
 #   --smoke-only   define the row and run only its smoke (one case, 2 members, about 0.7 GH200-h); nothing else is drawn.
 #                  Use it days before a row is due, on any existing export of the model: it proves the model file.
-# Optional environment, passed to the row definition: EMA_FILE, RAW_FILE, XSET_SCHED_JSON, XSET_SAMPLER_JSON.
+# Optional environment, passed to the row definition: EMA_FILE, RAW_FILE, XSET_SCHED_JSON, XSET_SAMPLER_JSON,
+# XSET_AG_FILE, XSET_AG_W, XSET_AG_WMAP (autoguidance by an earlier export of the same run; see jupiter/xset_define_row.sh).
 #
 # The command is a state machine and can be run again at any time; each call does the next missing step, never twice:
 #   1 define the row on Jupiter (files + sha256 of the weights, written once)
@@ -32,7 +33,7 @@ JK=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set/dow
 J="ssh -o BatchMode=yes -o ConnectTimeout=30 jupiter"
 [[ -z "$trows" ]] && { trows="GL512_450k"; [[ $row != GL512_450k ]] && trows="$trows $row"; }
 envs=""
-for v in EMA_FILE RAW_FILE XSET_SCHED_JSON XSET_SAMPLER_JSON; do [[ -n "${!v:-}" ]] && envs="$envs $v=$(printf %q "${!v}")"; done
+for v in EMA_FILE RAW_FILE XSET_SCHED_JSON XSET_SAMPLER_JSON XSET_AG_FILE XSET_AG_W XSET_AG_WMAP; do [[ -n "${!v:-}" ]] && envs="$envs $v=$(printf %q "${!v}")"; done
 say() { echo "[xset_row $row $(date -u +%FT%TZ)] $*"; }
 val() { echo "$st" | tr ' ' '\n' | grep "^$1=" | cut -d= -f2; }
 
