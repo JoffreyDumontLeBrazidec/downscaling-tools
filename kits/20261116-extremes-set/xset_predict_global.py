@@ -33,6 +33,7 @@ import datetime as dt
 import glob
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -285,6 +286,30 @@ def main():
     if bad or unexpected:
         raise SystemExit(f"FATAL: EMA state dict mismatch: missing {bad[:5]} unexpected {list(unexpected)[:5]}")
     del obj, sd
+    # ---- autoguidance (20 Nov 2026, off unless the row definition carries XSET_AG_FILE): D' = D + (w - 1) (D - D_weak),
+    # D_weak = the SAME network with the EMA weights of an earlier step of the SAME run, w per output variable.
+    ag = None
+    if os.environ.get("XSET_AG_FILE"):
+        import copy
+        ag_file = os.environ["XSET_AG_FILE"]
+        ag_w = float(os.environ.get("XSET_AG_W", "1.0"))
+        ag_map = json.loads(os.environ.get("XSET_AG_WMAP") or "{}")
+        if not all(math.isfinite(float(x)) and 0.0 <= float(x) <= 3.0 for x in [ag_w, *ag_map.values()]):
+            raise SystemExit(f"FATAL: autoguidance weights out of [0, 3]: {ag_w} {ag_map}")
+        weak = copy.deepcopy(lm.model)
+        wobj = torch.load(ag_file, map_location="cpu", weights_only=False)
+        wsd = wobj.state_dict() if hasattr(wobj, "state_dict") else wobj["state_dict"]
+        wmiss, wunexp = weak.load_state_dict(wsd, strict=False)
+        wbad = [k for k in wmiss if not ("node_attributes" in k and "latlons" in k)]
+        if wbad or wunexp:
+            raise SystemExit(f"FATAL: autoguidance weak state dict mismatch: missing {wbad[:5]} unexpected {list(wunexp)[:5]}")
+        del wobj, wsd
+        weak.to(device); weak.eval()
+        for p_ in weak.parameters():
+            p_.requires_grad_(False)
+        wfp = sum(float(p.double().sum().item()) for i, (_, p) in enumerate(sorted(weak.state_dict().items()))
+                  if torch.is_tensor(p) and p.is_floating_point() and i % 37 == 0)
+        ag = dict(file=ag_file, w=ag_w, map=ag_map, weak=weak, fingerprint=wfp)
     lm.to(device); lm.eval()
     lm.model_comm_group = mcg
     lm.grid_shard_sizes = {}
@@ -327,6 +352,40 @@ def main():
     if states != list(SAVE_VARS):
         raise SystemExit(f"FATAL: the model lacks outputs {sorted(set(SAVE_VARS) - set(states))}; it has {sorted(n2i_out_model)}")
     out_cols = [n2i_out_model[v] for v in states]
+    AG_ATTR = "off"
+    if ag is not None:
+        unknown = sorted(set(ag["map"]) - set(n2i_out_model))
+        if unknown:
+            raise SystemExit(f"FATAL: autoguidance weight map names {unknown} are not outputs {sorted(n2i_out_model)}")
+        gvec = torch.full((max(n2i_out_model.values()) + 1,), ag["w"] - 1.0, dtype=torch.float32, device=device)
+        for name, wv in ag["map"].items():
+            gvec[n2i_out_model[name]] = float(wv) - 1.0
+        if float(gvec.abs().max()) == 0.0:
+            raise SystemExit("FATAL: autoguidance requested with every weight equal to 1 (no effect)")
+        if abs(ag["fingerprint"] - fp) < 1e-9 * max(1.0, abs(fp)):
+            raise SystemExit("FATAL: the autoguidance weak weights equal the main weights (fingerprint)")
+        strong_fn = lm.model.model.fwd_with_preconditioning
+        weak_fn = ag["weak"].model.fwd_with_preconditioning
+        ag_calls = {"n": 0, "rms": 0.0}
+
+        def _autoguided(*a, **kw):   # no fallback: any failure stops the job (a silent unguided row would be a wrong row)
+            D = strong_fn(*a, **kw)
+            Dw = weak_fn(*a, **kw)
+            out = {}
+            for k in D:
+                if D[k].shape[-1] != gvec.numel() or Dw[k].shape != D[k].shape:
+                    raise RuntimeError(f"autoguidance: output {k} {tuple(D[k].shape)} weak {tuple(Dw[k].shape)} weights {gvec.numel()}")
+                diff = D[k] - Dw[k].to(D[k].dtype)
+                ag_calls["rms"] += float(diff.float().pow(2).mean().sqrt())
+                out[k] = D[k] + gvec.to(D[k].dtype) * diff
+            ag_calls["n"] += 1
+            return out
+
+        lm.model.model.fwd_with_preconditioning = _autoguided
+        wnames = {v: round(float(gvec[i]) + 1.0, 4) for v, i in sorted(n2i_out_model.items(), key=lambda kv: kv[1])}
+        AG_ATTR = json.dumps(dict(weak=ag["file"], weak_fingerprint=ag["fingerprint"], weights=wnames,
+                                  formula="D + (w - 1) (D - D_weak), every sampler call, all sigma"))
+        LOG.info("AUTOGUIDANCE ACTIVE %s", AG_ATTR)
     if is_main:
         LOG.info("OUTPUTS model has %d (%s); written by name: %s at columns %s", len(n2i_out_model),
                  " ".join(v for v, _ in sorted(n2i_out_model.items(), key=lambda kv: kv[1])), list(states), out_cols)
@@ -458,12 +517,18 @@ def main():
                 glob_v.append(p[:, n2i_out_model["10v"]].copy())
                 LOG.info("DRAW case=%s lead=%d seed=%d %.0fs finite=%s peak_alloc_GiB=%.2f", date, lead, seed, time.time() - t1,
                          bool(np.isfinite(p).all()), torch.cuda.max_memory_allocated(device) / 2**30)
+                if ag is not None:
+                    if ag_calls["n"] == 0:
+                        raise SystemExit("FATAL: autoguidance is on but the sampler never called the guided denoiser")
+                    LOG.info("AUTOGUIDANCE draw: %d guided calls, mean rms(D - D_weak) %.4e (normalised units)", ag_calls["n"],
+                             ag_calls["rms"] / ag_calls["n"])
+                    ag_calls["n"] = 0; ag_calls["rms"] = 0.0
             del pred, pt, p
         if not is_main:
             continue
         yp = np.stack(preds)
         attrs = dict(model=MODEL_LABEL, row=row_label, ckpt_step=step, weights=ema, fingerprint=fp, date=date, lead=lead,
-                     sampler=json.dumps({**PW_SCHED, **PW_SAMPLER}), seeds=json.dumps(cseeds), seed_base=SEED_BASE,
+                     sampler=json.dumps({**PW_SCHED, **PW_SAMPLER}), autoguidance=AG_ATTR, seeds=json.dumps(cseeds), seed_base=SEED_BASE,
                      seed_formula=SEED_FORMULA, matmul=torch.get_float32_matmul_precision(), xset="XSET-1",
                      member_mode="pf", member_store=os.environ.get("XSET_IN", os.environ.get("MEMBER_IN_STORE", "")),
                      member_rule="draw k conditioned on input member eefo pf k+1 (k 0-based), seed derive_draw_seed(1234, date, lead, k)",
