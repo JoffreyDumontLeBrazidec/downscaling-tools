@@ -1,0 +1,17 @@
+name: yinxing
+full_name: "Typhoon Yinxing (Marce), November 2024 (IBTrACS zarr storm id 4775)"
+# Global one-pass o1280 -> o2560 read of 20 Nov 2026 (global files, no box edge). Box = best-track fixes at the
+# valid times of inits 1-12 Nov 2024 (+24/+48/+72 h), padded by about 4 degrees. Boxes of the November 2024 western
+# Pacific storms overlap: use with best_track_cache (agent-work/20261120-global-evalcli/cache/tc_nov2024 on Jupiter,
+# built from the anemoi IBTrACS zarr; storm named by its track). base_dates = init dates whose valid times reach the storm.
+lat_min: 5.0
+lat_max: 24.0
+lon_min: 105.0
+lon_max: 142.0
+dates: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11"]
+base_dates: ["20241101", "20241102", "20241103", "20241104", "20241105", "20241106", "20241107", "20241108", "20241109", "20241110", "20241111"]
+analysis_dates: []
+year: "2024"
+month: "11"
+pressure_threshold: 1013.25
+scoring_eligible: false
