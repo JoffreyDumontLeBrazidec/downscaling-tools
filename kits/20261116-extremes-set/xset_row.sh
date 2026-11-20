@@ -39,8 +39,8 @@ val() { echo "$st" | tr ' ' '\n' | grep "^$1=" | cut -d= -f2; }
 
 step_once() {   # returns 0 = done, 3 = in progress, other = error
   if [[ $smokeonly == 1 ]]; then
-    $J "$envs bash $JK/xset_define_row.sh $row $model $step $tag" || { say "DEFINE_FAIL (Jupiter unreachable or row refused)"; return 1; }
-    st=$($J "bash $JK/xset_row_state.sh $row") || { say "STATE_FAIL"; return 1; }
+    $J "$envs bash $JK/xset_define_row.sh $row $model $step $tag" || { say "DEFINE_FAIL (Jupiter unreachable or row refused)"; return 4; }
+    st=$($J "bash $JK/xset_row_state.sh $row") || { say "STATE_FAIL"; return 4; }
     say "$st"
     if [[ $(val rowsmoke) == 1 ]]; then say "SMOKE_PASS model $(val model) through row $row (Jupiter XOUT/smoke/$row, log xsmoke_$(val model)-*.out)"; return 0; fi
     if [[ $(val smokejobs) != 0 ]]; then say "SMOKE in the queue"; return 3; fi
@@ -66,8 +66,8 @@ step_once() {   # returns 0 = done, 3 = in progress, other = error
     local id; id=$(sbatch --parsable --job-name=xset_score_$row $K/xset_score.sbatch $row) || { say "sbatch failed"; return 1; }
     say "SCORE_SUBMITTED job $id"; return 3
   fi
-  $J "$envs bash $JK/xset_define_row.sh $row $model $step $tag" || { say "DEFINE_FAIL (Jupiter unreachable or row refused)"; return 1; }
-  st=$($J "bash $JK/xset_row_state.sh $row") || { say "STATE_FAIL"; return 1; }
+  $J "$envs bash $JK/xset_define_row.sh $row $model $step $tag" || { say "DEFINE_FAIL (Jupiter unreachable or row refused)"; return 4; }
+  st=$($J "bash $JK/xset_row_state.sh $row") || { say "STATE_FAIL"; return 4; }
   say "$st"
   if [[ $(val files) == 252 && $(val part) == 0 && $(val jobs) == 0 ]]; then
     bash $K/xset_copy_from_jupiter.sh $row || { say "COPY_FAIL"; return 1; }
@@ -79,8 +79,18 @@ step_once() {   # returns 0 = done, 3 = in progress, other = error
   return 3
 }
 
+# rc 4 = Jupiter query failed (often a short ssh drop). With --wait, retry up to
+# XSET_SSH_RETRIES times (default 6, i.e. ~2 h at 1200 s) before giving up;
+# on 19 Nov 2026 one failed query killed both 200k watchers and nobody noticed.
+fails=0
 while true; do
   step_once; rc=$?
-  [[ $rc == 3 && $wait == 1 ]] || exit $rc
+  if [[ $rc == 4 && $wait == 1 ]]; then
+    fails=$((fails+1))
+    if (( fails > ${XSET_SSH_RETRIES:-6} )); then say "GIVE_UP after $fails failed Jupiter queries"; exit 1; fi
+    say "RETRY $fails of ${XSET_SSH_RETRIES:-6} in 1200 s"; sleep 1200; continue
+  fi
+  fails=0
+  [[ $rc == 3 && $wait == 1 ]] || exit $(( rc == 4 ? 1 : rc ))
   sleep 1200
 done
