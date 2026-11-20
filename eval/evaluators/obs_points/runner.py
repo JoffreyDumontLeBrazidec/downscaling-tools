@@ -125,6 +125,10 @@ def read_fields(path, variables, *, ensembles: bool = True, native_input: bool =
         src = {"model": "y_pred",
                "input": "x" if native else ("x_interp_members" if "x_interp_members" in ds.variables else "x_interp"),
                "truth": "y_members" if "y_members" in ds.variables else "y"}
+        # a file may carry no truth at all (a period without a high-resolution truth, e.g. an out-of-sample
+        # ensemble read): the truth row is then left out and the model and input rows are scored alone
+        has_truth = src["truth"] in ds.variables
+        prov["truth_absent"] = not has_truth
         if native:
             a = member_sample(ds["x"], in_n)
             m = int(ds["y_pred"].shape[1])
@@ -142,7 +146,10 @@ def read_fields(path, variables, *, ensembles: bool = True, native_input: bool =
             return a if row == "model" or prov["ensemble_rows"].get(row) else a[0]
 
         def triple(ch):
-            return {"truth": get("truth", ch), "input": get("input", ch), "model": get("model", ch)}
+            rows = {"input": get("input", ch), "model": get("model", ch)}
+            if has_truth:
+                rows["truth"] = get("truth", ch)
+            return rows
 
         for v in variables:
             if v == "10ff":
@@ -332,7 +339,9 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                 return np.array([a[b].mean() for b in bl])
             return np.stack([a[:, b].mean(1) for b in bl], 1)
 
-        vals = {"model": at(fields["model"]), "truth": at(fields["truth"])}
+        vals = {"model": at(fields["model"])}
+        if "truth" in fields:  # absent when the file has no truth (read_fields)
+            vals["truth"] = at(fields["truth"])
         if "input" in fields:  # absent when the file's input channel is degenerate (all zero / NaN / constant)
             vals["input"] = at(fields["input"], idx_in, ball_in)
         if hr is not None and r == 0:
@@ -476,6 +485,10 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
                     input_h, input_h_how = guess, "guessed from the native grid spacing"
                     note_height_guess(log, input_h, input_h_how, obs)
         kinds = row_kinds(prov)
+        if prov.get("truth_absent"):
+            kinds.pop("truth", None)
+            if not any("no truth" in x for x in log):
+                log.append("NOTE the files carry no truth (no y): model and input rows only")
         constructions.add(prov["model"])
         for row, kind in kinds.items():
             kinds_seen.setdefault(row, set()).add(kind)

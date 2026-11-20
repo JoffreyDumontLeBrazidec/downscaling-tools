@@ -47,6 +47,7 @@ class Curve:
     amplitude: np.ndarray
     role: str = "model"             # truth | model | input | baseline | reference
     style: dict = field(default_factory=dict)
+    ratio_reference: bool = False   # the ratio panel's reference when no curve has role "truth" (no-truth reads)
 
     def line_kwargs(self) -> dict:
         kw = role_style(self.role, linewidth=1.5)
@@ -156,6 +157,10 @@ def plot_spectra_grid(
             axr = fig.add_subplot(inner[1], sharex=ax)
             curves = list(panels[var])
             truth = next((cv for cv in curves if cv.role == "truth"), None)
+            ref_label = "ratio to truth"
+            if truth is None:
+                truth = next((cv for cv in curves if cv.ratio_reference), None)
+                ref_label = "ratio to input" if truth is not None else ref_label
 
             for cv in curves:
                 m = (np.asarray(cv.wavenumber) > 0) & np.isfinite(cv.amplitude) & (np.asarray(cv.amplitude) > 0)
@@ -188,7 +193,7 @@ def plot_spectra_grid(
             axr.yaxis.set_minor_locator(NullLocator())
             axr.yaxis.set_minor_formatter(NullFormatter())
             axr.tick_params(labelsize=8)
-            axr.set_ylabel("ratio to truth" if c == 0 else "", fontsize=9)
+            axr.set_ylabel(ref_label if c == 0 else "", fontsize=9)
             axr.set_xlabel("total wavenumber", fontsize=9)
             axr.grid(True, which="major", color="0.9", linewidth=0.5)
             if truth is None:

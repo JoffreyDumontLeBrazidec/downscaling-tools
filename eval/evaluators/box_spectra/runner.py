@@ -62,7 +62,7 @@ COMPOSITES = {"ws": ("10u", "10v")}
 BIN_COLS = ["scope", "variable", "bin_lo_km", "bin_hi_km", "bin_centre_km",
             "amp_resid_pred", "amp_resid_true", "ratio_resid",
             "amp_pred_full", "amp_truth_full", "ratio_full",
-            "amp_interp", "ratio_interp_to_truth", "coherence", "aligned", "n_draws"]
+            "amp_interp", "ratio_interp_to_truth", "coherence", "aligned", "n_draws", "ratio_full_to_input"]
 # accumulated powers per (scope, variable)
 TERMS = ("pred", "truth", "interp", "resid_pred", "resid_true", "pred_x_truth")
 INPUT_MIN_GRID_LENGTHS = 6.0   # the native input spectrum is reported at wavelengths of at least 6 grid lengths
@@ -243,8 +243,10 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                         if _v in clip_nonnegative:   # rule 7: negative precipitation clipped
                             full[idx] = np.maximum(full[idx], 0.0)
                         return smp(full)
-                    y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
-                    Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
+                    has_truth = "y" in f.ds.variables   # files of a period without truth carry no y
+                    xi, yp = grid("x_interp"), grid("y_pred")
+                    Fx, Fp = spec.fft(xi), spec.fft(yp)
+                    Fy = spec.fft(grid("y")) if has_truth else None
                     Fxm = Fx if ref_name == "x_interp" else spec.fft(grid(ref_name))
                     # input spectrum: from the native input when the file has it (rule 41); the residual
                     # terms stay defined against x_interp (y - x_interp is what the model learns)
@@ -258,9 +260,12 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                     else:
                         p_in = spec.power(Fx)
                         input_sources.add("x_interp (input interpolated to the output grid)")
-                    terms = {"pred": spec.power(Fp), "truth": spec.power(Fy),
+                    p_pred = spec.power(Fp)
+                    nan_bins = np.full_like(p_pred, np.nan)
+                    terms = {"pred": p_pred, "truth": spec.power(Fy) if has_truth else nan_bins,
                              "interp": p_in, "resid_pred": spec.power(Fp - Fxm),
-                             "resid_true": spec.power(Fy - Fx), "pred_x_truth": spec.cross(Fp, Fy)}
+                             "resid_true": spec.power(Fy - Fx) if has_truth else nan_bins,
+                             "pred_x_truth": spec.cross(Fp, Fy) if has_truth else nan_bins}
                     for scope in ("all", pf.date):
                         acc = sums.setdefault((scope, var), {t: 0.0 for t in TERMS})
                         for t in TERMS:
@@ -289,7 +294,8 @@ def bin_rows(spec, sums, counts) -> list[dict]:
             coherence = p["pred_x_truth"] / np.sqrt(p["pred"] * p["truth"])
             cols = {"ratio_resid": amp["resid_pred"] / amp["resid_true"], "ratio_full": ratio_full,
                     "ratio_interp_to_truth": amp["interp"] / amp["truth"],
-                    "coherence": coherence, "aligned": coherence * ratio_full}
+                    "coherence": coherence, "aligned": coherence * ratio_full,
+                    "ratio_full_to_input": amp["pred"] / amp["interp"]}
         for i in np.argsort(-wl):
             rows.append({"scope": scope, "variable": var, "bin_lo_km": spec.band_lo_km[i],
                          "bin_hi_km": spec.band_hi_km[i], "bin_centre_km": wl[i],
@@ -299,7 +305,7 @@ def bin_rows(spec, sums, counts) -> list[dict]:
                          "amp_interp": amp["interp"][i],
                          "ratio_interp_to_truth": cols["ratio_interp_to_truth"][i],
                          "coherence": cols["coherence"][i], "aligned": cols["aligned"][i],
-                         "n_draws": n})
+                         "n_draws": n, "ratio_full_to_input": cols["ratio_full_to_input"][i]})
     return rows
 
 
@@ -338,13 +344,15 @@ def write_table(rows, path, label: str, meta: dict) -> None:
     for var in sorted({r["variable"] for r in rows if r["scope"] == "all"}):
         sub = [r for r in rows if r["scope"] == "all" and r["variable"] == var]
         lines += [f"## {var} (draws: {sub[0]['n_draws']})", "",
-                  "| km | residual | full field | input/truth | coherence | aligned |",
-                  "|---|---|---|---|---|---|"]
+                  "| km | residual | full field | input/truth | coherence | aligned | model/input |",
+                  "|---|---|---|---|---|---|---|"]
         for r in sub:
             ri = float(r['ratio_interp_to_truth'])
+            rm = float(r.get('ratio_full_to_input') or 'nan')
             lines.append(f"| {float(r['bin_centre_km']):.1f} | {float(r['ratio_resid']):.3f} | "
                          f"{float(r['ratio_full']):.3f} | {'' if np.isnan(ri) else f'{ri:.3f}'} | "
-                         f"{float(r['coherence']):.3f} | {float(r['aligned']):.3f} |")
+                         f"{float(r['coherence']):.3f} | {float(r['aligned']):.3f} | "
+                         f"{'' if np.isnan(rm) else f'{rm:.3f}'} |")
         lines.append("")
     Path(path).write_text("\n".join(lines))
 

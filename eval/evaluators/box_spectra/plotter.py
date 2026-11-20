@@ -56,9 +56,15 @@ def grid_panels(rows: list[dict]) -> dict:
             vals = np.array([float(r[col]) if r[col] not in ("", "nan") else np.nan for r in sub])
             return amplitude_in_display(var, vals)
 
-        panels[var] = [Curve("Truth", wvn, amp("amp_truth_full"), role="truth"),
-                       Curve("Input", wvn, amp("amp_interp"), role="input"),
-                       Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, amp("amp_pred_full"), role="model")]
+        truth = amp("amp_truth_full")
+        if np.isfinite(truth).any():
+            panels[var] = [Curve("Truth", wvn, truth, role="truth"),
+                           Curve("Input", wvn, amp("amp_interp"), role="input"),
+                           Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, amp("amp_pred_full"), role="model")]
+        else:   # no truth in the files: the ratio panel shows model / input (the input is the reference curve)
+            panels[var] = [Curve("Input (reference, no truth)", wvn, amp("amp_interp"), role="input",
+                                 ratio_reference=True),
+                           Curve(f"Model ({sub[0]['n_draws']} draws)", wvn, amp("amp_pred_full"), role="model")]
     return panels
 
 
