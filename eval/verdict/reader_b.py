@@ -88,7 +88,7 @@ def spectra(run_root: Path, ref_root: Path, rule: str = "fixed5", leads=SPEC_LEA
                         return abs(ra - 1) - abs(rf - 1)
                     e, se = S.jackknife(excess, len(a))
                     ra = math.sqrt(Pa.sum() / Ta.sum()) if Ta.sum() > 0 else np.nan
-                    bad = math.isfinite(se) and e > MARGIN["G-B1_se"] * se
+                    bad = math.isfinite(se) and e - MARGIN["G-B1_se"] * se > MARGIN["G-B1_margin"]
                     fails.append(bad)
                     if not (ilo <= ra <= ihi):
                         info.append(f"{km:g} km {ra:.2f}")

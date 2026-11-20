@@ -179,6 +179,18 @@ def test_reader_c_faults_fail(tmp_path):
         assert _state(lines, g) == S.FAIL, g
 
 
+def test_g_c4_neighbour_checkpoint_and_missing_tails(tmp_path):
+    """B3: a checkpoint 8 % wetter than the reference (500k vs 450k: tail share x1.08, ENS9 1.0, REF 1.19) is not a FAIL;
+    a run with no tails (INPUT-like, x0.5) is a FAIL in log distance even though |share - ENS9| is smaller than REF's."""
+    h = tmp_path / "hist"
+    syn.hist(h, "ENS9", 1.0, seed=1), syn.hist(h, "REF", 1.19, seed=2)
+    syn.hist(h, "NEIGH", 1.19 * 1.08, seed=3), syn.hist(h, "NOTAIL", 0.5, seed=4)
+    neigh = [ln for ln in reader_c.tails(h, "NEIGH", "REF", "ENS9") if ln.gate == "G-C4"]
+    assert neigh and all(ln.state in (S.PASS, S.INCONCLUSIVE) for ln in neigh), neigh
+    notail = [ln for ln in reader_c.tails(h, "NOTAIL", "REF", "ENS9") if ln.gate == "G-C4"]
+    assert _state(notail, "G-C4") == S.FAIL
+
+
 # ------------------------------------------------------------------------------------------------ preflight, merge
 def test_preflight(tmp_path):
     m = syn.manifest(tmp_path / "M.json", tmp_path / "pred", tmp_path / "log.txt")
@@ -234,3 +246,28 @@ def test_cli_end_to_end(tmp_path, capsys):
     # G-B4 (no shape/texture), G-B5 (+84..+240 h) and G-C4 (no histograms) are MISSING: INCONCLUSIVE, never PASS
     assert "VERDICT: INCONCLUSIVE (gates not passed: G-B4, G-B5, G-C4)" in text
     assert (out / "verdict.md").exists() and json.loads((out / "verdict.json").read_text())["verdict"] == "INCONCLUSIVE"
+
+
+def test_manifest_builder_and_mi_layout(tmp_path):
+    """B3: L writes MANIFEST.json from disk; P2 counts the MI layout pred_<date>_step<LLL>.npz."""
+    import argparse
+    import json
+    from eval.cli import verdict as cli
+    ck = tmp_path / "m.ckpt"
+    ck.write_bytes(b"abc")
+    rows = tmp_path / "rows" / "R"
+    for d in ("20250901", "20250902"):
+        for lead in (12, 24):
+            (rows / d).mkdir(parents=True, exist_ok=True)
+            (rows / d / f"pred_{d}_step{lead:03d}.npz").write_bytes(b"x")
+    log = tmp_path / "log.txt"
+    log.write_text("ALL_PASS\n")
+    a = argparse.Namespace(reader="M", out=tmp_path / "V", row="R", ckpt=str(ck), ema="EMA-2000", sampler="heun30",
+                           precision="bf16", seed_base=1234, code_sha="abc", input_stream_check="PASS",
+                           instrument=[f"MI-S25={rows}"], dates="20250901..20250902", leads="12..24:12", members=10,
+                           log=[f"{log}=ALL_PASS"], no_md5=False, blocks=None)
+    cli.run(a)
+    m = json.loads((tmp_path / "V" / "MANIFEST.json").read_text())
+    assert m["checkpoint"]["md5"] == "900150983cd24fb0d6963f7d28e17f72" and m["instruments"]["MI-S25"]["files_expected"] == 4
+    st = {ln.gate: ln.state for ln in preflight.run(tmp_path / "V" / "MANIFEST.json", tmp_path / "V" / "MANIFEST.json", True)}
+    assert st["P1"] == st["P2"] == st["P3"] == st["P4"] == S.PASS

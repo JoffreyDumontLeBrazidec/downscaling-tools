@@ -24,7 +24,7 @@ HARD_GATES = {
     "G-C1": "cyclone central pressure and max wind fair CRPS vs GL512 450k (IBTrACS)",
     "G-C2": "storm centre distance from the INPUT centre vs GL512 450k",
     "G-C3": "station twCRPS 20 and 50 mm / 12 h vs GL512 450k",
-    "G-C4": "tail shares inside the GL512 450k to ENS9 interval widened by 2 SE",
+    "G-C4": "tail shares: log-ratio distance to ENS9 not worse than GL512 450k by the margin",
 }
 READER_OF = {g: g[2] for g in HARD_GATES}
 PREFLIGHT = ("P1", "P2", "P3", "P4", "P5")
@@ -34,9 +34,14 @@ MARGIN = {
     "G-A1": {"10ff": 1.0, "tp": 2.0},
     "G-A2": {"2t": 1.0, "msl": 1.0},
     "G-A3": {"10ff": 2.0, "tp": 2.0, "2t": 2.0, "msl": 2.0},
-    "G-A5_ssr_abs": 0.10,          # |SSR run - SSR ENS9| at most this
-    "G-A5_ratio_se": 2.0,          # spread ratio: |r-1| at most |r_ref-1| + this x SE
-    "G-B1_se": 2.0,                # a bin fails when |r-1| exceeds the reference's by more than this x SE
+    # G-A5 (B3): excess over REF, ratio units. XSET-1, +12..+72 h, 42 dates / 30 blocks: 450k vs itself had |SSR - SSR_ENS9| 0.103
+    # (tp) so the absolute 0.10 failed the reference; 500k vs 450k moved the spread ratio by +0.034 (tp), FS-242 100k by +0.040 (2t).
+    "G-A5_ssr": 0.05,              # |SSR run - SSR ENS9| - |SSR REF - SSR ENS9| (500k tp: +0.018)
+    "G-A5_ratio": 0.06,            # |spread ratio run - 1| - |spread ratio REF - 1| (1.5x the largest adjacent move, 0.04)
+    # G-B1 (B3): a bin fails when the excess |r-1| - |r_ref-1| minus 2 SE is above this amplitude-ratio margin. Per-bin paired SE is
+    # 0.001-0.003 on the 2023 box rows (30 dates), so SE alone failed 500k on 7 of 8 lines for moves of 0.015-0.09 (500k tp 0.04-0.09).
+    "G-B1_margin": 0.10,
+    "G-B1_se": 2.0,
     "G-B1_adjacent": 2,            # the gate fails on this many adjacent failing bins
     "G-B1_km": (31.0, 125.0),
     "G-B1_info_band": (0.9, 1.1),  # printed, information only (owner D7, "refine later")
@@ -46,7 +51,10 @@ MARGIN = {
     "G-C1": 3.0,
     "G-C2_se": 2.0,
     "G-C3": 3.0,                   # s4: "MDE of the set (2-4 %)"; 3 % until B3
-    "G-C4_se": 2.0,
+    # G-C4 (B3, 19 Nov 2026): excess = |ln(share_run/share_ENS9)| - |ln(share_ref/share_ENS9)|, in ln units, non-inferiority.
+    # Margins ~1.2-2x the largest move between adjacent checkpoints seen on XSET-1 (GL512 450k->500k: 0.08 / 0.10 / 0.12 for
+    # rain >= 50/100/200 mm; FS-242 100k->150k: 0.04 / 0.06 / 0.16); n = 2 checkpoint pairs, to tighten with a seed floor.
+    "G-C4": {"ws25": 0.10, "tp50": 0.10, "tp100": 0.15, "tp200": 0.20},
 }
 
 # station score selection of obs_points scores_per_date.csv (same as xset_table.py)

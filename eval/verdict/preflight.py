@@ -78,7 +78,7 @@ def run(manifest: Path, ref_manifest: Path | None = None, check_md5: bool = Fals
         exp = inst.get("files_expected")
         if exp is None:
             exp = len(inst.get("dates", [])) * len(inst.get("leads", []))
-        have = len(list(d.glob("predictions_*.nc"))) if d.is_dir() else 0
+        have = (len(list(d.glob("predictions_*.nc"))) + len(list(d.rglob("pred_*_step*.npz")))) if d.is_dir() else 0   # XSET/box rows, MI rows
         if have < exp:
             st = S.FAIL
         notes.append(f"{name}: {have}/{exp} prediction files")
