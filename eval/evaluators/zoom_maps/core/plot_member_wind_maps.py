@@ -108,6 +108,18 @@ def octahedral_name(n_points: int) -> str | None:
     return f"O{n}" if n > 0 and 4 * n * (n + 9) == int(n_points) else None
 
 
+def input_res(lat, lon) -> float:
+    """Drawing resolution of the input panel, from the input's own grid. An input coarser than about 20 km (O320,
+    the o320 -> o1280 lane) keeps the DEFAULT_LRES_RES nearest-neighbour mesh, whose coarse cells stay visible. A
+    finer input (O1280, the o1280 -> o2560 lane) gets DEFAULT_HRES_RES, so it is drawn like every other native O1280
+    source (a triangulation of its own points) instead of on a 0.28-degree mesh four times coarser than its grid."""
+    name = octahedral_name(np.size(lat))
+    if name is not None:
+        return DEFAULT_HRES_RES if int(name[1:]) >= 640 else DEFAULT_LRES_RES
+    from eval.shared.native_input import native_spacing_km
+    return DEFAULT_HRES_RES if native_spacing_km(lat, lon) < 20.0 else DEFAULT_LRES_RES
+
+
 def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int) -> tuple[dict[str, str], str]:
     """Titles of the panels and the output grid name. The grid names come from the file's point
     counts when the file is global, else the O320 -> O1280 defaults; '{lres}' and '{hres}' in a
@@ -820,7 +832,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               DEFAULT_LRES_RES, here,
+                               input_res(ds["lat_lres"].values, ds["lon_lres"].values), here,
                                [_field(_member_slice(ds["x"], m), states, spec) for m in here]))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, here,
@@ -897,7 +909,8 @@ def run(args: argparse.Namespace) -> int:
             titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               _field(_member_slice(ds["x"], args.member), states, spec), DEFAULT_LRES_RES))
+                               _field(_member_slice(ds["x"], args.member), states, spec),
+                               input_res(ds["lat_lres"].values, ds["lon_lres"].values)))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h,
                                _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES))

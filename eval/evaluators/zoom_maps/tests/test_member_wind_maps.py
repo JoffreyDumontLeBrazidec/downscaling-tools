@@ -218,3 +218,14 @@ def test_grid_names_in_titles():
     titles, hres = pm.panel_titles({}, 7_000, 300_000)
     assert hres == "O1280" and titles == pm.DEFAULT_TITLES
     assert pm.default_title("model") == "Model (O1280)"
+
+
+def test_input_res_follows_the_native_input_spacing():
+    """A 0.07-degree input (O1280-like) is drawn like the output; a 0.28-degree input (O320-like) keeps the mesh."""
+    from eval.evaluators.zoom_maps.core.plot_member_wind_maps import (DEFAULT_HRES_RES, DEFAULT_LRES_RES,
+                                                                        input_res, octahedral_name)
+    la, lo = np.meshgrid(np.arange(40.0, 46.0, 0.07), np.arange(0.0, 6.0, 0.07), indexing="ij")
+    assert input_res(la.ravel(), lo.ravel()) == DEFAULT_HRES_RES
+    la, lo = np.meshgrid(np.arange(40.0, 46.0, 0.28), np.arange(0.0, 6.0, 0.28), indexing="ij")
+    assert input_res(la.ravel(), lo.ravel()) == DEFAULT_LRES_RES
+    assert octahedral_name(4 * 1280 * (1280 + 9)) == "O1280" and octahedral_name(4 * 320 * 329) == "O320"
