@@ -17,11 +17,11 @@ source $MK/downscaling-tools/kits/20261116-extremes-set/jupiter/xset_env.sh
 export OUTPUT=$MOUT/_anemoi_output; mkdir -p "$OUTPUT"
 export OMP_NUM_THREADS=8
 S6=$(printf %06d "$CKPT_STEP")
-ema=$(ls $RUN_DIR/*/inference-${EMA_TAG}-anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null | head -1 || true)
-raw=$(ls $RUN_DIR/*/anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null | head -1 || true)
+ema=${EMA_FILE:-$(ls $RUN_DIR/*/inference-${EMA_TAG}-anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null | head -1 || true)}
+raw=${RAW_FILE:-$(ls $RUN_DIR/*/anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null | head -1 || true)}
 [[ -n "$ema" ]] || { echo "FATAL no $EMA_TAG file for step $CKPT_STEP under $RUN_DIR"; exit 7; }
 [[ -n "$raw" ]] || { echo "FATAL no raw by-step file for step $CKPT_STEP under $RUN_DIR"; exit 7; }
-export EMA_FILE=$ema
+export EMA_FILE=$ema RAW_FILE=$raw
 [[ "$OUTDIR" == $MOUT/* ]] || { echo "FATAL OUTDIR $OUTDIR"; exit 9; }
 echo "[mi] row=$1 mode=$MODE step=$CKPT_STEP ema=$ema sha256=$(sha256sum $ema | cut -c1-16) raw=$raw seed_base=$SEED_BASE cases=$CASES members=$MEMBERS outdir=$OUTDIR kit=$(git -C $MK/downscaling-tools rev-parse --short HEAD) code=$CODE_ROOT@$(git -C $CODE_ROOT rev-parse --short HEAD) $(date -u +%FT%TZ)"
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1); export MASTER_ADDR MASTER_PORT=${4:-29591}

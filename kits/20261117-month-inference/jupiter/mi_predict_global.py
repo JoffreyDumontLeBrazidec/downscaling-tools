@@ -82,6 +82,8 @@ def ema_file(step: int) -> str:
 
 
 def raw_file(step: int) -> str:
+    if os.environ.get("RAW_FILE"):
+        return os.environ["RAW_FILE"]
     return one_file(f"{RUN_DIR}/*/anemoi-by_step-epoch_*-step_{step:06d}.ckpt", "raw by-step")
 
 
