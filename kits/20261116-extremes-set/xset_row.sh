@@ -71,8 +71,11 @@ step_once() {   # returns 0 = done, 3 = in progress, other = error
       if [[ -s $A/scores/$r/tc_members.csv ]]; then refs="$refs --ref $r=$A/scores/$r"; else say "screen read: row $r is not scored yet, left out"; fi
     done
     [[ -n "$refs" ]] || { say "SCREEN_READ_FAIL no scored reference row among: $trows"; return 1; }
+    # ENS9 / INPUT member values (context levels): scores_members/ENS9 or scores/ENS9 when it holds tc_members.csv
+    local ens=""; for e in $A/scores_members/ENS9 $A/scores/ENS9; do [[ -s $e/tc_members.csv ]] && { ens="--ens $e"; break; }; done
+    [[ -n "$ens" ]] || say "screen read: no tc_members.csv of ENS9, levels of ENS9 / INPUT left out"
     module load python3 >/dev/null 2>&1
-    python3 $K/xset_screen_read.py --screen $row=$A/scores/$row $refs --ens $A/scores/ENS9 --kind $kind \
+    python3 $K/xset_screen_read.py --screen $row=$A/scores/$row $refs $ens --kind $kind \
       --dates $K/lists/dates_xset1.csv --out $A/screen_$row || { say "SCREEN_READ_FAIL"; return 1; }
     say "SCREEN_DONE (a screen, not a verdict) $(grep -m1 'SCREEN FLAG' $A/screen_$row/screen_read.md); read $A/screen_$row/screen_read.md"
     return 0

@@ -105,7 +105,8 @@ def main():
     cc = {k: case_crps(q) for k, q in {**rows, **ctx}.items()}
     cinfo = pd.concat(list(rows.values()) + list(ctx.values())).groupby("case")[["sid", "date", "lead"]].first()
     sq = rows[srow]
-    nm = sq.groupby("case").member.nunique()
+    nm = sq[sq.member.isin(MEMBERS)].groupby("case").member.nunique()
+    nsrc = int(sq.member.max())
     n_dates_screen = sq.date.nunique()
     n_tc_dates = None
     if a.dates:
@@ -122,7 +123,7 @@ def main():
               "the arm is worth a full XSET-1 row; it never enters a verdict, scoreboard or paper table (rules 46, 48). "
               "Every row below is cut to members 1-5.\n")
     md.append(f"- screen row {srow}: {sq.case.nunique()} cases, {sq.sid.nunique()} storms, {n_dates_screen} start dates"
-              + (f" of {n_tc_dates} cyclone dates" if n_tc_dates else "") + f", members per case {sorted(set(nm))}")
+              + (f" of {n_tc_dates} cyclone dates" if n_tc_dates else "") + f", members used per case {sorted(set(nm))} (row holds {nsrc})")
     if partial:
         md.append(f"- PARTIAL SCREEN: {n_dates_screen} of {n_tc_dates} cyclone dates. Not a SCREEN-TC flag; numbers below "
                   "are for checking only.")
