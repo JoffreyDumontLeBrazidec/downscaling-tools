@@ -13,7 +13,7 @@ XOUT=${XSET_JOUT:-$CK/xset1_20261116}
 row=${1:?row}
 unset RUN_DIR_ROW MODEL_LABEL_ROW RAW_STEP_ROW; export SAMPLER_MODE=edm
 unset VENV DATASETS_REPO EXTRA_OVERRIDES ANCHOR XSET_SCHED_JSON XSET_SAMPLER_JSON EMA_SHA256
-unset XSET_AG_FILE XSET_AG_SHA256 XSET_AG_W XSET_AG_WMAP
+unset XSET_AG_FILE XSET_AG_SHA256 XSET_AG_W XSET_AG_WMAP XSET_SCREEN
 if [[ -f $XOUT/rowdefs/$row.env ]]; then
   source $XOUT/rowdefs/$row.env                    # MODEL CKPT_STEP EMA_TAG EMA_FILE RAW_FILE [XSET_SCHED_JSON XSET_SAMPLER_JSON]
   [[ -f $XKIT/jupiter/models/$MODEL.env ]] || { echo "FATAL row '$row': no model file jupiter/models/$MODEL.env"; return 1; }
@@ -49,4 +49,6 @@ else
   export CODE_SHA_FILE=$DEVR/db_global_20261027/CODE_PIN DATASETS_SHA_FILE=$DEVR/db_global_20261027/DATASETS_PIN
 fi
 export ROW_LABEL=$row MEMBERS=${MEMBERS:-10}
+# SCREEN-TC row (xset_define_row.sh): members 1-5 only, always (same rule-31 seeds as members 1-5 of a full row)
+if [[ ${XSET_SCREEN:-} == TC ]]; then export XSET_SCREEN MEMBERS=5; fi
 export XSET_IN=$XK/stores/in XSET_TEMPLATE=$XOUT/rows/ENS9 XSET_HIST=$XOUT/hist OUTDIR=$XOUT/rows/$row
