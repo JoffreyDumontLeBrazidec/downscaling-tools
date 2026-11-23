@@ -42,6 +42,9 @@ class CaseList:
     description: str = ""
     spectra_steps: list[int] = field(default_factory=lambda: [24, 72])
     spectra_box: str | None = None
+    # owner 23 Nov 13:21: both spectra reads as a rule. The standard read (box_spectra res_deg 0.07) stops near the
+    # target limit; a fine read (spectra_fine_res_deg, e.g. 0.035 on the 4 km lane) shows the grain below it.
+    spectra_fine_res_deg: float | None = None
     spectra_variables: list[str] = field(default_factory=lambda: ["tp", "ws", "2t", "msl", "10u", "10v"])
     tc: Case | None = None
     rain: Case | None = None
@@ -103,6 +106,7 @@ def load_case_list(spec: str) -> CaseList:
     cl = CaseList(name=str(d.get("name", path.stem)), description=str(d.get("description", "")))
     cl.spectra_steps = [int(s) for s in sp.get("steps", cl.spectra_steps)]
     cl.spectra_box = sp.get("box")
+    cl.spectra_fine_res_deg = float(sp["fine_res_deg"]) if sp.get("fine_res_deg") else None
     cl.spectra_variables = list(sp.get("variables", cl.spectra_variables))
     cl.tc = _case("tc", d.get("tc"), "wind10m")
     cl.rain = _case("rain", d.get("rain"), "tp")
