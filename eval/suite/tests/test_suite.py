@@ -98,7 +98,7 @@ def test_shipped_case_lists_load():
 def test_every_page(inputs):
     root, runs, obs, tc, cache, cases = inputs
     out = root / "out"
-    argv = ["suite", "--cases", str(cases), "--out", str(out), "--tc-cache", str(cache)]
+    argv = ["suite", "--cases", str(cases), "--out", str(out), "--tc-cache", str(cache), "--smooth"]
     for label in runs:
         argv += ["--run", f"{label}={runs[label]}", "--obs", f"{label}={obs[label]}", "--tc", f"{label}={tc[label]}"]
     main(argv)
@@ -139,7 +139,7 @@ def test_rows_without_target_or_x_interp(tmp_path):
                                coords={"weather_state": ds.weather_state.values}).to_netcdf(
                         truth / f"truth_{valid:%Y%m%d%H}.nc")
     out = tmp_path / "out"
-    main(["suite", "--cases", "o1280_global", "--run", f"ARMO={run}", "--attach-target", str(truth),
+    main(["suite", "--cases", "o1280_global", "--run", f"ARMO={run}", "--attach-target", str(truth), "--smooth",
           "--only", "spectra", "rain_members", "stills", "tp_dist", "--out", str(out)])
     by = {p["page"]: p for p in json.loads((out / "suite_manifest.json").read_text())["pages"]}
     failed = {k: v["note"] + v.get("trace", "") for k, v in by.items() if not v["files"]}
@@ -147,3 +147,31 @@ def test_rows_without_target_or_x_interp(tmp_path):
     assert "wettest input" in by["04"]["note"]          # target tp is NaN, so the pick falls back to the input
     with xr.open_dataset(run / f"predictions_{DATES[1]}_step072.nc") as ds:
         assert "y" in ds and bool(np.isnan(ds["y"].values).all())
+
+
+def test_areas_page_in_real_resolution_cells(inputs):
+    """The default map mode (owner 23 Nov 09:14, 'real resolution'): grid cells, one model, page 05."""
+    root, runs, *_ , cases = inputs
+    out = root / "out_cells"
+    label = next(iter(runs))
+    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}", "--only", "areas"])
+    rec = json.loads((out / "suite_manifest.json").read_text())
+    assert rec["pages"][0]["files"], rec["pages"][0]
+    assert (out / "05_areas_member1.png").exists()
+
+
+def test_tc_case_from_ibtracs_csv(inputs):
+    """No tc_structure read: page 03 picks the deepest IBTrACS fix at the case step (2026 months, no event yaml)."""
+    root, runs, *_, cases = inputs
+    csv = root / "ibtracs.csv"
+    csv.write_text("SID,SEASON,NAME,ISO_TIME,LAT,LON,WMO_PRES,USA_PRES\n ,Year, , ,deg,deg,mb,mb\n"
+                   "2025A,2025,DOLPHIN,2025-09-26 00:00:00,25.0,-60.0,945,\n"
+                   "2025B,2025,LALA,2025-09-26 00:00:00,15.0,130.0,,990\n"
+                   "2025A,2025,DOLPHIN,2025-09-27 06:00:00,26.0,-61.0,930,\n")
+    out = root / "out_ib"
+    label = next(iter(runs))
+    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}", "--smooth",
+          "--ibtracs-csv", str(csv), "--only", "tc_members"])
+    p = json.loads((out / "suite_manifest.json").read_text())["pages"][0]
+    assert p["files"], p
+    assert "945 hPa" in p["note"] and "dolphin" in p["note"]

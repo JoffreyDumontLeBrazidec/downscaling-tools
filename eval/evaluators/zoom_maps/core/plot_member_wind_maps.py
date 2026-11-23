@@ -57,6 +57,7 @@ DEFAULT_HRES_RES = 0.08
 DEFAULT_LRES_RES = 0.28
 DEFAULT_VMAX = 25.0
 RENDER_DPI = 150  # house PNG resolution (eval.plotting.save_figure); kept for importers
+_DPI = [RENDER_DPI]  # set from --dpi by run(); a list so the renderers read the current value
 # Latitude scale factor for the nearest-neighbour lookup: reduced Gaussian
 # rows are denser in latitude than longitude, so an isotropic lookup would
 # smear rows; 1.4 keeps the lookup roughly isotropic in grid spacing.
@@ -287,6 +288,11 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--output-dir", required=True, help="Directory for the PNGs and manifest.")
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
+    p.add_argument("--min-span-deg", type=float, default=MIN_SPAN_DEG,
+                   help=f"Smallest map span in degrees of latitude (default {MIN_SPAN_DEG:g}); smaller boxes are "
+                        "widened around their centre. Lower it for a tight zoom (with --cells).")
+    p.add_argument("--dpi", type=int, default=RENDER_DPI,
+                   help=f"PNG resolution (default {RENDER_DPI}); 300 doubles the pixels of every panel.")
     p.add_argument("--cells", action="store_true", default=False,
                    help="Real resolution: draw every panel as its own grid cells (nearest neighbour on a fine "
                         "raster) instead of blending between grid points, so a 9 km input shows 9 km cells "
@@ -408,12 +414,13 @@ def resolve_extent(args: argparse.Namespace) -> tuple[tuple[float, float, float,
     Europe is not drawn on a cone centred on Europe.
     """
     requested = tuple(float(v) for v in args.extent)
-    extent = widen_extent(requested)
+    min_span = float(getattr(args, "min_span_deg", None) or MIN_SPAN_DEG)
+    extent = widen_extent(requested, min_span)
     line = f"map box {box_text(extent)}"
     if extent != requested:
         line += f" (widened from {box_text(requested)})"
         print(f"warning: the requested map box {box_text(requested)} is smaller than the "
-              f"{MIN_SPAN_DEG:g}-degree minimum; drawing {box_text(extent)}", flush=True)
+              f"{min_span:g}-degree minimum; drawing {box_text(extent)}", flush=True)
     if list(requested) == list(DEFAULT_EXTENT):
         print("note: no --extent given, so the default Europe box is drawn", flush=True)
     print(f"extent used: {line}", flush=True)
@@ -699,7 +706,7 @@ def _render(
         cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.06, aspect=40, shrink=0.8,
                             extend=spec["extend"] if field == "value" else "both")
         cbar.set_label(cbar_label)
-        save_figure(fig, out_path, close=True)
+        save_figure(fig, out_path, close=True, dpi=_DPI[0])
 
 
 def parse_members(spec: str, available: list[int]) -> list[int]:
@@ -823,7 +830,7 @@ def _render_grid(
                                 pad=0.04, aspect=50, fraction=0.05,
                                 extend=spec["extend"] if field == "value" else "both")
             cbar.set_label(cbar_label)
-        save_figure(fig, out_path, close=True)
+        save_figure(fig, out_path, close=True, dpi=_DPI[0])
 
 
 def run_member_grid(args: argparse.Namespace) -> int:
@@ -907,6 +914,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    _DPI[0] = int(getattr(args, "dpi", None) or RENDER_DPI)
     if getattr(args, "trajectory_npz", None):
         from .plot_trajectory_wind_maps import run as trajectory_run
         return trajectory_run(args)
