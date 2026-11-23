@@ -216,7 +216,8 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
     def areas():
         rows, notes = [], []
         for case in cases.areas:
-            date, how = resolve_date(case, list(runs.values()), pick="first")
+            # a rain area takes the wettest target date, as page 04 (a dry first date drew blank rows, 23 Nov)
+            date, how = resolve_date(case, list(runs.values()), pick="rain" if case.variable == "tp" else "first")
             rows.append(_zoom(map_runs, case, date, work / f"area_{case.name}", members=None, cells=cells))
             notes.append(f"{case.name} {case.variable} {date} +{case.step} h ({how})")
         if not rows:
@@ -236,7 +237,7 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         for case in cases.areas:
             if not case.extent:
                 continue
-            date, how = resolve_date(case, list(runs.values()), pick="first")
+            date, how = resolve_date(case, list(runs.values()), pick="rain" if case.variable == "tp" else "first")
             f = prediction_index(d)[(date, case.step)]
             rows, info = zoom_ladder(f, case, date, work / f"zooms_{case.name}", model_label=label,
                                      levels=cases.zoom_levels, close_points=cases.zoom_close_points)

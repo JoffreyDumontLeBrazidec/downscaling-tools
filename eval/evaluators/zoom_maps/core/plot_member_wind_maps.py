@@ -551,7 +551,11 @@ def smooth_refine(tri, vals) -> list[tuple]:
     for v in vals:
         interp = CubicTriInterpolator(tri, v, kind="geom")
         t2, v2 = refiner.refine_field(v, triinterpolator=interp, subdiv=SMOOTH_REFINE_SUBDIV)
-        out.append(("tri", t2, np.asarray(v2)))
+        # the cubic interpolant overshoots on long or thin triangles (page 03 input printed "max 7e13 m/s",
+        # 23 Nov): the refined field never leaves the range of its own native values
+        v = np.asarray(v, dtype=np.float64)
+        lo, hi = (np.nanmin(v), np.nanmax(v)) if np.isfinite(v).any() else (np.nan, np.nan)
+        out.append(("tri", t2, np.clip(np.asarray(v2, dtype=np.float64), lo, hi)))
     return out
 
 
