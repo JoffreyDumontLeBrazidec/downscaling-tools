@@ -18,10 +18,8 @@ change and the fine detail, truth and model side by side, and the trough and fro
 
 The lane block is `zoom_maps:`. A lane that still holds the older `membermaps:`
 block and no `zoom_maps:` block has that block read instead (`eval.cli evaluate`
-does this, with a deprecation warning). A region box smaller than the core's
-`MIN_SPAN_DEG` (12 degrees of latitude each way) is widened around its centre by
-the core, so the Alps box of the texture regions is drawn with its surroundings
-rather than as a map of single O1280 cells; each figure title states the box drawn.
+does this, with a deprecation warning). A region box is drawn exactly as given
+(no minimum size since 23 Nov 2026); each figure title states the box drawn.
 
 Diagnostic only. Nothing here scores anything, so there is no `score` function
 and nothing reaches a scoreboard.
