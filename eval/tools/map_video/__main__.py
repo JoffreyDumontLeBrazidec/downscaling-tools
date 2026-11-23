@@ -57,6 +57,9 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
                    help="box instead of the globe (degrees)")
     p.add_argument("--central-lon", type=float, default=0.0, help="centre longitude of a global map")
     p.add_argument("--grid", help="native grid, e.g. O1280 (needed only when the file is a crop)")
+    p.add_argument("--native-input", action="store_true",
+                   help="input panel from the native x of the same member at the nearest native point (rule 41) "
+                        "instead of x_interp (which some files fill with another input, e.g. HRES)")
     p.add_argument("--palette", default="classes", choices=("classes", "rain", "reference"),
                    help="tp colours: classes = blue-green-yellow-red-purple of the 9 Nov frame (default, "
                         "the owner's choice for videos); rain = house cmocean rain (rule 25); reference = classes")
@@ -160,12 +163,15 @@ def render(args: argparse.Namespace) -> int:
     from eval.plotting.variables import convert
 
     def field(f: fr.FrameFile, source: str) -> np.ndarray:
-        native = fr.read_field(f.path, source, args.variable, member=args.member, sample=args.sample)
+        native = fr.read_field(f.path, source, args.variable, member=args.member, sample=args.sample,
+                               prefer_native=getattr(args, "native_input", False))
         return np.asarray(convert(args.variable, interp(native)), dtype=np.float32)
 
     geo = None if args.no_geography else load_geography(args.geography)
     layout = Layout.build(lon_t.size, lat_t.size, len(sources), labels=len(sources) > 1)
     titles = [fr.SOURCE_TITLES[s] for s in sources] if len(sources) > 1 else []
+    if getattr(args, "native_input", False) and "input" in sources and titles:
+        titles[sources.index("input")] = "Input (native, same member)"
     comp = FrameComposer(layout, lat_t, lon_t, palette, panel_titles=titles, geography=geo)
     member = fr.member_label(files[0].path, args.member)
     print(f"frame {layout.width} x {layout.height}, {len(sources)} panel(s)", flush=True)

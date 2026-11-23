@@ -41,7 +41,7 @@ def register(subparsers) -> argparse.ArgumentParser:
                               formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run", action="append", required=True, metavar="LABEL=DIR",
                    help="Predictions folder (predictions_<date>_step<LLL>.nc, one draw per input member). Repeat "
-                        "per run; the first run gives the input and target rows.")
+                        "per run; the first run gives the input and target rows, and the model of the map pages.")
     p.add_argument("--cases", required=True,
                    help=f"Case list: a name in eval/config/suite ({', '.join(available_case_lists())}) or a path.")
     p.add_argument("--out", required=True, type=Path, help="Folder for the pages (created).")
@@ -54,6 +54,8 @@ def register(subparsers) -> argparse.ArgumentParser:
                    help="Before drawing, WRITE a target y into every prediction file that has none, from "
                         "TRUTH_DIR/truth_<valid YYYYMMDDHH>.nc (y(grid_point, weather_state), same points and state "
                         "names; NaN allowed). Missing truth file = all-NaN target. See eval/suite/target.py.")
+    p.add_argument("--maps-all-runs", action="store_true",
+                   help="Map pages (03, 04, 05, 07) show every run; default only the first (one model per page).")
     p.add_argument("--only", nargs="+", choices=PAGES, default=None, help="Draw only these pages.")
     return p
 
@@ -68,7 +70,8 @@ def run(args: argparse.Namespace) -> dict:
         for label, d in _kv(args.run, "run").items():
             print(f"attach-target {label}: {attach_target(d, args.attach_target)}")
     record = build_suite(_kv(args.run, "run"), load_case_list(args.cases), args.out, obs=_kv(args.obs, "obs"),
-                         tc=_kv(args.tc, "tc"), tc_cache=args.tc_cache, only=args.only)
+                         tc=_kv(args.tc, "tc"), tc_cache=args.tc_cache, only=args.only,
+                         maps_all_runs=args.maps_all_runs)
     for p in record["pages"]:
         print(f"{p['page']} {p['title']}: {'; '.join(p['files']) or '-'} | {p['note']}")
     print(f"index: {Path(args.out) / 'SUITE.md'}")
