@@ -1,6 +1,7 @@
 #!/bin/bash
 # CorrDiff on Jupiter: training body (called by cd_train_jupiter.sbatch and cd_smoke_jupiter.sbatch).
 # cd_torchrun MODE CKPT_DIR LOG [hydra overrides...]  -> torchrun on every node of the allocation, rc of srun
+# config: config_training_e2v4${CD_CONF_SUFFIX}_MODE.yaml, from $CD_CONF_DIR when set (else the example's conf folder)
 cd_torchrun() {
   local MODE=$1 DIR=$2 LOG=$3; shift 3
   local MASTER; MASTER=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -10,12 +11,12 @@ cd_torchrun() {
   export NCCL_IB_TIMEOUT=30 NCCL_DEBUG=WARN TORCH_NCCL_ASYNC_ERROR_HANDLING=1 TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=600
   export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True HYDRA_FULL_ERROR=1 PYTHONFAULTHANDLER=1
   cd $CD_REPO/examples/weather/corrdiff
-  echo "[torchrun] $(date -u) MODE=$MODE nodes=$SLURM_NNODES port=$PORT dir=$DIR overrides: $*" | tee -a $LOG
+  echo "[torchrun] $(date -u) MODE=$MODE nodes=$SLURM_NNODES port=$PORT dir=$DIR config=${CD_CONF_DIR:-conf}/config_training_e2v4${CD_CONF_SUFFIX:-}_${MODE}.yaml overrides: $*" | tee -a $LOG
   # Slurm >= 22.05: a step does not inherit --cpus-per-task from sbatch; give it the whole node, no binding (torchrun
   # spawns 4 ranks x 4 loader workers under this one task)
   srun --kill-on-bad-exit=1 --ntasks-per-node=1 --cpus-per-task=${SLURM_CPUS_PER_TASK:-288} --cpu-bind=none bash -c "torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 --node_rank=\$SLURM_NODEID \
     --rdzv_backend=c10d --rdzv_endpoint=$MASTER:$PORT --rdzv_id=$SLURM_JOB_ID \
-    train.py --config-name=config_training_e2v4_${MODE}.yaml training.io.checkpoint_dir=$DIR $*" >> $LOG 2>&1
+    train.py ${CD_CONF_DIR:+--config-dir=$CD_CONF_DIR} --config-name=config_training_e2v4${CD_CONF_SUFFIX:-}_${MODE}.yaml training.io.checkpoint_dir=$DIR $*" >> $LOG 2>&1
   local rc=$?
   echo "[torchrun] $(date -u) rc=$rc" | tee -a $LOG
   return $rc

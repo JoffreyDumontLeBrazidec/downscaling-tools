@@ -60,3 +60,36 @@ samples (x 4 patches). The smokes (`SMOKE=1`, 2,560 samples) give samples/s per 
 `cd_grid.py` check (bilinear exact on a linear field, NaN outside); export probe / init / fill in 2 parts / stats /
 verify and the dataset reader on 12 synthetic rows: pass. Not run here: Hydra composition, PhysicsNeMo training and
 sampling (no GPU, no hydra build); the Leonardo smokes cover them.
+
+## Opt-in options of 23 Nov (branch `claude/corrdiff-lowcompute-20261123`, Jupiter copy `$CD/kit_20261123`)
+
+Every option below is off by default, and the existing 46-channel checkpoints still load with the old options. The one
+exception is the generator's refusal described in the first item.
+
+- `make_cd_configs.py` writes the whole schedule of each stage (`total_batch_size`, `batch_size_per_gpu`, `lr`,
+  `lr_rampup`, `lr_decay`, `lr_decay_rate`, `training_duration`, `save_checkpoint_freq`, `validation_freq`) and, for the
+  diffusion, `P_mean` / `P_std` when given. Values that are not given come from the example's base files. It refuses
+  `lr_decay < 1` with `lr_rampup <= 0`, the combination under which train.py drives the learning rate to zero, so the
+  diffusion now needs `--diff-lr-rampup`, `--diff-lr-decay 1` or `--scale-schedule-to-batch` (the published ramp-up of
+  1,000,000 samples and decay interval of 500,000 samples, read as values for batch 256, scaled to the chosen batch).
+  It prints each schedule in samples and in optimizer updates, and the GPU counts that divide the batch evenly.
+  `--name-suffix x` writes `config_training_e2v4x_*.yaml` with run folders `run/reg_x`, `run/diff_x`; `--out-conf-dir`
+  writes them outside the PhysicsNeMo checkout (train.py then needs `--config-dir`, which `cd_train_jupiter_body.sh`
+  adds when `CD_CONF_DIR` is set). `--time-inputs` and `--val-spread` set the dataset options below.
+- `cd_dataset.py`: `time_inputs: true` appends 5 per-row channels after the 46 (cos/sin julian day, cos/sin local
+  time, insolation) at the row's valid time, unnormalised. They reproduce the forcings GL512 reads exactly on the O1280
+  points (`cd_check_time_inputs.py`, 23 Nov: maximum difference 0 on 6 rows at 00 and 12 UTC; the regrid to the box grid
+  alone differs by up to 4e-3). `spread: true` picks `max_rows` rows evenly over the split (used for validation).
+- `cd_predict.py` gives the dataset the valid time (start date 00 UTC plus lead) and takes `--sigma-max` / `--sigma-min`
+  for the sampler (defaults 800 / 0.002 as before).
+- `cd_widen_regression.py` adds input channels to a regression checkpoint with zero weights (output unchanged) and
+  writes it as `RUN/checkpoints_regression/CorrDiffRegressionUNet.0.0.mdlus` of a new run folder; training then starts at
+  0 samples with a fresh Adam state. `weights` (login) and `check` (GPU) verify it; `selftest` runs a small CPU case.
+- `cd_residual_ladder.py`: residual RMS of regression checkpoints per variable, for 48 training and 48 validation rows
+  (8 per lead), validation also per lead; restartable, one shard per GPU, `report` writes `ladder.json` and `ladder.md`.
+- Jupiter scripts for `$CD/kit_20261123`: `cd_env_jupiter_x.sh`, `cd_ladder_jupiter.sbatch` (one node, 30 min:
+  ladder, widening check, optional diffusion smoke of 640 samples), `cd_train_jupiter_x.sbatch` (state
+  `state/chain_<mode>_x`, run `run/<reg|diff>_x`, nodes from the command line, successor with the same nodes and time,
+  `CD_MAX_SEG` 1 by default).
+- Self-test: `python3 cd_selftest.py --work DIR` (synthetic export; dataset options, widening, ladder; the ladder part
+  needs the PhysicsNeMo venv) and `python3 cd_widen_regression.py selftest --work DIR`.
