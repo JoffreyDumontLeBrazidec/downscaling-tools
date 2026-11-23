@@ -57,6 +57,7 @@ DEFAULT_HRES_RES = 0.08
 DEFAULT_LRES_RES = 0.28
 DEFAULT_VMAX = 25.0
 RENDER_DPI = 150  # house PNG resolution (eval.plotting.save_figure); kept for importers
+_DPI = [RENDER_DPI]  # set from --dpi by run(); a list so the renderers read the current value
 # Latitude scale factor for the nearest-neighbour lookup: reduced Gaussian
 # rows are denser in latitude than longitude, so an isotropic lookup would
 # smear rows; 1.4 keeps the lookup roughly isotropic in grid spacing.
@@ -291,6 +292,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
                    help=f"Smallest map span in degrees of latitude; a smaller --extent is widened to it "
                         f"(default: {MIN_SPAN_DEG:g}). Lower it, for example to 3, for a close-up in which "
                         "single grid cells are visible with --cells.")
+    p.add_argument("--dpi", type=int, default=RENDER_DPI,
+                   help=f"PNG resolution (default {RENDER_DPI}); 300 doubles the pixels of every panel.")
     p.add_argument("--cells", action="store_true", default=False,
                    help="Real resolution: draw every panel as its own grid cells (nearest neighbour on a fine "
                         "raster) instead of blending between grid points, so a 9 km input shows 9 km cells "
@@ -704,7 +707,7 @@ def _render(
         cbar = fig.colorbar(mesh, ax=ax, orientation="horizontal", pad=0.06, aspect=40, shrink=0.8,
                             extend=spec["extend"] if field == "value" else "both")
         cbar.set_label(cbar_label)
-        save_figure(fig, out_path, close=True)
+        save_figure(fig, out_path, close=True, dpi=_DPI[0])
 
 
 def parse_members(spec: str, available: list[int]) -> list[int]:
@@ -828,7 +831,7 @@ def _render_grid(
                                 pad=0.04, aspect=50, fraction=0.05,
                                 extend=spec["extend"] if field == "value" else "both")
             cbar.set_label(cbar_label)
-        save_figure(fig, out_path, close=True)
+        save_figure(fig, out_path, close=True, dpi=_DPI[0])
 
 
 def run_member_grid(args: argparse.Namespace) -> int:
@@ -912,6 +915,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
 
 
 def run(args: argparse.Namespace) -> int:
+    _DPI[0] = int(getattr(args, "dpi", None) or RENDER_DPI)
     if getattr(args, "trajectory_npz", None):
         from .plot_trajectory_wind_maps import run as trajectory_run
         return trajectory_run(args)

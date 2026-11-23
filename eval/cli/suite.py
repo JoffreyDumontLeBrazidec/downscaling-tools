@@ -50,12 +50,17 @@ def register(subparsers) -> argparse.ArgumentParser:
     p.add_argument("--tc", action="append", metavar="LABEL=DIR",
                    help="tc_structure results folder (cases.csv) per run, for page 09.")
     p.add_argument("--tc-cache", type=Path, default=None, help="tc_obs cache (best_track.csv) for IBTrACS on page 09.")
+    p.add_argument("--ibtracs-csv", type=Path, default=None,
+                   help="NOAA IBTrACS csv (v04): with no --tc read, page 03 picks the deepest best-track fix inside the "
+                        "files at the case step (any month, no event yaml).")
     p.add_argument("--attach-target", type=Path, default=None, metavar="TRUTH_DIR",
                    help="Before drawing, WRITE a target y into every prediction file that has none, from "
                         "TRUTH_DIR/truth_<valid YYYYMMDDHH>.nc (y(grid_point, weather_state), same points and state "
                         "names; NaN allowed). Missing truth file = all-NaN target. See eval/suite/target.py.")
     p.add_argument("--maps-all-runs", action="store_true",
                    help="Map pages (03, 04, 05, 07) show every run; default only the first (one model per page).")
+    p.add_argument("--smooth", action="store_true",
+                   help="Map pages blend between grid points (zoom_maps default) instead of real-resolution cells.")
     p.add_argument("--only", nargs="+", choices=PAGES, default=None, help="Draw only these pages.")
     return p
 
@@ -71,7 +76,8 @@ def run(args: argparse.Namespace) -> dict:
             print(f"attach-target {label}: {attach_target(d, args.attach_target)}")
     record = build_suite(_kv(args.run, "run"), load_case_list(args.cases), args.out, obs=_kv(args.obs, "obs"),
                          tc=_kv(args.tc, "tc"), tc_cache=args.tc_cache, only=args.only,
-                         maps_all_runs=args.maps_all_runs)
+                         maps_all_runs=args.maps_all_runs, cells=not args.smooth,
+                         ibtracs_csv=args.ibtracs_csv)
     for p in record["pages"]:
         print(f"{p['page']} {p['title']}: {'; '.join(p['files']) or '-'} | {p['note']}")
     print(f"index: {Path(args.out) / 'SUITE.md'}")

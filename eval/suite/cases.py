@@ -190,3 +190,58 @@ def tc_auto(case: Case, cases_csv: Path, half_lat: float = 7.0) -> tuple[Case, s
                        event=str(r.event))
             return out, f"deepest {label} storm at +{case.step} h ({float(r.p):.0f} hPa member mean, {len(g)} storm cases)"
     raise SystemExit(f"eval.cli suite: no storm case at +{case.step} h in {cases_csv}")
+
+
+def best_track_fixes(cache_dir: Path | None = None, ibtracs_csv: Path | None = None):
+    """Best-track fixes as a frame (event, time YYYYMMDDHH, lat, lon, pmin_hpa): a tc_obs cache's best_track.csv
+    or a NOAA IBTrACS csv (v04, two header rows; pressure = WMO_PRES, else USA_PRES)."""
+    import pandas as pd
+
+    if cache_dir is not None and (Path(cache_dir) / "best_track.csv").exists():
+        bt = pd.read_csv(Path(cache_dir) / "best_track.csv", dtype={"time": str})
+        return bt[["event", "time", "lat", "lon", "pmin_hpa"]].dropna()
+    if ibtracs_csv is None:
+        return None
+    df = pd.read_csv(ibtracs_csv, skiprows=[1], low_memory=False, keep_default_na=False)
+    pres = pd.to_numeric(df.get("WMO_PRES"), errors="coerce")
+    if "USA_PRES" in df:
+        pres = pres.fillna(pd.to_numeric(df["USA_PRES"], errors="coerce"))
+    t = pd.to_datetime(df["ISO_TIME"], errors="coerce")
+    out = pd.DataFrame({"event": df["NAME"].astype(str).str.lower() + "_" + df["SID"].astype(str),
+                        "time": t.dt.strftime("%Y%m%d%H"), "lat": pd.to_numeric(df["LAT"], errors="coerce"),
+                        "lon": ((pd.to_numeric(df["LON"], errors="coerce") + 180.0) % 360.0) - 180.0,
+                        "pmin_hpa": pres})
+    return out.dropna()
+
+
+def tc_from_best_track(case: Case, run_dirs: list[Path], fixes, half_lat: float = 7.0,
+                       edge_margin_deg: float = 6.0) -> tuple[Case, str]:
+    """The deepest best-track fix at the valid time of a common (date, case step), inside the files' domain and at
+    least ``edge_margin_deg`` from a regional box edge (a storm at the edge loses its core, Melissa 23 Nov).
+    No event yaml and no tc_structure read needed. Extent: +-half_lat around the fix."""
+    from datetime import datetime, timedelta
+
+    import xarray as xr
+
+    keys = sorted(k for k in common_keys(run_dirs) if k[1] == case.step)
+    if not keys:
+        raise SystemExit(f"eval.cli suite: no date at +{case.step} h common to every run")
+    first = prediction_index(run_dirs[0])[keys[0]]
+    with xr.open_dataset(first) as ds:
+        lat, lon = ds["lat_hres"].values, ((ds["lon_hres"].values + 180.0) % 360.0) - 180.0
+    global_file = lat.max() - lat.min() > 170.0
+    s, n, w, e = lat.min(), lat.max(), lon.min(), lon.max()
+    m = 0.0 if global_file else edge_margin_deg
+    valid = {(datetime.strptime(d, "%Y%m%d") + timedelta(hours=st)).strftime("%Y%m%d%H"): d for d, st in keys}
+    f = fixes[fixes.time.astype(str).isin(valid)]
+    if not global_file:
+        f = f[(f.lat >= s + m) & (f.lat <= n - m) & (f.lon >= w + m) & (f.lon <= e - m)]
+    if f.empty:
+        raise SystemExit(f"eval.cli suite: no best-track fix at +{case.step} h valid times inside the files")
+    r = f.loc[f.pmin_hpa.idxmin()]
+    half_lon = half_lat / max(0.3, np.cos(np.deg2rad(float(r.lat))))
+    out = Case(name=str(r.event).split("_")[0], date=valid[str(r.time)], step=case.step, variable=case.variable,
+               vmax=case.vmax, event=str(r.event),
+               extent=[float(r.lon) - half_lon, float(r.lon) + half_lon, float(r.lat) - half_lat, float(r.lat) + half_lat])
+    return out, (f"deepest best-track fix at +{case.step} h ({float(r.pmin_hpa):.0f} hPa, {r.event}, "
+                 f"{f.event.nunique()} storms in the files)")

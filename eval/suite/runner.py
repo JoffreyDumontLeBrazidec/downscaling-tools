@@ -22,7 +22,8 @@ LOG = logging.getLogger(__name__)
 PAGES = ("spectra", "tc_members", "rain_members", "areas", "scores", "stills", "tp_dist", "tc_dist")
 
 
-def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | None, cols: int = 5) -> list[Path]:
+def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | None, cols: int = 5,
+          cells: bool = True) -> list[Path]:
     """zoom_maps of every source (member grids, or member 1 alone with members=None); [input, target, model...]."""
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import build_arg_parser
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import run as zoom_run
@@ -38,6 +39,8 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         argv += ["--members", members]
     if case.vmax is not None:
         argv += ["--vmax", str(case.vmax)]
+    if cells:   # real resolution (owner 23 Nov 09:14): every grid point its own cell, input cells visible
+        argv += ["--cells", "--dpi", "200"]
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
     from eval.suite.cases import field_max
 
@@ -84,7 +87,7 @@ def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None)
 
 def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[str, Path] | None = None,
                 tc: dict[str, Path] | None = None, tc_cache: Path | None = None, only=None,
-                maps_all_runs: bool = False) -> dict:
+                maps_all_runs: bool = False, cells: bool = True, ibtracs_csv: Path | None = None) -> dict:
     out = Path(out)
     work = out / "work"
     out.mkdir(parents=True, exist_ok=True)
@@ -131,16 +134,21 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
             if case is None:
                 raise ValueError(f"no {label} case in case list {cases.name}")
             if label == "tc_members" and (case.date == "auto" or case.extent is None):
-                if not tc:
-                    raise ValueError("the TC case is picked from a tc_structure read: give --tc LABEL=DIR")
-                from eval.suite.cases import tc_auto
+                from eval.suite.cases import best_track_fixes, tc_auto, tc_from_best_track
 
-                case, how = tc_auto(case, Path(next(iter(tc.values()))) / "cases.csv")
+                if tc:
+                    case, how = tc_auto(case, Path(next(iter(tc.values()))) / "cases.csv")
+                else:
+                    fixes = best_track_fixes(tc_cache, ibtracs_csv)
+                    if fixes is None:
+                        raise ValueError("the TC case is picked from a tc_structure read (--tc) or from best-track "
+                                         "fixes (--tc-cache or --ibtracs-csv)")
+                    case, how = tc_from_best_track(case, list(runs.values()), fixes)
                 date, _ = resolve_date(case, list(runs.values()), pick="first")
             else:
                 date, how = resolve_date(case, list(runs.values()), pick=pick)
             # side by side (owner 23 Nov 09:07): input | target | model, each 5 rows x 2 members
-            pngs = _zoom(map_runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=2)
+            pngs = _zoom(map_runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=2, cells=cells)
             dst = stitch([pngs], out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
             return [dst], (f"{case.name} {date} +{case.step} h ({how}); side by side: input, target, "
                            f"{', '.join(map_runs)}")
@@ -153,7 +161,7 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         rows, notes = [], []
         for case in cases.areas:
             date, how = resolve_date(case, list(runs.values()), pick="first")
-            rows.append(_zoom(map_runs, case, date, work / f"area_{case.name}", members=None))
+            rows.append(_zoom(map_runs, case, date, work / f"area_{case.name}", members=None, cells=cells))
             notes.append(f"{case.name} {case.variable} {date} +{case.step} h ({how})")
         if not rows:
             raise ValueError(f"no areas in case list {cases.name}")
