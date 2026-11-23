@@ -1,0 +1,33 @@
+# Classic suite case list, 9 km global lane (O320 or N320 input -> O1280), any month. Dates are picked from the
+# predictions (date: auto) so that one list serves every month; the TC case is the deepest storm of the
+# tc_structure read (--tc), the rain case the wettest target date. Fixed boxes keep pages comparable.
+name: o1280_global
+description: "9 km global, picks from the files (TC from the tc_structure read)"
+members: "1-10"
+spectra:
+  steps: [24, 72]
+  box: e2                  # the paper's Europe box, as the GL512 reads
+tc:
+  name: deepest_storm
+  date: auto               # deepest storm case of the first --tc read (target, else input, member mean)
+  step: 24
+  variable: wind10m
+rain:
+  name: e2_rain
+  date: auto
+  step: 24
+  extent: [-79.0, 39.0, 11.0, 69.0]
+  variable: tp
+areas:
+  - {name: alps, date: auto, step: 24, extent: [4.0, 16.0, 43.0, 49.0], variable: tp}
+  - {name: north_sea, date: auto, step: 24, extent: [-6.0, 14.0, 50.0, 62.0], variable: wind10m}
+  - {name: iberia, date: auto, step: 24, extent: [-10.0, 4.0, 36.0, 44.0], variable: 2t}
+stills:
+  cases:
+    - {name: global, date: auto, step: 24, variable: tp}
+    - {name: europe_e2, date: auto, step: 24, variable: tp, extent: [-80.0, 40.0, 10.0, 70.0]}
+tp_distribution:
+  steps: [24, 48, 72]
+scores:
+  region: all
+  variables: [[tp, raw], [10ff, raw], [2t, lapse], [msl, raw]]

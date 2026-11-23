@@ -59,3 +59,10 @@ python -m eval.cli scoreboard \
 squeue -u $(whoami) -n eval-o96_o320-*
 sacct -j <comma-separated-jobids> --format=JobID,JobName%24,State,Elapsed,ExitCode
 ```
+
+## Classic plot suite (the pages to give whenever plots are asked for)
+
+`python -m eval.cli suite --cases <case list> --run LABEL=PRED_DIR [...] [--obs LABEL=OBS_POINTS_DIR ...]
+[--tc LABEL=TC_STRUCTURE_DIR ... --tc-cache TC_OBS_CACHE] --out DIR` writes the fixed pages 01-09 and `SUITE.md`
+(owner, 23 Nov 2026): spectra +24/+72 h, TC 10 members, rain 10 members, areas, fair CRPS/spread at stations,
+tp stills, tp PDF, TC pressure/wind vs IBTrACS. Case lists: `eval/config/suite/*.yaml`. Code: `eval/suite/`.

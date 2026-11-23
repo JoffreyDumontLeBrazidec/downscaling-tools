@@ -177,11 +177,13 @@ def accumulate_tp_by_step(
     native_input: bool = True,
     info: dict | None = None,
     box_edge_deg: float | None = None,
+    ensemble_member_indices=None,
 ) -> dict[int, dict[str, StreamingDist]]:
     """Stream every predictions file into per-step per-series StreamingDists.
 
     ``native_input`` (rule 41): the input from the native x at the nearest native point first; ``info`` (a dict)
-    receives ``input_source`` and ``truth_source``."""
+    receives ``input_source`` and ``truth_source``. ``ensemble_member_indices`` (positions, or ``"all"``) pools
+    those members into the same distributions; default: the one ``ensemble_member_index``."""
     files = sorted(predictions_dir.glob("predictions_*_step*.nc"))
     if not files:
         raise FileNotFoundError(f"No predictions_*.nc in {predictions_dir}")
@@ -199,41 +201,49 @@ def accumulate_tp_by_step(
             # regional box: the box-edge strip is left out of every distribution (eval.shared.edge_strip)
             keep = box_edge_index(ds["lat_hres"].values, ds["lon_hres"].values, box_edge_deg)
             ti = find_tp_index(ds, var)
-            mi = ensemble_member_index
-            pred = _member_channel(ds, "y_pred", ti, mi)
+            if ensemble_member_indices is None:
+                positions = [ensemble_member_index]
+            elif ensemble_member_indices == "all":
+                positions = list(range(int(ds.sizes.get("ensemble_member", 1))))
+            else:
+                positions = [int(i) for i in ensemble_member_indices]
+            members_read = []
+            for mi in positions:
+                pred = _member_channel(ds, "y_pred", ti, mi)
 
-            truth = _member_channel(ds, "y", ti, mi)
-            if truth_mode is None:
-                truth_mode = "embedded-y" if np.isfinite(truth).mean() > 0.99 \
-                    else ("grib" if truth_grib_tpl else "missing")
-                print(f"truth source: {truth_mode}")
-            if truth_mode == "grib":
-                truth_src = truth_src or PrecipTruthSource(truth_grib_tpl, var=var)
-                # Declare the run's grid first: on a regional run the support
-                # index must exist before the first truth is served.
-                truth_src.verify_grid(ds["lat_hres"].values, ds["lon_hres"].values)
-                truth = truth_src.load(date, step).astype(np.float64)
-            elif truth_mode == "missing":
-                truth = None
+                truth = _member_channel(ds, "y", ti, mi)
+                if truth_mode is None:
+                    truth_mode = "embedded-y" if np.isfinite(truth).mean() > 0.99 \
+                        else ("grib" if truth_grib_tpl else "missing")
+                    print(f"truth source: {truth_mode}")
+                if truth_mode == "grib":
+                    truth_src = truth_src or PrecipTruthSource(truth_grib_tpl, var=var)
+                    # Declare the run's grid first: on a regional run the support
+                    # index must exist before the first truth is served.
+                    truth_src.verify_grid(ds["lat_hres"].values, ds["lon_hres"].values)
+                    truth = truth_src.load(date, step).astype(np.float64)
+                elif truth_mode == "missing":
+                    truth = None
 
-            if baseline_mode is None:
-                baseline_mode = _choose_input(ds, ti, mi, native_input, baseline_grib_tpl)
-                print(f"input/baseline source: {baseline_mode}")
-            inp = None
-            if baseline_mode == "x-native":
-                inp = InputReader(ds).channel(ti, member=mi)
-            elif baseline_mode == "x_interp":
-                inp = _member_channel(ds, "x_interp", ti, mi)
-            elif baseline_mode == "grib":
-                if baseline_src is None:
-                    baseline_src = LresInterpBaseline(
-                        baseline_grib_tpl, interp_index_cache or None, var=var)
-                    baseline_src.ensure_index(
-                        ds["lat_hres"].values, ds["lon_hres"].values,
-                        probe_date=date)
-                inp = baseline_src.load(date, step, _member_id(ds, mi)).astype(np.float64)
-            elif baseline_mode == "missing":
+                if baseline_mode is None:
+                    baseline_mode = _choose_input(ds, ti, mi, native_input, baseline_grib_tpl)
+                    print(f"input/baseline source: {baseline_mode}")
                 inp = None
+                if baseline_mode == "x-native":
+                    inp = InputReader(ds).channel(ti, member=mi)
+                elif baseline_mode == "x_interp":
+                    inp = _member_channel(ds, "x_interp", ti, mi)
+                elif baseline_mode == "grib":
+                    if baseline_src is None:
+                        baseline_src = LresInterpBaseline(
+                            baseline_grib_tpl, interp_index_cache or None, var=var)
+                        baseline_src.ensure_index(
+                            ds["lat_hres"].values, ds["lon_hres"].values,
+                            probe_date=date)
+                    inp = baseline_src.load(date, step, _member_id(ds, mi)).astype(np.float64)
+                elif baseline_mode == "missing":
+                    inp = None
+                members_read.append((pred, truth, inp))
         finally:
             ds.close()
 
@@ -244,16 +254,14 @@ def accumulate_tp_by_step(
                 "x_interp": interp_source("x_interp", "native_input: false" if not native_input
                                           else "no usable native x in the file"),
             }[baseline_mode]
-        pred = pred[keep]
-        truth = None if truth is None else truth[keep]
-        inp = None if inp is None else inp[keep]
         bucket = step_data.setdefault(
             step, {s: StreamingDist() for s in SERIES})
-        bucket["pred"].update(pred * MM)
-        if truth is not None:
-            bucket["truth"].update(truth * MM)
-        if inp is not None:
-            bucket["input"].update(inp * MM)
+        for pred, truth, inp in members_read:
+            bucket["pred"].update(pred[keep] * MM)
+            if truth is not None:
+                bucket["truth"].update(truth[keep] * MM)
+            if inp is not None:
+                bucket["input"].update(inp[keep] * MM)
     return step_data
 
 
