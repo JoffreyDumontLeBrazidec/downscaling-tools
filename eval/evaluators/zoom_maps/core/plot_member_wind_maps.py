@@ -99,6 +99,22 @@ def default_title(key: str, hres: str = "O1280") -> str:
     return default_titles(hres=hres).get(key, f"Model, {key} ({hres})")
 
 
+
+def input_res(lat) -> float:
+    """Drawing resolution of the input panel, from the spacing of its own latitude rows.
+
+    An O320 input (rows 0.28 deg apart) keeps the nearest-neighbour mesh that shows its
+    coarse cells. A finer input (O1280 on the 9 km -> 4 km lane, rows 0.07 deg apart) is
+    drawn on its native points like the output panels: rasterising it at 0.28 deg kept
+    one point in sixteen and made a 9 km field look like a 31 km one.
+    """
+    rows = np.unique(np.round(np.asarray(lat, dtype=float), 4))
+    if rows.size < 2:
+        return DEFAULT_LRES_RES
+    step = float(np.median(np.diff(rows)))
+    return DEFAULT_HRES_RES if step < 0.5 * DEFAULT_LRES_RES else DEFAULT_LRES_RES
+
+
 def octahedral_name(n_points: int) -> str | None:
     """'O<N>' when n_points is the size of a global octahedral grid (4 N (N + 9) points), else None
     (a regional file, for example the E2 box, does not tell its grid by its size)."""
@@ -833,7 +849,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               DEFAULT_LRES_RES, here,
+                               input_res(ds["lat_lres"].values), here,
                                [_field(_member_slice(ds["x"], m), states, spec) for m in here]))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, here,
@@ -910,7 +926,8 @@ def run(args: argparse.Namespace) -> int:
             titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
-                               _field(_member_slice(ds["x"], args.member), states, spec), DEFAULT_LRES_RES))
+                               _field(_member_slice(ds["x"], args.member), states, spec),
+                               input_res(ds["lat_lres"].values)))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h,
                                _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES))
