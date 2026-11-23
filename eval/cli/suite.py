@@ -50,6 +50,10 @@ def register(subparsers) -> argparse.ArgumentParser:
     p.add_argument("--tc", action="append", metavar="LABEL=DIR",
                    help="tc_structure results folder (cases.csv) per run, for page 09.")
     p.add_argument("--tc-cache", type=Path, default=None, help="tc_obs cache (best_track.csv) for IBTrACS on page 09.")
+    p.add_argument("--attach-target", type=Path, default=None, metavar="TRUTH_DIR",
+                   help="Before drawing, WRITE a target y into every prediction file that has none, from "
+                        "TRUTH_DIR/truth_<valid YYYYMMDDHH>.nc (y(grid_point, weather_state), same points and state "
+                        "names; NaN allowed). Missing truth file = all-NaN target. See eval/suite/target.py.")
     p.add_argument("--only", nargs="+", choices=PAGES, default=None, help="Draw only these pages.")
     return p
 
@@ -58,6 +62,11 @@ def run(args: argparse.Namespace) -> dict:
     from eval.suite.cases import load_case_list
     from eval.suite.runner import build_suite
 
+    if args.attach_target:
+        from eval.suite.target import attach_target
+
+        for label, d in _kv(args.run, "run").items():
+            print(f"attach-target {label}: {attach_target(d, args.attach_target)}")
     record = build_suite(_kv(args.run, "run"), load_case_list(args.cases), args.out, obs=_kv(args.obs, "obs"),
                          tc=_kv(args.tc, "tc"), tc_cache=args.tc_cache, only=args.only)
     for p in record["pages"]:

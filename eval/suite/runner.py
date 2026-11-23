@@ -13,6 +13,8 @@ import traceback
 from argparse import Namespace
 from pathlib import Path
 
+import numpy as np
+
 from eval.suite.cases import CaseList, prediction_index, resolve_date
 from eval.suite.stitch import stitch
 
@@ -34,6 +36,14 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         argv += ["--extent", *[str(v) for v in case.extent]]
     if members:
         argv += ["--members", members]
+    from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
+    from eval.suite.cases import field_max
+
+    state = _ZV[case.variable]["states"][0]
+    first = prediction_index(next(iter(runs.values())))[(date, case.step)]
+    if not np.isfinite(field_max(first, state, "y", case.extent)):
+        argv += ["--no-truth"]   # the target carries no such field here (e.g. tp of an analysis): no target row
+        LOG.warning("suite: no target %s in %s; the target row is left out", state, first.name)
     args = build_arg_parser().parse_args(argv)
     w, e, s_, n_ = args.extent
     if args.proj_lon is None:

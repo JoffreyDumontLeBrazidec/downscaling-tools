@@ -115,3 +115,35 @@ def test_every_page(inputs):
     assert "pages 10 and 11" in (out / "SUITE.md").read_text().lower()
     assert "deepest target storm" in by["03"]["note"]
     assert "wettest target" in by["04"]["note"]
+
+
+def test_rows_without_target_or_x_interp(tmp_path):
+    """AIFS-ENS-like rows (x and y_pred only, steps 24 and 72): --attach-target writes y, the pages draw."""
+    import xarray as xr
+
+    grids = (octahedral_grid(96), octahedral_grid(48))
+    run, truth = tmp_path / "ARMO", tmp_path / "truth"
+    run.mkdir()
+    truth.mkdir()
+    for i, date in enumerate(DATES):
+        for step in STEPS:
+            full = write_predictions_file(tmp_path / "full" / f"predictions_{date}_step{step:03d}.nc",
+                                          members=(1, 2, 3, 4), seed=i + step, grids=grids)
+            with xr.open_dataset(full) as ds:
+                ds.drop_vars(["y", "x_interp"]).to_netcdf(run / full.name)
+                if (date, step) != (DATES[1], 72):   # one valid time without truth: all-NaN target
+                    valid = pd.Timestamp(date) + pd.Timedelta(hours=step)
+                    y = ds["y"].isel(sample=0, ensemble_member=0).values.copy()
+                    y[:, list(ds.weather_state.values).index("tp")] = np.nan   # an analysis has no tp
+                    xr.Dataset({"y": (("grid_point", "weather_state"), y)},
+                               coords={"weather_state": ds.weather_state.values}).to_netcdf(
+                        truth / f"truth_{valid:%Y%m%d%H}.nc")
+    out = tmp_path / "out"
+    main(["suite", "--cases", "o1280_global", "--run", f"ARMO={run}", "--attach-target", str(truth),
+          "--only", "spectra", "rain_members", "stills", "tp_dist", "--out", str(out)])
+    by = {p["page"]: p for p in json.loads((out / "suite_manifest.json").read_text())["pages"]}
+    failed = {k: v["note"] + v.get("trace", "") for k, v in by.items() if not v["files"]}
+    assert not failed, failed
+    assert "wettest input" in by["04"]["note"]          # target tp is NaN, so the pick falls back to the input
+    with xr.open_dataset(run / f"predictions_{DATES[1]}_step072.nc") as ds:
+        assert "y" in ds and bool(np.isnan(ds["y"].values).all())
