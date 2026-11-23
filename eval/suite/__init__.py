@@ -4,7 +4,11 @@ Owner, 23 Nov 2026: "define the classic eval.suite ... so I have always the same
 in this order, are fixed; only the case list (``eval/config/suite/<name>.yaml``) changes per lane:
 
     01 spectra +24 h       truth (target), input, model(s): eval.plotting.spectra_grid on box_spectra reads
-    02 spectra +72 h       same; exactly two spectra pages, no more
+    02 spectra +72 h       same; the standard read (0.07 deg sampling), dotted input and target limits
+    01b-02b fine spectra   the same two leads read at the case list's ``spectra.fine_res_deg`` (0.035 deg on the
+                           4 km lane), drawn whenever the list sets it. Owner rule, 23 Nov 13:21: BOTH reads, as
+                           a rule. The standard read rightly stops near the target limit; the fine read shows the
+                           grain below it, which he wants to see (and ideally remove).
     03 TC members          10 members of 10 m wind speed (0 to a top fitted to the box) in a 10-degree box on a
                            storm: input | target | model side by side (zoom_maps)
     04 rain members        10 members of tp on an intense-rain case: input | target | model side by side (zoom_maps)

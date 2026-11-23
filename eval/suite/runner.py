@@ -154,23 +154,32 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                                     "trace": traceback.format_exc(limit=3)})
 
     # 01-02 spectra: exactly the leads of the case list (24 and 72 h), one page each, every run on it
-    def spectra(step):
+    def spectra(step, fine_res=None):
         def go():
+            from eval.evaluators.box_spectra.runner import SPEC_RES_DEG
             from eval.evaluators.box_spectra.runner import run as box_run
             from eval.suite.pages import spectra_page
 
+            res_deg = fine_res or SPEC_RES_DEG
             reads = {}
             for k, d in runs.items():
-                cfg = {"steps": [step], "variables": list(cases.spectra_variables), "box": cases.spectra_box}
-                res = work / "spectra" / f"{k}_L{step:03d}"
+                cfg = {"steps": [step], "variables": list(cases.spectra_variables), "box": cases.spectra_box,
+                       "res_deg": res_deg}
+                res = work / "spectra" / f"{k}_L{step:03d}{'_fine' if fine_res else ''}"
                 reads[k] = res if (res / "bins.csv").exists() else box_run(d, {}, cfg, output_dir=res, run_label=k)
-            files = spectra_page(reads, out / f"{'01' if step == cases.spectra_steps[0] else '02'}_spectra_L{step:03d}",
-                                 step=step, box=cases.spectra_box)
-            return files, f"{len(reads)} runs at +{step} h"
+            num = "01" if step == cases.spectra_steps[0] else "02"
+            stem = out / (f"{num}b_spectra_fine_L{step:03d}" if fine_res else f"{num}_spectra_L{step:03d}")
+            files = spectra_page(reads, stem, step=step, box=cases.spectra_box,
+                                 res_note=f", sampled at {res_deg:g} deg" + (" (fine read)" if fine_res else ""))
+            return files, f"{len(reads)} runs at +{step} h, sampled at {res_deg:g} deg"
         return go
 
+    # both reads as a rule (owner 23 Nov 13:21): standard 01-02, and 01b-02b at the case list's fine_res_deg
     for step in cases.spectra_steps[:2]:
-        page("01" if step == cases.spectra_steps[0] else "02", f"spectra: +{step} h", spectra(step))
+        num = "01" if step == cases.spectra_steps[0] else "02"
+        page(num, f"spectra: +{step} h", spectra(step))
+        if cases.spectra_fine_res_deg:
+            page(f"{num}b", f"spectra: +{step} h, fine read", spectra(step, cases.spectra_fine_res_deg))
 
     def members_page(num, case_in, pick, label):
         def go():

@@ -21,7 +21,8 @@ def model_style(i: int, **kw) -> dict:
 
 # ---------------------------------------------------------------- 01-02 spectra
 
-def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str | None) -> list[Path]:
+def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str | None,
+                 res_note: str = "") -> list[Path]:
     """One spectra grid: target and input from the first read, one model curve per read (box_spectra bins.csv)."""
     from eval.evaluators.box_spectra.plotter import grid_panels, input_limit_marks, target_limit_marks
     from eval.evaluators.box_spectra.runner import read_bins
@@ -43,7 +44,7 @@ def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str 
                                      style=model_style(i, linewidth=1.5)))
     if not panels:
         return []
-    title = f"Spectra +{step} h{f', box {box}' if box else ''}: target, input and model ({'; '.join(draws)})"
+    title = f"Spectra +{step} h{f', box {box}' if box else ''}{res_note}: target, input and model ({'; '.join(draws)})"
     foot = ("Box FFT amplitude per wavelength bin, placed at total wavenumber 40030 km / wavelength; ratio = amplitude "
             "/ target amplitude. Target and input curves are those of the first run's files.")
     first = next(iter(reads.values()))

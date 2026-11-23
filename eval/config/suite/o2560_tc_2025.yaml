@@ -7,6 +7,7 @@ members: "1-10"
 spectra:
   steps: [24, 72]          # exactly two pages (owner, 23 Nov 2026)
   box: null                # the file's own box (E2)
+  fine_res_deg: 0.035      # second read below the target limit (T2559, 16 km), pages 01b-02b (owner 23 Nov 13:21)
 tc:                        # Humberto rapid intensification: IBTrACS 949 hPa, input members 976-1006 hPa
   name: humberto
   date: "20250926"

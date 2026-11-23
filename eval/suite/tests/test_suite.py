@@ -15,7 +15,7 @@ STEPS = (24, 72)
 CASES = """
 name: synthetic
 members: "1-4"
-spectra: {steps: [24, 72], box: null}
+spectra: {steps: [24, 72], box: null, fine_res_deg: 0.05}
 tc: {name: storm, date: auto, step: 24, variable: wind10m}
 rain: {name: rain, date: auto, step: 24, extent: [-40.0, 20.0, 30.0, 65.0], box_deg: 10, variable: tp}
 areas:
@@ -106,10 +106,12 @@ def test_every_page(inputs):
     by = {p["page"]: p for p in rec["pages"]}
     failed = {k: v["note"] + v.get("trace", "") for k, v in by.items() if not v["files"]}
     assert not failed, failed
-    assert sorted(by) == ["01", "02", "03", "04", "05", "05z", "06", "07", "08", "09"]
+    assert sorted(by) == ["01", "01b", "02", "02b", "03", "04", "05", "05z", "06", "07", "08", "09"]
+    assert "0.05 deg" in by["01b"]["note"] and "0.07 deg" in by["01"]["note"]
     assert len(list(out.glob("05z_zooms_*.png"))) == 2
     assert "close level" in by["05z"]["note"]
-    for name in ("01_spectra_L024.png", "02_spectra_L072.png", "06_scores_stations.png", "07_tp_stills.png",
+    for name in ("01_spectra_L024.png", "02_spectra_L072.png", "01b_spectra_fine_L024.png",
+                 "02b_spectra_fine_L072.png", "06_scores_stations.png", "07_tp_stills.png",
                  "05_areas_member1.png", "08_tp_distribution.png", "09_tc_distribution.png"):
         assert (out / name).exists(), name
     assert list(out.glob("03_tc_members_storm_wind10m_*_L024.png"))
