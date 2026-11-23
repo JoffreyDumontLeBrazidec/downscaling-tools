@@ -210,7 +210,7 @@ def plot_spectra_grid(
                 handles.setdefault(mark_label, line)
 
         fig.legend(list(handles.values()), list(handles.keys()), loc="upper center",
-                   ncol=min(len(handles), 4), frameon=False, fontsize=10,
+                   ncol=min(len(handles), 6), frameon=False, fontsize=10,
                    bbox_to_anchor=(0.5, 1.0 if not title else 0.975))
         if title:
             fig.suptitle(title, y=1.02, fontsize=12)
