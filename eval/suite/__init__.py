@@ -10,6 +10,9 @@ in this order, are fixed; only the case list (``eval/config/suite/<name>.yaml``)
     04 rain members        10 members of tp on an intense-rain case: input | target | model side by side (zoom_maps)
     05 areas               member 1, input | target | model, one row per area, 10-degree boxes, colours fitted to
                            the box (zoom_maps)
+    05z zooms              member 1, input | target | model, one page per area, one row per zoom level (simple
+                           smooth maps, eval/suite/simple_maps.py): close level = the tightest allowed, 230 output
+                           grid spacings wide (~1000 km at 4.4 km, ~2000 km at 9 km), then x2, x4 (rule 53)
     06 scores              fair CRPS, spread and spread/skill by lead against STATIONS, every headline variable
                            on one page (obs_points summary.csv); the target is a competitor row
     07 global tp           tp stills, input | target | model(s), one row per case (map_video)
