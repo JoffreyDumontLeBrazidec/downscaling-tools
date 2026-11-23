@@ -4,7 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def stitch(rows: list[list[Path]], out: Path, *, title: str | None = None, pad: int = 12) -> Path:
+def stitch(rows: list[list[Path]], out: Path, *, title: str | None = None, pad: int = 12,
+           top_align: bool = False) -> Path:
     """Rows of images -> one PNG. Images of a row are scaled to the row's smallest height, rows to one width."""
     from PIL import Image, ImageDraw
 
@@ -13,8 +14,11 @@ def stitch(rows: list[list[Path]], out: Path, *, title: str | None = None, pad: 
         ims = [Image.open(p).convert("RGB") for p in row if p and Path(p).exists()]
         if not ims:
             continue
-        h = min(im.height for im in ims)
-        ims = [im.resize((max(1, round(im.width * h / im.height)), h)) for im in ims]
+        if top_align:   # keep every image's scale; shorter ones (a one-panel target) sit at the top
+            h = max(im.height for im in ims)
+        else:
+            h = min(im.height for im in ims)
+            ims = [im.resize((max(1, round(im.width * h / im.height)), h)) for im in ims]
         w = sum(im.width for im in ims) + pad * (len(ims) - 1)
         canvas = Image.new("RGB", (w, h), "white")
         x = 0

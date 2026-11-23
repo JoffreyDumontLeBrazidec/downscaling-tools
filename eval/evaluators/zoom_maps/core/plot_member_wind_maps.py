@@ -124,13 +124,38 @@ def octahedral_name(n_points: int) -> str | None:
     return f"O{n}" if n > 0 and 4 * n * (n + 9) == int(n_points) else None
 
 
-def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int) -> tuple[dict[str, str], str]:
+# project names of the octahedral grids (lane names: 36 -> 9 km, 9 -> 4.4 km)
+GRID_KM = {320: "36 km", 640: "18 km", 1280: "9 km", 2560: "4.4 km"}
+
+
+def grid_from_lats(lat) -> str | None:
+    """Octahedral grid of a regional file from its latitude rows: O_N rows are about 90/N degrees apart,
+    snapped to the grids of the project (O320, O640, O1280, O2560); None when it cannot tell."""
+    if lat is None:
+        return None
+    rows = np.unique(np.round(np.asarray(lat, dtype=np.float64), 4))
+    if rows.size < 3:
+        return None
+    n = 90.0 / float(np.median(np.diff(rows)))
+    best = min(GRID_KM, key=lambda k: abs(np.log(n / k)))
+    return f"O{best}" if abs(np.log(n / best)) < 0.25 else None
+
+
+def grid_label(name: str) -> str:
+    """'O2560' -> 'O2560, 4.4 km' (the km of the project's grids), else the name."""
+    km = GRID_KM.get(int(name[1:])) if name[:1] == "O" and name[1:].isdigit() else None
+    return f"{name}, {km}" if km else name
+
+
+def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int, lat_lres=None,
+                 lat_hres=None) -> tuple[dict[str, str], str]:
     """Titles of the panels and the output grid name. The grid names come from the file's point
-    counts when the file is global, else the O320 -> O1280 defaults; '{lres}' and '{hres}' in a
-    --title are replaced by them."""
-    lres = octahedral_name(n_lres) or "O320"
-    hres = octahedral_name(n_hres) or "O1280"
-    user = {k: v.replace("{lres}", lres).replace("{hres}", hres) for k, v in user_titles.items()}
+    counts when the file is global, else from its latitude rows (a regional box), else the
+    O320 -> O1280 defaults; '{lres}' and '{hres}' in a --title are replaced by them (with the km)."""
+    lres = octahedral_name(n_lres) or grid_from_lats(lat_lres) or "O320"
+    hres = octahedral_name(n_hres) or grid_from_lats(lat_hres) or "O1280"
+    user = {k: v.replace("{lres}", grid_label(lres)).replace("{hres}", grid_label(hres))
+            for k, v in user_titles.items()}
     return {**default_titles(lres, hres), **user}, hres
 
 # Renderable fields. Each entry fixes the source weather states, the filename
@@ -818,6 +843,7 @@ def _render_grid(
 
     init_dt = datetime.strptime(date + time, "%Y%m%d%H%M")
     valid_dt = init_dt + timedelta(hours=step)
+    ncols = max(1, min(int(ncols), len(members)))   # one field (an analysis target) is one panel
     nrows = int(np.ceil(len(members) / float(ncols)))
     cmap, cbar_label = _style_for(spec, field)
     unit = variable_spec(spec["house_key"]).unit
@@ -850,22 +876,28 @@ def _render_grid(
             peak = (float(np.nanmax(g)) if field == "value" else float(np.nanmax(np.abs(g)))) \
                 if np.isfinite(g).any() else float("nan")
             peak_word = "max" if field == "value" else "max |value|"
-            ax.set_title(f"Member {member} ({peak_word} {peak:.1f} {unit})", fontsize=9)
+            ax.set_title(f"Member {member} ({peak_word} {peak:.1f} {unit})" if len(members) > 1
+                         else f"{peak_word} {peak:.1f} {unit}", fontsize=9)
         for ax in axes[len(members):]:
             ax.set_visible(False)
-        # y above 1 keeps the three title lines clear of the first row of panel
-        # titles; bbox_inches="tight" then crops back to the drawn extent.
-        fig.suptitle(
-            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, {len(members)} members\n"
-            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
-            + (f"\n{box_line}" if box_line else ""),
-            y=1.08 if box_line else 1.06,
-        )
         if mesh is not None:
             cbar = fig.colorbar(mesh, ax=axes.tolist(), orientation="horizontal",
                                 pad=0.04, aspect=50, fraction=0.05,
                                 extend=spec["extend"] if field == "value" else "both")
             cbar.set_label(cbar_label)
+        # the title sits just above the drawn top of the first row of panels (map, labels and panel
+        # title), not at a fixed fraction of a tall figure: no blank band under it
+        renderer = fig.canvas.get_renderer()
+        fig.canvas.draw()
+        h_px = fig.get_size_inches()[1] * fig.dpi
+        top = max(ax.get_tightbbox(renderer).y1 for ax in axes[:len(members)]) / h_px
+        fig.suptitle(
+            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}"
+            f"{f', {len(members)} members' if len(members) > 1 else ''}\n"
+            f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
+            + (f"\n{box_line}" if box_line else ""),
+            y=top + 0.08 / fig.get_size_inches()[1], va="bottom",
+        )
         save_figure(fig, out_path, close=True, dpi=_DPI[0])
 
 
@@ -906,14 +938,17 @@ def run_member_grid(args: argparse.Namespace) -> int:
         if not members:
             members = here
         if i == 0:
-            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size,
+                                        ds["lat_lres"].values, lat_h)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                input_res(ds["lat_lres"].values), here,
                                [_field(_member_slice(ds["x"], m), states, spec) for m in here]))
             if not args.no_truth:
-                panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, here,
-                               [_field(_member_slice(ds["y"], m), states, spec) for m in here]))
+                # one analysis copied into every member slot (iekm) is drawn once, not ten times
+                tm = here[:1] if is_single_field(ds["y"]) else here
+                panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, tm,
+                               [_field(_member_slice(ds["y"], m), states, spec) for m in tm]))
         panels.append((key, lat_h, lon_h, DEFAULT_HRES_RES, here,
                        [_field(_member_slice(ds["y_pred"], m), states, spec) for m in here]))
 
@@ -986,7 +1021,8 @@ def run(args: argparse.Namespace) -> int:
         states = [str(s) for s in ds["weather_state"].values]
         lat_h, lon_h = ds["lat_hres"].values, ds["lon_hres"].values
         if i == 0:
-            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size)
+            titles, hres = panel_titles(user_titles, ds["lat_lres"].size, lat_h.size,
+                                        ds["lat_lres"].values, lat_h)
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                _field(_member_slice(ds["x"], args.member), states, spec),
