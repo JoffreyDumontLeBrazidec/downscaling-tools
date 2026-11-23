@@ -7,6 +7,13 @@
 #   EMA_TAG  which weights are read [ema2000]
 # Optional environment: EMA_FILE and RAW_FILE (the two export files, when they are not under RUN_DIR with the usual names),
 # XSET_SCHED_JSON and XSET_SAMPLER_JSON (a sampler other than the 30-step standard; recorded in every file).
+# Autoguidance (20 Nov 2026): XSET_AG_FILE = EMA export of an EARLIER step of the same run (the weak model),
+# XSET_AG_W = weight of every output [1.0 = off], XSET_AG_WMAP = JSON {"msl": 1.3, ...} per-output weights that win over
+# XSET_AG_W. D' = D + (w - 1) (D - D_weak) at every sampler call; two network calls per step, so a row costs about twice.
+# SCREEN-TC (21 Nov 2026, audit note epics/misc/20261121_information_gain_audit.md s8): XSET_SCREEN=TC defines a SCREEN
+# row = the 22 cyclone dates (tag TC or both) x members 1-5 x 6 leads (132 files, about 26 GH200-h). A screen row name
+# must end in _SCRTC and a full row name must not, so every file, score and read of a screen says it is one. A screen
+# flags "worth a full row"; it never enters a verdict or a paper table.
 # Writes XOUT/rowdefs/<ROW>.env with the files, the sha256 and the modification time of the weights. Defining the same
 # row again with the same export is a no-op; with another export it is refused (take a new row name).
 set -euo pipefail
@@ -16,6 +23,10 @@ row=${1:?row}; model=${2:?model}; step=${3:?step}; tag=${4:-ema2000}
 CK=/e/data1/jureap-data/ecmwf/users/jdumont/outputs
 DEVR=/e/home/jusers/dumontlebrazidec1/jupiter/dev
 XOUT=${XSET_JOUT:-$CK/xset1_20261116}
+scr=${XSET_SCREEN:-}
+[[ -z "$scr" || $scr == TC ]] || { echo "FATAL XSET_SCREEN=$scr (only TC exists)"; exit 2; }
+if [[ $scr == TC ]]; then [[ $row == *_SCRTC ]] || { echo "FATAL a SCREEN-TC row name ends in _SCRTC ($row)"; exit 2; }
+else [[ $row != *_SCRTC ]] || { echo "FATAL $row ends in _SCRTC but XSET_SCREEN is not TC"; exit 2; }; fi
 case "$row" in GL512_500k|GL512_450k|GL512_237k|REG_GL512_30k|REG_GL512_20k) echo "ROW_DEFINED $row (first row, fixed in xset_runs.sh)"; exit 0 ;; esac
 [[ $row != ENS9 && $row != INPUT && $row != CF9 ]] || { echo "FATAL '$row' is a reference row"; exit 2; }
 [[ -f $HERE/models/$model.env ]] || { echo "FATAL no model file $HERE/models/$model.env (copy models/TEMPLATE.env)"; exit 3; }
@@ -36,8 +47,16 @@ new=$(mktemp)
   echo "MODEL=$model"; echo "CKPT_STEP=$step"; echo "EMA_TAG=$tag"
   printf 'EMA_FILE=%q\nRAW_FILE=%q\n' "$ema" "$raw"
   echo "EMA_SHA256=$sha"
+  [[ $scr == TC ]] && echo "XSET_SCREEN=TC"
   [[ -n "${XSET_SCHED_JSON:-}" ]] && printf 'XSET_SCHED_JSON=%q\n' "$XSET_SCHED_JSON"
   [[ -n "${XSET_SAMPLER_JSON:-}" ]] && printf 'XSET_SAMPLER_JSON=%q\n' "$XSET_SAMPLER_JSON"
+  if [[ -n "${XSET_AG_FILE:-}" ]]; then
+    [[ -f "$XSET_AG_FILE" ]] || { echo "FATAL autoguidance weak file $XSET_AG_FILE not found" >&2; exit 4; }
+    [[ "$XSET_AG_FILE" != "$ema" ]] || { echo "FATAL the autoguidance weak file is the row's own weights" >&2; exit 4; }
+    printf 'XSET_AG_FILE=%q\n' "$XSET_AG_FILE"; echo "XSET_AG_SHA256=$(sha256sum "$XSET_AG_FILE" | cut -d' ' -f1)"
+    printf 'XSET_AG_W=%q\n' "${XSET_AG_W:-1.0}"
+    [[ -n "${XSET_AG_WMAP:-}" ]] && printf 'XSET_AG_WMAP=%q\n' "$XSET_AG_WMAP"
+  fi
   true
 } > "$new"
 mkdir -p $XOUT/rowdefs
@@ -48,4 +67,4 @@ if [[ -f $def ]]; then
 fi
 { cat "$new"; echo "# defined $(date -u +%FT%TZ) kit $(git -C "$HERE" rev-parse --short HEAD 2>/dev/null || echo unknown); weights modified $(date -u -r "$ema" +%FT%TZ), $(stat -c %s "$ema") bytes"; } > "$def"
 rm -f "$new"
-echo "ROW_DEFINED $row model=$model step=$step $tag sha256=${sha:0:16} $def"
+echo "ROW_DEFINED $row model=$model step=$step $tag${scr:+ SCREEN-$scr} sha256=${sha:0:16} $def"

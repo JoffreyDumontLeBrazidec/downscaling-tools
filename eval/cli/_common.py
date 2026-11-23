@@ -36,6 +36,7 @@ GROUP_TITLES = {
     "tc_tracks": "Tropical cyclone tracks",
     "observations": "Observations (reference caches, runs compared against observations)",
     "figures": "Figures",
+    "final": "Final-model battery (completely trained models only; never part of a development read)",
     "maintenance": "Maintenance",
     "retired": "Retired (each prints where the tool went and exits with status 1)",
 }

@@ -69,6 +69,27 @@ maximum wind. Member k of INPUT is the input of member k of a model row and has 
   --row GL512_450k=W/scores/GL512_450k --out W/tc_lead_read/tc_lead_read.md` (pandas; seconds). Tables per lead: means,
   what each row adds to its input member, the same by class of input wind, pairing of members between rows, structure.
 
+## SCREEN-TC: the standard screen (21 Nov 2026)
+
+Adopted by the owner 21 Nov 2026 15:13 UTC; calibration in docs `epics/misc/20261121_information_gain_audit.md` s8.
+A screen row = the 22 cyclone dates (tag TC or both) x members 1-5 x 6 leads = 132 files, about 26 GH200-h (3 Jupiter
+jobs of 8, 8, 6 dates). It FLAGS whether an arm is worth a full row; it never gives a verdict and never enters a table,
+scoreboard or paper (rules 46, 48).
+
+    bash $K/xset_row.sh <ROW> <MODEL> <STEP> --screen [--kind sampler] [--table "GL512_450k OTHER_FULL_ROW"]
+
+- The row name gets the suffix `_SCRTC` (added if missing); its definition carries `XSET_SCREEN=TC`, so the draw
+  (MEMBERS=5), the state (`need=132`) and every output folder say it is a screen. A full row cannot take that suffix.
+- Members 1-5 of a screen row use the same rule-31 seeds as members 1-5 of a full row of the same export (proof below).
+- Scoring: `xset_score.sbatch <ROW> screen` = cyclone cases only (no stations: 5-member station scores gave wrong-sign
+  calls on the 2023 set; no IMERG; no tail check).
+- Read: `xset_screen_read.py` against the `--table` rows (full rows, cut to members 1-5; default GL512_450k), ENS9 and
+  INPUT levels for context: pmin and wind fair CRPS against IBTrACS, paired case mean, delete-one-storm jackknife SE,
+  MDE, call (|d| > 2.8 SE and > line; line 0.4 hPa / 0.3 m/s training, 0 sampler). Output `A/screen_<ROW>/screen_read.md`
+  with a SCREEN FLAG line: WORTH A FULL ROW / NOT WORTH A FULL ROW / MIXED / NO CALL; a screen with fewer than 22
+  dates says PARTIAL and gives no flag. Expected MDE (s8): 0.63 hPa / 0.44 m/s training, 0.28 / 0.11 sampler.
+- `XSET_DRYRUN=1 bash jupiter/xset_submit_row.sh <ROW>` prints the date groups and submits nothing.
+
 ## Lessons of the first cluster runs (17 Nov 2026)
 
 - Start `xset_row.sh` detached (`setsid nohup bash K/xset_row.sh ... > W/logs/xset_row_<ROW>.log 2>&1 &`): the copy of a

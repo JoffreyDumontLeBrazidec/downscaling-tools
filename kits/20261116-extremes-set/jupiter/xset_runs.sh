@@ -11,8 +11,9 @@ XK=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-ex
 XKIT=$XK/downscaling-tools/kits/20261116-extremes-set
 XOUT=${XSET_JOUT:-$CK/xset1_20261116}
 row=${1:?row}
-unset RUN_DIR_ROW MODEL_LABEL_ROW; export SAMPLER_MODE=edm
+unset RUN_DIR_ROW MODEL_LABEL_ROW RAW_STEP_ROW; export SAMPLER_MODE=edm
 unset VENV DATASETS_REPO EXTRA_OVERRIDES ANCHOR XSET_SCHED_JSON XSET_SAMPLER_JSON EMA_SHA256
+unset XSET_AG_FILE XSET_AG_SHA256 XSET_AG_W XSET_AG_WMAP XSET_SCREEN
 if [[ -f $XOUT/rowdefs/$row.env ]]; then
   source $XOUT/rowdefs/$row.env                    # MODEL CKPT_STEP EMA_TAG EMA_FILE RAW_FILE [XSET_SCHED_JSON XSET_SAMPLER_JSON]
   [[ -f $XKIT/jupiter/models/$MODEL.env ]] || { echo "FATAL row '$row': no model file jupiter/models/$MODEL.env"; return 1; }
@@ -22,7 +23,7 @@ if [[ -f $XOUT/rowdefs/$row.env ]]; then
   done
   export CKPT_STEP RUN_DIR CFG_DIR CFG_NAME EMA_TAG EMA_FILE RAW_FILE EXPECT_CODE CODE_ROOT CODE_SHA_FILE DATASETS_SHA_FILE
   export MODEL_LABEL=${MODEL_NAME}_${EMA_TAG} XSET_MODEL=$MODEL
-  for v in VENV DATASETS_REPO EXTRA_OVERRIDES ANCHOR XSET_SCHED_JSON XSET_SAMPLER_JSON; do
+  for v in VENV DATASETS_REPO EXTRA_OVERRIDES ANCHOR XSET_SCHED_JSON XSET_SAMPLER_JSON XSET_AG_FILE XSET_AG_SHA256 XSET_AG_W XSET_AG_WMAP; do
     if [[ -n "${!v:-}" ]]; then export $v; fi
   done
 else
@@ -33,15 +34,21 @@ else
     # regression baseline of the paper (17 Nov 2026, kits/20261117-baselines/reg): GL512 450k warm start, training_approach
     # deterministic (sigma 5e5), 30k steps on 4,000 km caps; read with ONE denoiser call (SAMPLER_MODE=det). Built from
     # GL512's config and code (same class and 10 outputs): only the weights differ.
-    REG_GL512_30k) export CKPT_STEP=30000 SAMPLER_MODE=det MODEL_LABEL_ROW=reg_gl512_450k_det_ema2000 RUN_DIR_ROW=/e/data1/jureap-data/ecmwf/users/jdumont/sandbox/20261117-regression-baseline/chains/reg_gl512_450k_det ;;
-    REG_GL512_20k) export CKPT_STEP=20000 SAMPLER_MODE=det MODEL_LABEL_ROW=reg_gl512_450k_det_ema2000 RUN_DIR_ROW=/e/data1/jureap-data/ecmwf/users/jdumont/sandbox/20261117-regression-baseline/chains/reg_gl512_450k_det ;;
+    # Chain root _r2 = the run that passed the gate (job 2968869, run b8f583a2, 30k steps, 18 Nov 2026); the first root
+    # (job 2964697) failed the gate at step 200 and holds no export. Only the last raw by-step file is kept (30k): the
+    # 20k row builds its trainer from it (same network), then loads its own EMA-2000 weights strictly.
+    REG_GL512_30k) export CKPT_STEP=30000 SAMPLER_MODE=det MODEL_LABEL_ROW=reg_gl512_450k_det_ema2000 RUN_DIR_ROW=/e/data1/jureap-data/ecmwf/users/jdumont/sandbox/20261117-regression-baseline/chains/reg_gl512_450k_det_r2 ;;
+    REG_GL512_20k) export CKPT_STEP=20000 SAMPLER_MODE=det MODEL_LABEL_ROW=reg_gl512_450k_det_ema2000 RUN_DIR_ROW=/e/data1/jureap-data/ecmwf/users/jdumont/sandbox/20261117-regression-baseline/chains/reg_gl512_450k_det_r2 RAW_STEP_ROW=030000 ;;
     *) echo "FATAL unknown row '$row': no $XOUT/rowdefs/$row.env (define it with xset_define_row.sh or xset_row.sh)"; return 1 ;;
   esac
   unset EMA_FILE RAW_FILE
+  if [[ -n "${RAW_STEP_ROW:-}" ]]; then export RAW_FILE=$(ls ${RUN_DIR_ROW}/*/anemoi-by_step-epoch_*-step_${RAW_STEP_ROW}.ckpt 2>/dev/null | head -1); fi
   export RUN_DIR=${RUN_DIR_ROW:-$CK/checkpoint_nm50_global/db_global_512_300k} CFG_DIR=$DEVR/db_global_20261027/configs CFG_NAME=db_global_512_300k
   export EMA_TAG=ema2000 MODEL_LABEL=${MODEL_LABEL_ROW:-db_global_512_300k_ema2000} XSET_MODEL=GL512
   export EXPECT_CODE=db_global_20261027/code/anemoi-core CODE_ROOT=/e/data1/jureap-data/ecmwf/users/jdumont/db_global_20261027/code/anemoi-core
   export CODE_SHA_FILE=$DEVR/db_global_20261027/CODE_PIN DATASETS_SHA_FILE=$DEVR/db_global_20261027/DATASETS_PIN
 fi
 export ROW_LABEL=$row MEMBERS=${MEMBERS:-10}
+# SCREEN-TC row (xset_define_row.sh): members 1-5 only, always (same rule-31 seeds as members 1-5 of a full row)
+if [[ ${XSET_SCREEN:-} == TC ]]; then export XSET_SCREEN MEMBERS=5; fi
 export XSET_IN=$XK/stores/in XSET_TEMPLATE=$XOUT/rows/ENS9 XSET_HIST=$XOUT/hist OUTDIR=$XOUT/rows/$row

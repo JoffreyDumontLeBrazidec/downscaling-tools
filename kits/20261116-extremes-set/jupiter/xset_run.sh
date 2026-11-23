@@ -19,6 +19,10 @@ raw=${RAW_FILE:-$(ls $RUN_DIR/*/anemoi-by_step-epoch_*-step_$S6.ckpt 2>/dev/null
 if [[ -n "${EMA_SHA256:-}" ]]; then
   [[ "$(sha256sum "$ema" | cut -d' ' -f1)" == "$EMA_SHA256" ]] || { echo "FATAL $ema changed since the row was defined (sha256)"; exit 8; }
 fi
+if [[ -n "${XSET_AG_FILE:-}" ]]; then
+  [[ -f "$XSET_AG_FILE" && "$(sha256sum "$XSET_AG_FILE" | cut -d' ' -f1)" == "${XSET_AG_SHA256:-}" ]] || { echo "FATAL autoguidance weak file $XSET_AG_FILE missing or changed since the row was defined (sha256)"; exit 8; }
+  echo "[xset] autoguidance weak=$XSET_AG_FILE w=${XSET_AG_W:-1.0} map=${XSET_AG_WMAP:-}"
+fi
 export EMA_FILE=$ema RAW_FILE=$raw
 [[ "$OUTDIR" == "$XOUT"/* ]] || { echo "FATAL OUTDIR $OUTDIR"; exit 9; }
 echo "[xset] row=$1 mode=$MODE step=$CKPT_STEP ema=$ema sha256=$(sha256sum $ema | cut -c1-16) raw=$raw cases=$CASES members=$MEMBERS outdir=$OUTDIR kit=$(git -C $XK/downscaling-tools rev-parse --short HEAD) code=$CODE_ROOT@$(git -C $CODE_ROOT rev-parse --short HEAD) $(date -u +%FT%TZ)"
