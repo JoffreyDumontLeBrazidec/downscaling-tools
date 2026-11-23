@@ -27,9 +27,9 @@ paired); the panel is labelled "Operational ENFO" accordingly.
 The O1280 panels (truth, model, and O1280 GRIB panels) are drawn on the native
 grid points with a triangulation and Gouraud shading, so a zoomed map shows no
 grid-cell blocks; the O320 input panel keeps its nearest-neighbour cells, whose
-coarseness is the point of showing it. A map box smaller than ``MIN_SPAN_DEG``
-is widened around its centre, and the box actually drawn is printed and written
-in the figure title.
+coarseness is the point of showing it. The map box is drawn exactly as requested
+(owner, 23 Nov 2026: no minimum size); ``--min-span`` widens a smaller box around
+its centre only when asked, and the box drawn is then printed and written in the title.
 
 ``--layout scales`` and ``--layout fronts`` (``scale_maps.py``) draw the large-scale /
 fine-scale split of the residuals against the input and the classic trough and front
@@ -69,13 +69,11 @@ LAT_LOOKUP_SCALE = 1.4
 # carry; that leakage is inherited correctly by both truth and model, so it
 # biases a truth-versus-model contrast towards agreement, never away from it.
 DEFAULT_FINE_CUT_DEG = 0.6
-# Smallest map drawn, in degrees of latitude (about 1330 km), in both directions:
-# the east-west span is widened to MIN_SPAN_DEG / cos(central latitude) degrees
-# of longitude. Below this an O1280 cell (about 9 km) covers ten or more pixels
-# and the map shows grid cells rather than weather. The texture regions' west
-# tropical Atlantic box (15 x 25 deg) is above it; the Alps box (6 x 12 deg) is
-# widened around its centre.
-MIN_SPAN_DEG = 12.0
+# Smallest map drawn, in degrees of latitude, when --min-span is given. Default 0:
+# the requested box is drawn as it is (owner, 23 Nov 2026: "i dont want necessarily
+# 12 degrees minimum please remove this enforcement"). The smooth (Gouraud) drawing
+# shows no grid cells at any zoom; only --cells shows them.
+MIN_SPAN_DEG = 0.0
 # Triangles longer than this multiple of the median edge bridge a gap in the
 # source points (for example the edge of a local domain) and are not drawn.
 MAX_EDGE_RATIO = 6.0
@@ -289,9 +287,8 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     p.add_argument("--output-dir", required=True, help="Directory for the PNGs and manifest.")
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
     p.add_argument("--min-span", type=float, default=MIN_SPAN_DEG,
-                   help=f"Smallest map span in degrees of latitude; a smaller --extent is widened to it "
-                        f"(default: {MIN_SPAN_DEG:g}). Lower it, for example to 3, for a close-up in which "
-                        "single grid cells are visible with --cells.")
+                   help="Optional smallest map span in degrees of latitude: a smaller --extent is widened "
+                        "to it around its centre. Default 0: the box is drawn exactly as requested.")
     p.add_argument("--dpi", type=int, default=RENDER_DPI,
                    help=f"PNG resolution (default {RENDER_DPI}); 300 doubles the pixels of every panel.")
     p.add_argument("--cells", action="store_true", default=False,
@@ -375,7 +372,7 @@ def widen_extent(
     that crosses the dateline (lon_min > lon_max), is returned unchanged.
     """
     lon_min, lon_max, lat_min, lat_max = (float(v) for v in extent)
-    if lon_min > lon_max:
+    if lon_min > lon_max or not min_span_deg or min_span_deg <= 0:
         return (lon_min, lon_max, lat_min, lat_max)
     lat_c = 0.5 * (lat_min + lat_max)
     lat_half = max(0.5 * (lat_max - lat_min), 0.5 * min_span_deg)
@@ -410,12 +407,12 @@ def box_text(extent: tuple[float, float, float, float]) -> str:
 def resolve_extent(args: argparse.Namespace) -> tuple[tuple[float, float, float, float], str]:
     """(extent drawn, title line) for the requested --extent, printing what is used.
 
-    The requested box is widened to ``MIN_SPAN_DEG`` when it is smaller. The
+    The requested box is drawn as given, unless --min-span asks to widen a smaller one. The
     projection centre defaults to the centre of the box drawn, so a box far from
     Europe is not drawn on a cone centred on Europe.
     """
     requested = tuple(float(v) for v in args.extent)
-    min_span = float(getattr(args, "min_span", None) or MIN_SPAN_DEG)
+    min_span = float(getattr(args, "min_span", None) or 0.0)
     extent = widen_extent(requested, min_span)
     line = f"map box {box_text(extent)}"
     if extent != requested:

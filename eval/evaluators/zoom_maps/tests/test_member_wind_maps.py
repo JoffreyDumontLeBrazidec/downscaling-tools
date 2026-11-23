@@ -153,17 +153,23 @@ def test_nearest_grid_raises_outside_extent():
         )
 
 
-def test_widen_extent_keeps_a_large_box_and_widens_a_small_one_around_its_centre():
+def test_widen_extent_draws_the_box_as_requested_by_default():
+    # owner, 23 Nov 2026: no minimum map size unless --min-span asks for one
+    assert MIN_SPAN_DEG == 0.0
+    for box in [(-70.0, -45.0, 10.0, 25.0), (4.0, 16.0, 43.0, 49.0), (10.0, 12.0, 46.0, 47.0)]:
+        assert widen_extent(box) == box
+
+
+def test_widen_extent_with_a_min_span_widens_a_small_box_around_its_centre():
     wta = (-70.0, -45.0, 10.0, 25.0)
-    assert widen_extent(wta) == wta
-    alps = widen_extent((4.0, 16.0, 43.0, 49.0))
-    lon_min, lon_max, lat_min, lat_max = alps
+    assert widen_extent(wta, 12.0) == wta
+    lon_min, lon_max, lat_min, lat_max = widen_extent((4.0, 16.0, 43.0, 49.0), 12.0)
     assert (lat_min, lat_max) == (40.0, 52.0)
     assert 0.5 * (lon_min + lon_max) == pytest.approx(10.0, abs=0.01)
     # east-west span measured in degrees of latitude at the centre (46 N)
-    assert (lon_max - lon_min) * np.cos(np.radians(46.0)) == pytest.approx(MIN_SPAN_DEG, abs=0.02)
+    assert (lon_max - lon_min) * np.cos(np.radians(46.0)) == pytest.approx(12.0, abs=0.02)
     # a box that crosses the dateline is left alone
-    assert widen_extent((170.0, -170.0, 0.0, 5.0)) == (170.0, -170.0, 0.0, 5.0)
+    assert widen_extent((170.0, -170.0, 0.0, 5.0), 12.0) == (170.0, -170.0, 0.0, 5.0)
 
 
 def test_resolve_extent_centres_the_projection_on_the_box_drawn(capsys):
@@ -172,10 +178,20 @@ def test_resolve_extent_centres_the_projection_on_the_box_drawn(capsys):
          "--extent", "-76", "-64", "22", "34"]
     )
     extent, line = resolve_extent(args)
-    assert extent[2:] == (22.0, 34.0)
+    assert extent == (-76.0, -64.0, 22.0, 34.0)   # drawn as requested, no widening
     assert args.proj_lon == pytest.approx(-70.0) and args.proj_lat == pytest.approx(28.0)
-    assert line.startswith("map box ") and "widened from 76.0–64.0°W, 22.0–34.0°N" in line
+    assert line.startswith("map box ") and "widened" not in line
     assert "extent used" in capsys.readouterr().out
+
+
+def test_resolve_extent_widens_only_when_min_span_is_given():
+    args = build_arg_parser().parse_args(
+        ["--date", "20230828", "--step", "24", "--output-dir", "/tmp/x",
+         "--extent", "-76", "-64", "22", "34", "--min-span", "12"]
+    )
+    extent, line = resolve_extent(args)
+    assert extent[2:] == (22.0, 34.0)
+    assert "widened from 76.0–64.0°W, 22.0–34.0°N" in line
 
 
 def test_box_text_names_hemispheres():
