@@ -287,6 +287,10 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--output-dir", required=True, help="Directory for the PNGs and manifest.")
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
+    p.add_argument("--cells", action="store_true", default=False,
+                   help="Real resolution: draw every panel as its own grid cells (nearest neighbour on a fine "
+                        "raster) instead of blending between grid points, so a 9 km input shows 9 km cells "
+                        "beside 4 km cells of the target and the model.")
     p.add_argument("--no-truth", action="store_true", default=False, help="Skip the enfo (embedded truth) panel.")
     p.add_argument("--extent", nargs=4, type=float, default=list(DEFAULT_EXTENT), metavar=("LONMIN", "LONMAX", "LATMIN", "LATMAX"), help=f"Map extent (default: {DEFAULT_EXTENT}).")
     p.add_argument("--variable", choices=sorted(VARIABLES), default="wind10m",
@@ -499,8 +503,14 @@ def native_triangulation(
     return tri, [v[keep] for v in vals]
 
 
+def cells_res(extent) -> float:
+    """Raster step of the --cells drawing: fine enough that every source grid point
+    (4 km apart at O2560) shows as its own cell, capped at about 4000 columns."""
+    return max(0.01, (float(extent[1]) - float(extent[0]) + 2 * DEFAULT_MARGIN) / 4000.0)
+
+
 def _source_layers(
-    ax, *, lat, lon, values, res, extent, field, fine_cut_deg,
+    ax, *, lat, lon, values, res, extent, field, fine_cut_deg, cells=False,
 ) -> list[tuple]:
     """What to draw for one source, one layer per value array.
 
@@ -509,7 +519,12 @@ def _source_layers(
     The O320 input stays a nearest-neighbour mesh on purpose, so its coarse cells
     remain visible.
     """
-    if res < DEFAULT_LRES_RES:
+    if cells:
+        # Real resolution: every source is resampled nearest-neighbour onto one fine
+        # raster, so each grid point is drawn as its own cell (9 km cells for an O1280
+        # input, 4 km cells for an O2560 field) and nothing is blended between points.
+        res = cells_res(extent)
+    elif res < DEFAULT_LRES_RES:
         tri, vals = native_triangulation(ax, lat, lon, values, extent=extent, field=field,
                                          fine_cut_deg=fine_cut_deg, res=res)
         return [("tri", tri, v) for v in vals]
@@ -653,6 +668,7 @@ def _render(
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
     box_line: str = "",
+    cells: bool = False,
 ) -> None:
     """One map panel, written as ``out_path`` (PNG, 150 dpi) plus a PDF sibling."""
     import matplotlib
@@ -670,7 +686,7 @@ def _render(
         ax = fig.add_subplot(1, 1, 1, projection=_projection(extent, proj_lon, proj_lat))
         ax.set_extent(extent, crs=ccrs.PlateCarree())
         (layer,) = _source_layers(ax, lat=lat, lon=lon, values=[val], res=res, extent=extent,
-                                  field=field, fine_cut_deg=fine_cut_deg)
+                                  field=field, fine_cut_deg=fine_cut_deg, cells=cells)
         mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_extent(extent, crs=ccrs.PlateCarree())  # drawing may have autoscaled the view
         add_geography(ax, coast_lw=0.9, label_size=8)
@@ -739,6 +755,7 @@ def _render_grid(
     field: str = "value",
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
     box_line: str = "",
+    cells: bool = False,
     scored_bounds=None,
 ) -> None:
     """One figure holding every member of a single source on a shared colour scale.
@@ -774,7 +791,7 @@ def _render_grid(
         # Every panel shares the projection and extent, so one set of layers
         # (one triangulation for a native source) serves all members.
         layers = _source_layers(axes[0], lat=lat, lon=lon, values=values, res=res,
-                                extent=extent, field=field, fine_cut_deg=fine_cut_deg)
+                                extent=extent, field=field, fine_cut_deg=fine_cut_deg, cells=cells)
         mesh = None
         for i, (ax, member, layer) in enumerate(zip(axes, members, layers)):
             mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
@@ -869,6 +886,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             lat=lat, lon=lon, res=res, extent=extent, spec=spec, vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat, ncols=int(args.grid_cols),
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
+            cells=bool(args.cells),
             scored_bounds=scored_bounds,
         )
         outputs.append(str(out_path))
@@ -954,6 +972,7 @@ def run(args: argparse.Namespace) -> int:
             vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
+            cells=bool(args.cells),
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
