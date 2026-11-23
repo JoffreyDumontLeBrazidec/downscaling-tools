@@ -1,8 +1,9 @@
 """Zoom maps (called membermaps until 2026-09-29): EEFO input / ENFO truth / prediction arms.
 
 Renders 10 m wind speed by default; ``--variable`` also takes ``msl`` (mean
-sea level pressure), ``2t`` (2 m temperature), ``t_850`` (850 hPa temperature)
-and ``z_500`` (500 hPa geopotential height) from the same files. See
+sea level pressure), ``2t`` (2 m temperature), ``t_850`` (850 hPa temperature),
+``z_500`` (500 hPa geopotential height) and ``tp`` (total precipitation, mm per
+accumulation window) from the same files. See
 ``VARIABLES`` for the field table.
 
 Renders the member-level case-inspection map set (one PNG per panel, shared
@@ -124,7 +125,7 @@ def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int) -> tuple
 # below): msl in hPa, z_500 in dam, temperatures in K, wind in m s-1. The fixed
 # colour ranges are given in those display units. "wind10m" keeps the original
 # token and 0-25 m s-1 scale.
-_VARIABLE_KEYS = {"wind10m": "10ff", "msl": "msl", "2t": "2t", "t_850": "t_850", "z_500": "z_500"}
+_VARIABLE_KEYS = {"wind10m": "10ff", "msl": "msl", "2t": "2t", "t_850": "t_850", "z_500": "z_500", "tp": "tp"}
 
 VARIABLES: dict[str, dict] = {
     "wind10m": {
@@ -178,6 +179,18 @@ VARIABLES: dict[str, dict] = {
         "vmax": 592.0,
         "extend": "both",
         "fine_vmax": 0.3,
+    },
+    "tp": {
+        # Total precipitation of the file's accumulation window (6 h at o2560, 12 h at o1280), in mm.
+        # 0-30 mm keeps intense cells readable; heavier values saturate (extend max). The house rain
+        # map (cmocean rain, rule 25) is white at zero, so dry ground stays white.
+        "states": ("tp",),
+        "combine": "single",
+        "token": "tp",
+        "vmin": 0.0,
+        "vmax": 30.0,
+        "extend": "max",
+        "fine_vmax": 5.0,
     },
 }
 

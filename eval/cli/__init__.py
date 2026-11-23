@@ -11,7 +11,7 @@ Groups (see ``python -m eval.cli --help``):
     comparison   evolution
     tc_tracks    tctracker, tccompare
     observations obs (fetch, compare, ...)
-    figures      zoom_maps, map_video, spectra
+    figures      zoom_maps, map_video, spectra, suite
     final        final_battery (completely trained models only; refuses without --final-model), verdict
     maintenance  prepml-cleanup, config
     retired      membermaps (renamed zoom_maps), report, videogen: tombstones
@@ -31,7 +31,7 @@ from eval.cli._common import ALL_EVALUATORS, DEFAULT_HOST, GROUP_TITLES, Command
 # Modules that publish commands, in the order they appear in the help.
 _COMMAND_MODULES = (
     "discover", "run", "predict", "prepare", "evaluate", "judge", "scoreboard",
-    "evolution", "tctracker", "tccompare", "obs", "zoom_maps", "map_video", "spectra",
+    "evolution", "tctracker", "tccompare", "obs", "zoom_maps", "map_video", "spectra", "suite",
     "final_battery", "verdict", "prepml_cleanup", "lane_config", "retired",
 )
 

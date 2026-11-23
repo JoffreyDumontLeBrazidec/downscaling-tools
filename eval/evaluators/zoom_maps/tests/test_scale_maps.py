@@ -152,7 +152,7 @@ def test_fronts_layout_writes_one_figure(tmp_path, no_geography):
 def test_unknown_scale_row_is_refused(tmp_path):
     args = build_arg_parser().parse_args([
         "--layout", "scales", "--run", f"A={tmp_path}", "--date", "20231031", "--step", "24",
-        "--scale-rows", "wind10m,tp", "--output-dir", str(tmp_path)])
+        "--scale-rows", "wind10m,bogus", "--output-dir", str(tmp_path)])
     with pytest.raises(SystemExit, match="unknown variable"):
         run(args)
 
