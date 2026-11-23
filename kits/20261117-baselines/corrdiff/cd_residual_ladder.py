@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CorrDiff baseline: residual ladder of regression checkpoints. For each checkpoint (eval mode, fp32, TF32 off, the
 model-loading and regression_step pattern of cd_predict.py) and the same N training rows and N validation rows (default
-48 each, N/6 per lead 12..72 h, spread evenly over the split; deterministic), the root mean square of the residual
+48 each, N/6 per lead 12..72 h, spread evenly in valid time over the split; deterministic), the root mean square of the residual
 target - regression output in normalised units (the field the diffusion learns; its sigma_data is 0.5), per output
 variable: training rows, validation rows, and validation rows per lead time.
 
@@ -50,14 +50,15 @@ def part_name(p):
 
 
 def pick(ds, n):
-    """n rows of ds: n / 6 per lead, evenly spread over the split's rows of that lead."""
-    from cd_dataset import spread_index
+    """n rows of ds: n / 6 per lead, evenly spread in valid time over the split's rows of that lead, each lead offset by
+    a sixth of the spacing (so the leads do not share their start dates)."""
     per = n // len(LEADS)
     idx = []
-    for L in LEADS:
-        rows = [i for i, s in enumerate(ds.steps) if s == L]
-        idx += [rows[j] for j in spread_index(len(rows), per)]
-    return sorted(idx)
+    for j, L in enumerate(LEADS):
+        rows = sorted((i for i, s in enumerate(ds.steps) if s == L), key=lambda i: ds.valid[i])
+        step = len(rows) / per
+        idx += [rows[min(int((k + j / len(LEADS)) * step), len(rows) - 1)] for k in range(per)]
+    return sorted(set(idx))
 
 
 def cmd_run(a):
