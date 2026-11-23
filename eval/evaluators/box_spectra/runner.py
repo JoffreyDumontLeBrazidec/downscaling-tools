@@ -187,6 +187,7 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
     smp = spec = smp_in = spec_in = None
     meta: dict = {}
     input_sources: set[str] = set()
+    truth_missing: set[str] = set()
     resid_refs: set[str] = set()
     for pf in files:
         f = _File(pf.path)
@@ -231,6 +232,9 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
             # the model residual of member k against its own interpolated input when the file carries one per
             # member; the truth residual against x_interp (y is the control or single truth, x_interp its input)
             has_xi = "x_interp" in f.ds.variables
+            has_y = "y" in f.ds.variables
+            if not has_y:
+                truth_missing.add(Path(pf.path).name)
             ref_name = "x_interp_members" if "x_interp_members" in f.ds.variables else ("x_interp" if has_xi else None)
             if not has_xi and not f.native:
                 raise ValueError(f"{pf.path}: neither x_interp nor a native x; no input to compare with")
@@ -247,8 +251,10 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                         if _v in clip_nonnegative:   # rule 7: negative precipitation clipped
                             full[idx] = np.maximum(full[idx], 0.0)
                         return smp(full)
-                    y, yp = grid("y"), grid("y_pred")
-                    Fy, Fp = spec.fft(y), spec.fft(yp)
+                    Fp = spec.fft(grid("y_pred"))
+                    # files without a truth (global rows of a period with no 4 km run on disk): the truth,
+                    # true-residual and coherence columns are NaN; the model and input rows remain
+                    Fy = spec.fft(grid("y")) if has_y else None
                     if has_xi:
                         Fx = spec.fft(grid("x_interp"))
                         Fxm = Fx if ref_name == "x_interp" else spec.fft(grid(ref_name))
@@ -267,11 +273,11 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                         p_in = spec.power(Fx)
                         input_sources.add("x_interp (input interpolated to the output grid)")
                     nan = np.full_like(spec.power(Fp), np.nan)
-                    terms = {"pred": spec.power(Fp), "truth": spec.power(Fy),
+                    terms = {"pred": spec.power(Fp), "truth": spec.power(Fy) if has_y else nan,
                              "interp": p_in,
                              "resid_pred": spec.power(Fp - Fxm) if Fxm is not None else nan,
-                             "resid_true": spec.power(Fy - Fx) if Fx is not None else nan,
-                             "pred_x_truth": spec.cross(Fp, Fy)}
+                             "resid_true": spec.power(Fy - Fx) if (Fx is not None and has_y) else nan,
+                             "pred_x_truth": spec.cross(Fp, Fy) if has_y else nan}
                     for scope in ("all", pf.date):
                         acc = sums.setdefault((scope, var), {t: 0.0 for t in TERMS})
                         for t in TERMS:
@@ -281,6 +287,10 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
         finally:
             f.close()
     meta["input_source"] = sorted(input_sources)
+    if truth_missing:
+        meta["truth"] = f"none in {len(truth_missing)} file(s): truth, true-residual and coherence columns are NaN"
+        LOG.warning("box_spectra: %d file(s) carry no truth (y); only the model and input spectra are filled",
+                    len(truth_missing))
     meta["residual_reference"] = sorted(resid_refs)
     if any("interpolated" in s_ for s_ in input_sources):
         LOG.warning("box_spectra: input spectrum from x_interp (no native x in the files); rule 41: the input/truth "

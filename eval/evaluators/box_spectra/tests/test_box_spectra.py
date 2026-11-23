@@ -12,7 +12,7 @@ from eval.evaluators import box_spectra
 from eval.evaluators.box_spectra import runner
 
 
-def _write(path, *, mode: str, members=2, seed=0):
+def _write(path, *, mode: str, members=2, seed=0, with_truth=True):
     rng = np.random.default_rng(seed)
     lat1 = np.arange(35.0, 45.0 + 1e-9, 0.08)
     lon1 = np.arange(-30.0, -15.0 + 1e-9, 0.08)
@@ -31,14 +31,15 @@ def _write(path, *, mode: str, members=2, seed=0):
             ws[i] = s
         d.createVariable("ensemble_member", "i4", ("ensemble_member",))[:] = np.arange(1, members + 1)
         dims = ("sample", "ensemble_member", "grid_point_hres", "weather_state")
-        for name in ("y_pred", "y", "x_interp"):
+        for name in ("y_pred", "y", "x_interp") if with_truth else ("y_pred", "x_interp"):
             d.createVariable(name, "f4", dims)
         for k in range(members):
             xi = rng.standard_normal((n, len(states))) * 0.2 + np.cos(LA.ravel() / 3)[:, None]
             y = xi + rng.standard_normal((n, len(states)))
             yp = {"truth": y, "input": xi, "noise": xi + rng.standard_normal((n, len(states)))}[mode]
             d["x_interp"][0, k, :, :] = xi
-            d["y"][0, k, :, :] = y
+            if with_truth:
+                d["y"][0, k, :, :] = y
             d["y_pred"][0, k, :, :] = yp
 
 
@@ -296,3 +297,19 @@ def test_native_input_spectrum_on_the_octahedral_e2_points():
     sel = kept & (wl < 1400.0)   # the field holds waves of 45-1500 km only
     err = got[sel] / expected[sel] - 1.0
     assert sel.sum() >= 8 and np.abs(err).max() < 0.03, dict(zip(np.round(wl[sel]), np.round(err, 3)))
+
+
+def test_files_without_a_truth_keep_the_model_and_input_spectra(tmp_path):
+    """Global rows of a period with no 4 km run on disk carry no y: the model and input amplitudes are filled,
+    every column that needs the truth is NaN, and the figures are still written (Sep 2026 read, 23 Nov 2026)."""
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    _write(pred / "predictions_20260901_step024.nc", mode="noise", with_truth=False)
+    out = box_spectra.run(pred, {}, {"variables": ["10u", "2t"]}, output_dir=tmp_path / "bs")
+    pooled = [r for r in runner.read_bins(out / "bins.csv") if r["scope"] == "all" and r["variable"] == "2t"]
+    assert pooled and all(float(r["amp_pred_full"]) > 0 and float(r["amp_interp"]) > 0 for r in pooled)
+    assert all(np.isnan(float(r[c])) for r in pooled for c in ("amp_truth_full", "ratio_full", "coherence"))
+    assert all(float(r["amp_resid_pred"]) > 0 for r in pooled)
+    assert "none in 1 file" in json.loads((out / "run_meta.json").read_text())["truth"]
+    written = box_spectra.plot(out, {}, {})
+    assert all(p.exists() for p in written)
