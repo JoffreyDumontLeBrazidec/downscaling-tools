@@ -98,7 +98,7 @@ def test_shipped_case_lists_load():
 def test_every_page(inputs):
     root, runs, obs, tc, cache, cases = inputs
     out = root / "out"
-    argv = ["suite", "--cases", str(cases), "--out", str(out), "--tc-cache", str(cache), "--smooth"]
+    argv = ["suite", "--cases", str(cases), "--out", str(out), "--tc-cache", str(cache)]
     for label in runs:
         argv += ["--run", f"{label}={runs[label]}", "--obs", f"{label}={obs[label]}", "--tc", f"{label}={tc[label]}"]
     main(argv)
@@ -139,7 +139,7 @@ def test_rows_without_target_or_x_interp(tmp_path):
                                coords={"weather_state": ds.weather_state.values}).to_netcdf(
                         truth / f"truth_{valid:%Y%m%d%H}.nc")
     out = tmp_path / "out"
-    main(["suite", "--cases", "o1280_global", "--run", f"ARMO={run}", "--attach-target", str(truth), "--smooth",
+    main(["suite", "--cases", "o1280_global", "--run", f"ARMO={run}", "--attach-target", str(truth),
           "--only", "spectra", "rain_members", "stills", "tp_dist", "--out", str(out)])
     by = {p["page"]: p for p in json.loads((out / "suite_manifest.json").read_text())["pages"]}
     failed = {k: v["note"] + v.get("trace", "") for k, v in by.items() if not v["files"]}
@@ -150,11 +150,12 @@ def test_rows_without_target_or_x_interp(tmp_path):
 
 
 def test_areas_page_in_real_resolution_cells(inputs):
-    """The default map mode (owner 23 Nov 09:14, 'real resolution'): grid cells, one model, page 05."""
+    """Opt-in grid cells (--cells): page 05 still draws."""
     root, runs, *_ , cases = inputs
     out = root / "out_cells"
     label = next(iter(runs))
-    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}", "--only", "areas"])
+    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}", "--only", "areas",
+          "--cells"])
     rec = json.loads((out / "suite_manifest.json").read_text())
     assert rec["pages"][0]["files"], rec["pages"][0]
     assert (out / "05_areas_member1.png").exists()
@@ -170,7 +171,7 @@ def test_tc_case_from_ibtracs_csv(inputs):
                    "2025A,2025,DOLPHIN,2025-09-27 06:00:00,26.0,-61.0,930,\n")
     out = root / "out_ib"
     label = next(iter(runs))
-    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}", "--smooth",
+    main(["suite", "--cases", str(cases), "--out", str(out), "--run", f"{label}={runs[label]}",
           "--ibtracs-csv", str(csv), "--only", "tc_members"])
     p = json.loads((out / "suite_manifest.json").read_text())["pages"][0]
     assert p["files"], p

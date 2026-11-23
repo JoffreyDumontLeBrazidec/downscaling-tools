@@ -59,8 +59,9 @@ def register(subparsers) -> argparse.ArgumentParser:
                         "names; NaN allowed). Missing truth file = all-NaN target. See eval/suite/target.py.")
     p.add_argument("--maps-all-runs", action="store_true",
                    help="Map pages (03, 04, 05, 07) show every run; default only the first (one model per page).")
-    p.add_argument("--smooth", action="store_true",
-                   help="Map pages blend between grid points (zoom_maps default) instead of real-resolution cells.")
+    p.add_argument("--cells", action="store_true",
+                   help="Map pages as real-resolution grid cells (zoom_maps --cells). Default: smooth maps "
+                        "(owner 23 Nov 09:45: grid points are 'awful', pages must be beautiful).")
     p.add_argument("--only", nargs="+", choices=PAGES, default=None, help="Draw only these pages.")
     return p
 
@@ -76,7 +77,7 @@ def run(args: argparse.Namespace) -> dict:
             print(f"attach-target {label}: {attach_target(d, args.attach_target)}")
     record = build_suite(_kv(args.run, "run"), load_case_list(args.cases), args.out, obs=_kv(args.obs, "obs"),
                          tc=_kv(args.tc, "tc"), tc_cache=args.tc_cache, only=args.only,
-                         maps_all_runs=args.maps_all_runs, cells=not args.smooth,
+                         maps_all_runs=args.maps_all_runs, cells=args.cells,
                          ibtracs_csv=args.ibtracs_csv)
     for p in record["pages"]:
         print(f"{p['page']} {p['title']}: {'; '.join(p['files']) or '-'} | {p['note']}")

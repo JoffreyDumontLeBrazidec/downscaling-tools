@@ -23,7 +23,7 @@ PAGES = ("spectra", "tc_members", "rain_members", "areas", "scores", "stills", "
 
 
 def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | None, cols: int = 5,
-          cells: bool = True) -> list[Path]:
+          cells: bool = False) -> list[Path]:
     """zoom_maps of every source (member grids, or member 1 alone with members=None); [input, target, model...]."""
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import build_arg_parser
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import run as zoom_run
@@ -39,8 +39,9 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         argv += ["--members", members]
     if case.vmax is not None:
         argv += ["--vmax", str(case.vmax)]
-    if cells:   # real resolution (owner 23 Nov 09:14): every grid point its own cell, input cells visible
-        argv += ["--cells", "--dpi", "200"]
+    argv += ["--dpi", "200"]
+    if cells:   # opt-in only: the owner rejected grid cells as the look of the pages (23 Nov 09:45, "awful")
+        argv += ["--cells"]
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
     from eval.suite.cases import field_max
 
@@ -87,7 +88,7 @@ def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None)
 
 def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[str, Path] | None = None,
                 tc: dict[str, Path] | None = None, tc_cache: Path | None = None, only=None,
-                maps_all_runs: bool = False, cells: bool = True, ibtracs_csv: Path | None = None) -> dict:
+                maps_all_runs: bool = False, cells: bool = False, ibtracs_csv: Path | None = None) -> dict:
     out = Path(out)
     work = out / "work"
     out.mkdir(parents=True, exist_ok=True)
