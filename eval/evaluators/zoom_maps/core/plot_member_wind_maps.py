@@ -287,6 +287,10 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
     )
     p.add_argument("--output-dir", required=True, help="Directory for the PNGs and manifest.")
     p.add_argument("--no-input", action="store_true", default=False, help="Skip the eefo (input) panel.")
+    p.add_argument("--min-span", type=float, default=MIN_SPAN_DEG,
+                   help=f"Smallest map span in degrees of latitude; a smaller --extent is widened to it "
+                        f"(default: {MIN_SPAN_DEG:g}). Lower it, for example to 3, for a close-up in which "
+                        "single grid cells are visible with --cells.")
     p.add_argument("--cells", action="store_true", default=False,
                    help="Real resolution: draw every panel as its own grid cells (nearest neighbour on a fine "
                         "raster) instead of blending between grid points, so a 9 km input shows 9 km cells "
@@ -408,12 +412,13 @@ def resolve_extent(args: argparse.Namespace) -> tuple[tuple[float, float, float,
     Europe is not drawn on a cone centred on Europe.
     """
     requested = tuple(float(v) for v in args.extent)
-    extent = widen_extent(requested)
+    min_span = float(getattr(args, "min_span", None) or MIN_SPAN_DEG)
+    extent = widen_extent(requested, min_span)
     line = f"map box {box_text(extent)}"
     if extent != requested:
         line += f" (widened from {box_text(requested)})"
         print(f"warning: the requested map box {box_text(requested)} is smaller than the "
-              f"{MIN_SPAN_DEG:g}-degree minimum; drawing {box_text(extent)}", flush=True)
+              f"{min_span:g}-degree minimum (--min-span); drawing {box_text(extent)}", flush=True)
     if list(requested) == list(DEFAULT_EXTENT):
         print("note: no --extent given, so the default Europe box is drawn", flush=True)
     print(f"extent used: {line}", flush=True)
