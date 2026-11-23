@@ -9,6 +9,10 @@ export E2=/e/data1/jureap-data/ecmwf/users/jdumont/datasets/o320_o1280_europe_e2
 export HF_HUB_OFFLINE=1 WANDB_MODE=offline OMP_NUM_THREADS=8
 # keep every cache off HOME (80k file limit)
 export XDG_CACHE_HOME=$CD/cache WANDB_DIR=$CD/cache/wandb NUMBA_CACHE_DIR=$CD/cache/numba MPLCONFIGDIR=$CD/cache/mpl \
-       TRITON_CACHE_DIR=$CD/cache/triton TORCHINDUCTOR_CACHE_DIR=$CD/cache/inductor TMPDIR=$CD/tmp
+       TRITON_CACHE_DIR=$CD/cache/triton TORCHINDUCTOR_CACHE_DIR=$CD/cache/inductor
+# TMPDIR short and node-local: AF_UNIX socket paths are limited to 108 chars; $CD/tmp killed smoke 3023869 (20 Nov)
+export TMPDIR=/tmp/${USER}_cd_${SLURM_JOB_ID:-x}
 mkdir -p $XDG_CACHE_HOME $WANDB_DIR $NUMBA_CACHE_DIR $MPLCONFIGDIR $TMPDIR 2>/dev/null
 source $CD_VENV/bin/activate
+# GitPython: no git binary on compute nodes; reg seg1 3023870 died "ImportError: Bad git executable" (20 Nov 19:02 UTC)
+export GIT_PYTHON_REFRESH=quiet
