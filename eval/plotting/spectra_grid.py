@@ -149,8 +149,12 @@ def plot_spectra_grid(
     nrows = math.ceil(len(names) / ncols)
 
     with eval_style():
-        fig = plt.figure(figsize=(3.9 * ncols, 4.7 * nrows + (0.6 if title else 0.2)))
-        outer = fig.add_gridspec(nrows, ncols, hspace=0.42, wspace=0.32)
+        # A band of fixed height (inches) above the panels holds the title and the legend, so that neither
+        # sits on the panel titles and wavelength axes whatever the number of rows.
+        head_in = 1.25 if title else 0.75
+        fig_h = 4.7 * nrows + head_in
+        fig = plt.figure(figsize=(3.9 * ncols, fig_h))
+        outer = fig.add_gridspec(nrows, ncols, hspace=0.42, wspace=0.32, top=1.0 - head_in / fig_h, bottom=0.6 / fig_h)
         handles: dict[str, object] = {}
         for k, var in enumerate(names):
             r, c = divmod(k, ncols)
@@ -211,9 +215,9 @@ def plot_spectra_grid(
 
         fig.legend(list(handles.values()), list(handles.keys()), loc="upper center",
                    ncol=min(len(handles), 6), frameon=False, fontsize=10,
-                   bbox_to_anchor=(0.5, 1.0 if not title else 0.975))
+                   bbox_to_anchor=(0.5, 1.0 - (0.42 if title else 0.02) / fig_h))
         if title:
-            fig.suptitle(title, y=1.02, fontsize=12)
+            fig.suptitle(title, y=1.0 - 0.08 / fig_h, va="top", fontsize=12)
         if footnote:
-            fig.text(0.01, -0.01, footnote, fontsize=8, color="0.35", ha="left", va="top")
+            fig.text(0.01, 0.0, footnote, fontsize=8, color="0.35", ha="left", va="top")
         return save_figure(fig, out_stem, formats=tuple(formats), close=True)
