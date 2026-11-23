@@ -1,0 +1,31 @@
+Box crops for simple_maps.py, extracted 23 Nov 2026 on Jupiter login node with scratch/simple_maps/extract_crops.py, member 1.
+Source files: plot-only G300e2 (300k EMA-2000) +24 h predictions; x = native O1280 ENS input member, y = iekm O2560 truth, y_pred = G300e2 draw for that member.
+Source dir: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024
+4.4 km (hres) region of these files: lon -80..40, lat 10..70. t01_melissa box (-85.3..-71.3) extends west of -80, so hres is missing west of -80 there.
+msl printed in Pa. Script run: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/simple_maps/run_extract.sh
+
+a01_alps.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20251001_step024.nc
+  a01_alps.npz lres 12116 hres 48048 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+a02_adriatic.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20251001_step024.nc
+  a02_adriatic.npz lres 13651 hres 54630 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+a03_weurope.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20251001_step024.nc
+  a03_weurope.npz lres 16120 hres 63832 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+t01_melissa.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20251027_step024.nc
+  TC centre (iekm msl min) 17.17 N -78.29 E, 94174
+  t01_melissa.npz lres 22887 hres 78372 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+t02_humberto.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20250927_step024.nc
+  TC centre (iekm msl min) 23.04 N -61.34 E, 97026
+  t02_humberto.npz lres 29512 hres 117405 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+t03_erin.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20250816_step024.nc
+  TC centre (iekm msl min) 20.48 N -64.25 E, 97419
+  t03_erin.npz lres 30620 hres 121893 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True
+t04_gabrielle.npz
+  source: /e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261121-global-300k-read/plots_iekm/files/G300e2_m_L024/predictions_20250921_step024.nc
+  TC centre (iekm msl min) 29.09 N -62.02 E, 98134
+  t04_gabrielle.npz lres 26857 hres 106826 states ['10u', '10v', '2t', 'msl', 'tp'] iekm identical across members 1,2: True

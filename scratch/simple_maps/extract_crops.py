@@ -45,7 +45,7 @@ m = 0.5
 kl = (lonl >= lo0 - m) & (lonl <= lo1 + m) & (latl >= la0 - m) & (latl <= la1 + m)
 kh = (lonh >= lo0 - m) & (lonh <= lo1 + m) & (lath >= la0 - m) & (lath <= la1 + m)
 res = dict(lat_lres=latl[kl], lon_lres=lonl[kl], lat_hres=lath[kh], lon_hres=lonh[kh],
-           box=np.array([lo0, lo1, la0, la1]), member=member, file=path, states=np.array(want))
+           box=np.array([lo0, lo1, la0, la1]), member=member, source_file=path, states=np.array(want))
 for s in want:
     j = states.index(s)
     res["x_" + s] = X[kl, j]
