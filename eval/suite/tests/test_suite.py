@@ -17,10 +17,10 @@ name: synthetic
 members: "1-4"
 spectra: {steps: [24, 72], box: null}
 tc: {name: storm, date: auto, step: 24, variable: wind10m}
-rain: {name: rain, date: auto, step: 24, extent: [-40.0, 20.0, 30.0, 65.0], variable: tp}
+rain: {name: rain, date: auto, step: 24, extent: [-40.0, 20.0, 30.0, 65.0], box_deg: 10, variable: tp}
 areas:
   - {name: alps, date: auto, step: 24, extent: [4.0, 16.0, 43.0, 49.0], variable: tp}
-  - {name: atl, date: "20250926", step: 72, extent: [-40.0, -20.0, 35.0, 55.0], variable: msl}
+  - {name: atl, date: "20250926", step: 72, center: [45.0, -30.0], variable: msl}
 stills:
   cases:
     - {name: glob, date: auto, step: 24, variable: tp}
@@ -115,6 +115,20 @@ def test_every_page(inputs):
     assert "pages 10 and 11" in (out / "SUITE.md").read_text().lower()
     assert "deepest target storm" in by["03"]["note"]
     assert "wettest target" in by["04"]["note"]
+    assert "10-degree box on its maximum" in by["04"]["note"]
+
+
+def test_ten_degree_box_and_fitted_range():
+    """Owner 23 Nov: ~10-degree map boxes; 2t/msl colour range fitted to the box, wind and tp keep fixed scales."""
+    from eval.suite.cases import box_around, load_case_list
+
+    lo0, lo1, la0, la1 = box_around(46.0, 10.0)
+    assert la1 - la0 == 10.0 and lo1 - lo0 > 10.0
+    for name in ("o2560_tc_2025", "o1280_global"):
+        cl = load_case_list(name)
+        for c in cl.areas:
+            assert abs((c.extent[3] - c.extent[2]) - 10.0) < 1e-9, (name, c.name)
+        assert cl.rain.box_deg == 10
 
 
 def test_rows_without_target_or_x_interp(tmp_path):
@@ -176,3 +190,14 @@ def test_tc_case_from_ibtracs_csv(inputs):
     p = json.loads((out / "suite_manifest.json").read_text())["pages"][0]
     assert p["files"], p
     assert "945 hPa" in p["note"] and "dolphin" in p["note"]
+
+
+def test_regional_grid_names():
+    """A regional box names its real grids (4 km lane: O1280 9 km input, O2560 4.4 km output), not O320/O1280."""
+    from eval.evaluators.zoom_maps.core.plot_member_wind_maps import grid_from_lats, panel_titles
+
+    rows = lambda n: 90.0 / n * np.arange(200) + 10.0   # noqa: E731
+    assert grid_from_lats(rows(2560)) == "O2560" and grid_from_lats(rows(1280)) == "O1280"
+    titles, hres = panel_titles({"enfo": "Target ({hres})", "eefo": "Input ({lres})"}, 50_000, 200_000,
+                                rows(1280), rows(2560))
+    assert titles["enfo"] == "Target (O2560, 4.4 km)" and titles["eefo"] == "Input (O1280, 9 km)"

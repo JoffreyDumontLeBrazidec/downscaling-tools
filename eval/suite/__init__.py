@@ -5,10 +5,11 @@ in this order, are fixed; only the case list (``eval/config/suite/<name>.yaml``)
 
     01 spectra +24 h       truth (target), input, model(s): eval.plotting.spectra_grid on box_spectra reads
     02 spectra +72 h       same; exactly two spectra pages, no more
-    03 TC members          10 members of 10 m wind speed (0-70 m/s) around a storm: input | target | model side by
-                           side (zoom_maps)
+    03 TC members          10 members of 10 m wind speed (0 to a top fitted to the box) in a 10-degree box on a
+                           storm: input | target | model side by side (zoom_maps)
     04 rain members        10 members of tp on an intense-rain case: input | target | model side by side (zoom_maps)
-    05 areas               member 1, input | target | model, one row per area (zoom_maps)
+    05 areas               member 1, input | target | model, one row per area, 10-degree boxes, colours fitted to
+                           the box (zoom_maps)
     06 scores              fair CRPS, spread and spread/skill by lead against STATIONS, every headline variable
                            on one page (obs_points summary.csv); the target is a competitor row
     07 global tp           tp stills, input | target | model(s), one row per case (map_video)
