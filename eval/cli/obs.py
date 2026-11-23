@@ -45,7 +45,8 @@ def register(subparsers) -> argparse.ArgumentParser:
     t.add_argument("--noaa-csv", default=None, help="Optional local NOAA IBTrACS CSV (adds best-track wind). Never downloaded.")
     t.add_argument("--out", required=True, help="Cache directory (created).")
 
-    ts = sub.add_parser("tc-set", help="Event files and best-track cache for every storm of a period, from a NOAA IBTrACS CSV.")
+    ts = sub.add_parser("tc-set", help="Event files and best-track cache for every storm of a period, from a NOAA IBTrACS CSV. "
+                              "Only fixes with a position and a pressure count as cases (disturbance-stage rows without pressure are left out).")
     ts.add_argument("--noaa-csv", required=True, help="Local NOAA IBTrACS v04 CSV (last3years or ALL). Never downloaded.")
     ts.add_argument("--dates", required=True, help="Comma-separated YYYYMMDD base dates (00 UTC) of the predictions.")
     ts.add_argument("--leads", default="24,48,72", help="Comma-separated lead times in hours (default 24,48,72).")

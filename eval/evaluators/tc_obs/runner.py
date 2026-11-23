@@ -306,22 +306,28 @@ def write_summary_md(summ, pr, meta, path):
                                                             for l in lead_order) + " |",
                   "|---|" + "---|" * len(lead_order)]
         for row in ("model", "ens", "truth", "input", "hres"):
-            q = summ[summ.row == row].set_index("lead")
-            kind = q["kind"].iloc[0] if (not q.empty and "kind" in q) else ROW_KIND[row]
-            if q.empty or q[key].isna().all() or (key == "pos_spread_km" and kind != "ensemble"):
-                continue
-            cells = [f"{q.loc[l, key]:.1f} ({q.loc[l, key + '_se']:.1f}) n{int(q.loc[l, key + '_cases'])}"
-                     if l in q.index and np.isfinite(q.loc[l, key]) else "" for l in lead_order]
-            tag = row if kind == "ensemble" else f"{row} (single field)"
-            lines.append(f"| {tag} | " + " | ".join(cells) + " |")
+            sub = summ[summ.row == row]
+            # a row can hold two kinds (the input as an ensemble and as a single field): one table line per kind
+            kinds = list(dict.fromkeys(sub["kind"])) if (len(sub) and "kind" in sub) else [ROW_KIND[row]]
+            for kind in kinds:
+                q = (sub[sub["kind"] == kind] if "kind" in sub else sub).drop_duplicates("lead").set_index("lead")
+                if q.empty or q[key].isna().all() or (key == "pos_spread_km" and kind != "ensemble"):
+                    continue
+                cells = [f"{q.loc[l, key]:.1f} ({q.loc[l, key + '_se']:.1f}) n{int(q.loc[l, key + '_cases'])}"
+                         if l in q.index and np.isfinite(q.loc[l, key]) else "" for l in lead_order]
+                tag = row if kind == "ensemble" else f"{row} (single field)"
+                lines.append(f"| {tag} | " + " | ".join(cells) + " |")
         lines.append("")
     lines += ["## Members that found the storm (fraction of members; the ensemble scores above use only these)", "",
               "| row | " + " | ".join(("+" + l + " h") if l != "all" else "all leads" for l in lead_order) + " |",
               "|---|" + "---|" * len(lead_order)]
     for row in ("model", "ens", "input"):
-        q = summ[summ.row == row].set_index("lead")
+        q = summ[summ.row == row]
         if row == "input" and (q.empty or "kind" not in q or (q["kind"] != "ensemble").all()):
             continue
+        if "kind" in q and (q["kind"] == "ensemble").any():
+            q = q[q["kind"] == "ensemble"]
+        q = q.drop_duplicates("lead").set_index("lead")
         if len(q) and "found_frac" in q:
             lines.append(f"| {row} | " + " | ".join(f"{q.loc[l, 'found_frac']:.2f}" if l in q.index else ""
                                                    for l in lead_order) + " |")

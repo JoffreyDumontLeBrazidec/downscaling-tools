@@ -304,3 +304,21 @@ def test_tc_set_writes_events_and_cache_and_takes_a_provisional_track_when_there
         base = (when - pd.Timedelta(hours=24)).strftime("%Y%m%d")
         t2 = build_tc_set(SAMPLE, [base], [24], tmp_path / "e2", tmp_path / "c2")
         assert list(t2.track_type) == ["provisional"] or t2.empty  # empty only if the sample row has no pressure
+
+
+def test_summary_md_with_an_input_row_of_two_kinds(tmp_path):
+    """Files without a truth score the input both as an ensemble and as a single field: two summary rows per lead
+    for the same row name must give two table lines, not a crash (Sep 2026 global read, 23 Nov 2026)."""
+    from eval.evaluators.tc_obs.runner import write_summary_md
+
+    rows = []
+    for row, kind in (("model", "ensemble"), ("input", "ensemble"), ("input", "single field")):
+        for lead in ("24", "all"):
+            rows.append({"row": row, "kind": kind, "lead": lead, "pmin_crps": 4.0, "pmin_crps_se": 0.5,
+                         "pmin_crps_cases": 10, "found_frac": 0.9})
+    summ = pd.DataFrame(rows)
+    pr = pd.DataFrame(columns=["pair", "metric", "lead", "mean", "se", "wins", "cases"])
+    path = tmp_path / "summary.md"
+    write_summary_md(summ, pr, {"run_label": "G300", "note": "test", "events": ["lowell_2026"], "log": []}, path)
+    text = path.read_text()
+    assert "| input |" in text and "| input (single field) |" in text
