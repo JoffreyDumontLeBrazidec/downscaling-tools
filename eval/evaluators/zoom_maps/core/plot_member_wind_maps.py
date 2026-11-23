@@ -494,7 +494,9 @@ def native_triangulation(
     x, y = xy[:, 0], xy[:, 1]
     x0, x1 = ax.get_xlim()
     y0, y1 = ax.get_ylim()
-    px, py = 0.03 * (x1 - x0), 0.03 * (y1 - y0)
+    # pad by at least three point spacings, so a close-up of a coarse field reaches the map corners
+    deg = 1.0 if isinstance(ax.projection, ccrs.PlateCarree) else 111_320.0
+    px, py = max(0.03 * (x1 - x0), 3 * res * deg), max(0.03 * (y1 - y0), 3 * res * deg)
     keep = (np.isfinite(x) & np.isfinite(y)
             & (x >= x0 - px) & (x <= x1 + px) & (y >= y0 - py) & (y <= y1 + py))
     for v in vals:
@@ -506,6 +508,26 @@ def native_triangulation(
     longest = np.hypot(tx - np.roll(tx, 1, axis=1), ty - np.roll(ty, 1, axis=1)).max(axis=1)
     tri.set_mask(longest > MAX_EDGE_RATIO * np.median(longest))
     return tri, [v[keep] for v in vals]
+
+
+# A map that holds few source points (a close-up, or a coarse input on a small box) shows the straight-edged
+# facets of linear (Gouraud) shading. Such a triangulation is refined 8x8 with a cubic interpolant first, so the
+# panel stays smooth (owner 23 Nov: "i want it to be beautiful"); a dense map is drawn as before.
+SMOOTH_REFINE_MAX_POINTS = 40_000
+SMOOTH_REFINE_SUBDIV = 3
+
+
+def smooth_refine(tri, vals) -> list[tuple]:
+    """[("tri", refined triangulation, refined values)] by a C1 cubic interpolation of each value array."""
+    from matplotlib.tri import CubicTriInterpolator, UniformTriRefiner
+
+    refiner = UniformTriRefiner(tri)
+    out = []
+    for v in vals:
+        interp = CubicTriInterpolator(tri, v, kind="geom")
+        t2, v2 = refiner.refine_field(v, triinterpolator=interp, subdiv=SMOOTH_REFINE_SUBDIV)
+        out.append(("tri", t2, np.asarray(v2)))
+    return out
 
 
 def cells_res(extent) -> float:
@@ -532,6 +554,8 @@ def _source_layers(
     elif res < DEFAULT_LRES_RES:
         tri, vals = native_triangulation(ax, lat, lon, values, extent=extent, field=field,
                                          fine_cut_deg=fine_cut_deg, res=res)
+        if tri.x.size <= SMOOTH_REFINE_MAX_POINTS:
+            return smooth_refine(tri, vals)
         return [("tri", tri, v) for v in vals]
     layers = []
     for val in values:
@@ -573,6 +597,19 @@ def _draw_layer(ax, layer: tuple, *, cmap, vmin: float, vmax: float):
     gx, gy = geometry
     return ax.pcolormesh(gx, gy, data, transform=ccrs.PlateCarree(), cmap=cmap,
                          vmin=vmin, vmax=vmax, shading="auto", rasterized=True)
+
+
+def is_single_field(da) -> bool:
+    """True when a target has one field for every member: no member axis, or the same values in the first two
+    members (a deterministic analysis such as iekm, copied into each member slot). Its title names no member."""
+    d = da.isel(sample=0) if "sample" in da.dims else da
+    if "ensemble_member" not in d.dims or d.sizes["ensemble_member"] < 2:
+        return True
+    if "weather_state" in d.dims:
+        d = d.isel(weather_state=0)
+    a = np.asarray(d.isel(ensemble_member=0).values)
+    b = np.asarray(d.isel(ensemble_member=1).values)
+    return bool(np.array_equal(a, b, equal_nan=True))
 
 
 def _member_slice(da, member: int) -> np.ndarray:
@@ -656,7 +693,7 @@ def _render(
     *,
     out_path: Path,
     title: str,
-    member: int,
+    member: int | None,
     date: str,
     time: str,
     step: int,
@@ -696,7 +733,8 @@ def _render(
         ax.set_extent(extent, crs=ccrs.PlateCarree())  # drawing may have autoscaled the view
         add_geography(ax, coast_lw=0.9, label_size=8)
         ax.set_title(
-            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}, member {member}\n"
+            f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}"
+            f"{'' if member is None else f', member {member}'}\n"
             f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
             + (f"\n{box_line}" if box_line else ""),
             fontsize=12,
@@ -939,6 +977,7 @@ def run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, float]] = []
+    single_truth = False   # the target is one field for every member (no member in its title)
     for i, (key, run_dir) in enumerate(runs.items()):
         pred_file = Path(run_dir).expanduser() / f"predictions_{args.date}_step{args.step:03d}.nc"
         if not pred_file.exists():
@@ -955,6 +994,7 @@ def run(args: argparse.Namespace) -> int:
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h,
                                _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES))
+                single_truth = is_single_field(ds["y"])
         panels.append((key, lat_h, lon_h,
                        _field(_member_slice(ds["y_pred"], args.member), states, spec), DEFAULT_HRES_RES))
     for key, grib_path in gribs.items():
@@ -973,7 +1013,8 @@ def run(args: argparse.Namespace) -> int:
         )
         _render(
             out_path=out_path, title=titles.get(key, default_title(key, hres)),
-            member=args.member, date=args.date, time=args.time, step=args.step,
+            member=None if key == "enfo" and single_truth else args.member,
+            date=args.date, time=args.time, step=args.step,
             lat=lat, lon=lon, val=val, res=res, extent=extent, spec=spec,
             vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
