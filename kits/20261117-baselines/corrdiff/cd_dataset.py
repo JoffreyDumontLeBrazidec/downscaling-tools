@@ -4,6 +4,14 @@ Same contract as PhysicsNeMo's hrrr_mini reader (examples/weather/corrdiff/datas
 __getitem__ -> (y, x) normalised; x = the coarse input upsampled x4 to the target grid (bilinear with edge
 extrapolation, the same numba routine) followed by the invariants. Normalisation = per-channel mean / std of the
 training rows (OUT.stats.json). No lead-time conditioning (the rows mix leads 12-72 h; GL512 has none either).
+
+Options (all default off; the 46-channel input of the first regression run is unchanged without them):
+  time_inputs: true  appends 5 per-row channels after the 46 (TIME_INPUTS: cos/sin julian day, cos/sin local time,
+                     insolation), computed on the 864 x 1728 grid from the row's valid time with the earthkit-data
+                     forcing formulas (time_fields), not normalised (in [-1, 1] / [0, 1], as GL512 is given them). The
+                     stored invariants cos_local_time / sin_local_time stay as they are (constant, = -cos/-sin lon).
+  spread: true       with max_rows: the max_rows rows evenly spread over the whole split (deterministic) instead of
+                     the first max_rows (the first 64 valid rows are 29 Jun - 3 Aug 2022 only).
 """
 from __future__ import annotations
 
@@ -34,10 +42,40 @@ except ImportError:  # pragma: no cover
     prange = range
 
 
+TIME_INPUTS = ["cos_julian_day", "sin_julian_day", "cos_local_time", "sin_local_time", "insolation"]
+
+
+def time_fields(valid: datetime.datetime, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """(5, *lat.shape) float32, TIME_INPUTS order, at valid time `valid` (UTC, naive). Formulas of earthkit-data
+    sources/forcings.py (julian_day, local_time, insolation = cos_solar_zenith_angle) and earthkit-meteo
+    solar.cos_solar_zenith_angle (declination / time-correction series, clipped at 0, integer hour), which anemoi-datasets
+    uses for its computed forcings (the stores GL512 reads)."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    d = valid - datetime.datetime(valid.year, 1, 1)
+    jd = d.days + d.seconds / 86400.0
+    a = jd / 365.25 * np.pi * 2
+    d = valid - datetime.datetime(valid.year, valid.month, valid.day)
+    lt = (lon / 360.0 * 24.0 + (d.days + d.seconds / 86400.0) * 24) % 24
+    b = lt / 24 * np.pi * 2
+    decl = np.deg2rad(0.396372 - 22.91327 * np.cos(a) + 4.025430 * np.sin(a) - 0.387205 * np.cos(2 * a)
+                      + 0.051967 * np.sin(2 * a) - 0.154527 * np.cos(3 * a) + 0.084798 * np.sin(3 * a))
+    tc = 0.004297 + 0.107029 * np.cos(a) - 1.837877 * np.sin(a) - 0.837378 * np.cos(2 * a) - 2.340475 * np.sin(2 * a)
+    rlat = np.deg2rad(lat)
+    csza = np.sin(decl) * np.sin(rlat) + np.cos(decl) * np.cos(rlat) * np.cos(np.deg2rad((valid.hour - 12) * 15 + lon + tc))
+    one = np.ones_like(lat)
+    return np.stack([np.cos(a) * one, np.sin(a) * one, np.cos(b), np.sin(b), np.clip(csza, 0.0, None)]).astype(np.float32)
+
+
+def spread_index(n: int, k: int) -> np.ndarray:
+    """k indices evenly spread over range(n), first and last included, deterministic."""
+    return np.unique(np.round(np.linspace(0, n - 1, min(k, n))).astype(np.int64))
+
+
 class E2v4Box(DownscalingDataset):
     def __init__(self, data_path: str, stats_path: str, input_variables: Union[List[str], None] = None,
                  output_variables: Union[List[str], None] = None, invariant_variables: Union[List[str], None] = None,
-                 split: str = "train", max_rows: int = 0):
+                 split: str = "train", max_rows: int = 0, time_inputs: bool = False, spread: bool = False):
         import zarr
         self.root = zarr.open_group(str(data_path), mode="r")
         at = self.root.attrs
@@ -54,17 +92,23 @@ class E2v4Box(DownscalingDataset):
         rows = list(csv.DictReader(open(Path(str(data_path)).with_suffix(".rows.csv"))))
         sel = [r for r in rows if r["split"] == split]
         if max_rows:
-            sel = sel[:max_rows]
+            sel = [sel[i] for i in spread_index(len(sel), max_rows)] if spread else sel[:max_rows]
         if not sel:
             raise ValueError(f"no rows in split {split}")
         self.rows = np.array([int(r["row"]) for r in sel], np.int64)
         self.valid = [datetime.datetime.fromisoformat(r["valid"]) for r in sel]
         self.steps = [int(r["step"]) for r in sel]
+        self.time_inputs = bool(time_inputs)
+        self.time_variables = list(TIME_INPUTS) if self.time_inputs else []
+        nt = len(self.time_variables)
         st = json.load(open(stats_path))
+        # time inputs: mean 0, std 1 = left as they are by (de)normalize_input
         self.input_mean = np.array([st["input"][v]["mean"] for v in self.input_variables] +
-                                   [st["invariant"][v]["mean"] for v in self.invariant_variables], np.float32)[:, None, None]
+                                   [st["invariant"][v]["mean"] for v in self.invariant_variables] + [0.0] * nt,
+                                   np.float32)[:, None, None]
         self.input_std = np.array([st["input"][v]["std"] for v in self.input_variables] +
-                                  [st["invariant"][v]["std"] for v in self.invariant_variables], np.float32)[:, None, None]
+                                  [st["invariant"][v]["std"] for v in self.invariant_variables] + [1.0] * nt,
+                                  np.float32)[:, None, None]
         self.output_mean = np.array([st["output"][v]["mean"] for v in self.output_variables], np.float32)[:, None, None]
         self.output_std = np.array([st["output"][v]["std"] for v in self.output_variables], np.float32)[:, None, None]
         lat0, lon0 = float(at["lat0"]), float(at["lon0"])
@@ -74,14 +118,20 @@ class E2v4Box(DownscalingDataset):
         self._lon = np.repeat((w + (np.arange(nx) + 0.5) * (e - w) / nx)[None, :], ny, 0)
         assert abs(self._lat[0, 0] - lat0) < 1e-9 and abs(self._lon[0, 0] - lon0) < 1e-9
 
-    def coarse_input(self, x_coarse: np.ndarray) -> np.ndarray:
-        """(C_all_in, NYC, NXC) physical -> normalised network input (C_in + C_inv, NY, NX)."""
+    def coarse_input(self, x_coarse: np.ndarray, valid: Union[datetime.datetime, None] = None) -> np.ndarray:
+        """(C_all_in, NYC, NXC) physical -> normalised network input (C_in + C_inv [+ 5 time inputs], NY, NX).
+        valid (UTC) is required with time_inputs."""
         x = self.upsample(np.ascontiguousarray(x_coarse[self.ii], np.float32))
-        return self.normalize_input(np.concatenate([x, self.invariants], axis=0))
+        parts = [x, self.invariants]
+        if self.time_inputs:
+            if valid is None:
+                raise ValueError("time_inputs: coarse_input needs the valid time")
+            parts.append(time_fields(valid, self._lat, self._lon))
+        return self.normalize_input(np.concatenate(parts, axis=0))
 
     def __getitem__(self, idx):
         r = int(self.rows[idx])
-        x = self.coarse_input(np.asarray(self.root["input"][r], np.float32))
+        x = self.coarse_input(np.asarray(self.root["input"][r], np.float32), self.valid[idx])
         y = self.normalize_output(np.asarray(self.root["output"][r], np.float32)[self.oi])
         return (y, x)
 
@@ -96,7 +146,8 @@ class E2v4Box(DownscalingDataset):
 
     def input_channels(self) -> List[ChannelMetadata]:
         return [ChannelMetadata(name=v) for v in self.input_variables] + \
-               [ChannelMetadata(name=v, auxiliary=True) for v in self.invariant_variables]
+               [ChannelMetadata(name=v, auxiliary=True) for v in self.invariant_variables] + \
+               [ChannelMetadata(name=v, auxiliary=True) for v in self.time_variables]
 
     def output_channels(self) -> List[ChannelMetadata]:
         return [ChannelMetadata(name=v) for v in self.output_variables]
