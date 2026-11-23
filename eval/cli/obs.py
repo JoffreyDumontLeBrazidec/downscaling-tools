@@ -45,6 +45,16 @@ def register(subparsers) -> argparse.ArgumentParser:
     t.add_argument("--noaa-csv", default=None, help="Optional local NOAA IBTrACS CSV (adds best-track wind). Never downloaded.")
     t.add_argument("--out", required=True, help="Cache directory (created).")
 
+    ts = sub.add_parser("tc-set", help="Event files and best-track cache for every storm of a period, from a NOAA IBTrACS CSV.")
+    ts.add_argument("--noaa-csv", required=True, help="Local NOAA IBTrACS v04 CSV (last3years or ALL). Never downloaded.")
+    ts.add_argument("--dates", required=True, help="Comma-separated YYYYMMDD base dates (00 UTC) of the predictions.")
+    ts.add_argument("--leads", default="24,48,72", help="Comma-separated lead times in hours (default 24,48,72).")
+    ts.add_argument("--events-dir", default=None, help="Where the event yaml files go (default: eval/config/events).")
+    ts.add_argument("--out", required=True, help="Cache directory for best_track.csv (created).")
+    ts.add_argument("--margin", type=float, default=4.0, help="Degrees around the fixes for the storm box (default 4).")
+    ts.add_argument("--max-pmin", type=float, default=None, help="Keep only storms reaching this pressure (hPa) at a valid time.")
+    ts.add_argument("--min-cases", type=int, default=1, help="Drop storms with fewer (date, lead) cases.")
+
     from eval.evaluators.obs_imerg.core import fetch as imerg_fetch
     i = sub.add_parser("fetch-imerg", help="IMERG 12 h precipitation cut on the E2 points (Atos only).",
                        description=imerg_fetch.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -118,6 +128,16 @@ def run(args: argparse.Namespace) -> None:
                        zarr_path=args.ibtracs_zarr or IBTRACS_ZARR, noaa_csv=args.noaa_csv,
                        streams=tuple(args.streams.split(",")))
         print(f"tropical cyclone reference cache written: {out}")
+    elif args.obs_cmd == "tc-set":
+        from eval.config import loader
+        from eval.evaluators.tc_obs.core.reference import build_tc_set
+        events_dir = args.events_dir or (loader._CONFIG_DIR / "events")
+        table = build_tc_set(args.noaa_csv, args.dates.split(","), [int(v) for v in args.leads.split(",")],
+                             events_dir, args.out, margin_deg=args.margin, max_pmin_hpa=args.max_pmin,
+                             min_cases=args.min_cases)
+        print(table.to_string(index=False))
+        print(f"{len(table)} events ({int(table.cases.sum()) if len(table) else 0} cases) written: "
+              f"{events_dir}, cache {args.out}")
     elif args.obs_cmd == "fetch-imerg":
         from eval.evaluators.obs_imerg.core.fetch import run_from_args as imerg_run
         print(f"IMERG cut written: {imerg_run(args)}")
