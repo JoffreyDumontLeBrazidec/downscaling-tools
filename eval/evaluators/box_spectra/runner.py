@@ -230,8 +230,12 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
             mems = [m for m in f.members if not members or m in members]
             # the model residual of member k against its own interpolated input when the file carries one per
             # member; the truth residual against x_interp (y is the control or single truth, x_interp its input)
-            ref_name = "x_interp_members" if "x_interp_members" in f.ds.variables else "x_interp"
-            resid_refs.add(f"model: {ref_name}; truth: x_interp")
+            has_xi = "x_interp" in f.ds.variables
+            ref_name = "x_interp_members" if "x_interp_members" in f.ds.variables else ("x_interp" if has_xi else None)
+            if not has_xi and not f.native:
+                raise ValueError(f"{pf.path}: neither x_interp nor a native x; no input to compare with")
+            resid_refs.add(f"model: {ref_name}; truth: x_interp" if has_xi else
+                           "none: the file has no x_interp, residual columns are NaN")
             for var in variables:
                 if not f.has(var):
                     continue
@@ -243,9 +247,13 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                         if _v in clip_nonnegative:   # rule 7: negative precipitation clipped
                             full[idx] = np.maximum(full[idx], 0.0)
                         return smp(full)
-                    y, xi, yp = grid("y"), grid("x_interp"), grid("y_pred")
-                    Fy, Fx, Fp = spec.fft(y), spec.fft(xi), spec.fft(yp)
-                    Fxm = Fx if ref_name == "x_interp" else spec.fft(grid(ref_name))
+                    y, yp = grid("y"), grid("y_pred")
+                    Fy, Fp = spec.fft(y), spec.fft(yp)
+                    if has_xi:
+                        Fx = spec.fft(grid("x_interp"))
+                        Fxm = Fx if ref_name == "x_interp" else spec.fft(grid(ref_name))
+                    else:   # no x_interp in the file (AIFS-ENS rows): the input comes from the native x only
+                        Fx = Fxm = None
                     # input spectrum: from the native input when the file has it (rule 41); the residual
                     # terms stay defined against x_interp (y - x_interp is what the model learns)
                     if f.native and smp_in is not None:
@@ -258,9 +266,12 @@ def accumulate(files, variables, members, method, res_deg, margin_deg, box_spec,
                     else:
                         p_in = spec.power(Fx)
                         input_sources.add("x_interp (input interpolated to the output grid)")
+                    nan = np.full_like(spec.power(Fp), np.nan)
                     terms = {"pred": spec.power(Fp), "truth": spec.power(Fy),
-                             "interp": p_in, "resid_pred": spec.power(Fp - Fxm),
-                             "resid_true": spec.power(Fy - Fx), "pred_x_truth": spec.cross(Fp, Fy)}
+                             "interp": p_in,
+                             "resid_pred": spec.power(Fp - Fxm) if Fxm is not None else nan,
+                             "resid_true": spec.power(Fy - Fx) if Fx is not None else nan,
+                             "pred_x_truth": spec.cross(Fp, Fy)}
                     for scope in ("all", pf.date):
                         acc = sums.setdefault((scope, var), {t: 0.0 for t in TERMS})
                         for t in TERMS:

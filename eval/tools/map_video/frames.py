@@ -119,6 +119,8 @@ def read_field(path: Path, source: str, variable: str, *, member: int = 0, sampl
 
     name = SOURCE_VARS[source]
     with xr.open_dataset(path) as ds:
+        if source == "input" and name not in ds and "x" in ds and "lat_lres" in ds:
+            return _native_input(ds, variable, member, sample)
         if name not in ds:
             raise KeyError(f"{path.name} has no {name} ({source}); present: {sorted(ds.data_vars)}")
         da = ds[name]
@@ -127,6 +129,24 @@ def read_field(path: Path, source: str, variable: str, *, member: int = 0, sampl
             v = np.asarray(_select(da, "10v", member, sample).values, dtype=np.float32)
             return np.hypot(u, v)
         return np.asarray(_select(da, variable, member, sample).values, dtype=np.float32)
+
+
+def _native_input(ds, variable: str, member: int, sample: int) -> np.ndarray:
+    """The native input x at the nearest native point of each output point (rule 41), for files without x_interp."""
+    from eval.shared.native_input import InputReader
+
+    reader = InputReader(ds, sample=sample)
+    states = reader.states
+
+    def ch(name):
+        hit = next((i for i, n in enumerate(states) if n in (name, f"{name}_sfc")), None)
+        if hit is None:
+            raise KeyError(f"{name} not in weather_state {states}")
+        return np.asarray(reader.channel(hit, member=member), dtype=np.float32)
+
+    if variable == "10ff":
+        return np.hypot(ch("10u"), ch("10v"))
+    return ch(variable)
 
 
 def member_label(path: Path, member: int) -> str:
