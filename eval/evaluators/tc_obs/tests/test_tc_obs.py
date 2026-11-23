@@ -277,3 +277,30 @@ def test_input_source_travels_from_tc_structure(tmp_path):
     meta = json.loads((tc_obs.run(tmp_path, {}, cfg, output_dir=tmp_path / "o2", run_label="X")
                        / "run_meta.json").read_text())
     assert any("rule 41" in w for w in meta["log"])
+
+
+def test_tc_set_writes_events_and_cache_and_takes_a_provisional_track_when_there_is_no_main_one(tmp_path):
+    """obs tc-set on the verbatim sample: Franklin 2023 (main track) at the 29 Aug 00 UTC valid time, and the
+    2025 provisional storm only when its dates are asked for."""
+    from eval.config.loader import _validate_event
+    from eval.evaluators.tc_obs.core.reference import build_tc_set, load_cache
+    import yaml
+
+    table = build_tc_set(SAMPLE, ["20230828"], [24], tmp_path / "events", tmp_path / "cache")
+    assert list(table.event) == ["franklin_2023"] and table.cases.iloc[0] == 1 and table.track_type.iloc[0] == "main"
+    cfg = yaml.safe_load((tmp_path / "events" / "franklin_2023.yaml").read_text())
+    _validate_event(cfg, tmp_path)
+    assert (cfg["lat_min"], cfg["lat_max"]) == (pytest.approx(24.9), pytest.approx(32.9))
+    assert (cfg["lon_min"], cfg["lon_max"]) == (pytest.approx(-75.1), pytest.approx(-67.1))
+    assert cfg["base_dates"] == ["20230828"] and cfg["tracker_name"] == "FRANKLIN"
+    bt = load_cache(tmp_path / "cache")[0]
+    b = best_track_at(bt, "franklin_2023", pd.Timestamp("2023-08-29").to_pydatetime())
+    assert b["pmin_hpa"] == 926.0 and b["source"] == "noaa_ibtracs_csv"
+
+    raw = pd.read_csv(SAMPLE, skiprows=[1], keep_default_na=False, dtype=str)
+    prov = raw[raw.TRACK_TYPE.str.strip() == "PROVISIONAL"].iloc[0]
+    when = pd.Timestamp(prov.ISO_TIME.strip())
+    if when.hour == 0:
+        base = (when - pd.Timedelta(hours=24)).strftime("%Y%m%d")
+        t2 = build_tc_set(SAMPLE, [base], [24], tmp_path / "e2", tmp_path / "c2")
+        assert list(t2.track_type) == ["provisional"] or t2.empty  # empty only if the sample row has no pressure

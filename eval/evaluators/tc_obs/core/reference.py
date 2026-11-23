@@ -91,6 +91,14 @@ def read_noaa_csv(path, events, season: int | None = None, window=None):
         raise ValueError(f"IBTrACS names matching several storms (season {season}, window {window}): "
                          f"{x[x.NAME.isin(sids[sids > 1].index)].groupby('NAME').SID.unique().to_dict()}")
 
+    return _noaa_frame(x, x.NAME)
+
+
+def _noaa_frame(x, event):
+    """The cache columns (units and wind rule of ``read_noaa_csv``) of already selected NOAA CSV rows ``x``,
+    under the event names ``event`` (a Series on the index of ``x``)."""
+    import pandas as pd
+
     def num(col):
         return pd.to_numeric(x[col].str.strip(), errors="coerce") if col in x else pd.Series(np.nan, index=x.index)
 
@@ -105,10 +113,81 @@ def read_noaa_csv(path, events, season: int | None = None, window=None):
                                  np.where(wmo.notna(), "wmo_wind", "")))
     pres = num("USA_PRES").fillna(num("WMO_PRES"))
     t = pd.to_datetime(x["ISO_TIME"].str.strip())
-    return pd.DataFrame({"event": x.NAME, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H%M"),
+    return pd.DataFrame({"event": event, "storm_id": x["SID"].astype(str), "time": t.dt.strftime("%Y%m%d%H%M"),
                          "lat": num("LAT"), "lon": _wrap(num("LON")), "pmin_hpa": pres, "wind_ms": wind,
                          "wind_src": wind_src, "rmw_km": num("USA_RMW") * NMILE_KM,
                          "source": "noaa_ibtracs_csv"}).reset_index(drop=True)
+
+
+def build_tc_set(noaa_csv, base_dates, leads, events_dir, cache_dir, *, margin_deg: float = 4.0,
+                 max_pmin_hpa: float | None = None, min_cases: int = 1):
+    """Event files and a best-track cache for EVERY storm of a period, from a NOAA IBTrACS CSV alone.
+
+    For a set of global predictions (``base_dates`` YYYYMMDD at 00 UTC, ``leads`` in hours) with no hand-made
+    event files: every storm with a best-track fix at a valid time becomes one event ``<name>_<year>``
+    (``sid_<SID>_<year>`` when unnamed) with box = its fixes at the valid times +- ``margin_deg`` and
+    base_dates = the dates that have such a fix. A storm's 'main' track is used when the file has one, else
+    its PROVISIONAL track (recent seasons; ``track_type`` in best_track.csv says which); spur tracks never.
+    ``max_pmin_hpa`` keeps only storms that reach it at a valid time; ``min_cases`` drops storms with fewer
+    (date, lead) cases. Writes ``events_dir/<event>.yaml`` and ``cache_dir/{best_track.csv,tc_meta.json}``
+    (no tracker files: enough for tc_structure's best-track anchor and the suite's IBTrACS curves).
+    Returns a frame of one row per event (cases, lowest pressure, track type)."""
+    import pandas as pd
+    import yaml
+
+    x = pd.read_csv(noaa_csv, skiprows=[1], low_memory=False, keep_default_na=False, dtype=str)
+    t = pd.to_datetime(x["ISO_TIME"].str.strip())
+    bases = [pd.Timestamp(str(d)) for d in base_dates]
+    valid = {b + pd.Timedelta(hours=int(l)): None for b in bases for l in leads}
+    x = x[(t >= min(valid) - pd.Timedelta(days=1)) & (t <= max(valid) + pd.Timedelta(days=1))].copy()
+    x["_t"] = pd.to_datetime(x["ISO_TIME"].str.strip())
+    x["_type"] = x["TRACK_TYPE"].str.strip().str.lower() if "TRACK_TYPE" in x else "main"
+    rows, frames = [], []
+    for sid, g in x.groupby("SID"):
+        kind = "main" if (g._type == "main").any() else "provisional" if (g._type == "provisional").any() else None
+        if kind is None:
+            continue
+        g = g[g._type == kind]
+        year = min(valid).year
+        name = g["NAME"].iloc[-1].strip().lower().replace(" ", "_").replace(":", "_")
+        event = f"sid_{sid.strip().lower()}_{year}" if name in ("", "unnamed", "not_named") else f"{name}_{year}"
+        fr = _noaa_frame(g, pd.Series(event, index=g.index))
+        fr["track_type"] = kind
+        ft = pd.to_datetime(fr.time, format="%Y%m%d%H%M")
+        at = fr[ft.isin(list(valid)) & fr.lat.notna() & fr.lon.notna() & fr.pmin_hpa.notna()]
+        at_t = ft[at.index]
+        cases = [(b, int(l)) for b in bases for l in leads if (at_t == b + pd.Timedelta(hours=int(l))).any()]
+        if len(cases) < max(1, min_cases) or (max_pmin_hpa is not None and at.pmin_hpa.min() > max_pmin_hpa):
+            continue
+        lon = np.unwrap(np.radians(at.lon.to_numpy(float)))        # a track across the dateline stays one box
+        west, east = np.degrees(lon.min()) - margin_deg, np.degrees(lon.max()) + margin_deg
+        dates = sorted({b.strftime("%Y%m%d") for b, _ in cases})
+        cfg = {"name": event, "full_name": f"{g['NAME'].iloc[-1].strip()} (IBTrACS {sid.strip()}, {kind} track)",
+               "lat_min": float(max(-89.0, at.lat.min() - margin_deg)), "lat_max": float(min(89.0, at.lat.max() + margin_deg)),
+               "lon_min": float(_wrap(west)), "lon_max": float(_wrap(east)),
+               "dates": sorted({d[6:] for d in dates}), "base_dates": dates, "analysis_dates": [],
+               "year": dates[0][:4], "month": dates[0][4:6], "pressure_threshold": 1013.25,
+               "scoring_eligible": False, "tracker_name": g["NAME"].iloc[-1].strip().upper()}
+        Path(events_dir).mkdir(parents=True, exist_ok=True)
+        (Path(events_dir) / f"{event}.yaml").write_text(
+            "# written by eval.cli obs tc-set: box = best-track fixes at the valid times +- "
+            f"{margin_deg:g} degrees\n" + yaml.safe_dump(cfg, sort_keys=False))
+        frames.append(fr)
+        rows.append({"event": event, "storm_id": sid.strip(), "track_type": kind, "cases": len(cases),
+                     "base_dates": len(dates), "min_pmin_hpa": float(at.pmin_hpa.min()),
+                     "max_wind_ms": float(at.wind_ms.max()) if at.wind_ms.notna().any() else np.nan})
+    out = pd.DataFrame(rows, columns=["event", "storm_id", "track_type", "cases", "base_dates", "min_pmin_hpa",
+                                      "max_wind_ms"])
+    if frames:
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        pd.concat(frames, ignore_index=True).to_csv(Path(cache_dir) / "best_track.csv", index=False, float_format="%.4f")
+        meta = {"cache_version": CACHE_VERSION, "kind": "tropical cyclone best tracks of a period (obs tc-set)",
+                "created": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "host": socket.gethostname(),
+                "noaa_csv": str(noaa_csv), "base_dates": [b.strftime("%Y%m%d") for b in bases],
+                "leads": [int(l) for l in leads], "margin_deg": margin_deg, "events": out.to_dict("records"),
+                "provisional_events": sorted(out[out.track_type == "provisional"].event)}
+        (Path(cache_dir) / "tc_meta.json").write_text(json.dumps(meta, indent=2))
+    return out
 
 
 def decode_tracker(bufr_path):
