@@ -20,7 +20,8 @@ regional grid): regression U-Net on the full image, then the patched residual di
   - schedule: every stage now writes total_batch_size, batch_size_per_gpu, lr, lr_rampup, lr_decay, lr_decay_rate,
     training_duration, save_checkpoint_freq, validation_freq explicitly (values not given = the example's base files,
     read from --repo); diffusion P_mean / P_std only when given (train.py passes them to the residual loss; NVIDIA's
-    files never set them: loss defaults P_mean 0, P_std 1.2). The generator refuses lr_decay < 1 with lr_rampup <= 0.
+    files never set them: loss defaults P_mean 0, P_std 1.2). The generator refuses lr_decay < 1 with lr_rampup <= 0,
+    and with lr_decay < 1 it needs lr_rampup and lr_decay_rate given explicitly (or --scale-schedule-to-batch).
     --scale-schedule-to-batch (diffusion): ramp-up and decay interval = the published 1,000,000 / 500,000 samples
     (read as values for batch 256) x total_batch_size / 256, the same schedule counted in optimizer updates
   - batch_size_per_gpu fixed (REG_BPG, DIFF_BPG) so the global batch is reached by gradient accumulation
@@ -80,6 +81,10 @@ def schedule(stage: str, group: str, conf: Path, a, scale: bool) -> dict:
         assert given["lr_rampup"] * PUBLISHED_BATCH == PUBLISHED_RAMPUP * b and \
             given["lr_decay_rate"] * PUBLISHED_BATCH == PUBLISHED_DECAY_RATE * b, f"total_batch_size {b}: not exact in samples"
     s = {k: (given[k] if given[k] is not None else hp[k]) for k in SCHEDULE}
+    assert float(s["lr_decay"]) >= 1 or (given["lr_rampup"] is not None and given["lr_decay_rate"] is not None), (
+        f"{stage}: lr_decay {float(s['lr_decay']):g} < 1 needs the sample-based schedule given explicitly: "
+        f"--{'reg' if stage == 'regression' else 'diff'}-lr-rampup N and --{'reg' if stage == 'regression' else 'diff'}"
+        "-lr-decay-rate N (samples), or --scale-schedule-to-batch")
     s["lr"], s["lr_decay"] = float(s["lr"]), float(s["lr_decay"])
     s["lr_rampup"], s["lr_decay_rate"] = int(float(s["lr_rampup"])), int(float(s["lr_decay_rate"]))
     assert not (s["lr_decay"] < 1 and s["lr_rampup"] <= 0), (

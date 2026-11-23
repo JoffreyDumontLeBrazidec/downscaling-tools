@@ -5,7 +5,8 @@
 # diffusion training smoke of 640 samples with the x diffusion config (time inputs, regression = the widened file) to
 # read seconds per sample and peak GPU memory. Booster is OverSubscribe=EXCLUSIVE: a job always gets (and is charged)
 # whole nodes, so the header asks for the whole node and uses its 4 GPUs.
-#   sbatch --export=ALL,CD_LADDER_CKPTS="<paths or globs>"[,CD_DIFF_SMOKE=1] cd_ladder_jupiter.sbatch
+#   CD_LADDER_CKPTS='<paths or globs, space separated>' [CD_DIFF_SMOKE=1] sbatch --export=ALL cd_ladder_jupiter.sbatch
+# (not --export=ALL,CD_LADDER_CKPTS=a,b: sbatch splits --export at commas)
 # Optional: CD_LADDER_OUT (default $CD/eval_x/ladder), CD_LADDER_N (48), CD_LADDER_MIN (14), CD_WIDEN_DONOR (default the
 # final regression checkpoint), CD_WIDENED (default $CD_KIT/tests_20261123/widened/<donor name>.w5.mdlus).
 #SBATCH --job-name=cd_ladder
@@ -24,7 +25,7 @@ source /e/data1/jureap-data/ecmwf/users/jdumont/sandbox/20261120-corrdiff-jupite
 python ~/kernel_guard/kernel_guard.py check || exit 97
 python -c "import physicsnemo, torch; print(physicsnemo.__version__, torch.cuda.is_available(), torch.cuda.device_count())"
 source $CD_KIT/cd_train_jupiter_body.sh
-: "${CD_LADDER_CKPTS:?CD_LADDER_CKPTS=<regression .mdlus paths or globs, space or comma separated>}"
+: "${CD_LADDER_CKPTS:?CD_LADDER_CKPTS=<regression .mdlus paths or globs, space separated>}"
 OUT=${CD_LADDER_OUT:-$CD/eval_x/ladder}; mkdir -p $OUT
 CFG=$CD_CONF_DIR/config_training_e2v4x_diffusion.yaml
 DONOR=${CD_WIDEN_DONOR:-$CD/run/reg/checkpoints_regression/CorrDiffRegressionUNet.0.1000192.mdlus}
