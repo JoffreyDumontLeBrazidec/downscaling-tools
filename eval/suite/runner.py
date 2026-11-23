@@ -19,6 +19,9 @@ from eval.suite.cases import CaseList, prediction_index, resolve_date
 from eval.suite.stitch import stitch
 
 LOG = logging.getLogger(__name__)
+# variables whose colour range is fitted to the map box (1st-99th percentile); wind keeps 0 at the bottom and fits
+# its top to the box; tp keeps its fixed rain classes
+FITTED_RANGE = ("2t", "msl", "t_850", "z_500")
 PAGES = ("spectra", "tc_members", "rain_members", "areas", "scores", "stills", "tp_dist", "tc_dist")
 
 
@@ -39,6 +42,8 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         argv += ["--members", members]
     if case.vmax is not None:
         argv += ["--vmax", str(case.vmax)]
+    if case.vmin is not None:
+        argv += ["--vmin", str(case.vmin)]
     argv += ["--dpi", "200"]
     if cells:   # opt-in only: the owner rejected grid cells as the look of the pages (23 Nov 09:45, "awful")
         argv += ["--cells"]
@@ -50,6 +55,23 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
     if not np.isfinite(field_max(first, state, "y", case.extent)):
         argv += ["--no-truth"]   # the target carries no such field here (e.g. tp of an analysis): no target row
         LOG.warning("suite: no target %s in %s; the target row is left out", state, first.name)
+    if case.variable in FITTED_RANGE and case.vmin is None and case.vmax is None and case.extent:
+        # colour range fitted to the box (owner 23 Nov): 1st-99th percentile of the target (else input) member mean
+        from eval.suite.cases import field_stats
+
+        st = field_stats(first, state, "y", case.extent) or field_stats(first, state, "x", case.extent)
+        if st is not None:
+            sc, off = _ZV[case.variable]["scale"], _ZV[case.variable]["offset"]
+            lo, hi = st["p01"] * sc + off, st["p99"] * sc + off
+            pad = 0.05 * max(hi - lo, 1e-6)
+            argv += ["--vmin", f"{lo - pad:.2f}", "--vmax", f"{hi + pad:.2f}"]
+    elif case.variable == "wind10m" and case.vmax is None and case.extent:
+        # wind keeps 0 at the bottom; the top is fitted to the strongest target or model member in the box
+        from eval.suite.cases import speed_max
+
+        top = speed_max(first, case.extent)
+        if np.isfinite(top):
+            argv += ["--vmax", f"{max(15.0, 5.0 * np.ceil(1.02 * top / 5.0)):g}"]
     args = build_arg_parser().parse_args(argv)
     w, e, s_, n_ = args.extent
     if args.proj_lon is None:
@@ -148,9 +170,20 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                 date, _ = resolve_date(case, list(runs.values()), pick="first")
             else:
                 date, how = resolve_date(case, list(runs.values()), pick=pick)
+                if label == "rain_members" and case.box_deg and case.extent:
+                    # a box_deg box centred on the wettest target (else input) point of the search extent
+                    from dataclasses import replace
+
+                    from eval.suite.cases import box_around, field_stats
+
+                    f0 = prediction_index(next(iter(runs.values())))[(date, case.step)]
+                    st = field_stats(f0, "tp", "y", case.extent) or field_stats(f0, "tp", "x", case.extent)
+                    if st is not None:
+                        case = replace(case, extent=box_around(st["lat"], st["lon"], case.box_deg))
+                        how += f"; {case.box_deg:g}-degree box on its maximum at {st['lat']:.1f}N {st['lon']:.1f}E"
             # side by side (owner 23 Nov 09:07): input | target | model, each 5 rows x 2 members
             pngs = _zoom(map_runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=2, cells=cells)
-            dst = stitch([pngs], out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
+            dst = stitch([pngs], top_align=True, out=out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
             return [dst], (f"{case.name} {date} +{case.step} h ({how}); side by side: input, target, "
                            f"{', '.join(map_runs)}")
         return go

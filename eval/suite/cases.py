@@ -32,6 +32,8 @@ class Case:
     variable: str = "wind10m"
     event: str | None = None
     vmax: float | None = None
+    vmin: float | None = None
+    box_deg: float | None = None      # map box of box_deg degrees of latitude (longitude widened by 1/cos(lat))
 
 
 @dataclass
@@ -53,14 +55,30 @@ class CaseList:
     members: str = "1-10"
 
 
+# Map box of the suite (owner 23 Nov 2026 ~10:00 UTC: 3 degrees far too tight, 17 degrees too blurry): about
+# 10 degrees of latitude, with the colour range fitted to the box.
+BOX_DEG = 10.0
+
+
+def box_around(lat: float, lon: float, box_deg: float = BOX_DEG) -> list[float]:
+    """[lon_min, lon_max, lat_min, lat_max] of box_deg degrees of latitude centred on (lat, lon)."""
+    half = 0.5 * box_deg
+    half_lon = half / max(0.3, float(np.cos(np.deg2rad(lat))))
+    return [lon - half_lon, lon + half_lon, lat - half, lat + half]
+
+
 def _case(name: str, d: dict | None, default_var: str) -> Case | None:
     if not d:
         return None
+    if d.get("center") and not d.get("extent"):
+        d = {**d, "extent": box_around(float(d["center"][0]), float(d["center"][1]), float(d.get("box_deg", BOX_DEG)))}
     return Case(name=str(d.get("name", name)), date=str(d.get("date", "auto")), step=int(d.get("step", 24)),
                 extent=[float(v) for v in d["extent"]] if d.get("extent") else None,
                 variable=str(d.get("variable", default_var)), event=d.get("event"),
-                vmax=float(d["vmax"]) if d.get("vmax") is not None else
-                (70.0 if name == "tc" and d.get("variable", default_var) == "wind10m" else None))
+                # no fixed TC 0-70 m/s any more: the top is fitted to the box (owner 23 Nov ~10:00)
+                vmax=float(d["vmax"]) if d.get("vmax") is not None else None,
+                vmin=float(d["vmin"]) if d.get("vmin") is not None else None,
+                box_deg=float(d["box_deg"]) if d.get("box_deg") is not None else None)
 
 
 def available_case_lists() -> list[str]:
@@ -122,14 +140,15 @@ def _in_extent(lat, lon, extent):
     return (lat >= s) & (lat <= n) & (lon >= w) & (lon <= e)
 
 
-def field_max(path: Path, variable: str, name: str, extent) -> float:
-    """Member-mean maximum of one state of ``name`` (y, x) inside the extent; NaN when absent or empty."""
+def field_stats(path: Path, variable: str, name: str, extent) -> dict | None:
+    """Member-mean field of one state of ``name`` (y, x) inside the extent: max, its position, 1st and 99th
+    percentiles. None when absent, all-NaN or all zero."""
     import xarray as xr
 
     with xr.open_dataset(path, decode_timedelta=False) as ds:
         states = [str(s) for s in ds["weather_state"].values]
         if variable not in states or name not in ds:
-            return float("nan")
+            return None
         da = ds[name]
         if "sample" in da.dims:
             da = da.isel(sample=0)
@@ -140,8 +159,39 @@ def field_max(path: Path, variable: str, name: str, extent) -> float:
     sel = _in_extent(lat, lon, extent)
     v = mean[sel]
     if not np.isfinite(v).any() or np.nanmax(np.abs(v)) == 0.0:
-        return float("nan")
-    return float(np.nanmax(v))
+        return None
+    i = int(np.nanargmax(v))
+    lon_s = ((np.asarray(lon)[sel] + 180.0) % 360.0) - 180.0
+    return {"max": float(v[i]), "lat": float(np.asarray(lat)[sel][i]), "lon": float(lon_s[i]),
+            "p01": float(np.nanpercentile(v, 1)), "p99": float(np.nanpercentile(v, 99))}
+
+
+def speed_max(path: Path, extent, names=("y", "y_pred")) -> float:
+    """Largest 10 m wind speed (m/s) of any member of ``names`` inside the extent; NaN when none is there."""
+    import xarray as xr
+
+    best = float("nan")
+    with xr.open_dataset(path, decode_timedelta=False) as ds:
+        states = [str(s) for s in ds["weather_state"].values]
+        if "10u" not in states or "10v" not in states:
+            return best
+        sel = _in_extent(ds["lat_hres"].values, ds["lon_hres"].values, extent)
+        for name in names:
+            if name not in ds:
+                continue
+            da = ds[name].isel(sample=0) if "sample" in ds[name].dims else ds[name]
+            u = np.asarray(da.isel(weather_state=states.index("10u")).values, float)[..., sel]
+            v = np.asarray(da.isel(weather_state=states.index("10v")).values, float)[..., sel]
+            sp = np.hypot(u, v)
+            if np.isfinite(sp).any():
+                best = float(np.nanmax([best, np.nanmax(sp)]))
+    return best
+
+
+def field_max(path: Path, variable: str, name: str, extent) -> float:
+    """Member-mean maximum of one state of ``name`` (y, x) inside the extent; NaN when absent or empty."""
+    st = field_stats(path, variable, name, extent)
+    return float("nan") if st is None else st["max"]
 
 
 def resolve_date(case: Case, run_dirs: list[Path], *, pick: str) -> tuple[str, str]:
@@ -166,7 +216,7 @@ def resolve_date(case: Case, run_dirs: list[Path], *, pick: str) -> tuple[str, s
     return dates[0], "first common date (no tp in target or input)"
 
 
-def tc_auto(case: Case, cases_csv: Path, half_lat: float = 7.0) -> tuple[Case, str]:
+def tc_auto(case: Case, cases_csv: Path, half_lat: float = 0.5 * BOX_DEG) -> tuple[Case, str]:
     """The deepest storm case at the case step of a tc_structure read: (case with date and extent, how).
 
     Depth = member-mean central pressure of the target (else of the input) over the found members of the
@@ -214,7 +264,7 @@ def best_track_fixes(cache_dir: Path | None = None, ibtracs_csv: Path | None = N
     return out.dropna()
 
 
-def tc_from_best_track(case: Case, run_dirs: list[Path], fixes, half_lat: float = 7.0,
+def tc_from_best_track(case: Case, run_dirs: list[Path], fixes, half_lat: float = 0.5 * BOX_DEG,
                        edge_margin_deg: float = 6.0) -> tuple[Case, str]:
     """The deepest best-track fix at the valid time of a common (date, case step), inside the files' domain and at
     least ``edge_margin_deg`` from a regional box edge (a storm at the edge loses its core, Melissa 23 Nov).

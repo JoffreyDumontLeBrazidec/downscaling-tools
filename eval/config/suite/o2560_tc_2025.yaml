@@ -11,18 +11,20 @@ tc:                        # Humberto rapid intensification: IBTrACS 949 hPa, in
   name: humberto
   date: "20250926"
   step: 24
-  extent: [-66.0, -50.0, 15.5, 29.5]
+  center: [22.5, -58.0]     # 10-degree box (owner 23 Nov: ~10 degrees, colour range fitted)
   variable: wind10m
 rain:
   name: e2_rain
   date: auto               # wettest target member-mean tp max in the E2 box at +24 h
   step: 24
-  extent: [-79.0, 39.0, 11.0, 69.0]
+  extent: [-79.0, 39.0, 11.0, 69.0]   # search box; the map is a 10-degree box on the wettest point
+  box_deg: 10
   variable: tp
 areas:
-  - {name: alps, date: auto, step: 24, extent: [4.0, 16.0, 43.0, 49.0], variable: tp}
-  - {name: north_sea, date: auto, step: 24, extent: [-6.0, 14.0, 50.0, 62.0], variable: wind10m}
-  - {name: iberia, date: auto, step: 24, extent: [-10.0, 4.0, 36.0, 44.0], variable: 2t}
+  # 10-degree boxes (owner 23 Nov ~10:00: 3 degrees too tight, 17 too blurry); 2t/msl colour range fitted to the box
+  - {name: alps, date: auto, step: 24, center: [46.0, 10.0], variable: 2t}
+  - {name: north_sea, date: auto, step: 24, center: [56.0, 4.0], variable: wind10m}
+  - {name: iberia, date: auto, step: 24, center: [40.0, -4.0], variable: tp}
 stills:
   grid: O2560              # the files are an E2 crop of O2560
   cases:

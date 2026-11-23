@@ -229,7 +229,7 @@ def test_grid_names_in_titles():
     titles, hres = pm.panel_titles({"MF4": "MF4 ({hres})"}, 40_320, 421_120)
     assert hres == "O320"
     assert titles["eefo"] == "Input (EEFO O96)" and "ENFO O320" in titles["enfo"]
-    assert titles["MF4"] == "MF4 (O320)"
+    assert titles["MF4"] == "MF4 (O320, 36 km)"   # {hres} in a --title carries the km
     assert pm.default_title("EDM30", hres) == "Model, EDM30 (O320)"
     titles, hres = pm.panel_titles({}, 7_000, 300_000)
     assert hres == "O1280" and titles == pm.DEFAULT_TITLES
