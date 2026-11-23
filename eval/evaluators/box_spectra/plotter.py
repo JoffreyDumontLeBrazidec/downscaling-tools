@@ -101,6 +101,34 @@ def input_limit_marks(results_dir) -> list[tuple[float, str]]:
     return [got] if got else []
 
 
+def target_limit_marks(results_dir) -> list[tuple[float, str]]:
+    """The target-limit mark of a box_spectra read: spectral truncation T = N - 1 of the octahedral grid of the
+    target (lat_hres of the first file in run_meta.json; e.g. T2559, 16 km for an O2560 iekm). Below it the target
+    analysis holds no waves, so model variance there has nothing to match. Empty when the grid is not known."""
+    import json
+
+    from eval.plotting.spec_helpers import EARTH_CIRCUMFERENCE_KM
+
+    path = Path(results_dir) / "run_meta.json"
+    if not path.exists():
+        return []
+    try:
+        files = json.loads(path.read_text()).get("files") or []
+        import xarray as xr
+
+        from eval.evaluators.zoom_maps.core.plot_member_wind_maps import grid_from_lats, octahedral_name
+
+        with xr.open_dataset(files[0], decode_timedelta=False) as ds:
+            lat = ds["lat_hres"].values
+        name = octahedral_name(lat.size) or grid_from_lats(lat)
+    except Exception:   # a moved or unreadable file: no mark rather than a failed page
+        return []
+    if not name:
+        return []
+    t = int(name[1:]) - 1
+    return [(float(t), f"Target limit (T{t}, {EARTH_CIRCUMFERENCE_KM / t:.0f} km)")]
+
+
 def plot_grid(results_dir, *, output_dir=None, title=None):
     """The standard spectra figure (eval.plotting.spectra_grid) from bins.csv: box_spectra_grid.png/.pdf."""
     from eval.plotting.spectra_grid import plot_spectra_grid
@@ -114,7 +142,8 @@ def plot_grid(results_dir, *, output_dir=None, title=None):
     foot = ("Box FFT amplitude per wavelength bin (display unit), placed at total wavenumber "
             "40030 km / wavelength; ratio = amplitude / truth amplitude (rule 14 full-field ratio).")
     return plot_spectra_grid(grid_panels(rows), Path(output_dir or results_dir) / "box_spectra_grid",
-                             title=title, footnote=foot, marks=input_limit_marks(results_dir))
+                             title=title, footnote=foot,
+                             marks=input_limit_marks(results_dir) + target_limit_marks(results_dir))
 
 
 def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, **kwargs):

@@ -23,7 +23,7 @@ def model_style(i: int, **kw) -> dict:
 
 def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str | None) -> list[Path]:
     """One spectra grid: target and input from the first read, one model curve per read (box_spectra bins.csv)."""
-    from eval.evaluators.box_spectra.plotter import grid_panels, input_limit_marks
+    from eval.evaluators.box_spectra.plotter import grid_panels, input_limit_marks, target_limit_marks
     from eval.evaluators.box_spectra.runner import read_bins
     from eval.plotting.spectra_grid import Curve, plot_spectra_grid
 
@@ -46,7 +46,8 @@ def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str 
     title = f"Spectra +{step} h{f', box {box}' if box else ''}: target, input and model ({'; '.join(draws)})"
     foot = ("Box FFT amplitude per wavelength bin, placed at total wavenumber 40030 km / wavelength; ratio = amplitude "
             "/ target amplitude. Target and input curves are those of the first run's files.")
-    marks = input_limit_marks(next(iter(reads.values())))
+    first = next(iter(reads.values()))
+    marks = input_limit_marks(first) + target_limit_marks(first)   # input T1279 31 km, target T2559 16 km on 4 km
     return plot_spectra_grid(panels, out_stem, title=title, footnote=foot, marks=marks)
 
 

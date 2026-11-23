@@ -238,3 +238,16 @@ def test_regional_grid_names():
     titles, hres = panel_titles({"enfo": "Target ({hres})", "eefo": "Input ({lres})"}, 50_000, 200_000,
                                 rows(1280), rows(2560))
     assert titles["enfo"] == "Target (O2560, 4.4 km)" and titles["eefo"] == "Input (O1280, 9 km)"
+
+
+def test_target_limit_mark(inputs, tmp_path):
+    """Spectra pages mark the target limit: T = N - 1 of the target grid (O96 synthetic -> T95)."""
+    import json as _json
+
+    from eval.evaluators.box_spectra.plotter import target_limit_marks
+
+    root, runs, *_ = inputs
+    f = sorted(next(iter(runs.values())).glob("predictions_*.nc"))[0]
+    (tmp_path / "run_meta.json").write_text(_json.dumps({"files": [str(f)]}))
+    (wvn, label), = target_limit_marks(tmp_path)
+    assert wvn == 95.0 and label.startswith("Target limit (T95")
