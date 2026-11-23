@@ -106,7 +106,9 @@ def test_every_page(inputs):
     by = {p["page"]: p for p in rec["pages"]}
     failed = {k: v["note"] + v.get("trace", "") for k, v in by.items() if not v["files"]}
     assert not failed, failed
-    assert sorted(by) == ["01", "02", "03", "04", "05", "06", "07", "08", "09"]
+    assert sorted(by) == ["01", "02", "03", "04", "05", "05z", "06", "07", "08", "09"]
+    assert len(list(out.glob("05z_zooms_*.png"))) == 2
+    assert "close level" in by["05z"]["note"]
     for name in ("01_spectra_L024.png", "02_spectra_L072.png", "06_scores_stations.png", "07_tp_stills.png",
                  "05_areas_member1.png", "08_tp_distribution.png", "09_tc_distribution.png"):
         assert (out / name).exists(), name
@@ -173,6 +175,27 @@ def test_areas_page_in_real_resolution_cells(inputs):
     rec = json.loads((out / "suite_manifest.json").read_text())
     assert rec["pages"][0]["files"], rec["pages"][0]
     assert (out / "05_areas_member1.png").exists()
+
+
+def test_zoom_levels_never_tighter_than_close():
+    from eval.suite.simple_maps import box_around, widen_to_close, width_km
+
+    close = 1000.0
+    tight = [9.0, 12.0, 44.0, 46.0]                      # ~230 km wide: tighter than the close level
+    ext, widened = widen_to_close(tight, close)
+    assert widened and width_km(ext) >= close - 1 and ext[0] <= 9.0 and ext[1] >= 12.0
+    wide = box_around(10.0, 45.0, 4000.0)
+    assert widen_to_close(wide, close) == (wide, False)
+    assert abs(width_km(box_around(-60.0, 20.0, 1000.0)) - 1000.0) < 1
+
+
+def test_spacing_of_octahedral_grids():
+    from eval.suite.simple_maps import spacing_km
+    from eval.tests.synthetic_predictions import octahedral_grid
+
+    lat, lon = octahedral_grid(320)
+    k = (lat > 30) & (lat < 60) & (lon > 0) & (lon < 40)
+    assert 30 < spacing_km(lat[k], lon[k]) < 40          # O320 ~ 35 km
 
 
 def test_tc_case_from_ibtracs_csv(inputs):

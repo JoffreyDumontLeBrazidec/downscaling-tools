@@ -22,7 +22,7 @@ LOG = logging.getLogger(__name__)
 # variables whose colour range is fitted to the map box (1st-99th percentile); wind keeps 0 at the bottom and fits
 # its top to the box; tp keeps its fixed rain classes
 FITTED_RANGE = ("2t", "msl", "t_850", "z_500")
-PAGES = ("spectra", "tc_members", "rain_members", "areas", "scores", "stills", "tp_dist", "tc_dist")
+PAGES = ("spectra", "tc_members", "rain_members", "areas", "zooms", "scores", "stills", "tp_dist", "tc_dist")
 
 
 def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | None, cols: int = 5,
@@ -87,6 +87,27 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         tag = "members*" if members else "n001"
         found += sorted(out.glob(f"{key}_{token}_init{date}_{tag}_{case.name}_f{case.step:03d}.png"))[:1]
     return found
+
+
+def _not_tighter_than_close(case, runs: dict[str, Path], date: str, close_points: int):
+    """The case with its extent widened to the close zoom level when it is tighter (owner 23 Nov 10:19, rule 53:
+    nothing more zoomed in than the close level; fixed in output grid points, so it depends on the lane)."""
+    import dataclasses
+
+    import xarray as xr
+
+    from eval.suite.simple_maps import spacing_km, widen_to_close
+
+    if not case.extent:
+        return case
+    f = prediction_index(next(iter(runs.values())))[(date, case.step)]
+    with xr.open_dataset(f) as ds:
+        dx = spacing_km(ds["lat_hres"].values, ((ds["lon_hres"].values + 180.0) % 360.0) - 180.0)
+    ext, widened = widen_to_close(case.extent, close_points * dx)
+    if widened:
+        LOG.info("suite: %s box %s widened to the close zoom level %s (%d x %.1f km)", case.name, case.extent,
+                 [round(v, 2) for v in ext], close_points, dx)
+    return dataclasses.replace(case, extent=ext)
 
 
 def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None) -> list[Path]:
@@ -181,6 +202,7 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                     if st is not None:
                         case = replace(case, extent=box_around(st["lat"], st["lon"], case.box_deg))
                         how += f"; {case.box_deg:g}-degree box on its maximum at {st['lat']:.1f}N {st['lon']:.1f}E"
+            case = _not_tighter_than_close(case, map_runs, date, cases.zoom_close_points)
             # side by side (owner 23 Nov 09:07): input | target | model, each 5 rows x 2 members
             pngs = _zoom(map_runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=2, cells=cells)
             dst = stitch([pngs], top_align=True, out=out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
@@ -203,6 +225,29 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                                                               + "; ".join(notes))
 
     page("05", "areas: input / target / model by area", areas)
+
+    def zooms():
+        # zoom ladder (owner 23 Nov 10:19, rule 53): one page per area, one row per zoom level, simple smooth maps;
+        # the close level is the tightest allowed, fixed in output grid points (eval/suite/simple_maps.py)
+        from eval.suite.simple_maps import zoom_ladder
+
+        files, notes = [], []
+        label, d = next(iter(map_runs.items()))
+        for case in cases.areas:
+            if not case.extent:
+                continue
+            date, how = resolve_date(case, list(runs.values()), pick="first")
+            f = prediction_index(d)[(date, case.step)]
+            rows, info = zoom_ladder(f, case, date, work / f"zooms_{case.name}", model_label=label,
+                                     levels=cases.zoom_levels, close_points=cases.zoom_close_points)
+            files.append(stitch([[r] for r in rows],
+                                out / f"05z_zooms_{case.name}_{case.variable}_{date}_L{case.step:03d}.png"))
+            notes.append(f"{case.name} {case.variable} {date} +{case.step} h ({how}); {info}")
+        if not files:
+            raise ValueError(f"no area with a box in case list {cases.name}")
+        return files, f"member 1, input | target | {label}; " + "; ".join(notes)
+
+    page("05z", "zooms: zoom ladder by area", zooms)
 
     def scores():
         if not obs:

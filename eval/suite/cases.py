@@ -53,6 +53,8 @@ class CaseList:
                                                                      ["2t", "lapse"], ["msl", "raw"]])
     score_region: str = "all"
     members: str = "1-10"
+    zoom_levels: list[int] = field(default_factory=lambda: [1, 2, 4])
+    zoom_close_points: int = 230
 
 
 # Map box of the suite (owner 23 Nov 2026 ~10:00 UTC: 3 degrees far too tight, 17 degrees too blurry): about
@@ -111,6 +113,9 @@ def load_case_list(spec: str) -> CaseList:
     cl.score_variables = [list(v) for v in sc.get("variables", cl.score_variables)]
     cl.score_region = str(sc.get("region", cl.score_region))
     cl.members = str(d.get("members", cl.members))
+    zm = d.get("zoom", {}) or {}
+    cl.zoom_levels = [int(v) for v in zm.get("levels", cl.zoom_levels)]
+    cl.zoom_close_points = int(zm.get("close_points", cl.zoom_close_points))
     return cl
 
 
