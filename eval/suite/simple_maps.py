@@ -32,6 +32,7 @@ DEFAULT_LEVELS = (1, 2, 4)
 HEIGHT_RATIO = 0.7          # box height / width (km), a landscape panel
 KM_PER_DEG = 111.2
 _START_AT_ZERO = {"wind10m", "tp"}
+TP_MIN_TOP_MM = 5.0         # smallest colour-bar top for rain (mm per accumulation window)
 
 
 def spacing_km(lat: np.ndarray, lon: np.ndarray) -> float:
@@ -136,9 +137,16 @@ def draw_row(panels: list[dict], extent: list[float], out: Path, *, variable: st
     lat0 = 0.5 * (s + n)
     grids = [_regrid(p["lon"], p["lat"], p["val"], extent, n_x) for p in panels]
     ref = next((g for g, p in zip(grids, panels) if p.get("target")), grids[-1])
+    if variable in _START_AT_ZERO:              # no negative overshoot of the interpolation
+        grids = [np.clip(g, 0.0, None) for g in grids]
+        ref = next((g for g, p in zip(grids, panels) if p.get("target")), grids[-1])
     vmin, vmax = (float(v) for v in np.nanpercentile(ref, pct))
     if variable in _START_AT_ZERO:
         vmin = 0.0
+    if variable == "tp":
+        # a dry box has a 98th percentile near 0 mm, which blows drizzle up to full colour (Iberia 16 Aug 2025):
+        # top = 99.5th percentile of the target, never below TP_MIN_TOP_MM
+        vmax = max(float(np.nanpercentile(ref, 99.5)), TP_MIN_TOP_MM)
     if not vmax > vmin:
         vmax = vmin + 1.0
     aspect = (e - w) * np.cos(np.deg2rad(lat0)) / (n - s)
