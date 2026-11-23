@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--model", default="G300")
     ap.add_argument("--place", default="")
     ap.add_argument("--step-deg", type=float, default=0.02)
+    ap.add_argument("--pct", nargs=2, type=float, default=[2, 98],
+                    help="iekm percentiles for the colour range (TC cores: 0.1 99.9, so the eyewall is not saturated)")
     a = ap.parse_args()
     d = np.load(a.npz)
     lo0, lo1, la0, la1 = a.box
@@ -65,7 +67,7 @@ def main():
         (f"{a.model} member {m} (4.4 km)", d["lon_hres"], d["lat_hres"], field(d, "p_", a.var)),
     ]
     grids = [regrid(lon.astype(float), lat.astype(float), v, glon, glat, lat0) for _, lon, lat, v in panels]
-    vmin, vmax = np.nanpercentile(grids[1], [2, 98])
+    vmin, vmax = np.nanpercentile(grids[1], a.pct)
     if a.var == "wind":
         vmin = 0.0
 
