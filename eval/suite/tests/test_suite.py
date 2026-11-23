@@ -192,6 +192,20 @@ def test_tc_case_from_ibtracs_csv(inputs):
     assert "945 hPa" in p["note"] and "dolphin" in p["note"]
 
 
+def test_kernel_density_integrates_to_one_and_the_panel_width_comes_from_the_smallest_sample():
+    import numpy as np
+
+    from eval.suite.pages import common_kernel_width, kernel_density
+
+    rng = np.random.default_rng(0)
+    small, large = rng.normal(960.0, 15.0, 109), rng.normal(965.0, 12.0, 1090)
+    width = common_kernel_width([large, small])
+    assert width == 1.06 * np.std(small) * 109 ** -0.2
+    grid = np.linspace(850.0, 1050.0, 2001)
+    for v in (small, large):
+        dens = kernel_density(v, grid, width)
+        assert abs(float(np.sum(dens) * (grid[1] - grid[0])) - 1.0) < 1e-3
+    assert common_kernel_width([np.array([1.0])]) == 1.0
 def test_regional_grid_names():
     """A regional box names its real grids (4 km lane: O1280 9 km input, O2560 4.4 km output), not O320/O1280."""
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import grid_from_lats, panel_titles
