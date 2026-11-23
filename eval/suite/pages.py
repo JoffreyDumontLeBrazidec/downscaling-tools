@@ -23,7 +23,7 @@ def model_style(i: int, **kw) -> dict:
 
 def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str | None) -> list[Path]:
     """One spectra grid: target and input from the first read, one model curve per read (box_spectra bins.csv)."""
-    from eval.evaluators.box_spectra.plotter import grid_panels
+    from eval.evaluators.box_spectra.plotter import grid_panels, input_limit_marks
     from eval.evaluators.box_spectra.runner import read_bins
     from eval.plotting.spectra_grid import Curve, plot_spectra_grid
 
@@ -46,7 +46,8 @@ def spectra_page(reads: dict[str, Path], out_stem: Path, *, step: int, box: str 
     title = f"Spectra +{step} h{f', box {box}' if box else ''}: target, input and model ({'; '.join(draws)})"
     foot = ("Box FFT amplitude per wavelength bin, placed at total wavenumber 40030 km / wavelength; ratio = amplitude "
             "/ target amplitude. Target and input curves are those of the first run's files.")
-    return plot_spectra_grid(panels, out_stem, title=title, footnote=foot)
+    marks = input_limit_marks(next(iter(reads.values())))
+    return plot_spectra_grid(panels, out_stem, title=title, footnote=foot, marks=marks)
 
 
 # ---------------------------------------------------------------- 06 scores at stations
@@ -192,6 +193,22 @@ def tp_distribution_page(runs: dict[str, Path], out_stem: Path, *, steps, box_ed
 
 # ---------------------------------------------------------------- 09 TC distributions
 
+def common_kernel_width(samples) -> float:
+    """Silverman's width (1.06 x standard deviation x n^-1/5) of the smallest sample: one width for a whole panel."""
+    usable = [np.asarray(v, float) for v in samples if np.size(v) >= 2 and np.std(v) > 0]
+    if not usable:
+        return 1.0
+    v = min(usable, key=np.size)
+    return float(1.06 * np.std(v) * v.size ** -0.2)
+
+
+def kernel_density(values, grid, width: float) -> np.ndarray:
+    """Gaussian kernel density of ``values`` on ``grid`` (integrates to one)."""
+    v = np.asarray(values, float)[:, None]
+    z = (np.asarray(grid, float)[None, :] - v) / width
+    return np.exp(-0.5 * z * z).sum(axis=0) / (v.shape[0] * width * np.sqrt(2 * np.pi))
+
+
 def tc_distribution_page(tc_reads: dict[str, Path], cache_dir: Path | None, out_stem: Path,
                          *, wind_col: str = "maxwind300_ms") -> tuple[list[Path], dict]:
     """Central pressure and maximum wind of every member at every storm case (storm_ok cases of the first run),
@@ -237,19 +254,27 @@ def tc_distribution_page(tc_reads: dict[str, Path], cache_dir: Path | None, out_
             allv = allv[np.isfinite(allv)]
             if not allv.size:
                 continue
-            bins = np.linspace(allv.min(), allv.max(), 26)
-            for name, df, st in series:
-                if col not in df or not df[col].notna().any():
-                    continue
-                v = df[col].to_numpy(float)
-                v = v[np.isfinite(v)]
-                ax.hist(v, bins=bins, density=True, histtype="step", label=f"{name} ({v.size} members)",
-                        color=st["color"], linestyle=st.get("linestyle", "-"), linewidth=st.get("linewidth", 2))
+            # One kernel width for every curve of the panel, set by the smallest sample (IBTrACS when present),
+            # so that no curve is smoothed more than another (owner, 23 Nov 2026: smooth lines, not steps).
             b = np.asarray(bt_vals, float)
             b = b[np.isfinite(b)]
+            samples = []
+            for name, df, st in series:
+                if col in df and df[col].notna().any():
+                    v = df[col].to_numpy(float)
+                    samples.append((name, v[np.isfinite(v)], st))
+            width = common_kernel_width([v for _, v, _ in samples] + ([b] if b.size else []))
+            grid = np.linspace(allv.min() - 3 * width, allv.max() + 3 * width, 400)
+            for name, v, st in samples:
+                ax.plot(grid, kernel_density(v, grid, width), label=f"{name} ({v.size} members)",
+                        color=st["color"], linestyle=st.get("linestyle", "-"), linewidth=st.get("linewidth", 2))
             if b.size:
-                ax.hist(b, bins=bins, density=True, histtype="stepfilled", alpha=0.25, color="#7f3b08",
-                        label=f"IBTrACS ({b.size} fixes)")
+                dens = kernel_density(b, grid, width)
+                ax.fill_between(grid, dens, color="#7f3b08", alpha=0.22, linewidth=0)
+                ax.plot(grid, dens, color="#7f3b08", linewidth=1.6, label=f"IBTrACS ({b.size} fixes)")
+            ax.set_ylim(bottom=0)
+            ax.text(0.02, 0.97, f"Gaussian kernel, width {width:.2g} for every curve", transform=ax.transAxes,
+                    ha="left", va="top", fontsize=7.5, color="0.4")
             ax.set_xlabel(xlabel)
             ax.set_ylabel("Density")
         axes[1].legend(loc="upper right", fontsize=8.5)

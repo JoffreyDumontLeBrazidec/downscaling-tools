@@ -99,3 +99,41 @@ def test_box_spectra_grid_from_bins_csv(tmp_path):
     assert np.all(np.diff(truth.wavenumber) > 0)
     written = plot_grid(tmp_path)
     assert {p.name for p in written} == {"box_spectra_grid.png", "box_spectra_grid.pdf"}
+
+
+def test_input_limit_is_the_truncation_of_a_known_grid_else_two_grid_lengths(tmp_path):
+    import json
+
+    from eval.evaluators.box_spectra.plotter import input_limit, input_limit_marks
+
+    assert input_limit(7.2) == (1279.0, "Input limit (T1279, 31 km)")
+    assert input_limit(28.0) == (319.0, "Input limit (T319, 125 km)")
+    wvn, label = input_limit(50.0)          # no known grid: Nyquist, 100 km
+    assert label == "Input limit (2 grid lengths, 100 km)"
+    np.testing.assert_allclose(wvn, 400.3)
+    assert input_limit(float("nan")) is None and input_limit_marks(tmp_path) == []
+    (tmp_path / "run_meta.json").write_text(json.dumps({"input_spectrum": {"native_spacing_km": 7.0}}))
+    assert input_limit_marks(tmp_path) == [(1279.0, "Input limit (T1279, 31 km)")]
+
+
+def test_grid_draws_the_marks_on_both_axes_of_every_panel(tmp_path, monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    seen = {}
+    real_close = plt.close
+
+    def keep(fig=None):
+        if fig is not None and hasattr(fig, "axes"):
+            seen["fig"] = fig
+            seen["n"] = sum(1 for ax in fig.axes for ln in ax.lines
+                            if len(set(np.atleast_1d(ln.get_xdata()))) == 1 and ln.get_xdata()[0] == 319.0)
+            seen["legend"] = [t.get_text() for t in fig.legends[0].get_texts()]
+        return real_close(fig)
+
+    monkeypatch.setattr(plt, "close", keep)
+    panels = {v: [_curve("truth"), _curve("input", 0.8, 320), _curve("model", 1.1)] for v in ["2t", "tp"]}
+    plot_spectra_grid(panels, tmp_path / "grid", marks=[(319.0, "Input limit (T319, 125 km)")], formats=("png",))
+    assert seen["n"] == 4
+    assert "Input limit (T319, 125 km)" in seen["legend"]

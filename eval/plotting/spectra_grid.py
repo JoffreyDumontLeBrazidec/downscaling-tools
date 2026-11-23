@@ -129,11 +129,14 @@ def plot_spectra_grid(
     ncols: int = NCOLS,
     ratio_lim: tuple[float, float] = RATIO_LIM,
     formats: Sequence[str] = ("png", "pdf"),
+    marks: Sequence[tuple[float, str]] = (),
 ) -> list[Path]:
     """Draw the standard spectra figure and write it as ``<out_stem>.png`` and ``.pdf``.
 
     ``panels`` maps a variable name to its curves. The first curve with role ``truth`` is the
     reference of the ratio panel; without one the ratio panel is left empty with a note.
+    ``marks``: (total wavenumber, label) pairs drawn as vertical dotted lines in the input colour on every
+    panel and named in the legend, for example the smallest scale the input can carry.
     Returns the written paths (empty when no panel has a curve).
     """
     import matplotlib.pyplot as plt
@@ -198,6 +201,13 @@ def plot_spectra_grid(
                      for cv in curves)
             hi = max(float(np.max(cv.wavenumber)) for cv in curves)
             ax.set_xlim(max(lo, 0.8) * 0.9, hi * 1.1)
+            for wvn_mark, mark_label in marks:
+                if not (np.isfinite(wvn_mark) and wvn_mark > 0):
+                    continue
+                kw = dict(color=role_style("input")["color"], linestyle=":", linewidth=1.3, zorder=1.5)
+                line = ax.axvline(float(wvn_mark), label=mark_label, **kw)
+                axr.axvline(float(wvn_mark), **kw)
+                handles.setdefault(mark_label, line)
 
         fig.legend(list(handles.values()), list(handles.keys()), loc="upper center",
                    ncol=min(len(handles), 4), frameon=False, fontsize=10,

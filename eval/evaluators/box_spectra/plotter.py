@@ -62,6 +62,45 @@ def grid_panels(rows: list[dict]) -> dict:
     return panels
 
 
+# Octahedral grids the lanes use: N -> spectral truncation N - 1 (cubic octahedral, TCo).
+_KNOWN_OCTAHEDRAL = (96, 320, 1280, 2560)
+
+
+def input_limit(native_spacing_km: float) -> tuple[float, str] | None:
+    """(total wavenumber, legend label) of the smallest scale the input can carry.
+
+    The native point spacing (about 9000 km / N on an octahedral O<N> grid: 7 km on O1280, 28 km on O320)
+    names the grid when it is within 25 % of a known one; the limit is then its spectral truncation
+    T = N - 1 (wavelength 40030 km / T: 31 km for O1280, 125 km for O320), below which the input model
+    holds no signal at all. Any other grid: twice the point spacing (Nyquist).
+    """
+    from eval.plotting.spec_helpers import EARTH_CIRCUMFERENCE_KM
+
+    if not native_spacing_km or not math.isfinite(native_spacing_km) or native_spacing_km <= 0:
+        return None
+    n = min(_KNOWN_OCTAHEDRAL, key=lambda k: abs(math.log(9000.0 / k / native_spacing_km)))
+    if abs(math.log(9000.0 / n / native_spacing_km)) < math.log(1.25):
+        t = n - 1
+        return float(t), f"Input limit (T{t}, {EARTH_CIRCUMFERENCE_KM / t:.0f} km)"
+    wavelength = 2.0 * native_spacing_km
+    return EARTH_CIRCUMFERENCE_KM / wavelength, f"Input limit (2 grid lengths, {wavelength:.0f} km)"
+
+
+def input_limit_marks(results_dir) -> list[tuple[float, str]]:
+    """The input-limit mark of a box_spectra read, from run_meta.json (empty when the read used no native input)."""
+    import json
+
+    path = Path(results_dir) / "run_meta.json"
+    if not path.exists():
+        return []
+    try:
+        spacing = float(json.loads(path.read_text()).get("input_spectrum", {}).get("native_spacing_km"))
+    except (TypeError, ValueError):
+        return []
+    got = input_limit(spacing)
+    return [got] if got else []
+
+
 def plot_grid(results_dir, *, output_dir=None, title=None):
     """The standard spectra figure (eval.plotting.spectra_grid) from bins.csv: box_spectra_grid.png/.pdf."""
     from eval.plotting.spectra_grid import plot_spectra_grid
@@ -75,7 +114,7 @@ def plot_grid(results_dir, *, output_dir=None, title=None):
     foot = ("Box FFT amplitude per wavelength bin (display unit), placed at total wavenumber "
             "40030 km / wavelength; ratio = amplitude / truth amplitude (rule 14 full-field ratio).")
     return plot_spectra_grid(grid_panels(rows), Path(output_dir or results_dir) / "box_spectra_grid",
-                             title=title, footnote=foot)
+                             title=title, footnote=foot, marks=input_limit_marks(results_dir))
 
 
 def plot(results_dir, lane_config: dict, eval_config: dict, *, output_dir=None, **kwargs):
