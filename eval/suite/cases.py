@@ -31,6 +31,7 @@ class Case:
     extent: list[float] | None = None
     variable: str = "wind10m"
     event: str | None = None
+    vmax: float | None = None
 
 
 @dataclass
@@ -57,7 +58,9 @@ def _case(name: str, d: dict | None, default_var: str) -> Case | None:
         return None
     return Case(name=str(d.get("name", name)), date=str(d.get("date", "auto")), step=int(d.get("step", 24)),
                 extent=[float(v) for v in d["extent"]] if d.get("extent") else None,
-                variable=str(d.get("variable", default_var)), event=d.get("event"))
+                variable=str(d.get("variable", default_var)), event=d.get("event"),
+                vmax=float(d["vmax"]) if d.get("vmax") is not None else
+                (70.0 if name == "tc" and d.get("variable", default_var) == "wind10m" else None))
 
 
 def available_case_lists() -> list[str]:
@@ -182,7 +185,7 @@ def tc_auto(case: Case, cases_csv: Path, half_lat: float = 7.0) -> tuple[Case, s
             r = g.loc[g.p.idxmin()]
             half_lon = half_lat / max(0.3, np.cos(np.deg2rad(float(r.lat))))
             lon = ((float(r.lon) + 180.0) % 360.0) - 180.0
-            out = Case(name=str(r.event), date=str(r.date), step=case.step, variable=case.variable,
+            out = Case(name=str(r.event), date=str(r.date), step=case.step, variable=case.variable, vmax=case.vmax,
                        extent=[lon - half_lon, lon + half_lon, float(r.lat) - half_lat, float(r.lat) + half_lat],
                        event=str(r.event))
             return out, f"deepest {label} storm at +{case.step} h ({float(r.p):.0f} hPa member mean, {len(g)} storm cases)"

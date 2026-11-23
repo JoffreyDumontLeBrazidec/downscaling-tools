@@ -36,6 +36,8 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
         argv += ["--extent", *[str(v) for v in case.extent]]
     if members:
         argv += ["--members", members]
+    if case.vmax is not None:
+        argv += ["--vmax", str(case.vmax)]
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
     from eval.suite.cases import field_max
 
@@ -70,7 +72,7 @@ def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None)
         f = prediction_index(d)[(date, case.step)]
         sd = out / label
         argv = [str(f), "--stills-dir", str(sd), "--variable", case.variable, "--label", label,
-                "--sources", "input,truth,pred" if i == 0 else "pred"]
+                "--sources", "input,truth,pred" if i == 0 else "pred", "--native-input"]
         if case.extent:
             argv += ["--extent", *[str(v) for v in case.extent]]
         if grid:
@@ -81,12 +83,15 @@ def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None)
 
 
 def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[str, Path] | None = None,
-                tc: dict[str, Path] | None = None, tc_cache: Path | None = None, only=None) -> dict:
+                tc: dict[str, Path] | None = None, tc_cache: Path | None = None, only=None,
+                maps_all_runs: bool = False) -> dict:
     out = Path(out)
     work = out / "work"
     out.mkdir(parents=True, exist_ok=True)
     pages = list(only or PAGES)
     names = list(runs)
+    # map pages (03, 04, 05, 07) show ONE model, the first run (owner 23 Nov 09:07: "just 300"); curves pages all runs
+    map_runs = dict(runs) if maps_all_runs else dict(list(runs.items())[:1])
     record: dict = {"case_list": cases.name, "runs": {k: str(v) for k, v in runs.items()}, "pages": []}
 
     def page(num: str, title: str, fn):
@@ -134,9 +139,11 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                 date, _ = resolve_date(case, list(runs.values()), pick="first")
             else:
                 date, how = resolve_date(case, list(runs.values()), pick=pick)
-            pngs = _zoom(runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=5)
-            dst = stitch([[p] for p in pngs], out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
-            return [dst], f"{case.name} {date} +{case.step} h ({how}); rows: input, target, {', '.join(names)}"
+            # side by side (owner 23 Nov 09:07): input | target | model, each 5 rows x 2 members
+            pngs = _zoom(map_runs, case, date, work / f"zoom_{case.name}", members=cases.members, cols=2)
+            dst = stitch([pngs], out / f"{num}_{label}_{case.name}_{case.variable}_{date}_L{case.step:03d}.png")
+            return [dst], (f"{case.name} {date} +{case.step} h ({how}); side by side: input, target, "
+                           f"{', '.join(map_runs)}")
         return go
 
     page("03", "tc_members: 10 members around a storm", members_page("03", cases.tc, "first", "tc_members"))
@@ -146,11 +153,12 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         rows, notes = [], []
         for case in cases.areas:
             date, how = resolve_date(case, list(runs.values()), pick="first")
-            rows.append(_zoom(runs, case, date, work / f"area_{case.name}", members=None))
+            rows.append(_zoom(map_runs, case, date, work / f"area_{case.name}", members=None))
             notes.append(f"{case.name} {case.variable} {date} +{case.step} h ({how})")
         if not rows:
             raise ValueError(f"no areas in case list {cases.name}")
-        return [stitch(rows, out / "05_areas_member1.png")], "member 1, input | target | models; " + "; ".join(notes)
+        return [stitch(rows, out / "05_areas_member1.png")], (f"member 1, input | target | {', '.join(map_runs)}; "
+                                                              + "; ".join(notes))
 
     page("05", "areas: input / target / model by area", areas)
 
@@ -168,7 +176,7 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         rows, notes = [], []
         for case in cases.stills:
             date, how = resolve_date(case, list(runs.values()), pick="rain" if case.date == "auto" else "first")
-            rows.append(_stills(runs, case, date, work / f"stills_{case.name}_{date}", cases.stills_grid))
+            rows.append(_stills(map_runs, case, date, work / f"stills_{case.name}_{date}", cases.stills_grid))
             notes.append(f"{case.name} {date} +{case.step} h ({how})")
         if not rows:
             raise ValueError(f"no stills in case list {cases.name}")

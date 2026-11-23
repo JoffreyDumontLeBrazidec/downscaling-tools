@@ -110,7 +110,8 @@ def _select(da, variable: str, member: int, sample: int):
     return da.isel(weather_state=names.index(hit))
 
 
-def read_field(path: Path, source: str, variable: str, *, member: int = 0, sample: int = 0) -> np.ndarray:
+def read_field(path: Path, source: str, variable: str, *, member: int = 0, sample: int = 0,
+               prefer_native: bool = False) -> np.ndarray:
     """Native-unit values of ``variable`` from one source of one file, on the file's hres points.
 
     ``variable='10ff'`` (10 m wind speed) is computed from ``10u`` and ``10v``.
@@ -119,7 +120,8 @@ def read_field(path: Path, source: str, variable: str, *, member: int = 0, sampl
 
     name = SOURCE_VARS[source]
     with xr.open_dataset(path) as ds:
-        if source == "input" and name not in ds and "x" in ds and "lat_lres" in ds:
+        # the native input member (rule 41) when asked, or when the file has no x_interp
+        if source == "input" and (prefer_native or name not in ds) and "x" in ds and "lat_lres" in ds:
             return _native_input(ds, variable, member, sample)
         if name not in ds:
             raise KeyError(f"{path.name} has no {name} ({source}); present: {sorted(ds.data_vars)}")
