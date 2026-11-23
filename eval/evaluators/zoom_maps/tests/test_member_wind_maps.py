@@ -234,3 +234,18 @@ def test_grid_names_in_titles():
     titles, hres = pm.panel_titles({}, 7_000, 300_000)
     assert hres == "O1280" and titles == pm.DEFAULT_TITLES
     assert pm.default_title("model") == "Model (O1280)"
+
+
+def test_smooth_refine_never_leaves_native_range():
+    """Cubic refinement overshoots on thin triangles (page 03 printed 7e13 m/s, 23 Nov 2026); it is clipped."""
+    import numpy as np
+    from matplotlib.tri import Triangulation
+
+    from eval.evaluators.zoom_maps.core.plot_member_wind_maps import smooth_refine
+
+    rng = np.random.default_rng(0)
+    x = np.r_[rng.uniform(0, 1, 200), [0.0, 1.0, 0.5]]
+    y = np.r_[rng.uniform(0, 1, 200), [0.0, 0.0, 1e-6]]       # a sliver triangle near y = 0
+    v = rng.uniform(0, 30, x.size)
+    (_, _, v2), = smooth_refine(Triangulation(x, y), [v])
+    assert np.nanmin(v2) >= v.min() - 1e-9 and np.nanmax(v2) <= v.max() + 1e-9
