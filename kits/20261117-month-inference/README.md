@@ -28,3 +28,6 @@ MI-S25 = Sep 2025 (`dates_s25.txt`), MI-J25 = Jan 2025 (`dates_j25.txt`, 31 date
 `mi_predict.sbatch` takes the set from its dates (one set per job); the xcheck gate file stays in the S25 folder. Atos work dir is shared (dates differ).
 Probe: `bash mi_probe.sh 20250101 20250131`. Chain: `bash mi_chain_submit.sh dates_j25.txt 2 ret` with SBATCH_ACCOUNT=ecaifs (nf limit 100/account).
 MI-JUL25 = Jul 2025 (`dates_jul25.txt`, 31 dates, third month, owner "go build" 19 Nov 10:18 UTC; summer). Same commands with that dates file.
+
+## IFS cycle 48r1 sets (24 Nov 2026)
+MI-J24 = Jan 2024 (dates_j24.txt, 31 dates), MI-JUL24 = Jul 2024 (dates_jul24.txt, 31), MI-S24 = Sep 2024 (dates_s24.txt, 30). Owner request 24 Nov 2026: test months of the same IFS cycle as the training re-forecasts (48r1, operational 27 Jun 2023 to 11 Nov 2024); the 2025 sets are cycle 49r1. Same design and commands as the 2025 sets; they mirror the months of MI-J25, MI-JUL25 and MI-S25 so that each season has one month per cycle.
