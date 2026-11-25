@@ -20,6 +20,6 @@ X=/e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116
 K=${XSET_JWORK:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261116-extremes-set}/downscaling-tools/kits/20261116-extremes-set/jupiter
 [[ -f /e/data1/jureap-data/ecmwf/users/jdumont/outputs/xset1_20261116/test/GL512_237k/XSET_TEST_PASS ]] || { echo "[xset] FATAL no XSET_TEST_PASS"; exit 2; }
 row=${1:?row}; shift
-cases=""; for d in "$@"; do for L in 12 24 36 48 60 72; do cases="$cases${cases:+,}$d:$L"; done; done
+cases=""; for d in "$@"; do for L in $(echo ${XSET_LEADS:-12,24,36,48,60,72} | tr , " "); do cases="$cases${cases:+,}$d:$L"; done; done
 bash $K/xset_run.sh "$row" predict "$cases" 29591 || { echo "[xset] PREDICT_FAIL $row $(date -u +%FT%TZ)"; exit 1; }
 echo "[xset] PREDICT_DONE $row $* $(date -u +%FT%TZ)"

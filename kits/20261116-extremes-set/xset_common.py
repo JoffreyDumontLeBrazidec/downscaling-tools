@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-LEADS = (12, 24, 36, 48, 60, 72)
+import os as _os
+LEADS = tuple(int(x) for x in _os.environ.get("XSET_LEADS", "12,24,36,48,60,72").split(","))  # XSET_LEADS from xset_set.env (S24, 25 Nov 2026: 12..240)
 SAVE_VARS = ("10u", "10v", "2t", "msl", "tp")
 R_EARTH_KM = 6371.0
 # latitude bands of the global histograms (south to north)

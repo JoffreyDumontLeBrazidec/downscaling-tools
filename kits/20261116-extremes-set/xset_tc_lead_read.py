@@ -30,7 +30,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-LEADS = (12, 24, 36, 48, 60, 72)
+import os as _os
+LEADS = tuple(int(x) for x in _os.environ.get("XSET_LEADS", "12,24,36,48,60,72").split(","))  # XSET_LEADS from xset_set.env (S24, 25 Nov 2026: 12..240)
 GROUPS = {"+12/+24 h": (12, 24), "+36/+48 h": (36, 48), "+60/+72 h": (60, 72)}
 IN_EDGES = (0.0, 15.0, 22.0, 1e9)            # classes of the input member's wind, m/s (36 km field)
 IN_NAMES = ("input < 15", "input 15-22", "input >= 22")

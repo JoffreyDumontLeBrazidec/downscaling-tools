@@ -1,0 +1,35 @@
+{
+ "dates": 30,
+ "tc_cases": 1112,
+ "storms": 19,
+ "basins": {
+  "NA": 8,
+  "SI": 1,
+  "EP": 3,
+  "WP": 7
+ },
+ "rain_events": 334,
+ "dates_with_tc": 30,
+ "dates_with_rain": 30,
+ "scan_windows_2024": 732,
+ "tc_rule": {
+  "first": "20240101",
+  "last": "20251228",
+  "min_fixes": 3,
+  "wind_kt": 34.0,
+  "max_abs_lat": 45.0,
+  "dateline_deg": 12.0,
+  "spacing_days": 3,
+  "n_storms": 30,
+  "n_basins": 3,
+  "basin_min": 6,
+  "major_kt": 96.0,
+  "min_dates": 22,
+  "max_dates": 26
+ },
+ "rain_rule": {
+  "thr": 50.0,
+  "event_min": 5,
+  "link_km": 300.0
+ }
+}

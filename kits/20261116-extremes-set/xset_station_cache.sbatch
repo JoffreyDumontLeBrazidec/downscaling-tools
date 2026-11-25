@@ -22,7 +22,7 @@ export TMPDIR=$A/tmp/$SLURM_JOB_ID; mkdir -p "$TMPDIR" "$C"
 dates=$(tail -n +2 "${1:?dates csv}" | cut -d, -f1 | paste -sd,)
 echo "[cache] dates $dates $(date -u +%FT%TZ)"
 cd $T
-python3 -m eval.cli obs fetch --dates "$dates" --leads 12,24,36,48,60,72 --vars 2t,10ff,msl,tp --tp-periods 12 \
+python3 -m eval.cli obs fetch --dates "$dates" --leads ${XSET_LEADS:-12,24,36,48,60,72} --vars 2t,10ff,msl,tp --tp-periods 12 \
   --box -90,90,-180,180 --out $C
 for o in $A/grib/orography_O320_eefo_*.grib; do
   [[ -f $o ]] || continue
