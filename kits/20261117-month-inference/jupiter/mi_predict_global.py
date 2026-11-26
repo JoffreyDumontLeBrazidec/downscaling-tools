@@ -66,6 +66,21 @@ PW_SCHED = {
     "low_schedule_type": "karras", "num_steps_high": 10, "num_steps_low": 20, "rho": 7.0,
 }
 PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.0, "S_noise": 1.05}
+# SAMPLER_MODE=det (26 Nov 2026, one-call rows of the paper, same rule as kits/20261116-extremes-set/xset_predict_global.py):
+# ONE denoiser call at sigma MI_DET_SIGMA (default 5e5 = REG_GL512_*): linear schedule [MI_DET_SIGMA, 1e-12], so
+# y = y_init + (1e-12 - s) (y_init - D) / s = D(x; s) up to 1e-12/s y_init. On a diffusion model this is its
+# conditional-mean estimate at noise level s. The unit noise of that call still comes from the rule-31 seed of the draw.
+# XSET_SCHED_JSON / XSET_SAMPLER_JSON replace the whole dictionaries (never merged); what was used is in every file.
+if os.environ.get("SAMPLER_MODE", "edm") == "det":
+    PW_SCHED = {"schedule_type": "linear", "num_steps": 2, "sigma_max": float(os.environ.get("MI_DET_SIGMA", "500000")),
+                "sigma_min": 1e-12}
+    PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0}
+elif os.environ.get("SAMPLER_MODE", "edm") != "edm":
+    raise SystemExit(f"unknown SAMPLER_MODE {os.environ.get('SAMPLER_MODE')!r} (edm | det)")
+if os.environ.get("XSET_SCHED_JSON"):
+    PW_SCHED = json.loads(os.environ["XSET_SCHED_JSON"])
+if os.environ.get("XSET_SAMPLER_JSON"):
+    PW_SAMPLER = json.loads(os.environ["XSET_SAMPLER_JSON"])
 
 
 def one_file(pattern: str, what: str) -> str:
