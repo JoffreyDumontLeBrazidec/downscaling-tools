@@ -253,3 +253,14 @@ def test_target_limit_mark(inputs, tmp_path):
     (tmp_path / "run_meta.json").write_text(_json.dumps({"files": [str(f)]}))
     (wvn, label), = target_limit_marks(tmp_path)
     assert wvn == 95.0 and label.startswith("Target limit (T95")
+
+
+def test_exceedance_shares_cover_both_tails():
+    import numpy as np
+
+    from eval.suite.pages import exceedance
+
+    x, y = exceedance(np.array([3.0, 1.0, np.nan, 2.0]))
+    assert list(x) == [1.0, 2.0, 3.0] and np.allclose(y, [1.0, 2 / 3, 1 / 3])
+    x, y = exceedance(np.array([3.0, 1.0, 2.0]), low_tail=True)
+    assert list(x) == [1.0, 2.0, 3.0] and np.allclose(y, [1 / 3, 2 / 3, 1.0])
