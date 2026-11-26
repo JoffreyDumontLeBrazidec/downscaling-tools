@@ -1,0 +1,41 @@
+# Classic suite case list, 4 km global lane (o1280 -> o2560), Sep 2026 month inference (no 4.4 km truth for 2026:
+# pages show input | model). Cases picked on 25 Nov 2026 from the month files (docs 4 km techdoc, report-figs
+# MANIFEST): Lowell = largest IBTrACS wind of the +24 h valid times 0902-0921; WPac rain = largest model member tp at
+# +24 h; Alps 2t = driest Alps night. Other areas: fixed global boxes (world model, no European focus).
+name: o2560_global
+description: "4 km global, Sep 2026 month, input vs model (no truth)"
+members: "1-10"
+spectra:
+  steps: [24, 72]
+  box: e2
+  fine_res_deg: 0.035
+tc:
+  name: lowell
+  date: "20260902"
+  step: 24
+  center: [13.3, -154.7]
+  variable: wind10m
+rain:
+  name: wpac_rain
+  date: "20260920"
+  step: 24
+  center: [10.5, 141.4]
+  variable: tp
+areas:
+  - {name: alps, date: "20260911", step: 24, center: [46.0, 10.0], variable: 2t}
+  - {name: himalaya, date: "20260911", step: 24, center: [29.0, 85.0], variable: 2t}
+  - {name: andes, date: "20260911", step: 24, center: [-18.0, -68.0], variable: 2t}
+  - {name: lowell, date: "20260902", step: 24, center: [13.3, -154.7], variable: wind10m}
+  - {name: southern_ocean, date: "20260911", step: 24, center: [-50.0, 60.0], variable: wind10m}
+  - {name: wpac_rain, date: "20260920", step: 24, center: [10.5, 141.4], variable: tp}
+  - {name: maritime, date: "20260911", step: 24, center: [0.0, 110.0], variable: tp}
+stills:
+  grid: O2560
+  cases:
+    - {name: global, date: "20260920", step: 24, variable: tp}
+    - {name: tropics_wpac, date: "20260920", step: 24, variable: tp, extent: [100.0, 180.0, -10.0, 40.0]}
+tp_distribution:
+  steps: [24, 72, 120, 240]
+scores:
+  region: all
+  variables: [[tp, raw], [10ff, raw], [2t, lapse], [msl, raw]]

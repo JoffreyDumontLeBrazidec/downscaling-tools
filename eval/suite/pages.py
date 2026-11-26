@@ -211,6 +211,15 @@ def kernel_density(values, grid, width: float) -> np.ndarray:
     return np.exp(-0.5 * z * z).sum(axis=0) / (v.shape[0] * width * np.sqrt(2 * np.pi))
 
 
+def exceedance(values, *, low_tail: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Sorted values and the share of the sample at or beyond each one: >= x (high tail) or <= x (low tail)."""
+    v = np.sort(np.asarray(values, float)[np.isfinite(values)])
+    n = v.size
+    if low_tail:
+        return v, np.arange(1, n + 1) / max(n, 1)
+    return v, (n - np.arange(n)) / max(n, 1)
+
+
 def tc_distribution_page(tc_reads: dict[str, Path], cache_dir: Path | None, out_stem: Path,
                          *, wind_col: str = "maxwind300_ms") -> tuple[list[Path], dict]:
     """Central pressure and maximum wind of every member at every storm case (storm_ok cases of the first run),
@@ -247,39 +256,39 @@ def tc_distribution_page(tc_reads: dict[str, Path], cache_dir: Path | None, out_
                 bt_w.append(b.get("wind_ms", np.nan))
     info = {"cases": len(kset), "dates": len({k[1] for k in kset}), "events": sorted({k[0] for k in kset}),
             "ibtracs_fixes": len(bt_p)}
+    # Exceedance curves (owner 26 Nov 2026: no Gaussian kernel, no negative winds): share of members (or of
+    # IBTrACS fixes) with wind >= w, and with central pressure <= p, on a log axis that shows the tail.
     with eval_style():
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
-        for ax, col, bt_vals, xlabel in ((axes[0], "pmin_hpa", bt_p, "Central pressure (hPa)"),
-                                         (axes[1], wind_col, bt_w, "Maximum 10 m wind (m/s)")):
-            vals = [s[1][col].to_numpy(float) for s in series if col in s[1]]
-            allv = np.concatenate([v[np.isfinite(v)] for v in vals] + [np.asarray(bt_vals, float)])
-            allv = allv[np.isfinite(allv)]
-            if not allv.size:
-                continue
-            # One kernel width for every curve of the panel, set by the smallest sample (IBTrACS when present),
-            # so that no curve is smoothed more than another (owner, 23 Nov 2026: smooth lines, not steps).
-            b = np.asarray(bt_vals, float)
-            b = b[np.isfinite(b)]
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4.2), constrained_layout=True)
+        for ax, col, bt_vals, xlabel, deep_is_low in ((axes[0], "pmin_hpa", bt_p, "Central pressure p (hPa)", True),
+                                                      (axes[1], wind_col, bt_w, "Maximum 10 m wind w (m/s)", False)):
             samples = []
             for name, df, st in series:
                 if col in df and df[col].notna().any():
                     v = df[col].to_numpy(float)
                     samples.append((name, v[np.isfinite(v)], st))
-            width = common_kernel_width([v for _, v, _ in samples] + ([b] if b.size else []))
-            grid = np.linspace(allv.min() - 3 * width, allv.max() + 3 * width, 400)
+            b = np.asarray(bt_vals, float)
+            b = b[np.isfinite(b)]
+            if not samples and not b.size:
+                continue
             for name, v, st in samples:
-                ax.plot(grid, kernel_density(v, grid, width), label=f"{name} ({v.size} members)",
-                        color=st["color"], linestyle=st.get("linestyle", "-"), linewidth=st.get("linewidth", 2))
+                x, y = exceedance(v, low_tail=deep_is_low)
+                ax.step(x, y, where="post" if deep_is_low else "pre", label=f"{name} ({v.size} members)", color=st["color"],
+                        linestyle=st.get("linestyle", "-"), linewidth=st.get("linewidth", 2))
             if b.size:
-                dens = kernel_density(b, grid, width)
-                ax.fill_between(grid, dens, color="#7f3b08", alpha=0.22, linewidth=0)
-                ax.plot(grid, dens, color="#7f3b08", linewidth=1.6, label=f"IBTrACS ({b.size} fixes)")
-            ax.set_ylim(bottom=0)
-            ax.text(0.02, 0.97, f"Gaussian kernel, width {width:.2g} for every curve", transform=ax.transAxes,
-                    ha="left", va="top", fontsize=7.5, color="0.4")
+                x, y = exceedance(b, low_tail=deep_is_low)
+                ax.step(x, y, where="post" if deep_is_low else "pre", color="#7f3b08", linewidth=2.2, label=f"IBTrACS ({b.size} fixes)")
+            ax.set_yscale("log")
+            ax.set_ylim(min(0.5 / max([v.size for _, v, _ in samples] + [b.size, 1]), 1e-2), 1.05)
+            if deep_is_low:
+                ax.set_xlim(right=1015)
+                ax.set_ylabel("Share with central pressure <= p")
+            else:
+                ax.set_xlim(left=0)
+                ax.set_ylabel("Share with maximum wind >= w")
             ax.set_xlabel(xlabel)
-            ax.set_ylabel("Density")
+            ax.grid(True, which="both", alpha=0.3)
         axes[1].legend(loc="upper right", fontsize=8.5)
-        fig.suptitle(f"Tropical cyclones: {info['cases']} storm cases ({info['dates']} dates; "
-                     f"{', '.join(info['events'])}), every member", fontsize=11)
+        fig.suptitle(f"Tropical cyclones: {info['cases']} cases, {len(info['events'])} storms, "
+                     f"{info['dates']} start dates, every member", fontsize=11)
         return save_figure(fig, out_stem, close=True), info

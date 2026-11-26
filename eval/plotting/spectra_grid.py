@@ -130,11 +130,13 @@ def plot_spectra_grid(
     ratio_lim: tuple[float, float] = RATIO_LIM,
     formats: Sequence[str] = ("png", "pdf"),
     marks: Sequence[tuple[float, str]] = (),
+    reference_role: str = "truth",
 ) -> list[Path]:
     """Draw the standard spectra figure and write it as ``<out_stem>.png`` and ``.pdf``.
 
     ``panels`` maps a variable name to its curves. The first curve with role ``truth`` is the
     reference of the ratio panel; without one the ratio panel is left empty with a note.
+    ``reference_role="input"`` makes the input curve the reference (sets with no truth, e.g. a future month).
     ``marks``: (total wavenumber, label) pairs drawn as vertical dotted lines in the input colour (the target colour for a label
     starting "Target") on every panel and named in the legend, e.g. the smallest scale the input can carry.
     Returns the written paths (empty when no panel has a curve).
@@ -162,7 +164,7 @@ def plot_spectra_grid(
             ax = fig.add_subplot(inner[0])
             axr = fig.add_subplot(inner[1], sharex=ax)
             curves = list(panels[var])
-            truth = next((cv for cv in curves if cv.role == "truth"), None)
+            truth = next((cv for cv in curves if cv.role == reference_role), None)
 
             for cv in curves:
                 m = (np.asarray(cv.wavenumber) > 0) & np.isfinite(cv.amplitude) & (np.asarray(cv.amplitude) > 0)
@@ -195,11 +197,11 @@ def plot_spectra_grid(
             axr.yaxis.set_minor_locator(NullLocator())
             axr.yaxis.set_minor_formatter(NullFormatter())
             axr.tick_params(labelsize=8)
-            axr.set_ylabel("ratio to truth" if c == 0 else "", fontsize=9)
+            axr.set_ylabel(f"ratio to {reference_role}" if c == 0 else "", fontsize=9)
             axr.set_xlabel("total wavenumber", fontsize=9)
             axr.grid(True, which="major", color="0.9", linewidth=0.5)
             if truth is None:
-                axr.text(0.5, 0.5, "no truth curve", transform=axr.transAxes, ha="center",
+                axr.text(0.5, 0.5, f"no {reference_role} curve", transform=axr.transAxes, ha="center",
                          va="center", fontsize=8, color="0.4")
             lo = min(float(np.min(np.asarray(cv.wavenumber)[np.asarray(cv.wavenumber) > 0]))
                      for cv in curves)

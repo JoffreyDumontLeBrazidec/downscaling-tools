@@ -114,12 +114,17 @@ def _stills(runs: dict[str, Path], case, date: str, out: Path, grid: str | None)
     """map_video stills: input | target | first model, then the other models' predictions."""
     from eval.tools.map_video.__main__ import build_arg_parser, render
 
+    import xarray as xr
+
     pngs = []
+    f0 = prediction_index(next(iter(runs.values())))[(date, case.step)]
+    with xr.open_dataset(f0) as ds0:
+        first_sources = "input,truth,pred" if "y" in ds0 else "input,pred"   # no truth (e.g. 2026 4 km): no target panel
     for i, (label, d) in enumerate(runs.items()):
         f = prediction_index(d)[(date, case.step)]
         sd = out / label
         argv = [str(f), "--stills-dir", str(sd), "--variable", case.variable, "--label", label,
-                "--sources", "input,truth,pred" if i == 0 else "pred", "--native-input"]
+                "--sources", first_sources if i == 0 else "pred", "--native-input"]
         if case.extent:
             argv += ["--extent", *[str(v) for v in case.extent]]
         if grid:
