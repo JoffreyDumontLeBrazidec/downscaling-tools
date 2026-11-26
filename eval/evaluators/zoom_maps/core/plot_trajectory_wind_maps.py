@@ -125,6 +125,7 @@ def run(args):
 
     from eval.plotting.flow import SPEED_REF
 
+    flow = bool(getattr(args, "flow", False))
     ws_spec = variable_spec("10ff")
     for field in ("ws", "band"):
         with eval_style():
@@ -137,10 +138,14 @@ def run(args):
                                      cmap=ws_spec.field_cmap() if field == "ws" else "RdBu_r", vmin=vmin, vmax=vmax)
                 ax.set_facecolor("#e6e6e6")
                 ax.plot(0, 0, marker="+", color="black", ms=8, mew=1)
-                if field == "ws":
-                    # streamlines, width by speed (owner 26 Nov 2026: they replace the sparse arrows)
+                if field == "ws" and flow:   # opt-in (owner 26 Nov 2026): streamlines, width by speed
                     from eval.plotting.flow import streamlines_on_plane
                     streamlines_on_plane(ax, p["x"], p["y"], p["U"], p["V"], density=1.8)
+                elif field == "ws":
+                    sl = slice(None, None, 12)
+                    X, Y = np.meshgrid(p["x"][sl], p["y"][sl])
+                    q = ax.quiver(X, Y, p["U"][sl, sl], p["V"][sl, sl], color="white",
+                                  scale=650, width=.003, headwidth=3.5)
                 r = p["record"]
                 ax.set_title(f'{p["title"]}\nCentre: {r["lat_p"]:.2f}°N, {abs(r["lon_p"]):.2f}°W; offset {p["offset"]:.0f} km',
                              fontsize=10, pad=8)
@@ -152,11 +157,13 @@ def run(args):
             cax = fig.add_axes([.90, .21, .019, .54])
             cb = fig.colorbar(mesh, cax=cax, extend="max" if field == "ws" else "both")
             cb.set_label(ws_spec.label if field == "ws" else f"40–150 km wind-speed component ({ws_spec.unit})")
+            if field == "ws" and not flow:
+                axes.flat[-1].quiverkey(q, .50, .072, 30, f"30 {ws_spec.unit}", coordinates="figure", labelpos="E")
             view = "Full 10 m wind speed and direction" if field == "ws" else "40–150 km wind-speed features"
             fig.suptitle(f'{args.region_tag.capitalize()}: {view}', fontsize=15, y=.965)
             fig.text(.5, .925, f'Initialization {init:%d %b %Y %H:%M} UTC · lead +{args.step} h · member {args.member:02d} · free seed {args.seed}',
                      ha="center", fontsize=11)
-            note = f"Colours show full speed; lines follow the wind, width grows with speed (full width at {SPEED_REF:g} {ws_spec.unit})." if field == "ws" else "Colours show a difference-of-Gaussians band-pass, not model-minus-input residuals."
+            note = (f"Colours show full speed; lines follow the wind, width grows with speed (full width at {SPEED_REF:g} {ws_spec.unit})." if flow else "Colours show full speed; arrows show wind direction and strength.") if field == "ws" else "Colours show a difference-of-Gaussians band-pass, not model-minus-input residuals."
             fig.text(.5, .044, note, ha="center", fontsize=10)
             fig.text(.5, .024, "Each storm is recentered. Linear interpolation to a 5 km local grid; grey denotes unavailable data.",
                      ha="center", fontsize=9)

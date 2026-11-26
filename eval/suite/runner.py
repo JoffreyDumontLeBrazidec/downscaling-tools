@@ -270,7 +270,8 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         note = f"{case.name} {date} +{case.step} h ({how}); member 1, input | target | {label}; {', '.join(done)}"
         return [dst], note + (f"; not in the file: {'; '.join(missing)}" if missing else "")
 
-    page("03f", "tc_flow: storm, scalar + 10 m wind streamlines", tc_flow)
+    if cases.tc is not None and cases.tc.flow_variables:   # opt-in page (owner 26 Nov 2026: an option only)
+        page("03f", "tc_flow: storm, scalar + 10 m wind streamlines", tc_flow)
     page("04", "rain_members: 10 members on intense rain", members_page("04", cases.rain, "rain", "rain_members"))
 
     def areas():

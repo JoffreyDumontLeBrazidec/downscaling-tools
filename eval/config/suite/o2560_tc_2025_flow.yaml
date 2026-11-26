@@ -1,0 +1,16 @@
+# Opt-in variant of o2560_tc_2025 with 10 m wind streamlines (owner 26 Nov 2026: "keep it as an option only").
+# Same TC case; page 03 with streamlines, page 03f = storm, scalar + flow (tcw when the file has it, wind, 2t);
+# north_sea wind area with streamlines on pages 05 / 05z. Use: --cases o2560_tc_2025_flow --only tc_members tc_flow zooms
+name: o2560_tc_2025_flow
+description: "4 km E2 box, 2025 TC set, streamline (scalar + flow) view"
+members: "1-10"
+tc:
+  name: humberto
+  date: "20250926"
+  step: 24
+  center: [22.5, -58.0]
+  variable: wind10m
+  flow: true
+  flow_variables: [tcw, wind10m, 2t]
+areas:
+  - {name: north_sea, date: auto, step: 24, center: [56.0, 4.0], variable: wind10m, flow: true}

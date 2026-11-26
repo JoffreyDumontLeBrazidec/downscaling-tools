@@ -14,8 +14,8 @@ tc:                        # Humberto rapid intensification: IBTrACS 949 hPa, in
   step: 24
   center: [22.5, -58.0]     # 10-degree box (owner 23 Nov: ~10 degrees, colour range fitted)
   variable: wind10m
-  flow: true               # 10 m wind streamlines on page 03 (owner 26 Nov 2026)
-  flow_variables: [tcw, wind10m]   # page 03f: storm, scalar + flow, input | target | model
+  # opt-in (owner 26 Nov 2026, an option only): flow: true = 10 m wind streamlines on page 03;
+  # flow_variables: [tcw, wind10m] = page 03f, storm, scalar + flow, input | target | model
 rain:
   name: e2_rain
   date: auto               # wettest target member-mean tp max in the E2 box at +24 h
@@ -24,10 +24,10 @@ rain:
   box_deg: 10
   variable: tp
 areas:
-  # flow: true = 10 m wind streamlines over the field (any field: wind10m, tcw, 2t; owner 26 Nov 2026)
+  # opt-in: flow: true = 10 m wind streamlines over the field (any field: wind10m, tcw, 2t; owner 26 Nov 2026)
   # 10-degree boxes (owner 23 Nov ~10:00: 3 degrees too tight, 17 too blurry); 2t/msl colour range fitted to the box
   - {name: alps, date: auto, step: 24, center: [46.0, 10.0], variable: 2t}
-  - {name: north_sea, date: auto, step: 24, center: [56.0, 4.0], variable: wind10m, flow: true}
+  - {name: north_sea, date: auto, step: 24, center: [56.0, 4.0], variable: wind10m}
   - {name: iberia, date: auto, step: 24, center: [40.0, -4.0], variable: tp}
 stills:
   grid: O2560              # the files are an E2 crop of O2560
