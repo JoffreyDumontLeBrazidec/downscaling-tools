@@ -13,7 +13,7 @@ Wider levels are multiples of it (default x1, x2, x4). Nothing tighter than the 
 Drawing: every field is interpolated from its own native points (Clough-Tocher, C1; longitude scaled by
 cos(latitude)) onto one regular grid, drawn with bilinear smoothing. No grid cells, no triangle facets.
 Colour range = 2nd-98th percentile of the target in the box (model when there is no target); wind and rain
-start at 0. One colour bar per row. Titles name the field plainly; a target with one field for every member
+start at 0; wind tops at the 99.9th percentile of all panels (storm cores). One colour bar per row. Titles name the field plainly; a target with one field for every member
 (e.g. iekm) carries no member number. Input, target and model are separate realisations, not paired.
 """
 from __future__ import annotations
@@ -147,6 +147,10 @@ def draw_row(panels: list[dict], extent: list[float], out: Path, *, variable: st
         # a dry box has a 98th percentile near 0 mm, which blows drizzle up to full colour (Iberia 16 Aug 2025):
         # top = 99.5th percentile of the target, never below TP_MIN_TOP_MM
         vmax = max(float(np.nanpercentile(ref, 99.5)), TP_MIN_TOP_MM)
+    if variable == "wind10m":
+        # a storm core covers < 2 % of a 1000 km box, so the 98th percentile saturated it (Lowell 2026, 45.7 m/s
+        # drawn on a 22 m/s scale; 26 Nov 2026): top = 99.9th percentile over ALL panels
+        vmax = max(vmax, float(np.nanpercentile(np.concatenate([g.ravel() for g in grids]), 99.9)))
     if not vmax > vmin:
         vmax = vmin + 1.0
     aspect = (e - w) * np.cos(np.deg2rad(lat0)) / (n - s)
