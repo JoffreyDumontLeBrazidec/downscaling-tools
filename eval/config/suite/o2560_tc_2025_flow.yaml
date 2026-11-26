@@ -1,16 +1,42 @@
-# Opt-in variant of o2560_tc_2025 with 10 m wind streamlines (owner 26 Nov 2026: "keep it as an option only").
-# Same TC case; page 03 with streamlines, page 03f = storm, scalar + flow (tcw when the file has it, wind, 2t);
-# north_sea wind area with streamlines on pages 05 / 05z. Use: --cases o2560_tc_2025_flow --only tc_members tc_flow zooms
+# Opt-in variant of o2560_tc_2025 (owner 26 Nov 2026: streamlines are "an option only"); identical except the flow keys.
+# Classic suite case list, 4 km lane (o1280 -> o2560, E2 box), 2025 tropical-cyclone set
+# (outputs/o2560_tc_20261109/pred/<row>/ on Jupiter: 31 base dates, +24/+48/+72 h, rows *_m = one draw per
+# o1280 ENS member pf1-10, embedded iekm target). Fixed so that pages of two runs compare by eye.
 name: o2560_tc_2025_flow
-description: "4 km E2 box, 2025 TC set, streamline (scalar + flow) view"
+description: "o2560_tc_2025 with the opt-in 10 m wind streamlines (page 03, 03f, north_sea)"
 members: "1-10"
-tc:
+spectra:
+  steps: [24, 72]          # exactly two pages (owner, 23 Nov 2026)
+  box: null                # the file's own box (E2)
+  fine_res_deg: 0.035      # second read below the target limit (T2559, 16 km), pages 01b-02b (owner 23 Nov 13:21)
+tc:                        # Humberto rapid intensification: IBTrACS 949 hPa, input members 976-1006 hPa
   name: humberto
   date: "20250926"
   step: 24
-  center: [22.5, -58.0]
+  center: [22.5, -58.0]     # 10-degree box (owner 23 Nov: ~10 degrees, colour range fitted)
   variable: wind10m
-  flow: true
-  flow_variables: [tcw, wind10m, 2t]
+  flow: true                       # 10 m wind streamlines on page 03
+  flow_variables: [tcw, wind10m, 2t]   # page 03f: storm, scalar + flow, input | target | model
+rain:
+  name: e2_rain
+  date: auto               # wettest target member-mean tp max in the E2 box at +24 h
+  step: 24
+  extent: [-79.0, 39.0, 11.0, 69.0]   # search box; the map is a 10-degree box on the wettest point
+  box_deg: 10
+  variable: tp
 areas:
+  # opt-in: flow: true = 10 m wind streamlines over the field (any field: wind10m, tcw, 2t; owner 26 Nov 2026)
+  # 10-degree boxes (owner 23 Nov ~10:00: 3 degrees too tight, 17 too blurry); 2t/msl colour range fitted to the box
+  - {name: alps, date: auto, step: 24, center: [46.0, 10.0], variable: 2t}
   - {name: north_sea, date: auto, step: 24, center: [56.0, 4.0], variable: wind10m, flow: true}
+  - {name: iberia, date: auto, step: 24, center: [40.0, -4.0], variable: tp}
+stills:
+  grid: O2560              # the files are an E2 crop of O2560
+  cases:
+    - {name: e2_wettest, date: auto, step: 24, variable: tp}
+    - {name: humberto, date: "20250926", step: 24, variable: tp, extent: [-80.0, -40.0, 10.0, 40.0]}
+tp_distribution:
+  steps: [24, 48, 72]
+scores:
+  region: all
+  variables: [[tp, raw], [10ff, raw], [2t, lapse], [msl, raw]]
