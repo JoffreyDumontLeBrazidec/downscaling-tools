@@ -21,7 +21,8 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-LEADS = (12, 24, 36, 48, 60, 72)
+import os as _os
+LEADS = tuple(int(x) for x in _os.environ.get("XSET_LEADS", "12,24,36,48,60,72").split(","))  # XSET_LEADS from xset_set.env (S24, 25 Nov 2026: 12..240)
 P = dict(first="20240101", last="20251228", min_fixes=3, wind_kt=34.0, max_abs_lat=45.0, dateline_deg=12.0,
          spacing_days=3, n_storms=30, n_basins=3, basin_min=6, major_kt=96.0, min_dates=22, max_dates=26)
 

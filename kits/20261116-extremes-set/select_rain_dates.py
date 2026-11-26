@@ -28,7 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
-LEADS = (12, 24, 36, 48, 60, 72)
+import os as _os
+LEADS = tuple(int(x) for x in _os.environ.get("XSET_LEADS", "12,24,36,48,60,72").split(","))  # XSET_LEADS from xset_set.env (S24, 25 Nov 2026: 12..240)
 P = dict(first="20240101", last="20250927", thr=50.0, event_min=5, link_km=300.0, spacing_days=5, tc_spacing_days=3,
          per_month=2, min_s=3, min_t=6, min_w=3, n_dates=20)
 

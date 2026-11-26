@@ -24,6 +24,9 @@ REGIONS = {
     "europe": [35.0, 75.0, -12.5, 42.5],
     "north_america": [15.0, 72.0, -170.0, -50.0],
     "east_asia": [5.0, 55.0, 95.0, 150.0],
+    # CorrDiff baseline (17 Nov 2026): the E2 box [10, 70] N x [-80, 40] E minus 0.5 deg, so every station of the region
+    # and its 36 km disc fall on points that CorrDiff predicts (it writes NaN outside the box; obs_points drops those)
+    "e2_box_in": [10.5, 69.5, -79.5, 39.5],
 }
 
 

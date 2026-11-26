@@ -15,6 +15,10 @@ Reads the row's prediction files (xset_rows_date.py / xset_predict_global.py lay
                  a bad forecast of the storm, not a missing one. HEADLINE.
         *_found  only the members with a closed centre inside the disc (tc_obs's rule); n_found says how many.
       Position error: distance of the mean centre of the found members from the best-track fix.
+  tc_members.csv        one line per (case, row, member): the member's minimum pressure and maximum wind (the *_all
+                        rule), whether it has a closed centre, the centre and the radius of maximum wind. Member k of
+                        INPUT is the input of member k of a model row, and has the number of member k of ENS9: the file
+                        is for paired reads per lead (xset_tc_lead_read.py). --tc-only skips the IMERG discs.
   imerg_discs.csv       one line per (date, lead, disc, row): fair twCRPS of 12 h rain above 20 and 50 mm against IMERG
                         Final at every evaluation point within DISC_KM of a cyclone fix (kind tc) or of a heavy-rain
                         event centre (kind rain); mean over points, with point counts and exceedance frequencies.
@@ -59,6 +63,7 @@ def main():
     ap.add_argument("--rain-events", default="")
     ap.add_argument("--out", required=True)
     ap.add_argument("--with-refs", action="store_true")
+    ap.add_argument("--tc-only", action="store_true", help="cyclone cases only: no IMERG discs, imerg_discs.csv not written")
     a = ap.parse_args()
     import netCDF4
     from eval.evaluators.obs_points.core.scores import fair_crps, fair_twcrps
@@ -70,12 +75,12 @@ def main():
     for c in csv.DictReader(open(a.tc_cases)):
         cases[(c["date"], int(c["lead"]))].append(c)
     events = defaultdict(list)
-    if a.rain_events:
+    if a.rain_events and not a.tc_only:
         for e in csv.DictReader(open(a.rain_events)):
             events[(e["date"], int(e["lead"]))].append(e)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    tc_rows, im_rows = [], []
+    tc_rows, im_rows, mem_rows = [], [], []
     files = sorted(Path(a.pred).glob("predictions_*_step*.nc"))
     for f in files:
         m = re.match(r"predictions_(\d{8})_step(\d{3})\.nc", f.name)
@@ -119,6 +124,11 @@ def main():
                     sc, _ = measure_structure(lat, lon, x[k, :, iu], x[k, :, iv], clat, clon, params)
                     p_all.append(float(msl[disc].min()))
                     w_all.append(sc["maxwind300_ms"])
+                    mem_rows.append(dict(sid=c["sid"], date=date, lead=lead, row=row, member=k + 1, found=int(bool(cen["found"])),
+                                         pmin_hpa=p_all[-1], wind_ms=sc["maxwind300_ms"],
+                                         clat=cen["lat"] if cen["found"] else np.nan, clon=cen["lon"] if cen["found"] else np.nan,
+                                         rmw_km=sc["rmw_km"] if cen["found"] else np.nan, bt_lat=bl, bt_lon=bo,
+                                         bt_pres_hpa=bt_p, bt_wind_ms=bt_w))
                     if cen["found"]:
                         p_f.append(cen["pmin_hpa"]); w_f.append(sc["maxwind300_ms"]); cl.append(cen["lat"]); co.append(cen["lon"])
                         rmw.append(sc["rmw_km"])
@@ -152,7 +162,7 @@ def main():
                         r["bt_rmw_km"] = float(c["usa_rmw_nmi"]) * 1.852
                 tc_rows.append(r)
         # ---- IMERG discs
-        if imerg is not None and np.isfinite(imerg).any():
+        if imerg is not None and not a.tc_only and np.isfinite(imerg).any():
             discs = [("tc", c["sid"], float(c["lat"]), float(c["lon"])) for c in cs] + \
                     [("rain", f"{e['lat']}_{e['lon']}", float(e["lat"]), float(e["lon"])) for e in es]
             for kind, key, la, lo in discs:
@@ -182,7 +192,9 @@ def main():
             w.writerows(rows)
 
     dump(out / "tc_cases_scored.csv", tc_rows)
-    dump(out / "imerg_discs.csv", im_rows)
+    dump(out / "tc_members.csv", mem_rows)
+    if not a.tc_only:
+        dump(out / "imerg_discs.csv", im_rows)
     print(f"EVENTS_DONE {a.label}: {len(tc_rows)} cyclone lines, {len(im_rows)} IMERG lines from {len(files)} files", flush=True)
 
 

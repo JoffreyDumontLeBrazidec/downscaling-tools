@@ -25,7 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
-LEADS = (12, 24, 36, 48, 60, 72)
+import os as _os
+LEADS = tuple(int(x) for x in _os.environ.get("XSET_LEADS", "12,24,36,48,60,72").split(","))  # XSET_LEADS from xset_set.env (S24, 25 Nov 2026: 12..240)
 N_PF = 10
 ACCUM = ("tp", "cp")
 
