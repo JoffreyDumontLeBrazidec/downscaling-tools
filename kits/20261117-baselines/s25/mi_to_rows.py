@@ -14,6 +14,7 @@ point_index; y, native x, imerg_tp12, why, coordinates from the ENS9 template) a
     python3 mi_to_rows.py --mi DIR --templates XOUT/rows/ENS9 --out XOUT --date 20250901 [--date ...] [--label GL512_450k]
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -32,6 +33,22 @@ def seed(date, lead, member0):
     return int(np.random.SeedSequence([SEED_BASE, int(date), int(lead), int(member0)]).generate_state(1, dtype=np.uint32)[0])
 
 
+def model_attr(a, z) -> str:
+    """Row attr 'model': --model-attr, else the MI npz attrs (model label, step, sampler), else the 21 Nov fixed text."""
+    tail = " (MI month row, uint16-packed fields, max error span/131070)"
+    if a.model_attr:
+        return f"{a.label}: {a.model_attr}{tail}"
+    if "attrs" in z.files:
+        try:
+            m = json.loads(str(z["attrs"]))
+            keys = [k for k in ("model", "model_label", "ckpt_step", "step", "ema", "sampler") if k in m]
+            if keys:
+                return f"{a.label}: " + "; ".join(f"{k}={json.dumps(m[k], sort_keys=True)}" for k in keys) + tail
+        except (ValueError, TypeError):
+            pass
+    return f"{a.label}: db_global_512_300k step 450000 EMA-2000, from the MI-S25 month row{tail}"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--mi", required=True)
@@ -39,6 +56,8 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--date", action="append", required=True)
     ap.add_argument("--label", default="GL512_450k")
+    ap.add_argument("--model-attr", default=None, help="row attr 'model' (default: built from the MI npz attrs json; "
+                    "the old fixed GL512 450k text only when the npz has none)")
     a = ap.parse_args()
     mi, O = Path(a.mi), Path(a.out)
     g = np.load(mi / "grid_o1280.npz")
@@ -73,8 +92,7 @@ def main():
             write_row_file(tmp, lat=tpl["lat_hres"], lon=tpl["lon_hres"], point_index=pidx, states=list(SAVE_VARS), y=tpl["y"],
                            y_pred=y_pred, x=tpl["x"], lat_lres=tpl["lat_lres"], lon_lres=tpl["lon_lres"],
                            lres_index=tpl["lres_index"], extra=tpl["extra"],
-                           attrs=dict(model=f"{a.label}: db_global_512_300k step 450000 EMA-2000, from the MI-S25 month row "
-                                            "(uint16-packed fields, max error span/131070)",
+                           attrs=dict(model=model_attr(a, z),
                                       truth="y = od enfo cf", date=d, lead=L, member_rule="y_pred member k = draw k, seed "
                                       "derive_draw_seed(1234, date, lead, k-1), GlobalNoise", source=str(mi / d), tp_units="m per 12 h"))
             tmp.rename(rows / name)
