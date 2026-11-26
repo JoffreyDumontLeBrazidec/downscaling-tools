@@ -13,6 +13,6 @@
 #SBATCH --time=01:30:00
 #SBATCH --output=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-month-inference/logs/%x-%j.out
 set -o pipefail; ulimit -c 0
-K=/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-month-inference/downscaling-tools/kits/20261117-month-inference/jupiter
+K=${MI_K:-/e/data1/jureap-data/ecmwf/users/jdumont/agent-work/20261117-month-inference/downscaling-tools/kits/20261117-month-inference/jupiter}   # MI_K: another checkout (sbatch spools this file; give --output too)
 bash $K/mi_run.sh "${1:-GL512_500k}" xcheck "${XCASES:-20240804:24,20240804:72}" 29643 || { echo "[mi] MI_XCHECK_FAIL $(date -u +%FT%TZ)"; exit 1; }
 echo "[mi] MI_XCHECK_JOB_DONE $(date -u +%FT%TZ)"

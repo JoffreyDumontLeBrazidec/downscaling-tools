@@ -31,3 +31,15 @@ MI-JUL25 = Jul 2025 (`dates_jul25.txt`, 31 dates, third month, owner "go build" 
 
 ## IFS cycle 48r1 sets (24 Nov 2026)
 MI-J24 = Jan 2024 (dates_j24.txt, 31 dates), MI-JUL24 = Jul 2024 (dates_jul24.txt, 31), MI-S24 = Sep 2024 (dates_s24.txt, 30). Owner request 24 Nov 2026: test months of the same IFS cycle as the training re-forecasts (48r1, operational 27 Jun 2023 to 11 Nov 2024); the 2025 sets are cycle 49r1. Same design and commands as the 2025 sets; they mirror the months of MI-J25, MI-JUL25 and MI-S25 so that each season has one month per cycle.
+
+## MeanFlow rows (26 Nov 2026)
+`SAMPLER_MODE=meanflow` (set by `mi_runs.sh` for rows `GLAJ<n>K_J1|J2|J4|J10` and for an XSET-1 row name `GLAJ<n>K_G<GRID>`):
+FG-199 `glmf_alljump_50k` at step n x 1000, EMA-2000, with the sampler route of the XSET-1 MeanFlow rows
+(Jupiter `agent-work/20261110-meanflow-extremes/kit/xset/xset_predict_mf.py`): `kit/gl/runs_gl.sh` gives model, code pin
+(worktrees/anemoi-core-meanflow-gl512 ae5d7c333), config + `training.crop.enabled=false`, warm file (sha checked), grid; the grid
+dicts go natively to `predict_step`, the class and the network calls of every draw are checked (fatal on mismatch). Grids:
+J1 (1e5, 0), J2 = J2S (1e5, 80, 0), J4 = JX4 (1e5, 1000, 80, 0.97561, 0), J10 = JX10 (the XSET-1 GJX10 grid). `mi_run.sh` now
+takes the kit (python, xset_env.sh, kit sha) from the checkout it lives in, and `MODE=dry` (login CPU, no draws) exists.
+Gate: `mi_xcheck.sbatch GLAJ400K_GJX10` -> `outputs/month_inference_s25/xcheck/GLAJ400K_GJX10/MI_XCHECK_PASS` (required by
+`mi_predict.sbatch` for every GLAJ row). Submit: `bash jupiter/mi_submit_meanflow_s24.sh` from a separate checkout (sets
+`MI_K`, `--output`, `--kill-on-invalid-dep=yes`); outputs `outputs/month_inference_s24/rows/<ROW>/`.

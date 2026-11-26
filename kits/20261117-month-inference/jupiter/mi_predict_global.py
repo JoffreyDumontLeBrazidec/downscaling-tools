@@ -71,16 +71,47 @@ PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0, "S_min": 0.75, "S_max": 100000.
 # y = y_init + (1e-12 - s) (y_init - D) / s = D(x; s) up to 1e-12/s y_init. On a diffusion model this is its
 # conditional-mean estimate at noise level s. The unit noise of that call still comes from the rule-31 seed of the draw.
 # XSET_SCHED_JSON / XSET_SAMPLER_JSON replace the whole dictionaries (never merged); what was used is in every file.
+# SAMPLER_MODE=meanflow (26 Nov 2026, thread "Score MeanFlow on Sep 2024 for the paper"): the sampler of the XSET-1 MeanFlow
+# rows (agent-work/20261110-meanflow-extremes/kit/xset/xset_predict_mf.py, rows GLAJ<n>K_G<GRID>): FM_SCHED_JSON (flow_map,
+# sigma_levels) and FM_SAMPLER_JSON (hybrid, one mode per interval) from kit/gl/runs_gl.sh, passed natively to predict_step
+# (a fresh dict per draw); EXPECT_CLASS checked after the build; a forward pre-hook counts the network passes of every draw and
+# the job stops if the count differs from the grid's (expected_calls) and from EXPECT_CALLS (guard against a sampler that
+# ignores the grid); a Lightning weights file is read through its state_dict with 'model.' stripped; sample_s / draw_s timing.
+MEANFLOW = os.environ.get("SAMPLER_MODE", "edm") == "meanflow"
 if os.environ.get("SAMPLER_MODE", "edm") == "det":
     PW_SCHED = {"schedule_type": "linear", "num_steps": 2, "sigma_max": float(os.environ.get("MI_DET_SIGMA", "500000")),
                 "sigma_min": 1e-12}
     PW_SAMPLER = {"sampler": "heun", "S_churn": 0.0}
+elif MEANFLOW:
+    if os.environ.get("XSET_SCHED_JSON") or os.environ.get("XSET_SAMPLER_JSON"):
+        raise SystemExit("FATAL: SAMPLER_MODE=meanflow takes FM_SCHED_JSON / FM_SAMPLER_JSON only, not XSET_*_JSON")
+    PW_SCHED = json.loads(os.environ["FM_SCHED_JSON"])
+    PW_SAMPLER = json.loads(os.environ["FM_SAMPLER_JSON"])
+    assert PW_SCHED.get("schedule_type") == "flow_map", PW_SCHED
 elif os.environ.get("SAMPLER_MODE", "edm") != "edm":
-    raise SystemExit(f"unknown SAMPLER_MODE {os.environ.get('SAMPLER_MODE')!r} (edm | det)")
+    raise SystemExit(f"unknown SAMPLER_MODE {os.environ.get('SAMPLER_MODE')!r} (edm | det | meanflow)")
 if os.environ.get("XSET_SCHED_JSON"):
     PW_SCHED = json.loads(os.environ["XSET_SCHED_JSON"])
 if os.environ.get("XSET_SAMPLER_JSON"):
     PW_SAMPLER = json.loads(os.environ["XSET_SAMPLER_JSON"])
+
+
+def expected_calls(sched: dict, sampler: dict) -> int:
+    """Network passes of one draw, from the block alone (copy of kit/xset/xset_predict_mf.py)."""
+    if sched.get("schedule_type") == "flow_map":
+        if sampler["sampler"] == "hybrid":
+            lv, md = [float(x) for x in sched["sigma_levels"]], list(sampler["modes"])
+            assert len(md) == len(lv) - 1 and lv[-1] == 0.0, (lv, md)
+            return sum(2 if (m == "h" and lv[i + 1] > 0.0) else 1 for i, m in enumerate(md))
+        n = int(sched["num_steps"])
+        return 2 * n - 1 if sampler["sampler"] == "vel_heun" else n
+    assert sampler["sampler"] == "heun" and float(sampler.get("S_churn", 0.0)) == 0.0, sampler
+    return 2 * int(sched["num_steps"]) - 1
+
+
+EXPECTED_CALLS = expected_calls(PW_SCHED, PW_SAMPLER) if MEANFLOW else None
+if MEANFLOW and os.environ.get("EXPECT_CALLS"):
+    assert int(os.environ["EXPECT_CALLS"]) == EXPECTED_CALLS, (os.environ["EXPECT_CALLS"], EXPECTED_CALLS)
 
 
 def one_file(pattern: str, what: str) -> str:
@@ -184,7 +215,7 @@ def time_forcings(valid, lat, lon):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s", stream=sys.stdout)
     mode = os.environ.get("MODE", "predict")
-    assert mode in ("xcheck", "predict"), mode
+    assert mode in ("xcheck", "predict", "dry"), mode   # dry (meanflow kit, login node CPU, one process): all but the draws
     if mode == "xcheck":
         assert SEED_BASE == 1234, "xcheck reproduces XSET-1 rows, which use seed base 1234"
     step = int(os.environ["CKPT_STEP"])
@@ -196,9 +227,10 @@ def main():
     anchor_date, anchor_lead = os.environ.get("ANCHOR", "20230101:24").split(":")
     anchor_lead = int(anchor_lead)
     torch.set_float32_matmul_precision("high")
-    mcg, rank, local_rank, world = init_distributed(True)
+    use_cuda = mode != "dry"
+    mcg, rank, local_rank, world = init_distributed(use_cuda)
     is_main = rank == 0
-    if is_main:
+    if is_main and mode != "dry":
         outdir.mkdir(parents=True, exist_ok=True)
     LOG.info("MODE %s step %d ema %s raw %s %d cases %s members %d label %s row %s code %s rank %d of %d", mode, step, ema, raw,
              len(cases), cases[:3], n_mem, MODEL_LABEL, row_label, EXPECT_CODE, rank, world)
@@ -206,6 +238,8 @@ def main():
              [derive_draw_seed(1234, 20230101, 12, m) for m in (0, 1)])
     LOG.info("PW_SCHED %s", json.dumps(PW_SCHED))
     LOG.info("PW_SAMPLER %s", json.dumps(PW_SAMPLER))
+    if MEANFLOW:
+        LOG.info("MEANFLOW expected network calls per draw %d, class %s", EXPECTED_CALLS, os.environ.get("EXPECT_CLASS"))
     import anemoi.datasets, anemoi.models, anemoi.training  # noqa: E401
     LOG.info("anemoi.datasets from %s; anemoi.models from %s; anemoi.training from %s", anemoi.datasets.__file__,
              anemoi.models.__file__, anemoi.training.__file__)
@@ -241,11 +275,19 @@ def main():
     trainer.__dict__["initial_seed"] = int(os.environ.get("ANEMOI_BASE_SEED", "756"))
     dm = trainer.datamodule
     lm = trainer.model
-    device = torch.device(f"cuda:{local_rank}")
+    device = torch.device(f"cuda:{local_rank}") if use_cuda else torch.device("cpu")
+    if MEANFLOW and type(lm.model.model).__name__ != os.environ["EXPECT_CLASS"]:
+        raise SystemExit(f"FATAL: model class {type(lm.model.model).__name__}, the row expects {os.environ['EXPECT_CLASS']}")
     LOG.info("trainer built from the raw warm start %s in %.0fs", raw, time.time() - t0)
 
     obj = torch.load(ema, map_location="cpu", weights_only=False)
     sd = obj.state_dict() if hasattr(obj, "state_dict") else obj["state_dict"]
+    if MEANFLOW and not hasattr(obj, "state_dict"):   # a Lightning file (the converted warm start): keys 'model.<interface key>'
+        other = [k for k in sd if not k.startswith("model.")]
+        if other:
+            raise SystemExit(f"FATAL: Lightning state_dict of {ema} holds non-model keys {other[:5]}")
+        sd = {k[len("model."):]: v for k, v in sd.items()}
+        LOG.info("weights from a Lightning file: %d state_dict keys, leading 'model.' stripped", len(sd))
     missing, unexpected = lm.model.load_state_dict(sd, strict=False)
     LOG.info("EMA load: %d missing %s, %d unexpected %s", len(missing), list(missing), len(unexpected), list(unexpected))
     bad = [k for k in missing if not ("node_attributes" in k and "latlons" in k)]
@@ -259,6 +301,9 @@ def main():
              if torch.is_tensor(p) and p.is_floating_point() and i % 37 == 0)
     LOG.info("weights loaded (%d buffers not in the file), fingerprint=%.6e, training-mode modules: %d, model class %s",
              len(missing), fp, sum(1 for m in lm.modules() if m.training), type(lm.model.model).__name__)
+    net_calls = [0]   # meanflow: network passes of the inner model in one draw (forward pre-hook; counts, changes nothing)
+    if MEANFLOW:
+        lm.model.model.register_forward_pre_hook(lambda _m, _a: net_calls.__setitem__(0, net_calls[0] + 1))
     emit_lead = bool(cfg.dataloader.get("emit_lead_hours", True))
     ds_cfg = OmegaConf.to_container(cfg.dataloader.test.datasets, resolve=True)
 
@@ -347,14 +392,14 @@ def main():
     import netCDF4
     part = os.environ.get("PART", "x")
     hdir = outdir / "hist"
-    if is_main:
+    if is_main and mode != "dry":
         hdir.mkdir(parents=True, exist_ok=True)
         gfile = outdir / "grid_o1280.npz"
         if not gfile.exists():   # parallel jobs share OUTDIR: a private temporary name per process, then an atomic rename
             gtmp = outdir / f"grid_o1280.part.{os.environ.get('SLURM_JOB_ID', 'x')}.{os.getpid()}.npz"
             np.savez(gtmp, lat=lat_all, lon=lon_all)
             os.replace(gtmp, gfile)
-    records, xres = [], []
+    records, xres, timing = [], [], []
     n_draws = n_finite = n_skip = 0
     for date, lead in cases:
         ddir = outdir / date
@@ -367,6 +412,9 @@ def main():
         mem70 = members_of(date, lead)
         assert mem70.shape == (len(full_vars), mem70.shape[1], in_full.shape[-1]) and mem70.shape[1] >= n_mem, mem70.shape
         assert np.isfinite(mem70[:, :n_mem]).all(), f"non-finite member input {date} +{lead}"
+        if mode == "dry":
+            LOG.info("DRY_CASE %s +%d h: %d input members read, no draw", date, lead, mem70.shape[1])
+            continue
         in_hres = hres_in(hres_row(valid)).unsqueeze(0).to(device)
         cseeds = case_seeds(date, lead, n_mem)
         if is_main:
@@ -382,10 +430,18 @@ def main():
             torch.cuda.manual_seed_all(s)
             t1 = time.time()
             gn = GlobalNoise(n_grid, world, rank)
+            net_calls[0] = 0
             with torch.inference_mode(), gn:
                 pred = lm.model.predict_step(batch, model_comm_group=mcg, gather_out=True,
                                              **({"lead_hours": torch.tensor([float(lead)], device=device)} if emit_lead else {}),
-                                             noise_scheduler_params=PW_SCHED, sampler_params=PW_SAMPLER)
+                                             noise_scheduler_params=dict(PW_SCHED) if MEANFLOW else PW_SCHED,
+                                             sampler_params=dict(PW_SAMPLER) if MEANFLOW else PW_SAMPLER)
+            if MEANFLOW:
+                torch.cuda.synchronize(device)
+                t_sample = time.time() - t1
+                if net_calls[0] != EXPECTED_CALLS:
+                    raise SystemExit(f"FATAL: rank {rank}: {net_calls[0]} network calls in draw {km} of {date} +{lead}, "
+                                     f"expected {EXPECTED_CALLS}")
             pt = pred["out_hres"] if isinstance(pred, dict) else pred
             if world > 1:
                 import torch.distributed as dist
@@ -418,8 +474,15 @@ def main():
                     raw5.append(p[:, [n2i_out_model[v] for v in SAVE_VARS]].copy())
                 glob_tp.append(p[:, n2i_out_model["tp"]].copy()); glob_u.append(p[:, n2i_out_model["10u"]].copy())
                 glob_v.append(p[:, n2i_out_model["10v"]].copy())
-                LOG.info("DRAW case=%s lead=%d seed=%d %.0fs finite=%s peak_alloc_GiB=%.2f", date, lead, seed, time.time() - t1,
-                         bool(np.isfinite(p).all()), torch.cuda.max_memory_allocated(device) / 2**30)
+                if MEANFLOW:
+                    t_draw = time.time() - t1
+                    timing.append(dict(date=date, lead=lead, member=km, sample_s=t_sample, draw_s=t_draw, calls=net_calls[0]))
+                    LOG.info("DRAW case=%s lead=%d seed=%d sample_s=%.3f draw_s=%.3f calls=%d finite=%s peak_alloc_GiB=%.2f",
+                             date, lead, seed, t_sample, t_draw, net_calls[0], bool(np.isfinite(p).all()),
+                             torch.cuda.max_memory_allocated(device) / 2**30)
+                else:
+                    LOG.info("DRAW case=%s lead=%d seed=%d %.0fs finite=%s peak_alloc_GiB=%.2f", date, lead, seed, time.time() - t1,
+                             bool(np.isfinite(p).all()), torch.cuda.max_memory_allocated(device) / 2**30)
             del pred, pt, p
         if not is_main:
             continue
@@ -430,6 +493,9 @@ def main():
                      in_hres="6 constants of the dataset anchor row + 5 time forcings computed at date + lead (anchor-checked)",
                      anchor=f"{anchor_date}:{anchor_lead}", tp_units="m per 12 h window ending at the lead (raw, not clipped)",
                      packing="value = lo + q / 65535 * (hi - lo), per (member, output)", grid="O1280, out_hres store order")
+        if MEANFLOW:
+            attrs.update(network_calls=EXPECTED_CALLS, model_class=os.environ["EXPECT_CLASS"], raw_warm_start=raw,
+                         predictor="mi_predict_global.py SAMPLER_MODE=meanflow (sampler route of kit/xset/xset_predict_mf.py)")
         if mode == "xcheck":
             xf = Path(os.environ["XCHECK_ROWS"]) / f"predictions_{date}_step{lead:03d}.nc"
             with netCDF4.Dataset(str(xf)) as d:
@@ -465,6 +531,12 @@ def main():
         dist.barrier(); dist.destroy_process_group()
     if is_main:
         LOG.info("FINITE_DRAWS %d of %d", n_finite, n_draws)
+        if MEANFLOW and timing:
+            warm = timing[1:] if len(timing) > 1 else timing
+            sm, dm_ = np.array([r["sample_s"] for r in warm]), np.array([r["draw_s"] for r in warm])
+            LOG.info("TIMING row=%s draws=%d network_calls=%d sample_s mean %.3f median %.3f draw_s mean %.3f median %.3f "
+                     "(job's first draw excluded: sample %.3f draw %.3f)", row_label, len(timing), EXPECTED_CALLS, sm.mean(),
+                     np.median(sm), dm_.mean(), np.median(dm_), timing[0]["sample_s"], timing[0]["draw_s"])
         if mode == "xcheck":
             (outdir / "MI_XCHECK_PASS").write_text(json.dumps(dict(cases=xres, step=step, ema=ema,
                                                                     utc=time.strftime("%FT%TZ", time.gmtime())), indent=1))
