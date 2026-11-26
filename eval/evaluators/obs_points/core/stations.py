@@ -141,9 +141,11 @@ def height_masks(dz_abs, classes: dict) -> dict:
     return {k: (dz_abs >= float(lo)) & (dz_abs < float(hi)) for k, (lo, hi) in classes.items()}
 
 
-def density_weights(lat, lon) -> np.ndarray:
+def density_weights(lat, lon, pop_lat=None, pop_lon=None) -> np.ndarray:
     """quaver's station-density weights (Gaussian kernel, scale 0.75 degree), summing to one.
     The implementation is the one validated against vtb in eval/tools/obs_crps."""
     from eval.tools.obs_crps.obs_crps_compute import station_density_weights
 
-    return station_density_weights(np.asarray(lat), np.asarray(lon))
+    if pop_lat is not None:
+        pop_lat, pop_lon = np.asarray(pop_lat), np.asarray(pop_lon)
+    return station_density_weights(np.asarray(lat), np.asarray(lon), pop_lat=pop_lat, pop_lon=pop_lon)
