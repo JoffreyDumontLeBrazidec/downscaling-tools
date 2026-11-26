@@ -10,7 +10,11 @@ in this order, are fixed; only the case list (``eval/config/suite/<name>.yaml``)
                            a rule. The standard read rightly stops near the target limit; the fine read shows the
                            grain below it, which he wants to see (and ideally remove).
     03 TC members          10 members of 10 m wind speed (0 to a top fitted to the box) in a 10-degree box on a
-                           storm: input | target | model side by side (zoom_maps)
+                           storm: input | target | model side by side (zoom_maps); with ``tc.flow: true`` 10 m wind
+                           streamlines on every panel (eval/plotting/flow.py, owner 26 Nov 2026)
+    03f TC scalar + flow   member 1, input | target | model on the same storm box, one row per ``tc.flow_variables``
+                           (e.g. tcw, 10 m wind speed, 2t), each panel with its own 10 m wind streamlines; a field
+                           the file lacks is listed in the note and left out
     04 rain members        10 members of tp on an intense-rain case: input | target | model side by side (zoom_maps)
     05 areas               member 1, input | target | model, one row per area, 10-degree boxes, colours fitted to
                            the box (zoom_maps)

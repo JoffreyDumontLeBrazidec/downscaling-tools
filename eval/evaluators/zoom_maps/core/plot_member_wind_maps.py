@@ -165,7 +165,7 @@ def panel_titles(user_titles: dict[str, str], n_lres: int, n_hres: int, lat_lres
 # below): msl in hPa, z_500 in dam, temperatures in K, wind in m s-1. The fixed
 # colour ranges are given in those display units. "wind10m" keeps the original
 # token and 0-25 m s-1 scale.
-_VARIABLE_KEYS = {"wind10m": "10ff", "msl": "msl", "2t": "2t", "t_850": "t_850", "z_500": "z_500", "tp": "tp"}
+_VARIABLE_KEYS = {"wind10m": "10ff", "msl": "msl", "2t": "2t", "t_850": "t_850", "z_500": "z_500", "tp": "tp", "tcw": "tcw"}
 
 VARIABLES: dict[str, dict] = {
     "wind10m": {
@@ -231,6 +231,17 @@ VARIABLES: dict[str, dict] = {
         "vmax": 30.0,
         "extend": "max",
         "fine_vmax": 5.0,
+    },
+    "tcw": {
+        # Total column water, kg m-2. 0-70 covers polar dry air to tropical storm cores; wetter saturates.
+        # The house map (davos_r) is white when dry; the flow overlay (--flow) is drawn in near-black over it.
+        "states": ("tcw",),
+        "combine": "single",
+        "token": "tcw",
+        "vmin": 0.0,
+        "vmax": 70.0,
+        "extend": "max",
+        "fine_vmax": 4.0,
     },
 }
 
@@ -321,6 +332,10 @@ def build_arg_parser(add_help: bool = True) -> argparse.ArgumentParser:
                         "raster) instead of blending between grid points, so a 9 km input shows 9 km cells "
                         "beside 4 km cells of the target and the model.")
     p.add_argument("--no-truth", action="store_true", default=False, help="Skip the enfo (embedded truth) panel.")
+    p.add_argument("--flow", action="store_true", default=False,
+                   help="Overlay 10 m wind streamlines (thin, semi-transparent, width by speed; eval/plotting/flow.py) "
+                        "on every panel, each from its own wind: the 'scalar + flow' view (e.g. tcw, 2t or wind "
+                        "speed + 10 m wind). Needs 10u and 10v in the file.")
     p.add_argument("--extent", nargs=4, type=float, default=list(DEFAULT_EXTENT), metavar=("LONMIN", "LONMAX", "LATMIN", "LATMAX"), help=f"Map extent (default: {DEFAULT_EXTENT}).")
     p.add_argument("--variable", choices=sorted(VARIABLES), default="wind10m",
                    help="Field to render (default: wind10m, the 10 m wind speed).")
@@ -740,8 +755,10 @@ def _render(
     fine_cut_deg: float = DEFAULT_FINE_CUT_DEG,
     box_line: str = "",
     cells: bool = False,
+    flow: tuple[np.ndarray, np.ndarray] | None = None,
+    variable: str = "wind10m",
 ) -> None:
-    """One map panel, written as ``out_path`` (PNG, 150 dpi) plus a PDF sibling."""
+    """One map panel, written as ``out_path`` (PNG, 150 dpi) plus a PDF sibling; ``flow`` = (10u, 10v) streamlines."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -760,10 +777,14 @@ def _render(
                                   field=field, fine_cut_deg=fine_cut_deg, cells=cells)
         mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
         ax.set_extent(extent, crs=ccrs.PlateCarree())  # drawing may have autoscaled the view
+        if flow is not None:
+            from eval.plotting.flow import streamlines_on_map
+            streamlines_on_map(ax, lon, lat, flow[0], flow[1], extent, variable=variable, density=1.7)
         add_geography(ax, coast_lw=0.9, label_size=8)
         ax.set_title(
             f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}"
-            f"{'' if member is None else f', member {member}'}\n"
+            f"{'' if member is None else f', member {member}'}"
+            f"{', 10 m wind streamlines (width by speed)' if flow is not None else ''}\n"
             f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
             + (f"\n{box_line}" if box_line else ""),
             fontsize=12,
@@ -829,6 +850,8 @@ def _render_grid(
     box_line: str = "",
     cells: bool = False,
     scored_bounds=None,
+    flows: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    variable: str = "wind10m",
 ) -> None:
     """One figure holding every member of a single source on a shared colour scale.
 
@@ -869,6 +892,9 @@ def _render_grid(
         for i, (ax, member, layer) in enumerate(zip(axes, members, layers)):
             mesh = _draw_layer(ax, layer, cmap=cmap, vmin=vmin, vmax=vmax)
             ax.set_extent(extent, crs=ccrs.PlateCarree())
+            if flows is not None:
+                from eval.plotting.flow import streamlines_on_map
+                streamlines_on_map(ax, lon, lat, flows[i][0], flows[i][1], extent, variable=variable, density=1.3)
             grid = layer[2]
             gl = add_geography(ax, label_size=6.5)
             if gl is not None:
@@ -897,7 +923,8 @@ def _render_grid(
         top = max(ax.get_tightbbox(renderer).y1 for ax in axes[:len(members)]) / h_px
         fig.suptitle(
             f"{title}\n{spec['subtitle']}{_fine_note(field, fine_cut_deg)}"
-            f"{f', {len(members)} members' if len(members) > 1 else ''}\n"
+            f"{f', {len(members)} members' if len(members) > 1 else ''}"
+            f"{', 10 m wind streamlines (width by speed)' if flows is not None else ''}\n"
             f"init {init_dt:%Y-%m-%d %H} UTC, lead time {step} h, valid {valid_dt:%Y-%m-%d %H} UTC"
             + (f"\n{box_line}" if box_line else ""),
             y=top + 0.08 / fig.get_size_inches()[1], va="bottom",
@@ -926,8 +953,20 @@ def run_member_grid(args: argparse.Namespace) -> int:
     outputs: list[str] = []
     members: list[int] = []
 
-    # (key, lat, lon, resolution, [member label], [field per member])
-    panels: list[tuple[str, np.ndarray, np.ndarray, float, list[int], list[np.ndarray]]] = []
+    # (key, lat, lon, resolution, [member label], [field per member], [(10u, 10v) per member] or None)
+    panels: list[tuple] = []
+    flow = bool(getattr(args, "flow", False))
+
+    def uv(da, ms, states):
+        if not flow:
+            return None
+        if "10u" not in states or "10v" not in states:
+            raise SystemExit(f"--flow needs 10u and 10v; the file carries {states}.")
+        out = []
+        for m in ms:
+            a = _member_slice(da, m)
+            out.append((a[:, states.index("10u")], a[:, states.index("10v")]))
+        return out
     for i, (key, run_dir) in enumerate(runs.items()):
         pred_file = Path(run_dir).expanduser() / f"predictions_{args.date}_step{args.step:03d}.nc"
         if not pred_file.exists():
@@ -947,16 +986,19 @@ def run_member_grid(args: argparse.Namespace) -> int:
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                input_res(ds["lat_lres"].values), here,
-                               [_field(_member_slice(ds["x"], m), states, spec) for m in here]))
+                               [_field(_member_slice(ds["x"], m), states, spec) for m in here],
+                               uv(ds["x"], here, states)))
             if not args.no_truth:
                 # one analysis copied into every member slot (iekm) is drawn once, not ten times
                 tm = here[:1] if is_single_field(ds["y"]) else here
                 panels.append(("enfo", lat_h, lon_h, DEFAULT_HRES_RES, tm,
-                               [_field(_member_slice(ds["y"], m), states, spec) for m in tm]))
+                               [_field(_member_slice(ds["y"], m), states, spec) for m in tm],
+                               uv(ds["y"], tm, states)))
         panels.append((key, lat_h, lon_h, DEFAULT_HRES_RES, here,
-                       [_field(_member_slice(ds["y_pred"], m), states, spec) for m in here]))
+                       [_field(_member_slice(ds["y_pred"], m), states, spec) for m in here],
+                       uv(ds["y_pred"], here, states)))
 
-    for key, lat, lon, res, member_labels, values in panels:
+    for key, lat, lon, res, member_labels, values, flows in panels:
         out_path = out_dir / (
             f"{key}_{token}_init{args.date}_members{len(member_labels):02d}"
             f"_{args.region_tag}_f{args.step:03d}.png"
@@ -970,6 +1012,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
             cells=bool(args.cells),
             scored_bounds=scored_bounds,
+            flows=flows, variable=args.variable,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)
@@ -977,7 +1020,7 @@ def run_member_grid(args: argparse.Namespace) -> int:
     write_manifest(out_root=out_dir, payload={
         "tool": "zoom_maps", "mode": "member_grid",
         "date": args.date, "time": args.time, "step": args.step, "members": members,
-        "variable": args.variable, "field": args.field, "fine_cut_deg": args.fine_cut_deg,
+        "variable": args.variable, "field": args.field, "fine_cut_deg": args.fine_cut_deg, "flow": flow,
         "runs": runs, "extent": list(extent), "extent_requested": list(args.extent),
         "vmin": vmin, "vmax": vmax,
         "outputs": outputs,
@@ -1015,7 +1058,17 @@ def run(args: argparse.Namespace) -> int:
     out_dir = Path(args.output_dir).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    panels: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, float]] = []
+    panels: list[tuple] = []          # (key, lat, lon, field, res, (10u, 10v) or None)
+    flow = bool(getattr(args, "flow", False))
+
+    def uv(da, states):
+        if not flow:
+            return None
+        if "10u" not in states or "10v" not in states:
+            raise SystemExit(f"--flow needs 10u and 10v; the file carries {states}.")
+        a = _member_slice(da, args.member)
+        return a[:, states.index("10u")], a[:, states.index("10v")]
+
     single_truth = False   # the target is one field for every member (no member in its title)
     for i, (key, run_dir) in enumerate(runs.items()):
         pred_file = Path(run_dir).expanduser() / f"predictions_{args.date}_step{args.step:03d}.nc"
@@ -1030,23 +1083,25 @@ def run(args: argparse.Namespace) -> int:
             if not args.no_input:
                 panels.append(("eefo", ds["lat_lres"].values, ds["lon_lres"].values,
                                _field(_member_slice(ds["x"], args.member), states, spec),
-                               input_res(ds["lat_lres"].values)))
+                               input_res(ds["lat_lres"].values), uv(ds["x"], states)))
             if not args.no_truth:
                 panels.append(("enfo", lat_h, lon_h,
-                               _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES))
+                               _field(_member_slice(ds["y"], args.member), states, spec), DEFAULT_HRES_RES,
+                               uv(ds["y"], states)))
                 single_truth = is_single_field(ds["y"])
         panels.append((key, lat_h, lon_h,
-                       _field(_member_slice(ds["y_pred"], args.member), states, spec), DEFAULT_HRES_RES))
+                       _field(_member_slice(ds["y_pred"], args.member), states, spec), DEFAULT_HRES_RES,
+                       uv(ds["y_pred"], states)))
     for key, grib_path in gribs.items():
         lat, lon, val = read_grib_field(grib_path, spec)
         res = DEFAULT_HRES_RES if lat.size > 2_000_000 else DEFAULT_LRES_RES
-        panels.append((key, lat, lon, val, res))
+        panels.append((key, lat, lon, val, res, None))   # a GRIB panel holds one field: no flow
 
     outputs: list[str] = []
     # "fine" panels get their own filename token so the two field kinds never
     # overwrite each other in a shared output directory.
     token = spec["token"] if args.field == "value" else f"{spec['token']}-fine"
-    for key, lat, lon, val, res in panels:
+    for key, lat, lon, val, res, uv_k in panels:
         out_path = out_dir / (
             f"{key}_{token}_init{args.date}_n{args.member:03d}"
             f"_{args.region_tag}_f{args.step:03d}.png"
@@ -1059,7 +1114,7 @@ def run(args: argparse.Namespace) -> int:
             vmin=vmin, vmax=vmax,
             proj_lon=args.proj_lon, proj_lat=args.proj_lat,
             field=args.field, fine_cut_deg=args.fine_cut_deg, box_line=box_line,
-            cells=bool(args.cells),
+            cells=bool(args.cells), flow=uv_k, variable=args.variable,
         )
         outputs.append(str(out_path))
         print(f"saved {out_path}", flush=True)

@@ -29,10 +29,10 @@ read looks at the two jobs the model does at once, never a change to the product
 
 ``--layout fronts`` (troughs and fronts, the Storm Ciaran read of 30 Oct 2026)
     Columns input, truth and one model panel per ``--run``; rows 10 m wind speed with
-    wind arrows, the front temperature (``t_850`` when the file has it, else ``2t``), and
+    10 m wind streamlines (eval/plotting/flow.py), the front temperature (``t_850`` when the file has it, else ``2t``), and
     the horizontal gradient of that temperature in K per 100 km, the frontal zone. msl
     isobars every 4 hPa on every panel. A cold front shows as a line of isobar kinks (the
-    trough), a wind shift in the arrows and a band of strong temperature gradient on its
+    trough), a wind shift in the streamlines and a band of strong temperature gradient on its
     cold side.
 
 The input panels use ``x_interp`` (the o320 input on the o1280 points) when the file holds
@@ -73,7 +73,6 @@ ISOBAR_STEP_HPA = 4.0
 # Front gradient: regular grid spacing (degrees) and Gaussian smoothing (grid cells).
 FRONT_GRID_DEG = 0.25
 FRONT_SMOOTH_CELLS = 1.5
-FRONT_ARROWS = 18              # arrows across the map width
 KM_PER_DEG = 111.2
 
 
@@ -436,6 +435,7 @@ def run_fronts(args: argparse.Namespace) -> int:
     import matplotlib.pyplot as plt
     import cartopy.crs as ccrs
     from eval.plotting import eval_style, save_figure
+    from eval.plotting.flow import SPEED_REF, streamlines_on_map
 
     runs = _parse_kv(args.run, "run")
     if not runs:
@@ -490,13 +490,9 @@ def run_fronts(args: argparse.Namespace) -> int:
                                                            field="value", fine_cut_deg=0.6, res=DEFAULT_HRES_RES)
             m0 = _draw_layer(axes[0, j], ("tri", tri, ws_v), cmap=ws_house.field_cmap(),
                              vmin=ws_spec["vmin"], vmax=ws_spec["vmax"])
-            # wind arrows on a coarse regular grid
-            step_deg = (extent[1] - extent[0]) / FRONT_ARROWS
-            gx, gy, ug = nearest_grid(lat, lon, arr[:, ui], extent=extent, res=step_deg, margin=0.0)
-            _, _, vg = nearest_grid(lat, lon, arr[:, vi], extent=extent, res=step_deg, margin=0.0)
-            gxx, gyy = np.meshgrid(gx, gy)
-            q = axes[0, j].quiver(gxx, gyy, ug, vg, transform=ccrs.PlateCarree(), scale=20.0 * FRONT_ARROWS,
-                                  scale_units="width", width=0.0025, color="white", zorder=7)
+            # 10 m wind streamlines, width by speed (owner 26 Nov 2026: streamlines replace the sparse arrows)
+            streamlines_on_map(axes[0, j], lon, lat, arr[:, ui], arr[:, vi], extent, variable="wind10m",
+                               density=1.6)
             m1 = _draw_layer(axes[1, j], ("tri", tri, t_v), cmap=t_house.field_cmap(),
                              vmin=t_spec["vmin"], vmax=t_spec["vmax"])
             ggx, ggy, grad = grads[j]
@@ -507,12 +503,12 @@ def run_fronts(args: argparse.Namespace) -> int:
                 _finish(axes[i, j], extent)
             note = f"\n{input_note.split(' = ')[1]}" if key == "input" else ""
             axes[0, j].set_title(f"{label}{note}", fontsize=9)
-        axes[0, -1].quiverkey(q, 0.85, -0.08, 20.0, "20 m s⁻¹", labelpos="E", coordinates="axes")
         fig.colorbar(m0, ax=list(axes[0]), shrink=0.85, pad=0.01, extend="max").set_label(ws_spec["cbar_label"])
         fig.colorbar(m1, ax=list(axes[1]), shrink=0.85, pad=0.01, extend="both").set_label(t_spec["cbar_label"])
         fig.colorbar(m2, ax=list(axes[2]), shrink=0.85, pad=0.01, extend="max").set_label(
             f"{t_house.name} gradient (K per 100 km)")
         fig.suptitle(f"Troughs and fronts, member {args.member}; {when}\n{box_line}; msl isobars every 4 hPa; "
+                     f"10 m wind streamlines, full width at {SPEED_REF:g} m s⁻¹; "
                      f"gradient on a {FRONT_GRID_DEG:g}° grid smoothed over {FRONT_SMOOTH_CELLS:g} cells",
                      fontsize=11)
         path = _out(out_dir, "+".join(runs), "fronts", args)

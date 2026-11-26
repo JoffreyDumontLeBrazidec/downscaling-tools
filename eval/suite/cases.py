@@ -34,6 +34,9 @@ class Case:
     vmax: float | None = None
     vmin: float | None = None
     box_deg: float | None = None      # map box of box_deg degrees of latitude (longitude widened by 1/cos(lat))
+    flow: bool = False                # overlay 10 m wind streamlines (eval/plotting/flow.py), owner 26 Nov 2026
+    # TC case only: page 03f draws member 1, input | target | model, one row per variable, each with streamlines
+    flow_variables: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -83,7 +86,8 @@ def _case(name: str, d: dict | None, default_var: str) -> Case | None:
                 # no fixed TC 0-70 m/s any more: the top is fitted to the box (owner 23 Nov ~10:00)
                 vmax=float(d["vmax"]) if d.get("vmax") is not None else None,
                 vmin=float(d["vmin"]) if d.get("vmin") is not None else None,
-                box_deg=float(d["box_deg"]) if d.get("box_deg") is not None else None)
+                box_deg=float(d["box_deg"]) if d.get("box_deg") is not None else None,
+                flow=bool(d.get("flow", False)), flow_variables=[str(v) for v in d.get("flow_variables", []) or []])
 
 
 def available_case_lists() -> list[str]:

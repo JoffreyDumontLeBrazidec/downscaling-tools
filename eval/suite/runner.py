@@ -22,7 +22,7 @@ LOG = logging.getLogger(__name__)
 # variables whose colour range is fitted to the map box (1st-99th percentile); wind keeps 0 at the bottom and fits
 # its top to the box; tp keeps its fixed rain classes
 FITTED_RANGE = ("2t", "msl", "t_850", "z_500")
-PAGES = ("spectra", "tc_members", "rain_members", "areas", "zooms", "scores", "stills", "tp_dist", "tc_dist")
+PAGES = ("spectra", "tc_members", "tc_flow", "rain_members", "areas", "zooms", "scores", "stills", "tp_dist", "tc_dist")
 
 
 def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | None, cols: int = 5,
@@ -45,6 +45,8 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
     if case.vmin is not None:
         argv += ["--vmin", str(case.vmin)]
     argv += ["--dpi", "200"]
+    if getattr(case, "flow", False):   # 10 m wind streamlines on every panel (owner 26 Nov 2026)
+        argv += ["--flow"]
     if cells:   # opt-in only: the owner rejected grid cells as the look of the pages (23 Nov 09:45, "awful")
         argv += ["--cells"]
     from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
@@ -83,6 +85,7 @@ def _zoom(runs: dict[str, Path], case, date: str, out: Path, *, members: str | N
 
     token = VARIABLES[case.variable]["token"]
     found = []
+    # --flow keeps the file names of the plain maps (same token)
     for key in ["eefo", "enfo", *runs]:
         tag = "members*" if members else "n001"
         found += sorted(out.glob(f"{key}_{token}_init{date}_{tag}_{case.name}_f{case.step:03d}.png"))[:1]
@@ -181,23 +184,37 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         if cases.spectra_fine_res_deg:
             page(f"{num}b", f"spectra: +{step} h, fine read", spectra(step, cases.spectra_fine_res_deg))
 
+    tc_resolved: dict = {}
+
+    def resolve_tc(case):
+        """(case with its storm box, date, how) of the TC case; computed once, shared by pages 03 and 03f."""
+        if "v" in tc_resolved:
+            return tc_resolved["v"]
+        how = "fixed in the case list"
+        if case.date == "auto" or case.extent is None:
+            from eval.suite.cases import best_track_fixes, tc_auto, tc_from_best_track
+
+            if tc:
+                case, how = tc_auto(case, Path(next(iter(tc.values()))) / "cases.csv")
+            else:
+                fixes = best_track_fixes(tc_cache, ibtracs_csv)
+                if fixes is None:
+                    raise ValueError("the TC case is picked from a tc_structure read (--tc) or from best-track "
+                                     "fixes (--tc-cache or --ibtracs-csv)")
+                case, how = tc_from_best_track(case, list(runs.values()), fixes)
+            date, _ = resolve_date(case, list(runs.values()), pick="first")
+        else:
+            date, how = resolve_date(case, list(runs.values()), pick="first")
+        tc_resolved["v"] = (case, date, how)
+        return tc_resolved["v"]
+
     def members_page(num, case_in, pick, label):
         def go():
             case = case_in
             if case is None:
                 raise ValueError(f"no {label} case in case list {cases.name}")
-            if label == "tc_members" and (case.date == "auto" or case.extent is None):
-                from eval.suite.cases import best_track_fixes, tc_auto, tc_from_best_track
-
-                if tc:
-                    case, how = tc_auto(case, Path(next(iter(tc.values()))) / "cases.csv")
-                else:
-                    fixes = best_track_fixes(tc_cache, ibtracs_csv)
-                    if fixes is None:
-                        raise ValueError("the TC case is picked from a tc_structure read (--tc) or from best-track "
-                                         "fixes (--tc-cache or --ibtracs-csv)")
-                    case, how = tc_from_best_track(case, list(runs.values()), fixes)
-                date, _ = resolve_date(case, list(runs.values()), pick="first")
+            if label == "tc_members":
+                case, date, how = resolve_tc(case)
             else:
                 date, how = resolve_date(case, list(runs.values()), pick=pick)
                 if label == "rain_members" and case.box_deg and case.extent:
@@ -220,6 +237,40 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
         return go
 
     page("03", "tc_members: 10 members around a storm", members_page("03", cases.tc, "first", "tc_members"))
+    def tc_flow():
+        # scalar + flow on the storm (owner 26 Nov 2026): member 1, input | target | model, one row per variable
+        # of the case list's tc.flow_variables (e.g. tcw, wind10m), 10 m wind streamlines on every panel
+        import dataclasses
+
+        from eval.suite.simple_maps import draw_row, load_panels
+
+        if cases.tc is None or not cases.tc.flow_variables:
+            raise ValueError(f"no tc.flow_variables in case list {cases.name}")
+        case, date, how = resolve_tc(cases.tc)
+        case = _not_tighter_than_close(case, map_runs, date, cases.zoom_close_points)
+        label, d = next(iter(map_runs.items()))
+        f = prediction_index(d)[(date, case.step)]
+        from eval.evaluators.zoom_maps.core.plot_member_wind_maps import VARIABLES as _ZV
+
+        rows, done, missing = [], [], []
+        when = f"{date[:4]}-{date[4:6]}-{date[6:]} 00 UTC +{case.step} h"
+        for var in case.flow_variables:
+            try:
+                panels = load_panels(f, var, 1, label, flow=True)
+            except (SystemExit, ValueError) as exc:      # the file does not carry this field
+                missing.append(f"{var} ({exc})")
+                continue
+            head = f"{_ZV[var]['subtitle']} + 10 m wind, {case.name}, {when}"
+            rows.append([draw_row(panels, case.extent, work / "tc_flow" / f"{case.name}_{var}_flow.png",
+                                  variable=var, head=head)])
+            done.append(var)
+        if not rows:
+            raise ValueError(f"none of {case.flow_variables} in {f.name}: {'; '.join(missing)}")
+        dst = stitch(rows, out / f"03f_tc_flow_{case.name}_{date}_L{case.step:03d}.png")
+        note = f"{case.name} {date} +{case.step} h ({how}); member 1, input | target | {label}; {', '.join(done)}"
+        return [dst], note + (f"; not in the file: {'; '.join(missing)}" if missing else "")
+
+    page("03f", "tc_flow: storm, scalar + 10 m wind streamlines", tc_flow)
     page("04", "rain_members: 10 members on intense rain", members_page("04", cases.rain, "rain", "rain_members"))
 
     def areas():
