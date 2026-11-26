@@ -261,8 +261,9 @@ def build_suite(runs: dict[str, Path], cases: CaseList, out: Path, *, obs: dict[
                 missing.append(f"{var} ({exc})")
                 continue
             head = f"{_ZV[var]['subtitle']} + 10 m wind, {case.name}, {when}"
+            # storm core: colour range 0.1-99.9th percentile of the target in the box (2-98 saturates the core)
             rows.append([draw_row(panels, case.extent, work / "tc_flow" / f"{case.name}_{var}_flow.png",
-                                  variable=var, head=head)])
+                                  variable=var, head=head, pct=(0.1, 99.9))])
             done.append(var)
         if not rows:
             raise ValueError(f"none of {case.flow_variables} in {f.name}: {'; '.join(missing)}")
