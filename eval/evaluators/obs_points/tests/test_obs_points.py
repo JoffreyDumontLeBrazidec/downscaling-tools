@@ -964,3 +964,21 @@ def test_wind_thresholds_and_forecast_frequency(tmp_path):
     w = df[df["var"] == "10ff"]
     assert w.twcrps4.notna().all() and w.fc_freq_gt4.between(0, 1).all() and (w.n_obs_gt4 > 0).any()
     assert df[df["var"] == "tp"].twcrps4.isna().all()   # the wind threshold stays on the wind rows
+
+
+def test_quaver_conformity_spread_and_density_population():
+    """T1 conformity (26 Nov 2026): quaver's spread is sqrt(mean variance, ddof 0); its density kernel runs over
+    every observation of the valid time, not only the scored stations."""
+    import numpy as np
+    from eval.evaluators.obs_points.core.scores import ensemble_scores
+    from eval.evaluators.obs_points.core.stations import density_weights
+
+    rng = np.random.default_rng(1)
+    ens, obs = rng.normal(size=(10, 40)), rng.normal(size=40)
+    r = ensemble_scores(ens, obs)
+    assert np.isclose(r["spread_q"], np.sqrt(np.mean(ens.var(0, ddof=0))))
+    assert np.isclose(r["spread_q"] / r["spread_rms"], np.sqrt(0.9))
+    lat, lon = rng.uniform(30, 60, 300), rng.uniform(-10, 30, 300)
+    assert np.allclose(density_weights(lat, lon), density_weights(lat, lon, lat, lon))
+    w = density_weights(lat[:50], lon[:50], lat, lon)
+    assert np.isclose(w.sum(), 1.0) and not np.allclose(w, density_weights(lat[:50], lon[:50]))

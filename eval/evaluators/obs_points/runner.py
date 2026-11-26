@@ -294,6 +294,8 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     kinds = kinds or ROW_KIND
     valid = (pd.Timestamp(date) + pd.Timedelta(hours=int(lead))).strftime("%Y%m%d%H")
     o = obs_v[obs_v.valid == valid]
+    # quaver's density-weight population: every observation of the valid time in the cache, scored or not
+    pop = o if cfg.get("density_population", "all") == "all" else None
     clim = None
     if seeps_clim is not None:
         c = seeps_clim[seeps_clim.valid == valid].drop_duplicates(subset=["stnid"]).set_index("stnid")
@@ -355,7 +357,9 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                 m = m & ok
                 if m.sum() < cfg["min_stations"]:
                     continue
-                w = density_weights(o.lat.to_numpy()[m], o.lon.to_numpy()[m]) if cfg["weighting"] == "station_density" else None
+                w = (density_weights(o.lat.to_numpy()[m], o.lon.to_numpy()[m],
+                                     *((pop.lat.to_numpy(), pop.lon.to_numpy()) if pop is not None else (None, None)))
+                     if cfg["weighting"] == "station_density" else None)
                 base = dict(var=var, variant=tag, radius_km=float(r), region=reg, lead=int(lead), date=str(date))
                 for k, x in vv.items():
                     ens = x[:, m] if x.ndim == 2 else x[m][None]
@@ -389,6 +393,7 @@ def resolve_config(eval_config: dict) -> dict:
         "lapse_rate": float(eval_config.get("lapse_rate", LAPSE_RATE)),
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
+        "density_population": str(eval_config.get("density_population", "all")),
         "competitor_ensembles": bool(eval_config.get("competitor_ensembles", True)),
         # rule 41: score the input on its native grid (x, lat_lres/lon_lres); False only to reproduce old tables
         "native_input": bool(eval_config.get("native_input", True)),

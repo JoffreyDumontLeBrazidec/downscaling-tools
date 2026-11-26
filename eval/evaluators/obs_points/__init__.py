@@ -47,6 +47,8 @@ Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
                  box edge (slot-head edge artefact, docs ablation note s21). Default 1; 0 keeps them; global grids keep all.
   lapse_rate     K/m for the 2t height correction; 0 turns the corrected variant off. Default 0.0065.
   min_stations   A region is scored on a date only with at least this many stations. Default 30.
+  density_population  all (default: the density kernel runs over every observation of the valid time in the
+                 cache, as quaver does) or scored (only the scored stations, the pre-26 Nov 2026 behaviour).
   weighting      none (plain station mean, the default) or station_density (quaver's Gaussian-kernel
                  station-density weights, eval/tools/obs_crps).
   seeps          Score 24 h SEEPS when the cache allows it. Default true.
