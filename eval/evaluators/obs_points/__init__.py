@@ -25,12 +25,24 @@ date by date with ``eval.cli obs compare``.
 Variables: 2t [K], 10ff [m/s, from 10u/10v], msl [Pa], tp [mm per 12 h ending at valid time; file
 metres x 1000, clipped at 0], tp24 [mm per 24 h, SEEPS only].
 
+quaver conformity (owner rule, 27 Nov 2026: every station score equals quaver's): observations pass quaver's
+toss hard limits (2t 173-333 K, 10ff 0-100 m/s, msl 800-1100 hPa, tp 0-900 mm) and, per row, its
+analysis-departure check on the row's own grid; physically implausible reports that pass (tp 301-703 mm in
+2023) are kept, as quaver keeps them. fair CRPS per station with M members (Ferro), spread = root of the
+station-density-weighted mean of the member variance (ddof 0), ensemble-mean RMSE = root of the weighted mean
+square error; density weights over every observation of the valid time; each row on its own stations. Means
+over dates as quaver's scorecard (averaging "wmo"): RMS over dates for rmse_mean and spread, plain mean for
+fair CRPS and the rest. One departure is kept on purpose: the box-edge strip (``box_edge_deg``, default 1 on
+regional grids; 2-3 of ~3,200 e2box stations per date on the 9 km lane, < 0.05 points), which guards against
+the slot-head edge artefact; set ``box_edge_deg: 0`` for exact quaver station sets.
+
 Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
   cache          The observation cache directory, or a list or mapping of candidate directories (one
                  per cluster); the first that exists on this machine is used.
   vars           Default [2t, 10ff, msl, tp].
-  regions        Mapping name -> [lat0, lat1, lon0, lon1] (lon -180..180, half-open) or null for every
-                 station. Default: all, europe (35-75 N, 12.5 W-42.5 E, quaver's), 40-70N, 25-40N, 10-25N.
+  regions        Mapping name -> [lat0, lat1, lon0, lon1] (lon -180..180, bounds included as in quaver's
+                 domains) or null for every station. Default: all, e2box (11-69 N, 79 W-39 E) and europe
+                 (35-75 N, 12.5 W-42.5 E), quaver's two card domains, 40-70N, 25-40N, 10-25N.
   height_classes Mapping name -> [lo, hi) in metres of |model orography - station height|, scored as
                  extra regions. Default all_dz<100m [0, 100] and all_dz>=300m [300, 1e9].
   model_height_column
@@ -42,13 +54,24 @@ Lane configuration (the ``obs_points:`` block); only ``cache`` is required:
                  ending at valid time, the 4 km lane); anything but tp turns SEEPS and the 12 h window audit off.
   thresholds     tp thresholds in mm per 12 h for twCRPS, Brier and counts. Default [5, 10, 20].
   radii          tp disc radii in km (0 = nearest grid point). Default [0, 18, 36].
-  max_km         Largest station-to-grid-point distance kept. Default 15.
+  max_km         Largest station-to-grid-point distance kept for the model and truth rows. Default 15.
+  input_max_km   The same for the input row on its native grid. Default: unlimited on a global grid, the grid's
+                 coarsest point spacing on a regional one.
   box_edge_deg   On a regional grid, drop stations whose nearest grid point is within this many degrees of the
                  box edge (slot-head edge artefact, docs ablation note s21). Default 1; 0 keeps them; global grids keep all.
   lapse_rate     K/m for the 2t height correction; 0 turns the corrected variant off. Default 0.0065.
   min_stations   A region is scored on a date only with at least this many stations. Default 30.
-  weighting      none (plain station mean, the default) or station_density (quaver's Gaussian-kernel
-                 station-density weights, eval/tools/obs_crps).
+  density_population  all (default: the density kernel runs over every observation of the valid time in the
+                 cache that passes the row's checks, scored or not, as quaver does; exact only with a global
+                 cache) or scored (only the scored stations, the pre-26 Nov 2026 behaviour).
+  weighting      station_density (the default since 27 Nov 2026: quaver's Gaussian-kernel station-density
+                 weights, eval/tools/obs_crps) or none (plain station mean).
+  station_set    per_row (default, quaver): each row on its own stations, those where it has a value and whose
+                 observation passes quaver's analysis-departure check on that row's own grid; common: the
+                 intersection over rows (the pre-27 Nov 2026 behaviour).
+  analysis_columns  Row -> cache column of the analysis of that row's grid. Default model/truth an (O1280; an_o2560
+                 when model_height_column is h_o2560), input an_o320 when input_height_column is h_o320*, hres an.
+                 A column the cache lacks means no analysis check for that row (caches before 27 Nov 2026).
   seeps          Score 24 h SEEPS when the cache allows it. Default true.
   competitor_ensembles
                  Score the input and the truth as ensembles when the files carry their members

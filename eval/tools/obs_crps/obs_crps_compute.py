@@ -100,7 +100,7 @@ def unit_xyz(lat, lon) -> np.ndarray:
     )
 
 
-def station_density_weights(lat, lon, scangle: float = 0.75) -> np.ndarray:
+def station_density_weights(lat, lon, scangle: float = 0.75, pop_lat=None, pop_lon=None) -> np.ndarray:
     """Station-density weights, equivalent to ``vtb.geo.station_density_weights``.
 
     Every station gets a weight of one over the sum of a Gaussian kernel
@@ -112,16 +112,20 @@ def station_density_weights(lat, lon, scangle: float = 0.75) -> np.ndarray:
     This is a vectorised rewrite of the vtb function, which loops in Python and
     is the slowest step of the whole calculation.  It was checked against vtb on
     12,765 stations: maximum relative difference 4e-9, about seven times faster.
+    With ``pop_lat``/``pop_lon`` the kernel sum runs over that population of stations (quaver sums over every
+    observation of the valid time, scored or not; T1 conformity test 26 Nov 2026) instead of the scored ones;
+    the weights are still those of the scored stations, normalised over them.
     """
     sc = float(scangle) * np.pi / 180.0
     xyz = unit_xyz(lat, lon)
-    tree = cKDTree(xyz)
+    pop = xyz if pop_lat is None else unit_xyz(pop_lat, pop_lon)
+    tree = cKDTree(pop)
     chord = 2.0 * np.sin(min(4.0 * sc, np.pi) / 2.0)
-    neighbours = tree.query_ball_tree(tree, r=chord)
+    neighbours = tree.query_ball_point(xyz, r=chord)
 
     kernel_sum = np.empty(len(xyz), dtype=float)
     for i, nb in enumerate(neighbours):
-        d = np.linalg.norm(xyz[np.asarray(nb)] - xyz[i], axis=1)
+        d = np.linalg.norm(pop[np.asarray(nb, dtype=int)] - xyz[i], axis=1)
         ang = 2.0 * np.arcsin(np.clip(d / 2.0, 0.0, 1.0))
         k = np.exp(-((ang / sc) ** 2))
         k[ang > 4.0 * sc] = 0.0

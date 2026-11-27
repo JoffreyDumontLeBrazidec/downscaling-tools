@@ -75,7 +75,10 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
     """Ensemble scores of one sample of stations. Single fields go in as ens of shape (1, n):
     fair CRPS is then the MAE and the spread is 0, so they stay on the same columns, labelled single field.
 
-    Headline columns: fcrps, spread (mean member SD, ddof 1), spread_rms (root of the mean member variance),
+    Headline columns: fcrps, spread = quaver's spread (root of the weighted mean over stations of the member
+    variance with ddof 0; T1 conformity test, 26 Nov 2026, reproduced quaver's psv to 0), spread_q (the same
+    number, the name the scorecard kit reads), spread_rms (the same with ddof 1, for the spread/skill ratio),
+    spread_sd (mean member SD with ddof 1: the ``spread`` column before 27 Nov 2026),
     ssr_corrected = spread_rms / rmse_mean * sqrt((M + 1) / M), and per threshold t the fair twCRPS, the fair
     Brier score, the observed exceedance count n_obs_gt<t> and the mean forecast exceedance probability
     fc_freq_gt<t>. Secondary (deterministic) columns: bias,
@@ -90,6 +93,7 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
     d = mean - obs
     rmse = float(np.sqrt(_wmean(d ** 2, w)))
     spread_rms = float(np.sqrt(_wmean(ens.var(0, ddof=1), w))) if m > 1 else 0.0
+    spread_q = float(np.sqrt(_wmean(ens.var(0, ddof=0), w))) if m > 1 else 0.0
     if w is None:
         corr = float(np.corrcoef(mean, obs)[0, 1]) if mean.std() > 0 and obs.std() > 0 else np.nan
     else:
@@ -99,8 +103,11 @@ def ensemble_scores(ens: np.ndarray, obs: np.ndarray, thresholds=(), weights=Non
     out = {
         "n": int(obs.size), "members": int(m),
         "fcrps": _wmean(fair_crps(ens, obs), w),
-        "spread": _wmean(ens.std(0, ddof=1), w) if m > 1 else 0.0,
+        # quaver's spread: root of the (weighted) mean member variance with ddof 0 (T1 conformity test, 26 Nov 2026)
+        "spread": spread_q,
+        "spread_q": spread_q,
         "spread_rms": spread_rms,
+        "spread_sd": _wmean(ens.std(0, ddof=1), w) if m > 1 else 0.0,
         # spread/skill against observations with no observation-error term: the observation error adds to the
         # RMSE but not to the spread, so a reliable ensemble reads below 1 (summary.SSR_NOTE)
         "ssr_corrected": spread_rms / rmse * np.sqrt((m + 1) / m) if m > 1 and rmse > 0 else np.nan,

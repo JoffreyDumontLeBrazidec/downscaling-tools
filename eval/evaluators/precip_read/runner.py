@@ -12,6 +12,7 @@ import numpy as np
 from eval.shared.edge_strip import box_edge_index, resolve_box_edge_deg
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.precip_read.core.metrics import EDGES, score_sums
+from eval.evaluators.obs_points.core.stations import TP_LIMITS
 from eval.shared.native_input import InputReader, is_interpolated, warn_fallback
 
 LOG = logging.getLogger(__name__)
@@ -109,9 +110,9 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     obs = matcher = None
     if obs_cfg.get("csv"):
         from eval.evaluators.precip_read.core.obs import load_obs
-        obs, n_bad = load_obs(obs_cfg["csv"], float(obs_cfg.get("obs_max", 300.0)))
+        obs, n_bad = load_obs(obs_cfg["csv"], float(obs_cfg.get("obs_max", TP_LIMITS[1])))
         LOG.info("precip_read: %d station values, %d dropped outside [0, %s] mm", len(obs), n_bad,
-                 obs_cfg.get("obs_max", 300.0))
+                 obs_cfg.get("obs_max", TP_LIMITS[1]))
     station, station_log = [], []
     native_input = bool(eval_config.get("native_input", True))
     input_sources: set[str] = set()

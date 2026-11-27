@@ -1,9 +1,12 @@
 """Summaries of the per-date station scores: means over dates with their standard errors, paired
 differences between rows of one run, and between the model rows of two runs (``eval.cli obs compare``).
 
-Every statistic is over dates: one value per date (the station mean of that date), then the mean, the
-standard error of the mean (ddof 1) and the number of dates on which the first member of a pair is better
-("wins"). Lower is better for every score except the correlation.
+Every statistic is over dates: one value per date (the station mean of that date), then the mean over dates as
+quaver's scorecard forms it (averaging "wmo", quaver datadescriptors.xml: the root of the mean square over dates
+for the RMS scores rmse_mean and the spreads, the plain mean for every other score; RMS_OVER_DATES), the standard
+error of the per-date values (ddof 1) and the number of dates on which the first member of a pair is better
+("wins"). Paired differences are plain means of the per-date differences, as quaver's scorecard cell. Lower is
+better for every score except the correlation.
 """
 from __future__ import annotations
 
@@ -13,7 +16,10 @@ from pathlib import Path
 import numpy as np
 
 KEYS = ["var", "variant", "radius_km", "region", "lead"]
-HEADLINE = ("fcrps", "spread", "spread_rms", "ssr_corrected", "seeps")
+HEADLINE = ("fcrps", "spread", "spread_q", "spread_rms", "spread_sd", "ssr_corrected", "seeps")
+# Scores whose mean over dates is the root of the mean square (quaver's "wmo" averaging: classes Rms and Spread,
+# callMeanOfSquaresMethod; read in quaver 3.8.1 on Atos, 27 Nov 2026, docs T1/rmsef_compare_20261127.md s4)
+RMS_OVER_DATES = ("rmse_mean", "spread", "spread_q", "spread_rms")
 SECONDARY = ("bias", "rmse_mean", "mae_mean", "mae_member", "corr_mean")
 TAIL_PREFIXES = ("twcrps", "brier", "n_obs_gt")
 # Rows of one run compared date by date: (a, b) gives a - b. Only rows of the same kind are paired on every
@@ -70,7 +76,11 @@ def summarise(df):
     """Mean over dates per (var, variant, radius, region, lead, row): every score, its SE, mean n, dates."""
     cols = [c for c in HEADLINE + SECONDARY if c in df.columns] + tail_columns(df)
     g = df.groupby(KEYS + ["row", "kind"])
-    s = g[cols].mean().join(g[cols].sem().add_suffix("_se")).join(g["n"].mean().rename("mean_n"))
+    rms = [c for c in cols if c in RMS_OVER_DATES]
+    mean = g[cols].mean()
+    if rms:
+        mean[rms] = np.sqrt((df[rms] ** 2).groupby([df[k] for k in KEYS + ["row", "kind"]]).mean())
+    s = mean.join(g[cols].sem().add_suffix("_se")).join(g["n"].mean().rename("mean_n"))
     s = s.join(g["members"].first()).join(g.size().rename("dates"))
     if {"spread_rms", "rmse_mean"} <= set(df.columns):
         # spread/skill from the variance and MSE pooled over dates, next to the mean of the per-date ratios
