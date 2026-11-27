@@ -52,11 +52,10 @@
  
      # Instantiate the optimizer
      optimizer = torch.optim.Adam(
-@@ -501,6 +523,24 @@
-         )
+@@ -502,6 +524,25 @@
      except Exception:
          pass
-+
+ 
 +    # CD_KIT_PATCH: EMA of the weights (EDM's update; rank 0 holds and saves it), resumed with the checkpoint
 +    ema = None
 +    ema_cfg = cfg.training.get("ema", None)
@@ -72,12 +71,14 @@
 +        else:
 +            logger0.info(f"EMA initialised from the start weights (half-life {ema.halflife_nimg:,.0f} samples, "
 +                         f"ramp-up ratio {ema.rampup_ratio}); saved in {cdx.ema_dir(checkpoint_dir)}")
-+    visits = cdx.CropVisits(img_shape, reg_crop) if (reg_crop and dist.rank == 0) else None
++    visits_path = os.path.join(os.path.dirname(checkpoint_dir), "crop_visits_rank0.npz")
++    visits = cdx.CropVisits(img_shape, reg_crop, visits_path if cur_nimg > 0 else None) if (reg_crop and dist.rank == 0) else None
 +    data_wait = 0.0
- 
++
      ############################################################################
      #                            MAIN TRAINING LOOP                            #
-@@ -525,6 +565,7 @@
+     ############################################################################
+@@ -525,6 +566,7 @@
              while not done:
                  tick_start_nimg = cur_nimg
                  tick_start_time = time.time()
@@ -85,7 +86,7 @@
  
                  if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
                      logger0.info(f"Starting Profiler at {cur_nimg}")
-@@ -543,9 +584,16 @@
+@@ -543,9 +585,16 @@
                              f"accumulation round {n_i}", color="Magenta"
                          ):
                              with nvtx.annotate("loading data", color="green"):
@@ -105,7 +106,7 @@
                                  if use_apex_gn:
                                      img_clean = img_clean.to(
                                          dist.device,
-@@ -599,7 +647,20 @@
+@@ -599,7 +648,20 @@
                                      with torch.autocast(
                                          "cuda", dtype=amp_dtype, enabled=enable_amp
                                      ):
@@ -127,7 +128,7 @@
  
                                  loss = loss.sum() / batch_size_per_gpu
                                  loss_accum += (
-@@ -670,6 +731,8 @@
+@@ -670,6 +732,8 @@
                          )
                      with nvtx.annotate("optimizer step", color="blue"):
                          optimizer.step()
@@ -136,7 +137,7 @@
  
                      cur_nimg += cfg.training.hp.total_batch_size
                      done = cur_nimg >= cfg.training.hp.training_duration
-@@ -799,6 +862,9 @@
+@@ -799,6 +863,9 @@
                      fields += [
                          f"sec_per_sample {((tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg)):<7.2f}"
                      ]
@@ -146,7 +147,7 @@
                      fields += [
                          f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
                      ]
-@@ -829,6 +895,25 @@
+@@ -829,6 +896,25 @@
                          optimizer=optimizer,
                          epoch=cur_nimg,
                      )
@@ -161,7 +162,7 @@
 +                        )
 +                    if visits is not None:
 +                        _n, _lo, _hi = visits.write(
-+                            os.path.join(os.path.dirname(checkpoint_dir), "crop_visits_rank0.npz"),
++                            visits_path,
 +                            cur_nimg,
 +                            dist.world_size,
 +                        )

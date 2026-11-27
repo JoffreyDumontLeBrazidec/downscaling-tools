@@ -1,6 +1,6 @@
 #!/bin/bash
 # CorrDiff on MN5: training body (sourced by cd_train_mn5.sbatch and cd_smoke_mn5.sbatch, after cd_env_mn5.sh).
-# cd_srun MODE DIR LOG [hydra overrides...] -> train_cd.py on every GPU of the allocation (srun, 4 tasks per node, one
+# [CD_CAP="timeout ... N"] cd_srun MODE DIR LOG [hydra overrides...] -> train_cd.py on every GPU of the allocation (srun, 4 tasks per node, one
 # per H100; PhysicsNeMo's DistributedManager reads SLURM_PROCID / SLURM_LOCALID), rc of srun. Config
 # config_training_e2v4${CD_CONF_SUFFIX}_MODE.yaml from $CD_CONF_DIR. train_cd.py = train.py + train_cd_v2.2.2.patch.
 cd_srun() {
@@ -12,7 +12,8 @@ cd_srun() {
   export OMP_NUM_THREADS=4
   cd $CD_REPO/examples/weather/corrdiff
   echo "[srun] $(date -u) MODE=$MODE nodes=$SLURM_NNODES port=$MASTER_PORT dir=$DIR config=$CD_CONF_DIR/config_training_e2v4${CD_CONF_SUFFIX}_${MODE}.yaml overrides: $*" | tee -a $LOG
-  srun --kill-on-bad-exit=1 --nodes=$SLURM_NNODES --ntasks-per-node=4 --cpus-per-task=20 --cpu-bind=none \
+  # CD_CAP (optional): a time cap put in front of srun, e.g. "timeout --signal=TERM --kill-after=120 3600"
+  ${CD_CAP:-} srun --kill-on-bad-exit=1 --nodes=$SLURM_NNODES --ntasks-per-node=4 --cpus-per-task=20 --cpu-bind=none \
     python train_cd.py --config-dir=$CD_CONF_DIR --config-name=config_training_e2v4${CD_CONF_SUFFIX}_${MODE}.yaml \
     training.io.checkpoint_dir=$DIR "$@" >> $LOG 2>&1
   local rc=$?

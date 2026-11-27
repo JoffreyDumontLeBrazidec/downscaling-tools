@@ -93,3 +93,71 @@ exception is the generator's refusal described in the first item.
   `CD_MAX_SEG` 1 by default).
 - Self-test: `python3 cd_selftest.py --work DIR` (synthetic export; dataset options, widening, ladder; the ladder part
   needs the PhysicsNeMo venv) and `python3 cd_widen_regression.py selftest --work DIR`.
+
+## MN5 (27 Nov)
+
+Europe (E2 box) CorrDiff on MareNostrum 5 (branch `claude/corrdiff-mn5-20261127`, from `claude/corrdiff-lowcompute-20261123`
+at 3abda47; plan of record: docs `epics/paper-o320-o1280/in-progress/support/20261127_BRIEF_corrdiff_europe_mn5.md`).
+Code and venv in `$CD=/gpfs/projects/ehpc01/ecm800825/sandbox/20261127-corrdiff-mn5` (`kit/` = this folder at the SHA
+in `kit/KIT_SHA`, `qm/`, `physicsnemo/` = tag v2.2.2, `venv/`, `conf/`, `run/`, `state/`, `logs/`); the export in
+`$CDD=/gpfs/scratch/ehpc01/jdumontl/sandbox/20261127-corrdiff-mn5/data`. Environment: `source $CD/kit/cd_env_mn5.sh`.
+
+What is new, all opt-in (the Jupiter and Leonardo paths are unchanged):
+
+- Regression on random 448 x 448 crops (`cd_dataset.py crop: 448`, `make_cd_configs.py --reg-crop 448`). The crop
+  origin is uniform over the valid origins and fresh at every sample (torch RNG, seeded per DataLoader worker, per rank
+  and per resume point). The crop equals the slice of the full-box sample bit for bit (the x4 upsampling and the time
+  inputs are evaluated on the crop's points only). Validation stays on the full box (`validation.crop: 0`).
+- Position channels. The regression U-Net (`CorrDiffRegressionUNet` wrapping `SongUNetPosEmbd`, `gridtype`
+  "sinusoidal", `N_grid_channels` 4) appends 4 fixed channels: sin x, sin y, cos x, cos y, each one period over the box
+  (`linspace(0, 2 pi, n)` over the 1728 columns and the 864 rows). They are a non-persistent buffer rebuilt from
+  `img_resolution` at construction, so they are not in the checkpoint. The crop path keeps the U-Net built at the box
+  size (`dataset.image_shape()` stays 864 x 1728) and passes `global_index` = the box row and column of every crop pixel
+  (`cd_train_ext.crop_global_index`), which makes `SongUNetPosEmbd` select its box grid at the crop: the network sees the
+  same embedding value at the same box point as in a full-box forward, and a checkpoint trained on the full box
+  (Jupiter 3051247) continues on crops with its own grid. A model built at 448 x 448 would load the same checkpoint
+  without error but with a grid relative to the crop; the kit never builds one. The diffusion (`patched_diffusion`)
+  keeps its 100 learnable position channels (a parameter of the box size, selected per patch by `global_index`), as
+  before.
+- Not purely convolutional. The U-Net has GroupNorm (statistics over the whole input) and an attention block at the
+  bottleneck, so the output at a point depends on the input extent: a crop-trained regression evaluated on the full box
+  sees other normalisation statistics than in training. The kit keeps the regression on the full box at validation,
+  in the diffusion's residual loss and in `cd_predict.py` (as before); the full-box validation loss of train_cd.py and the
+  residual ladder measure this directly against the start checkpoint.
+- Diffusion patches: PhysicsNeMo `RandomPatching2D` draws new uniform patch positions at every `set_patch_num` call,
+  which train.py makes before every loss evaluation (every optimizer step and every patch sub-iteration); unchanged.
+- EMA of the weights for both stages (`make_cd_configs.py --ema`, `training.ema` in the config): EDM's update,
+  half-life `min(500,000, 0.05 x samples seen)` samples, `beta = 0.5 ** (batch / half-life)`, after every optimizer step,
+  rank 0. Saved with every checkpoint as `<run>/checkpoints_<model>_ema/<Model>.0.<samples>.mdlus` (the raw
+  `checkpoints_<model>/` files are kept as before). A resume reloads the EMA of the resumed checkpoint and stops with
+  `EMA_RESUME_MISSING` if it is absent; a start at 0 samples (scratch or widened checkpoint) starts the EMA from the start
+  weights. Code: `cd_train_ext.py`, wired into the example by `train_cd_v2.2.2.patch` (`cd_apply_train_patch.sh` writes
+  `examples/weather/corrdiff/train_cd.py`; `train.py` stays pristine). The patch also logs `sec_data_wait` per tick.
+- No gradient accumulation: `total_batch_size = batch_size_per_gpu x GPUs`. The regression batch per GPU and checkpoint
+  level come from the smoke (`state/FIT_regression`); the diffusion config's batch must match the node count.
+- GPU-hour ceiling per chain (`CD_GPUH_CEIL`, default regression 150, diffusion 700 H100-h): sacct elapsed x GPUs over
+  every job id of `state/chain_<mode>_m5/jobs.txt` (`cd_gpuh.py`), checked before training and before the successor.
+
+Steps on MN5 (login node `alogin1`; login processes are killed past 300 CPU-s):
+
+1. `bash $CD/kit/build_venv_mn5.sh` (uv, Python 3.11, versions pinned to the Leonardo venv by `LEONARDO_FREEZE`,
+   git_hash patch by `cd_patch_version_check.py`), then `CD_REPO=$CD/physicsnemo CD_KIT=$CD/kit bash $CD/kit/cd_apply_train_patch.sh`.
+2. Export on a GPP node: `sbatch --qos=gp_debug --time=02:00:00 $CD/kit/cd_export_mn5.sbatch` (or the default gp_ehpc,
+   8 h); resumable; it writes `$CD/state/VERIFY_OK` (`VERIFY_OK 17280 rows`). The export holds no time fields: the
+   dataset computes the five time inputs per row at its valid time (`time_inputs: true`).
+3. Configs: `python $CD/kit/make_cd_configs.py --gl512-config $CD/gl512.yaml --data $CD_DATA --repo $CD_REPO
+   --dataset-py $CD/kit/cd_dataset.py --run-dir $CD/run --out-conf-dir $CD/conf --name-suffix m5 --time-inputs
+   --val-spread --scale-schedule-to-batch --reg-crop 448 --ema --reg-bpg 4 --reg-total-batch 16 --reg-ckpt-level 0
+   --diff-bpg 4 --diff-total-batch 16 --diff-ckpt-level 1 --diff-max-patch 4 --reg-samples 2000000
+   --diff-samples 10000000 --reg-save-freq 100000 --reg-val-freq 20000 --diff-save-freq 250000 --dataloader-workers 8`
+   (the diffusion batch 16 = 1 node; regenerate with `--diff-total-batch 4 x 4 x nodes` for more nodes).
+4. Smokes (1 node, then 2 nodes, <= 30 min each): `sbatch --nodes=1 $CD/kit/cd_smoke_mn5.sbatch`, `sbatch --nodes=2
+   $CD/kit/cd_smoke_mn5.sbatch` (`--export=ALL,CD_REG_INIT=<widened .mdlus>` to start the regression from it); summary
+   in `$CD/state/SMOKE_SUMMARY.txt`.
+5. Regression chain: `sbatch --nodes=N --time=12:00:00 --export=ALL,MODE=regression,CD_REG_INIT=<widened .mdlus>,CD_MAX_SEG=K
+   $CD/kit/cd_train_mn5.sbatch`; diffusion chain with `MODE=diffusion,CD_REG_CKPT=<picked regression .mdlus>`.
+
+Self-tests: `python $CD/kit/cd_selftest.py --work DIR` (adds the crop, embedding, EMA and visit-map tests),
+`python $CD/kit/cd_widen_regression.py selftest --work DIR`, `python $CD/kit/cd_gpuh.py selftest`, and
+`bash $CD/kit/cd_cpu_e2e.sh DIR` (train_cd.py end to end on CPU on a synthetic export: crop regression, save, resume
+with EMA, patched diffusion, resume).

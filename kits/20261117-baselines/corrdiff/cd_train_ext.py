@@ -112,10 +112,17 @@ class CropRegressionLoss:
 class CropVisits:
     """Histogram of the crop origins drawn on this rank, and the pixel visit counts they give (written as npz)."""
 
-    def __init__(self, img_shape, crop: int):
+    def __init__(self, img_shape, crop: int, path: str | None = None):
+        """path: an earlier write of this run (a resume) whose origin histogram is continued."""
         self.ny, self.nx = int(img_shape[0]), int(img_shape[1])
         self.crop = int(crop)
         self.hist = np.zeros((self.ny - self.crop + 1, self.nx - self.crop + 1), np.int64)
+        self.resumed = 0
+        if path and os.path.exists(path):
+            h = np.load(path)["origin_hist"]
+            if h.shape == self.hist.shape:
+                self.hist += h
+                self.resumed = int(h.sum())
 
     def add(self, origin: torch.Tensor):
         o = origin.detach().cpu().numpy().reshape(-1, 2)

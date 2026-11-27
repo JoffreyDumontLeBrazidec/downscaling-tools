@@ -61,7 +61,7 @@ USED=$(python $CD_KIT/cd_gpuh.py used --jobs $ST/jobs.txt --exclude $SLURM_JOB_I
 REM_S=$(python -c "print(int(max(0.0, ($CEIL - $USED) * 3600 / $GPUS)))")
 echo "ceiling: chain used $USED H100-h before this segment, ceiling $CEIL, budget left for this segment ${REM_S} s on $GPUS GPUs (time limit $TLIM_S s)"
 if (( REM_S < 600 )); then echo "ceiling reached: $USED of $CEIL H100-h used, job $SLURM_JOB_ID $(date -u)" | tee $ST/CEILING_REACHED; exit 0; fi
-CAP=(); (( REM_S < TLIM_S )) && { CAP=(timeout --signal=TERM --kill-after=120 $(( REM_S - 60 ))); echo "this segment is cut at $(( REM_S - 60 )) s by the ceiling"; }
+CAP=""; (( REM_S < TLIM_S )) && { CAP="timeout --signal=TERM --kill-after=120 $(( REM_S - 60 ))"; echo "this segment is cut at $(( REM_S - 60 )) s by the ceiling"; }
 
 SEG=$(( $(cat $ST/SEGMENTS 2>/dev/null || echo 0) + 1 )); echo $SEG > $ST/SEGMENTS
 echo "$SLURM_JOB_ID seg $SEG start $(date -u) nodes $NODES time $TLIM" >> $ST/jobs.txt
@@ -108,7 +108,7 @@ for (( i=START; i<${#LADDER[@]}; i++ )); do
   [[ $MODE == regression ]] && OV+=(training.hp.batch_size_per_gpu=$BPG training.hp.total_batch_size=$(( BPG * GPUS )))
   LOG=$CD/logs/${TAG}_m5_seg${SEG}_${SLURM_JOB_ID}_b${BPG}_L$L.log; : > $LOG
   echo "attempt batch_size_per_gpu $BPG level $L (total batch $(( BPG * GPUS ))) log $LOG"
-  ${CAP[@]+"${CAP[@]}"} bash -c "$(declare -f cd_srun); cd_srun $MODE $RUN $LOG ${OV[*]} ${VAL[*]:-}" &
+  CD_CAP="$CAP" cd_srun $MODE $RUN $LOG "${OV[@]}" ${VAL[@]+"${VAL[@]}"} &
   TP=$!; SUBMITTED=0
   # the successor is submitted only once this segment logs its first progress line (no cascade of failing segments)
   while kill -0 $TP 2>/dev/null; do

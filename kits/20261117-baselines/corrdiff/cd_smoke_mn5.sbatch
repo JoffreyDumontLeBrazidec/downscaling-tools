@@ -51,9 +51,9 @@ for RUNG in 4:0 2:1 1:2 1:3; do
   R=$S/reg_b${B}_L$L; mkdir -p $R/checkpoints_regression   # a fresh run folder per try, each from the same start
   [[ -n "${CD_REG_INIT:-}" ]] && cp $CD_REG_INIT $R/checkpoints_regression/CorrDiffRegressionUNet.0.0.mdlus
   LOG=$S/reg_p1_b${B}_L$L.log; : > $LOG
-  timeout --kill-after=60 420 bash -c "$(declare -f cd_srun); cd_srun regression $R $LOG training.hp.batch_size_per_gpu=$B training.hp.total_batch_size=$T \
+  CD_CAP="timeout --signal=TERM --kill-after=60 420" cd_srun regression $R $LOG training.hp.batch_size_per_gpu=$B training.hp.total_batch_size=$T \
     training.perf.songunet_checkpoint_level=$L training.hp.training_duration=$NR training.io.print_progress_freq=$(( T * 2 )) \
-    training.io.validation_freq=$NR training.io.save_checkpoint_freq=$NR $COMMON"; rc=$?
+    training.io.validation_freq=$NR training.io.save_checkpoint_freq=$NR $COMMON; rc=$?
   if grep -q "Training Completed" $LOG; then FIT="$B $L"; say "REG part1 PASS bpg $B level $L total batch $T: $(last_tick $LOG)"; summ "REG crops (s per crop)" $LOG $NODES; break; fi
   if is_oom $LOG; then say "REG bpg $B level $L OOM"; continue; fi
   say "REG part1 FAIL bpg $B level $L rc=$rc (not OOM): $(grep -E 'Error|error' $LOG | tail -3 | tr '\n' ' ' | cut -c1-600)"; break
@@ -65,9 +65,9 @@ if [[ -n "$FIT" ]]; then
   ls $R/checkpoints_regression_ema/*.mdlus >/dev/null 2>&1 && say "REG SAVE_OK raw $(ls $R/checkpoints_regression/*.mdlus | sort -V | tail -1) ema $(ls $R/checkpoints_regression_ema/*.mdlus | sort -V | tail -1)"
   ls $R/crop_visits_rank0.npz >/dev/null 2>&1 && say "REG crop visits $R/crop_visits_rank0.npz: $(grep -h 'crop visits written' $S/reg_p1_b${B}_L$L.log | tail -1 | sed 's/.*crop visits written: //')"
   LOG=$S/reg_p2_b${B}_L$L.log; : > $LOG
-  timeout --kill-after=60 300 bash -c "$(declare -f cd_srun); cd_srun regression $R $LOG training.hp.batch_size_per_gpu=$B training.hp.total_batch_size=$(( B * GPUS )) \
+  CD_CAP="timeout --signal=TERM --kill-after=60 300" cd_srun regression $R $LOG training.hp.batch_size_per_gpu=$B training.hp.total_batch_size=$(( B * GPUS )) \
     training.perf.songunet_checkpoint_level=$L training.hp.training_duration=$(( NR * 2 )) training.io.print_progress_freq=$(( B * GPUS * 2 )) \
-    training.io.validation_freq=$(( NR * 2 )) training.io.save_checkpoint_freq=$(( NR * 2 )) $COMMON"; rc=$?
+    training.io.validation_freq=$(( NR * 2 )) training.io.save_checkpoint_freq=$(( NR * 2 )) $COMMON; rc=$?
   if grep -q "Training Completed" $LOG && grep -q "Loaded model state dictionary" $LOG && grep -q "Loaded optimizer state dictionary" $LOG && grep -q "EMA loaded from" $LOG; then
     say "REG_RESUME_OK: model, Adam and EMA reloaded ($(grep -h -oE 'EMA loaded from [^ ]+' $LOG | head -1)), trained to $(( NR * 2 )) samples"
   else say "REG_RESUME_FAIL rc=$rc: $(grep -cE 'Loaded model state dictionary' $LOG) model loads, $(grep -c 'Loaded optimizer' $LOG) optimizer, $(grep -c 'EMA loaded' $LOG) EMA; $(grep -E 'Error|error' $LOG | tail -2 | tr '\n' ' ' | cut -c1-400)"; fi
@@ -84,8 +84,8 @@ if [[ -n "$REG_CKPT" ]]; then
   DT=$(( DB * GPUS )); DFIT=""
   for L in 1 2 3; do
     D=$S/diff_L$L; LOG=$S/diff_p1_L$L.log; : > $LOG
-    timeout --kill-after=60 420 bash -c "$(declare -f cd_srun); cd_srun diffusion $D $LOG training.hp.total_batch_size=$DT training.perf.songunet_checkpoint_level=$L \
-      training.hp.training_duration=$ND training.io.print_progress_freq=$(( DT * 2 )) training.io.validation_freq=$ND training.io.save_checkpoint_freq=$ND $COMMON"; rc=$?
+    CD_CAP="timeout --signal=TERM --kill-after=60 420" cd_srun diffusion $D $LOG training.hp.total_batch_size=$DT training.perf.songunet_checkpoint_level=$L \
+      training.hp.training_duration=$ND training.io.print_progress_freq=$(( DT * 2 )) training.io.validation_freq=$ND training.io.save_checkpoint_freq=$ND $COMMON; rc=$?
     if grep -q "Training Completed" $LOG; then DFIT=$L; say "DIFF part1 PASS bpg $DB level $L total batch $DT: $(last_tick $LOG)"; summ "DIFF (s per sample, 4 patches)" $LOG $NODES; break; fi
     if is_oom $LOG; then say "DIFF level $L OOM"; continue; fi
     say "DIFF part1 FAIL level $L rc=$rc (not OOM): $(grep -E 'Error|error' $LOG | tail -3 | tr '\n' ' ' | cut -c1-600)"; break
@@ -94,8 +94,8 @@ if [[ -n "$REG_CKPT" ]]; then
     (( NODES == 1 )) && echo "$DB $DFIT" > $CD/state/FIT_diffusion && say "FIT_diffusion = $DB $DFIT (bpg level)"
     ls $D/checkpoints_patched_diffusion_ema/*.mdlus >/dev/null 2>&1 && say "DIFF SAVE_OK raw $(ls $D/checkpoints_patched_diffusion/*.mdlus | sort -V | tail -1) ema $(ls $D/checkpoints_patched_diffusion_ema/*.mdlus | sort -V | tail -1)"
     LOG=$S/diff_p2_L$DFIT.log; : > $LOG
-    timeout --kill-after=60 300 bash -c "$(declare -f cd_srun); cd_srun diffusion $D $LOG training.hp.total_batch_size=$DT training.perf.songunet_checkpoint_level=$DFIT \
-      training.hp.training_duration=$(( ND * 2 )) training.io.print_progress_freq=$(( DT * 2 )) training.io.validation_freq=$(( ND * 2 )) training.io.save_checkpoint_freq=$(( ND * 2 )) $COMMON"; rc=$?
+    CD_CAP="timeout --signal=TERM --kill-after=60 300" cd_srun diffusion $D $LOG training.hp.total_batch_size=$DT training.perf.songunet_checkpoint_level=$DFIT \
+      training.hp.training_duration=$(( ND * 2 )) training.io.print_progress_freq=$(( DT * 2 )) training.io.validation_freq=$(( ND * 2 )) training.io.save_checkpoint_freq=$(( ND * 2 )) $COMMON; rc=$?
     if grep -q "Training Completed" $LOG && grep -q "Loaded model state dictionary" $LOG && grep -q "EMA loaded from" $LOG; then
       say "DIFF_RESUME_OK: model, Adam and EMA reloaded, trained to $(( ND * 2 )) samples"
     else say "DIFF_RESUME_FAIL rc=$rc: $(grep -E 'Error|error' $LOG | tail -2 | tr '\n' ' ' | cut -c1-400)"; fi

@@ -18,6 +18,8 @@ source /gpfs/projects/ehpc01/ecm800825/sandbox/20261127-corrdiff-mn5/kit/cd_env_
 OUT=$E2V4/out_hres_o1280.zarr; IN=$E2V4/in_lres_o320_halo1p5.zarr; FORC=$E2/in_hres_o1280_forcings.zarr
 NP=${CD_EXPORT_NP:-48}
 echo "export job $SLURM_JOB_ID start $(date -u) host $(hostname) cpus $(nproc) -> $CD_DATA"
+# can a compute node submit (the training chains submit their successor from the job)? --test-only submits nothing
+sbatch --test-only -A ehpc01 -p acc -q acc_ehpc -N 1 --gres=gpu:4 -c 80 -t 00:10:00 --wrap hostname 2>&1 | sed 's/^/[compute-node sbatch test] /'
 [[ -f $CD/state/VERIFY_OK ]] && { echo "VERIFY_OK already: $(cat $CD/state/VERIFY_OK)"; exit 0; }
 mkdir -p $CDD $CD/logs/export
 if [[ ! -f ${CD_DATA%.zarr}.rows.csv ]]; then
@@ -29,7 +31,7 @@ for P in $(seq 0 $(( NP - 1 ))); do
     > $CD/logs/export/fill_${SLURM_JOB_ID}_p$P.log 2>&1 & pids+=($!)
 done
 fail=0; for p in "${pids[@]}"; do wait $p || fail=$((fail + 1)); done
-echo "fill end $(date -u) after $(( SECONDS - t0 )) s: failed_parts=$fail, rows written $(grep -h FILL_DONE $CD/logs/export/fill_${SLURM_JOB_ID}_p*.log | awk '{s+=$5} END {print s+0}')"
+echo "fill end $(date -u) after $(( SECONDS - t0 )) s: failed_parts=$fail, rows written $(grep -h FILL_DONE $CD/logs/export/fill_${SLURM_JOB_ID}_p*.log | awk '{s+=$4} END {print s+0}')"
 (( fail == 0 )) || { echo "FILL_FAIL: $(grep -lE 'Error|Traceback' $CD/logs/export/fill_${SLURM_JOB_ID}_p*.log | head -3)"; exit 1; }
 [[ -f ${CD_DATA%.zarr}.stats.json ]] || { OMP_NUM_THREADS=16 python $CD_KIT/cd_export.py stats --dest $CD_DATA || { echo STATS_FAIL; exit 1; }; }
 python $CD_KIT/cd_export.py verify --out-store $OUT --in-store $IN --dest $CD_DATA 2>&1 | tee $CD/logs/export/verify_${SLURM_JOB_ID}.log
