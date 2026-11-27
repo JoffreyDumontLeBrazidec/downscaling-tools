@@ -17,21 +17,40 @@ import numpy as np
 
 R_EARTH_KM = 6371.0
 
-# quaver's toss.yaml hard limits; tp in mm per accumulation window.
-LIMITS = {"2t": (173.0, 333.0), "10ff": (0.0, 100.0), "msl": (80000.0, 110000.0), "tp": (0.0, 300.0),
-          "tp24": (0.0, 300.0)}
-# quaver's toss.yaml analysis-departure limits (filter toss_with_analysis): |obs - analysis at the nearest
-# grid point| above these is a gross error. Units K, m/s, Pa. tp has no analysis check.
+# quaver's toss.yaml hard limits (filter ``toss``, ObsFilters.Toss: keep hardmin <= v <= hardmax). tp has ONE key
+# for every accumulation window: 0-900 mm. Read in quaver 3.8.1 on Atos, 27 Nov 2026
+# (quaver/config/language/quaver/observations.xml, toss.yaml; docs T1/rmsef_compare_20261127.md s4). Until
+# 27 Nov 2026 this table capped tp at 300 mm and so dropped 8 gross reports per 30 dates that quaver scores.
+TP_LIMITS = (0.0, 900.0)
+LIMITS = {"2t": (173.0, 333.0), "10ff": (0.0, 100.0), "msl": (80000.0, 110000.0), "tp": TP_LIMITS}
+# quaver's analysis-departure limits (filter toss_with_analysis): |obs - analysis at the nearest point of the
+# FORECAST'S OWN grid| above these is a gross error. Units K, m/s, Pa. tp has no analysis check.
 ANL_DEP_MAX = {"2t": 30.0, "10ff": 40.0, "msl": 1000.0}
 
 
-def analysis_departure_ok(obs_frame, var):
-    """Mask of rows that pass quaver's analysis-departure check; all True when the cache has no ``an`` column
-    (caches written before 9 Nov 2026) or the variable has no limit."""
+def limits_of(var):
+    """quaver's hard limits of a cache variable; every tp series (tp, tp6, tp24, ...) shares the tp key."""
+    if var in LIMITS:
+        return LIMITS[var]
+    if var.startswith("tp") and var[2:].isdigit():
+        return TP_LIMITS
+    return (-np.inf, np.inf)
+
+
+def analysis_column(grid: str | None) -> str:
+    """Cache column of the analysis read at the nearest point of ``grid`` (``o1280`` -> ``an``, the column every
+    cache has; ``o320`` -> ``an_o320``, written by ``obs fetch --analysis-grids O1280,O320``)."""
+    g = (grid or "o1280").lower()
+    return "an" if g == "o1280" else f"an_{g}"
+
+
+def analysis_departure_ok(obs_frame, var, column: str = "an"):
+    """Mask of rows that pass quaver's analysis-departure check against the analysis in ``column``; all True when
+    the cache lacks that column (caches written before 9 Nov 2026) or the variable has no limit."""
     lim = ANL_DEP_MAX.get(var)
-    if lim is None or "an" not in obs_frame.columns:
+    if lim is None or column not in obs_frame.columns:
         return np.ones(len(obs_frame), bool)
-    an = obs_frame["an"].to_numpy(np.float64)
+    an = obs_frame[column].to_numpy(np.float64)
     return ~np.isfinite(an) | (np.abs(obs_frame["obs"].to_numpy(np.float64) - an) <= lim)
 
 
@@ -74,7 +93,7 @@ class StationMatcher:
         return self.tree.query_ball_point(xyz(self.lat[idx], self.lon[idx]), radius_km / R_EARTH_KM)
 
 
-def load_obs(path, obs_max: float = 300.0):
+def load_obs(path, obs_max: float = TP_LIMITS[1]):
     """One observation CSV with values outside [0, obs_max] dropped; returns (frame, n dropped).
     Used by precip_read for its single tp file."""
     import pandas as pd
@@ -97,9 +116,11 @@ def resolve_cache(cache) -> Path:
     raise FileNotFoundError(f"obs_points: no observation cache found among {cands}")
 
 
-def load_cache(cache_dir, variables) -> tuple[dict, dict, dict]:
-    """(obs per var, hres per var, cache_meta) from a cache directory; quaver hard limits applied again, and
-    quaver's analysis-departure check where the cache carries the analysis (``an`` column)."""
+def load_cache(cache_dir, variables, *, analysis_check: bool = False) -> tuple[dict, dict, dict]:
+    """(obs per var, hres per var, cache_meta) from a cache directory, with quaver's hard limits applied again.
+    quaver's analysis-departure check depends on the forecast's grid (each row reads the analysis at its own
+    nearest point), so obs_points applies it per row (``score_valid``); ``analysis_check=True`` applies it here
+    against the O1280 analysis (column ``an``) for callers that score one grid only."""
     import pandas as pd
 
     cache_dir = Path(cache_dir)
@@ -109,9 +130,9 @@ def load_cache(cache_dir, variables) -> tuple[dict, dict, dict]:
         if not p.exists():
             continue
         o = pd.read_csv(p, dtype={"valid": str, "stnid": str})
-        lo, hi = LIMITS.get(v, (-np.inf, np.inf))
+        lo, hi = limits_of(v)
         o = o[(o.obs >= lo) & (o.obs <= hi)]
-        obs[v] = o[analysis_departure_ok(o, v)]
+        obs[v] = o[analysis_departure_ok(o, v)] if analysis_check else o
         h = cache_dir / f"hres_{v}.csv"
         if h.exists():
             hres[v] = pd.read_csv(h, dtype={"date": str, "stnid": str})
@@ -129,9 +150,10 @@ def load_seeps_clim(cache_dir):
 
 
 def region_masks(lat, lon, regions: dict) -> dict:
-    """name -> boolean mask; a region is None (everything) or [lat0, lat1, lon0, lon1], half-open."""
+    """name -> boolean mask; a region is None (everything) or [lat0, lat1, lon0, lon1], bounds included as in
+    quaver's domains (vtbconf domains.yaml: south <= lat <= north, west <= lon <= east). Half-open before 27 Nov 2026."""
     lat, lon = np.asarray(lat), np.asarray(lon)
-    return {k: np.ones(lat.size, bool) if b is None else (lat >= b[0]) & (lat < b[1]) & (lon >= b[2]) & (lon < b[3])
+    return {k: np.ones(lat.size, bool) if b is None else (lat >= b[0]) & (lat <= b[1]) & (lon >= b[2]) & (lon <= b[3])
             for k, b in regions.items()}
 
 

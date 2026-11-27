@@ -14,7 +14,8 @@ from eval.shared.precip.sources import is_degenerate_channel
 from eval.discovery.predictions import find_predictions
 from eval.evaluators.obs_points.core.scores import _wmean, ensemble_scores, rank_counts, seeps
 from eval.evaluators.obs_points.core.stations import (
-    LIMITS, StationMatcher, density_weights, height_masks, load_cache, load_seeps_clim, region_masks, resolve_cache, xyz,
+    StationMatcher, analysis_column, analysis_departure_ok, density_weights, height_masks, limits_of, load_cache,
+    load_seeps_clim, region_masks, resolve_cache, xyz,
 )
 from eval.evaluators.obs_points.core.summary import SSR_NOTE, paired, summarise, write_summary_md
 from eval.shared.provenance import (
@@ -24,10 +25,12 @@ from eval.shared.provenance import (
 LOG = logging.getLogger(__name__)
 
 DEFAULT_VARS = ("2t", "10ff", "msl", "tp")
+# quaver's own domains (vtbconf domains.yaml; bounds included): the cells of the ECMWF station scorecards
+QUAVER_REGIONS = {"e2box": [11.0, 69.0, -79.0, 39.0], "europe": [35.0, 75.0, -12.5, 42.5]}
 DEFAULT_REGIONS = {
     "all": None,
-    "europe": [35.0, 75.0, -12.5, 42.5],
-    "40-70N": [40.0, 70.01, -180.0, 180.0],
+    **QUAVER_REGIONS,
+    "40-70N": [40.0, 70.0, -180.0, 180.0],
     "25-40N": [25.0, 40.0, -180.0, 180.0],
     "10-25N": [10.0, 25.0, -180.0, 180.0],
 }
@@ -176,6 +179,19 @@ def input_height_column(lat, lon) -> str:
                      "and set input_height_column: h_<name> in the lane block")
 
 
+def input_max_km(lat, lon, cfg) -> float:
+    """Largest distance from a station to its nearest native input point for the input row to have a value:
+    ``input_max_km`` when set, else unlimited on a global grid (quaver reads a global input GRIB everywhere) and
+    the coarsest point spacing on a regional grid (a station outside the input box has no value there)."""
+    if cfg.get("input_max_km") is not None:
+        return float(cfg["input_max_km"])
+    from eval.shared.edge_strip import is_global
+
+    if is_global(lat, lon):
+        return float("inf")
+    return float(max(cfg["max_km"], native_spacing_km(lat, lon, coarsest=True)))
+
+
 def degenerate_input(a) -> bool:
     """True when an input channel carries no data: all NaN, all zero (``is_degenerate_channel``; e.g. tp on the
     prepml 4 km route, an output-only channel) or one constant value."""
@@ -280,10 +296,33 @@ def tp_window_check(fields, obs_v, matcher, *, date, lead, cfg, log=None, input_
     return out
 
 
+def row_analysis_columns(cfg: dict, input_h: str | None) -> dict:
+    """Row -> cache column of the analysis that row's quaver analysis-departure check reads: the analysis at the
+    nearest point of the row's OWN grid (quaver toss_with_analysis). Model and truth: the output grid
+    (``model_height_column`` h_o1280 -> ``an``, h_o2560 -> ``an_o2560``); input: its native grid (``input_height_column``
+    h_o320 / h_o320_eefh -> ``an_o320``, h_o1280 -> ``an``); HRES: ``an`` (O1280). ``analysis_columns`` in the lane
+    block overrides any of them."""
+    def grid_of(col):
+        g = str(col or "h_o1280")[2:].split("_")[0]
+        return analysis_column(g)
+
+    out = {"model": grid_of(cfg.get("model_height_column")), "truth": grid_of(cfg.get("model_height_column")),
+           "input": grid_of(input_h), "hres": "an"}
+    out.update(cfg.get("analysis_columns") or {})
+    return out
+
+
 def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_clim=None, hres_pool=None,
                 kinds=None, input_matcher=None, input_h="h_o320"):
-    """Rows of one variable, one date and one lead. The station sample is the intersection over rows
-    (model, input, truth and, where STVL has it, HRES), so every row is scored on the same stations.
+    """Rows of one variable, one date and one lead, scored as quaver scores them (``station_set: per_row``, the
+    default): each row on ITS OWN station set, the stations where that row has a value (model and truth: nearest
+    output-grid point within ``max_km`` and outside the box-edge strip; input: nearest point of its native grid
+    within ``input_max_km``; HRES: where STVL has it) whose observation passes quaver's analysis-departure check
+    on that row's grid (``row_analysis_columns``). quaver's europe cell, for one, scores the model inside the
+    model box and a global input on the whole domain. With ``station_set: common`` every row is scored on the
+    intersection of the rows' sets (the pre-27 Nov 2026 behaviour). The station-density weights of a row are
+    computed over every observation of the valid time that passes that row's checks (``density_population:
+    all``), scored or not, as quaver does, then restricted to the row's scored stations and renormalised.
     ``kinds`` (row -> kind, ``row_kinds``) labels each row; the input and truth rows are ensembles (M, n)
     when the file carried their members, else single fields (n,).
     With ``seeps_clim`` (24 h tp) the sample is restricted to stations with a SEEPS climatology whose dry-day
@@ -292,9 +331,13 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     import pandas as pd
 
     kinds = kinds or ROW_KIND
+    per_row = cfg.get("station_set", "per_row") == "per_row"
     valid = (pd.Timestamp(date) + pd.Timedelta(hours=int(lead))).strftime("%Y%m%d%H")
     o = obs_v[obs_v.valid == valid]
-    # quaver's density-weight population: every observation of the valid time in the cache, scored or not
+    an_cols = row_analysis_columns(cfg, input_h)
+    base_var = var[:2] if var.startswith("tp") else var
+    # quaver's density-weight population: every observation of the valid time in the cache that passes the row's
+    # checks, scored or not
     pop = o if cfg.get("density_population", "all") == "all" else None
     clim = None
     if seeps_clim is not None:
@@ -303,17 +346,28 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
         o = o[(p1 >= 0.1) & (p1 < 0.85)]
     if o.empty:
         return [], [], 0
-    idx, keep = matcher.match(o.lat.to_numpy(), o.lon.to_numpy(), cfg["max_km"])
-    o, idx = o[keep].reset_index(drop=True), idx[keep]
-    # the input's own nearest native point (rule 41); same stations as every other row
-    idx_in = idx if input_matcher is None else input_matcher.match(o.lat.to_numpy(), o.lon.to_numpy(), np.inf)[0]
+    o = o.reset_index(drop=True)
+    slat, slon = o.lat.to_numpy(), o.lon.to_numpy()
+    idx, keep = matcher.match(slat, slon, cfg["max_km"])
+    if input_matcher is None:
+        idx_in, keep_in = idx, keep
+    else:  # the input's own nearest native point (rule 41)
+        idx_in, keep_in = input_matcher.match(slat, slon, getattr(input_matcher, "max_km", np.inf))
+        if not per_row:
+            keep_in = keep
+    o_keep = keep | keep_in if per_row else keep
+    if not o_keep.any():
+        return [], [], 0
+    o, idx, keep, idx_in, keep_in = (o[o_keep].reset_index(drop=True), idx[o_keep], keep[o_keep], idx_in[o_keep],
+                                     keep_in[o_keep])
+    slat, slon = o.lat.to_numpy(), o.lon.to_numpy()
     if seeps_clim is not None:
         cc = c.loc[o.stnid]
         clim = (cc.t1.to_numpy(), cc.t2.to_numpy(), cc[[f"s{k}" for k in range(9)]].to_numpy())
     ov = o.obs.to_numpy(np.float64)
     hr, hel = _hres_at(hres_v, date, lead, o)
     if var.startswith("tp") and hr is not None and hres_pool is not None:
-        hres_pool.setdefault(var, []).append((hr, ov))  # the metres audit is decided once per run
+        hres_pool.setdefault(var, []).append((hr[keep], ov[keep]))  # the metres audit is decided once per run
     is_tp = var == "tp"
     # tp: the rain thresholds (mm per window); 10ff: the opt-in wind thresholds (m/s; default none). The score
     # columns are named by the value alone (twcrps20), so read them with the row's variable.
@@ -322,6 +376,11 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
     elev = o.elevation.to_numpy(np.float64)
     h_model = o[cfg.get("model_height_column", "h_o1280")].to_numpy(np.float64)  # orography of the output grid
     dz_abs = np.abs(h_model - elev)
+    has_value = {"model": keep, "truth": keep, "input": keep_in, "hres": keep}
+    an_ok = {k: analysis_departure_ok(o, base_var, col) for k, col in an_cols.items()}
+    pop_an = ({k: analysis_departure_ok(pop, base_var, col) for k, col in an_cols.items()} if pop is not None else None)
+    masks = region_masks(slat, slon, cfg["regions"])
+    masks.update(height_masks(dz_abs, cfg["height_classes"]))
     rows, ranks = [], []
     for r in radii:
         ball = None if r == 0 else matcher.discs(idx, r)
@@ -348,20 +407,26 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                 dz["hres"] = (hel if hel is not None else np.full(elev.size, np.nan)) - elev
             variants.append(("lapse", {k: x + cfg["lapse_rate"] * np.asarray(dz[k], np.float64) for k, x in vals.items()}))
         for tag, vv in variants:
-            ok = np.isfinite(ov)
-            for x in vv.values():
-                ok &= np.isfinite(x).all(0) if x.ndim == 2 else np.isfinite(x)
-            masks = region_masks(o.lat.to_numpy(), o.lon.to_numpy(), cfg["regions"])
-            masks.update(height_masks(dz_abs, cfg["height_classes"]))
-            for reg, m in masks.items():
-                m = m & ok
-                if m.sum() < cfg["min_stations"]:
-                    continue
-                w = (density_weights(o.lat.to_numpy()[m], o.lon.to_numpy()[m],
-                                     *((pop.lat.to_numpy(), pop.lon.to_numpy()) if pop is not None else (None, None)))
-                     if cfg["weighting"] == "station_density" else None)
+            ok = {}
+            for k, x in vv.items():
+                fin = np.isfinite(x).all(0) if x.ndim == 2 else np.isfinite(x)
+                ok[k] = np.isfinite(ov) & fin & has_value[k] & an_ok[k]
+            if not per_row:
+                common = np.logical_and.reduce(list(ok.values()))
+                ok = {k: common for k in ok}
+            for reg, mreg in masks.items():
                 base = dict(var=var, variant=tag, radius_km=float(r), region=reg, lead=int(lead), date=str(date))
                 for k, x in vv.items():
+                    m = mreg & ok[k]
+                    if m.sum() < cfg["min_stations"]:
+                        continue
+                    w = None
+                    if cfg["weighting"] == "station_density":
+                        if pop is not None:
+                            pp = pop[pop_an[k]]
+                            w = density_weights(slat[m], slon[m], pp.lat.to_numpy(), pp.lon.to_numpy())
+                        else:
+                            w = density_weights(slat[m], slon[m])
                     ens = x[:, m] if x.ndim == 2 else x[m][None]
                     extra = {}
                     if clim is not None:
@@ -372,14 +437,17 @@ def score_valid(var, fields, obs_v, hres_v, matcher, *, date, lead, cfg, seeps_c
                         counts = rank_counts(ens, ov[m], seed=rank_seed(base, k))
                         ranks.append({**base, "row": k, "members": int(ens.shape[0]), "n": int(m.sum()),
                                       **{f"r{i}": int(c) for i, c in enumerate(counts)}})
-    return rows, ranks, int(ov.size)
+    return rows, ranks, int(keep.sum())
 
 
 def resolve_config(eval_config: dict) -> dict:
     regions = eval_config.get("regions")
-    weighting = str(eval_config.get("weighting", "none") or "none")
+    weighting = str(eval_config.get("weighting", "station_density") or "station_density")
     if weighting not in ("none", "station_density"):
         raise ValueError(f"obs_points: weighting must be 'none' or 'station_density', not {weighting!r}")
+    station_set = str(eval_config.get("station_set", "per_row") or "per_row")
+    if station_set not in ("per_row", "common"):
+        raise ValueError(f"obs_points: station_set must be 'per_row' or 'common', not {station_set!r}")
     return {
         "vars": [str(v) for v in eval_config.get("vars", DEFAULT_VARS)],
         "regions": dict(DEFAULT_REGIONS if regions is None else regions),
@@ -394,6 +462,13 @@ def resolve_config(eval_config: dict) -> dict:
         "min_stations": int(eval_config.get("min_stations", 30)),
         "weighting": weighting,
         "density_population": str(eval_config.get("density_population", "all")),
+        # quaver: every row on its own station set (per_row); common = the intersection over rows
+        "station_set": station_set,
+        # row -> cache analysis column for quaver's analysis-departure check (default: row_analysis_columns)
+        "analysis_columns": dict(eval_config.get("analysis_columns") or {}),
+        # largest station-to-native-input-point distance [km]; default: unlimited on a global input grid, the
+        # grid's coarsest point spacing on a regional one (a station outside a regional input box has no value)
+        "input_max_km": (float(eval_config["input_max_km"]) if eval_config.get("input_max_km") is not None else None),
         "competitor_ensembles": bool(eval_config.get("competitor_ensembles", True)),
         # rule 41: score the input on its native grid (x, lat_lres/lon_lres); False only to reproduce old tables
         "native_input": bool(eval_config.get("native_input", True)),
@@ -431,7 +506,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
     load_vars = [cfg["tp_obs_var"] if v == "tp" else v for v in cfg["vars"]] + (["tp24"] if cfg["seeps"] else [])
     obs, hres, cache_meta = load_cache(cache_dir, load_vars)
     if cfg["tp_obs_var"] != "tp" and "tp" in cfg["vars"]:
-        lo_tp, hi_tp = LIMITS["tp"]
+        lo_tp, hi_tp = limits_of("tp")
         if cfg["tp_obs_var"] in obs:
             o_tp = obs.pop(cfg["tp_obs_var"])
             obs["tp"] = o_tp[(o_tp.obs >= lo_tp) & (o_tp.obs <= hi_tp)]
@@ -475,6 +550,7 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             # edge_deg=0: the station set (incl. the box-edge strip drop) is decided by the output-grid matcher
             # alone; the input matcher only gives each kept station its nearest native point (same stations)
             input_matcher = StationMatcher(g["lat"], g["lon"], 0.0)
+            input_matcher.max_km = input_max_km(g["lat"], g["lon"], cfg)
             if not cfg["input_height_column"]:
                 guess = input_height_column(g["lat"], g["lon"])
                 if guess != input_h:
@@ -594,9 +670,16 @@ def run(predictions_dir, lane_config: dict, eval_config: dict, *, output_dir=Non
             against_observations=True,
             ensemble=construction, competitor_rows=competitor,
             weight_form=("unweighted mean over stations" if cfg["weighting"] == "none"
-                         else "quaver station-density weights (weighted mean over stations)"),
-            spread_form="spread = mean member SD (ddof 1); spread_rms = root of the mean member variance; "
-                        "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M), " + SSR_NOTE + "; SE = over dates",
+                         else "quaver station-density weights over "
+                              + ("every observation of the valid time passing the row's checks"
+                                 if cfg["density_population"] == "all" else "the scored stations")
+                              + " (weighted mean over stations)")
+                        + f"; station set: {cfg['station_set']}",
+            spread_form="spread = quaver's spread, root of the mean member variance with ddof 0 (= spread_q); "
+                        "spread_rms = the same with ddof 1; spread_sd = mean member SD (ddof 1); "
+                        "ssr_corrected = spread_rms / rmse_mean * sqrt((M+1)/M), " + SSR_NOTE + "; means over dates "
+                        "as quaver's card (RMS over dates for rmse_mean and the spreads, plain mean otherwise); "
+                        "SE = over dates",
             domain_bounds={**cfg["regions"], **{k: f"|{cfg['model_height_column']} - h_station| in {v} m"
                                                 for k, v in cfg["height_classes"].items()}},
             dates=sorted({p.date for p in preds}),

@@ -26,13 +26,17 @@ Writes into <cache dir>:
   cache_meta.json cache_version, created (UTC), host, dates, leads, vars, box, filters, the STVL request
                   parameters, rows per file and stations per valid time; a later fetch into the same directory
                   adds its files and merges its entries into the manifest
-Filters: quaver toss hard limits (2t 173-333 K, 10ff 0-100 m/s, msl 800-1100 hPa, tp 0-300 mm), one report per
-station and time, and quaver's analysis-departure check (toss_with_analysis): the operational analysis
-(od oper an, O1280) at valid time is read at the nearest grid point and stored as column ``an`` of obs_<var>.csv
-(2t, 10ff, msl); rows with |obs - an| above 30 K, 40 m/s or 1000 Pa are dropped at fetch and again at load
-(``stations.ANL_DEP_MAX``). quaver does not height-correct the analysis 2t before this check; neither do we.
-``--add-analysis`` adds the ``an`` column to an existing cache in place (caches before 9 Nov 2026 lack it:
-on 1-12 Nov 2024 they kept 68-89 msl reports near 91,000 Pa and a 63-97 m/s wind station per lead).
+Filters: quaver toss hard limits (2t 173-333 K, 10ff 0-100 m/s, msl 800-1100 hPa, tp 0-900 mm for every
+accumulation; caches fetched before 27 Nov 2026 capped tp at 300 mm and must be refetched), one report per station
+and time. quaver's analysis-departure check (toss_with_analysis) reads the operational analysis (od oper an) at valid
+time at the nearest point of EACH FORECAST'S OWN grid (station 60190, 2023050700: dropped for the O1280 model, kept
+for the O320 input). The fetch therefore keeps every report and stores the analysis once per grid of
+``--analysis-grids`` (default O1280,O320): column ``an`` (O1280) and ``an_o320`` (O320) of obs_<var>.csv (2t,
+10ff, msl). obs_points drops, per row, the reports with |obs - an of that row's grid| above 30 K, 40 m/s or
+1000 Pa (``stations.ANL_DEP_MAX``). quaver does not height-correct the analysis 2t before this check; neither do
+we. ``--add-analysis`` adds the analysis columns to an existing cache in place (it cannot bring back reports that
+an older fetch dropped: refetch for that). quaver keeps every report that passes these filters, even physically
+implausible ones (tp 301-703 mm at single stations in 2023); so do we, so that the scores equal quaver's.
 ``--add-height <name>=<source>`` (repeatable) adds column ``h_<name>``, the height [m] of the nearest point of
 that orography: a GRIB file of z (geopotential, any grid) or an anemoi zarr dataset with a ``z`` variable
 (row 0, its own latitudes/longitudes), both divided by g. With ``--dates`` it goes into the files of that
@@ -52,7 +56,9 @@ from pathlib import Path
 
 import numpy as np
 
-from eval.evaluators.obs_points.core.stations import ANL_DEP_MAX, LIMITS, analysis_departure_ok, xyz
+from eval.evaluators.obs_points.core.stations import (
+    ANL_DEP_MAX, analysis_column, analysis_departure_ok, limits_of, xyz,
+)
 
 CACHE_VERSION = 1
 G = 9.80665
@@ -204,56 +210,70 @@ def analysis_fields(out, valid, log, grid="O1280"):
     return {"2t": by["2t"], "10ff": np.hypot(by["10u"], by["10v"]), "msl": by["msl"]}
 
 
-def add_analysis_column(obs, var, out, tree, log):
-    """Add column ``an`` (analysis at the nearest O1280 point, valid time of the row) to an obs frame of a
+DEFAULT_ANALYSIS_GRIDS = ("O1280", "O320")
+
+
+def add_analysis_column(obs, var, out, tree, log, grid="O1280"):
+    """Add the analysis column of ``grid`` (``stations.analysis_column``: ``an`` for O1280, ``an_o320`` for O320;
+    the analysis retrieved on that grid and read at its nearest point, valid time of the row) to an obs frame of a
     variable with an analysis-departure limit; other variables are returned unchanged."""
     if var not in ANL_DEP_MAX or not len(obs):
         return obs
+    col = analysis_column(grid)
     obs = obs.copy()
-    obs["an"] = np.nan
+    obs[col] = np.nan
     idx = tree.query(xyz(obs.lat.to_numpy(), obs.lon.to_numpy()))[1]
     for v in sorted(obs["valid"].astype(str).unique()):
         rows = (obs["valid"].astype(str) == v).to_numpy()
-        an = analysis_fields(out, dt.datetime.strptime(v, "%Y%m%d%H"), log)[var]
-        obs.loc[rows, "an"] = an[idx[rows]]
+        an = analysis_fields(out, dt.datetime.strptime(v, "%Y%m%d%H"), log, grid=grid)[var]
+        obs.loc[rows, col] = an[idx[rows]]
     return obs
 
 
-def drop_gross(obs, var, log, tag):
-    keep = analysis_departure_ok(obs, var)
-    n = int((~keep).sum())
-    if n:
-        log.append(f"analysis check {var} {tag}: dropped {n} of {len(obs)} reports "
-                   f"(|obs - an| > {ANL_DEP_MAX[var]})"); print(log[-1], flush=True)
-    return obs[keep]
+def count_gross(obs, var, log, tag):
+    """Log how many reports fail the analysis check on each analysis grid; nothing is dropped (obs_points
+    applies the check per row, on the row's own grid)."""
+    for col in [c for c in obs.columns if c == "an" or c.startswith("an_")]:
+        n = int((~analysis_departure_ok(obs, var, col)).sum())
+        if n:
+            log.append(f"analysis check {var} {tag} {col}: {n} of {len(obs)} reports fail "
+                       f"(|obs - an| > {ANL_DEP_MAX[var]}), kept in the cache"); print(log[-1], flush=True)
+    return obs
 
 
-def add_analysis(out, variables):
-    """Add the ``an`` column to the obs files of an existing cache and drop the gross errors, in place."""
+def analysis_meta(variables, grids):
+    return {"source": "od oper an at valid time, retrieved on each grid, nearest point",
+            "columns": {g: analysis_column(g) for g in grids},
+            "applied": "per row by obs_points, on the row's own grid (quaver toss_with_analysis)",
+            "limits": {v: ANL_DEP_MAX[v] for v in variables if v in ANL_DEP_MAX}}
+
+
+def add_analysis(out, variables, grids=DEFAULT_ANALYSIS_GRIDS):
+    """Add the analysis columns of ``grids`` to the obs files of an existing cache, in place."""
     import pandas as pd
 
-    out = Path(out); log, dropped = [], {}
-    tree = orography(out, "O1280", log)[0]
+    out = Path(out); log, failing = [], {}
+    trees = {g: orography(out, g, log)[0] for g in grids}
     for var in variables:
         p = out / f"obs_{var}.csv"
         if var not in ANL_DEP_MAX or not p.exists():
             continue
         o = pd.read_csv(p, dtype={"valid": str, "stnid": str})
-        n0 = len(o)
-        o = drop_gross(add_analysis_column(o.drop(columns=["an"], errors="ignore"), var, out, tree, log),
-                       var, log, "existing cache")
-        dropped[var] = n0 - len(o)
+        for g in grids:
+            o = add_analysis_column(o.drop(columns=[analysis_column(g)], errors="ignore"), var, out, trees[g], log, g)
+        count_gross(o, var, log, "existing cache")
+        failing[var] = {analysis_column(g): int((~analysis_departure_ok(o, var, analysis_column(g))).sum())
+                        for g in grids}
         o.to_csv(p, index=False, float_format="%.4f")
     with open(out / "fetch_log.txt", "a") as f:
         f.write("\n".join(log) + "\n")
     mp = out / "cache_meta.json"
     meta = json.loads(mp.read_text()) if mp.exists() else {}
-    meta["analysis_check"] = {"source": "od oper an O1280 at valid time, nearest point", "limits": ANL_DEP_MAX,
+    meta["analysis_check"] = {**analysis_meta(variables, grids),
                               "added": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                              "dropped_existing": {**meta.get("analysis_check", {}).get("dropped_existing", {}),
-                                                   **dropped}}
+                              "failing_kept": failing}
     mp.write_text(json.dumps(meta, indent=2))
-    return dropped
+    return failing
 
 
 def _stvl_param(var):
@@ -283,7 +303,7 @@ def obs_at(var, valid, box, *, limits=True, dedup=True):
     df = df.dropna(subset=["obs"])
     df["lon"] = ((df["lon"] + 180.0) % 360.0) - 180.0
     if limits:
-        lo, hi = LIMITS.get(var, LIMITS.get(param))
+        lo, hi = limits_of(var)
         df = df[(df.obs >= lo) & (df.obs <= hi)]
     df = df[(df.lat >= box[0]) & (df.lat <= box[1]) & (df.lon >= box[2]) & (df.lon <= box[3])]
     if dedup:
@@ -406,7 +426,8 @@ def merge_stvl(old, new):
     return out
 
 
-def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True, heights=None):
+def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an_check=True, heights=None,
+                analysis_grids=DEFAULT_ANALYSIS_GRIDS):
     import pandas as pd
 
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
@@ -423,7 +444,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
             else:
                 log.append(f"WARN {c}: in the existing file but not in the new rows (left empty)")
         return frame
-    trees = {g: orography(out, g, log) for g in ("O1280", "O320")} if variables else {}
+    grids = sorted({"O1280", "O320", *analysis_grids})
+    trees = {g: orography(out, g, log) for g in grids} if variables else {}
     extra = {n: height_source(s) for n, s in (heights or {}).items()} if variables else {}
     height_info = {n: height_meta(n, heights[n], extra[n][1], log) for n in extra}
     for var in variables:
@@ -441,12 +463,15 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
         obs = pd.concat(frames, ignore_index=True)
         p = xyz(obs.lat.to_numpy(), obs.lon.to_numpy())
         for g, (tree, h) in trees.items():
-            obs[f"h_{g.lower()}"] = h[tree.query(p)[1]]
+            if g in ("O1280", "O320"):
+                obs[f"h_{g.lower()}"] = h[tree.query(p)[1]]
         obs = add_height_columns(obs, extra)
         for n in extra:
             height_info[n].setdefault("files", []).append(f"obs_{var}.csv")
         if an_check:
-            obs = drop_gross(add_analysis_column(obs, var, out, trees["O1280"][0], log), var, log, "fetch")
+            for g in analysis_grids:
+                obs = add_analysis_column(obs, var, out, trees[g][0], log, g)
+            count_gross(obs, var, log, "fetch")
         rows[f"obs_{var}.csv"] = write_merged(out / f"obs_{var}.csv", obs, ["valid", "stnid"], log, refill=refill)
         if not hres or var == "tp24":
             continue
@@ -479,9 +504,8 @@ def fetch_cache(dates, leads, variables, box, out, *, hres=True, seeps=False, an
         "cache_version": CACHE_VERSION, "kind": "station observations (obs_points)",
         "created": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "host": socket.gethostname(),
         "dates": list(dates), "leads": list(leads), "vars": list(variables), "box": list(box),
-        "limits": {v: LIMITS[v] for v in variables if v in LIMITS},
-        "analysis_check": None if not an_check else {"source": "od oper an O1280 at valid time, nearest point",
-                                                     "limits": {v: ANL_DEP_MAX[v] for v in variables if v in ANL_DEP_MAX}},
+        "limits": {v: list(limits_of(v)) for v in variables},
+        "analysis_check": None if not an_check else analysis_meta(variables, analysis_grids),
         "stvl": None if not variables else {
             "observation": {"table": "observation", "forecast_lengths_h": [0], "reference_datetimes": "valid time",
                             "period_h": {v: _stvl_param(v)[1] for v in variables if _stvl_param(v)[1]}},
@@ -527,7 +551,10 @@ def add_args(ap):
     ap.add_argument("--no-an-check", action="store_true",
                     help="skip quaver's analysis-departure check (no od oper an retrieval, no 'an' column)")
     ap.add_argument("--add-analysis", action="store_true",
-                    help="only add the 'an' column to the obs files already in --out and drop the gross errors")
+                    help="only add the analysis columns (--analysis-grids) to the obs files already in --out")
+    ap.add_argument("--analysis-grids", default=",".join(DEFAULT_ANALYSIS_GRIDS),
+                    help="grids the analysis is read on, one column each (O1280 -> an, O320 -> an_o320): the grids "
+                         "of the forecasts scored, as quaver reads the analysis on each forecast's own grid")
     ap.add_argument("--add-height", action="append", default=[], metavar="NAME=SOURCE",
                     help="add column h_NAME, the height [m] of the nearest point of an orography (GRIB of z on any "
                          "grid, or an anemoi zarr with z), e.g. o2560=orography_O2560.grib; repeatable. With --dates "
@@ -545,19 +572,24 @@ def variables_from_args(a):
     return out
 
 
+def grids_from_args(a):
+    return tuple(g.strip().upper() for g in str(getattr(a, "analysis_grids", "") or ",".join(DEFAULT_ANALYSIS_GRIDS)).split(",")
+                 if g.strip())
+
+
 def run_from_args(a):
     heights = parse_heights(getattr(a, "add_height", None))
     if heights and not a.dates and not a.add_analysis:
         return add_height(a.out, heights)  # reads local files only: runs on any cluster
     require_atos()
     if a.add_analysis:
-        done = add_analysis(a.out, variables_from_args(a))
+        done = add_analysis(a.out, variables_from_args(a), grids_from_args(a))
         return (done, add_height(a.out, heights)) if heights else done
     if not a.dates:
         raise SystemExit("obs fetch: --dates is required")
     return fetch_cache(a.dates.split(","), [int(x) for x in a.leads.split(",")], variables_from_args(a),
                        [float(x) for x in a.box.split(",")], a.out, hres=not a.no_hres, seeps=a.seeps,
-                       an_check=not a.no_an_check, heights=heights)
+                       an_check=not a.no_an_check, heights=heights, analysis_grids=grids_from_args(a))
 
 
 def main(argv=None):

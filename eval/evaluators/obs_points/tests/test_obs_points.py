@@ -148,7 +148,7 @@ def test_matches_the_a0_kit():
     ens, o = rng.gamma(0.5, 6.0, (10, 300)), rng.gamma(0.5, 6.0, 300)
     mine = ensemble_scores(ens, o, a0.TP_THRESHOLDS)
     ref = {**a0.scores(ens.mean(0), o, ens), **a0.tail_scores(ens.mean(0), o, ens)}
-    pairs = {"fcrps": "crps", "spread": "spread", "ssr_corrected": "ssr_corr", "bias": "bias", "rmse_mean": "rmse",
+    pairs = {"fcrps": "crps", "spread_sd": "spread", "ssr_corrected": "ssr_corr", "bias": "bias", "rmse_mean": "rmse",
              "mae_mean": "mae", "mae_member": "member_mae", "corr_mean": "corr"}
     pairs.update({k: k for k in ref if k.startswith(("twcrps", "brier", "n_obs_gt"))})
     for k, r in pairs.items():
@@ -166,7 +166,8 @@ def two_runs(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("obs_points")
     cache = _cache(tmp)
     cfg = {"cache": {"jupiter": str(tmp / "absent"), "atos": str(cache)}, "max_km": 100.0, "min_stations": 20,
-           "radii": [0, 40], "regions": {"all": None, "north": [45, 60, -20, 20]}}
+           "radii": [0, 40], "regions": {"all": None, "north": [45, 60, -20, 20]},
+           "station_set": "common", "weighting": "none"}  # the pre-27 Nov 2026 behaviour these tests pin
     outs = {}
     for name, noise, seed in (("good", 1.0, 0), ("bad", 3.0, 100)):
         pred = _pred(tmp, name, noise, seed)
@@ -380,7 +381,7 @@ def test_seeps_on_24h_windows(tmp_path):
     pred.mkdir()
     for step in (12, 24):
         _write(pred / f"predictions_{date}_step{step:03d}.nc", date, step, noise=1.0, seed=step)
-    cfg = {"cache": str(cache), "vars": ["tp"], "max_km": 100.0, "min_stations": 20, "radii": [0],
+    cfg = {"cache": str(cache), "vars": ["tp"], "max_km": 100.0, "min_stations": 20, "radii": [0], "weighting": "none",
            "regions": {"all": None}, "height_classes": {}}
     out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "out", run_label="S")
     df = pd.read_csv(out / "scores_per_date.csv")
@@ -546,8 +547,12 @@ def test_analysis_departure_check_matches_quaver_toss(tmp_path):
     w = pd.DataFrame({"obs": [80.0, 5.0], "an": [3.0, 4.0]})
     assert analysis_departure_ok(w, "10ff").tolist() == [False, True]
     o.to_csv(tmp_path / "obs_msl.csv", index=False)
-    obs, _, _ = load_cache(tmp_path, ["msl"])
+    obs, _, _ = load_cache(tmp_path, ["msl"], analysis_check=True)
     assert obs["msl"].stnid.tolist() == ["b", "c", "d"]
+    # default: the check is left to obs_points, per row on the row's own grid (quaver reads the analysis there)
+    assert load_cache(tmp_path, ["msl"])[0]["msl"].stnid.tolist() == ["a", "b", "c", "d"]
+    o["an_o320"] = [90900.0, 101100.0, 103000.0, np.nan]
+    assert analysis_departure_ok(o, "msl", "an_o320").tolist() == [True, True, False, True]
 
 
 def test_input_is_scored_on_its_native_grid(tmp_path):
@@ -597,7 +602,8 @@ def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
             base = np.zeros((la.size, 5)); base[:, 0] = 280.0; base[:, 3] = 101000.0 + 10.0 * la  # not constant
             x[0] = np.stack([base] * 5)
     cfg = {"cache": str(cache), "vars": ["msl"], "max_km": 100.0, "min_stations": 20, "radii": [0],
-           "regions": {"all": None}, "height_classes": {}, "box_edge_deg": 3.0}  # wide strip: stations sit >= 1 deg in
+           "regions": {"all": None}, "height_classes": {}, "box_edge_deg": 3.0,  # wide strip: stations sit >= 1 deg in
+           "station_set": "common"}
     out = obs_points.run(pred, {}, cfg, output_dir=tmp_path / "o1", run_label="N")
     df = pd.read_csv(out / "scores_per_date.csv", dtype={"date": str})
     assert (df.groupby(["var", "variant", "radius_km", "region", "lead", "date"]).n.nunique() == 1).all()
@@ -607,6 +613,10 @@ def test_native_input_row_drops_the_box_edge_strip_stations_too(tmp_path):
     assert n_strip < n_all == 80   # the strip drops stations, for the input row as for the model row
     meta = json.loads((out / "run_meta.json").read_text())
     assert meta["input_source"] == ["x (native input grid)"]
+    # per_row (quaver, the default): the strip of the output grid is the model's; the input keeps its stations
+    outp = obs_points.run(pred, {}, {**cfg, "station_set": "per_row"}, output_dir=tmp_path / "op", run_label="NP")
+    dp = pd.read_csv(outp / "scores_per_date.csv")
+    assert (dp[dp.row == "input"].n == 80).all() and (dp[dp.row == "model"].n == n_strip).all()
 
 
 def test_tp_obs_var_scores_tp_against_the_named_series(tmp_path):
