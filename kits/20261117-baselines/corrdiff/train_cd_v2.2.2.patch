@@ -147,11 +147,11 @@
                      fields += [
                          f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
                      ]
-@@ -829,6 +896,25 @@
-                         optimizer=optimizer,
-                         epoch=cur_nimg,
-                     )
-+                    if ema is not None:  # CD_KIT_PATCH
+@@ -823,12 +890,31 @@
+                     dist.rank,
+                     rank_0_only=True,
+                 ):
++                    if ema is not None:  # CD_KIT_PATCH: EMA first, so a kill between the two saves leaves no checkpoint without its EMA
 +                        logger0.info(
 +                            "EMA saved "
 +                            + ema.save(
@@ -160,6 +160,12 @@
 +                                keep=cfg.training.io.save_n_recent_checkpoints,
 +                            )
 +                        )
+                     save_checkpoint(
+                         path=checkpoint_dir,
+                         models=model,
+                         optimizer=optimizer,
+                         epoch=cur_nimg,
+                     )
 +                    if visits is not None:
 +                        _n, _lo, _hi = visits.write(
 +                            visits_path,

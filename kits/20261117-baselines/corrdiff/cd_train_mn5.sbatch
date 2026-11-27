@@ -14,8 +14,8 @@
 #   weights); unset = from scratch (fallback). A run folder that already holds a model file resumes and ignores it.
 # - batch: no gradient accumulation (total_batch_size = batch_size_per_gpu x GPUs). Regression: batch_size_per_gpu and
 #   checkpoint level from $CD/state/FIT_regression ("BPG LEVEL", written by the smoke) else the config's, total batch
-#   overridden to BPG x GPUs (constant learning rate, no sample-based schedule); an out-of-memory failure before the
-#   first progress line steps down the ladder 8:0 4:0 4:1 2:1 2:2 1:2 1:3 (bpg:level) in the same allocation. Diffusion:
+#   overridden to BPG x GPUs (constant learning rate, no sample-based schedule); an out-of-memory failure (at any point, resuming
+#   from the newest checkpoint) steps down the ladder 8:0 4:0 4:1 2:1 2:2 1:2 1:3 (bpg:level) in the same allocation. Diffusion:
 #   the config's batch (its schedule is scaled to it) must equal batch_size_per_gpu x GPUs, else the segment stops;
 #   out of memory steps the checkpoint level up (1, 2, 3).
 # - load guards: a run folder holding a model file must show "Loaded model state dictionary" (train.py swallows load
@@ -61,7 +61,7 @@ USED=$(python $CD_KIT/cd_gpuh.py used --jobs $ST/jobs.txt --exclude $SLURM_JOB_I
 REM_S=$(python -c "print(int(max(0.0, ($CEIL - $USED) * 3600 / $GPUS)))")
 echo "ceiling: chain used $USED H100-h before this segment, ceiling $CEIL, budget left for this segment ${REM_S} s on $GPUS GPUs (time limit $TLIM_S s)"
 if (( REM_S < 600 )); then echo "ceiling reached: $USED of $CEIL H100-h used, job $SLURM_JOB_ID $(date -u)" | tee $ST/CEILING_REACHED; exit 0; fi
-CAP=""; (( REM_S < TLIM_S )) && { CAP="timeout --signal=TERM --kill-after=120 $(( REM_S - 60 ))"; echo "this segment is cut at $(( REM_S - 60 )) s by the ceiling"; }
+(( REM_S < TLIM_S )) && echo "this segment is cut at $(( REM_S - 60 )) s by the ceiling"
 
 SEG=$(( $(cat $ST/SEGMENTS 2>/dev/null || echo 0) + 1 )); echo $SEG > $ST/SEGMENTS
 echo "$SLURM_JOB_ID seg $SEG start $(date -u) nodes $NODES time $TLIM" >> $ST/jobs.txt
@@ -102,25 +102,30 @@ EOF
 fi
 VAL=(); [[ -n "${CD_VAL_FREQ:-}" ]] && VAL=(training.io.validation_freq=$CD_VAL_FREQ)
 
+SUBMITTED=0
 for (( i=START; i<${#LADDER[@]}; i++ )); do
+  HAD_MODEL=$(ls $CKD/*.mdlus 2>/dev/null | wc -l)   # a later rung resumes from what an earlier one saved
   BPG=${LADDER[$i]%:*}; L=${LADDER[$i]#*:}; echo "$BPG $L" > $ST/FIT
   OV=(training.perf.songunet_checkpoint_level=$L)
   [[ $MODE == regression ]] && OV+=(training.hp.batch_size_per_gpu=$BPG training.hp.total_batch_size=$(( BPG * GPUS )))
   LOG=$CD/logs/${TAG}_m5_seg${SEG}_${SLURM_JOB_ID}_b${BPG}_L$L.log; : > $LOG
   echo "attempt batch_size_per_gpu $BPG level $L (total batch $(( BPG * GPUS ))) log $LOG"
+  CAP=""; (( REM_S < TLIM_S )) && CAP="timeout --signal=TERM --kill-after=120 $(( REM_S - SECONDS - 60 ))"   # left of the cut
   CD_CAP="$CAP" cd_srun $MODE $RUN $LOG "${OV[@]}" ${VAL[@]+"${VAL[@]}"} &
-  TP=$!; SUBMITTED=0
+  TP=$!; TICKED=0
   # the successor is submitted only once this segment logs its first progress line (no cascade of failing segments)
   while kill -0 $TP 2>/dev/null; do
-    if (( SUBMITTED == 0 )) && grep -q sec_per_sample $LOG; then
-      SUBMITTED=1; echo "first tick $(date -u): $(last_tick $LOG)"
+    if (( TICKED == 0 )) && grep -q sec_per_sample $LOG; then
+      TICKED=1; echo "first tick $(date -u): $(last_tick $LOG)"
       if (( HAD_MODEL > 0 )) && ! grep -q "Loaded model state dictionary" $LOG; then
         echo "FATAL: $CKD held a model file but the log shows no 'Loaded model state dictionary' (train.py swallows load" \
              "errors and trains from random weights); stopping, no successor"
         touch $ST/STOP; exit 3   # the end of the batch script ends the job and its srun step
       fi
-      if (( SEG < MAX_SEG )) && [[ ! -f $ST/STOP && ! -f $ST/DONE ]]; then
-        OTHERS=$(python $CD_KIT/cd_gpuh.py used --jobs $ST/jobs.txt --exclude $SLURM_JOB_ID)
+      if (( SUBMITTED == 0 && SEG < MAX_SEG )) && [[ ! -f $ST/STOP && ! -f $ST/DONE ]]; then
+        SUBMITTED=1
+        OTHERS=$(python $CD_KIT/cd_gpuh.py used --jobs $ST/jobs.txt --exclude $SLURM_JOB_ID) || OTHERS=""
+        [[ $OTHERS =~ ^[0-9.]+$ ]] || { echo "sacct accounting failed: no successor submitted; STOP written"; touch $ST/STOP; OTHERS=1e9; }
         NEXT_S=$(python -c "r=($CEIL-$OTHERS)*3600/$GPUS-$TLIM_S; print(int(min($TLIM_S, max(0, r))))")
         if (( NEXT_S < 3600 )); then
           echo "no successor: after this segment's full time limit the chain would have used $OTHERS + $(( TLIM_S * GPUS / 3600 )) of $CEIL H100-h (under 1 h left) $(date -u)" | tee $ST/CEILING_REACHED
@@ -139,7 +144,9 @@ for (( i=START; i<${#LADDER[@]}; i++ )); do
   wait $TP; rc=$?
   if grep -q "Training Completed" $LOG; then echo "Training Completed job $SLURM_JOB_ID $(date -u) $(last_tick $LOG)" > $ST/DONE; cat $ST/DONE; exit 0; fi
   grep -q EMA_RESUME_MISSING $LOG && { echo "FATAL: EMA_RESUME_MISSING (see $LOG); STOP written"; touch $ST/STOP; exit 4; }
-  if is_oom $LOG && ! grep -q "sec_per_sample" $LOG; then echo "bpg $BPG level $L out of memory before the first tick, next rung"; continue; fi
+  # out of memory (before or after the first tick, e.g. at the first full-box validation): next rung in this
+  # allocation, resumed from the newest checkpoint; $ST/FIT then holds the smaller rung for the successors
+  if is_oom $LOG; then echo "bpg $BPG level $L out of memory ($(grep -c sec_per_sample $LOG) ticks), next rung"; continue; fi
   (( rc == 124 )) && echo "segment cut by the GPU-hour ceiling $(date -u)" | tee $ST/CEILING_REACHED
   echo "segment end rc=$rc $(date -u) last tick: $(last_tick $LOG) | $(tick_stats $LOG)"; exit $rc
 done

@@ -173,6 +173,14 @@ Results of 27 Nov on MN5 (login node alogin1 and GPP job 49464812; no GPU job ru
 - Export: probe `rows OK: {'train': 15870, 'valid': 864, 'test': 546}`; `rows.csv` identical to the Leonardo export's;
   invariants the same 8 as before; fill of 17,280 rows in 636 s on one GPP node (48 parts).
 - A compute node can submit (`sbatch --test-only` from the export job answered), so the chains can queue successors.
+- `stats.json` identical to the Leonardo export's (same 1,200 rows, maximum relative difference 0; same channel order).
+- A real-size regression U-Net (78.4M parameters, 55 input channels, built at 864 x 1728) runs a 448 x 448 crop at the
+  last valid origin (416, 1280) on CPU, and its 4 grid channels equal the box grid at that crop (`REAL_CROP_OK`).
+- Launch: `cd_srun` gives every srun task torchrun's variables (`RANK`, `WORLD_SIZE`, `LOCAL_RANK`, `MASTER_ADDR` = the
+  first node) so PhysicsNeMo initialises through the same ENV branch as the torchrun jobs on Jupiter and Leonardo.
+  `cd_launch_probe_mn5.sbatch` (2 GPP nodes, CPU) checks that srun line across nodes, squeue, sacct through `cd_gpuh.py`
+  and sbatch from a compute node (`LAUNCH_PROBE_OK`). The GPU path itself (NCCL, CUDA) is first exercised by the smoke.
+- `cd_gpuh.py` on two real past acc jobs of ecm800825 (46841326, 46847710: 12 s and 360 s on 1 GPU) gives 0.103 GPU-h.
 
 Watch points:
 - With `--scale-schedule-to-batch` at batch 16 the diffusion decays by 0.7 every 31,250 samples after a 62,500-sample

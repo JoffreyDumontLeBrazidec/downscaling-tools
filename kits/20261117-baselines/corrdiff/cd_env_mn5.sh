@@ -20,8 +20,8 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 export XDG_CACHE_HOME=$CD/cache WANDB_DIR=$CD/cache/wandb NUMBA_CACHE_DIR=$CD/cache/numba MPLCONFIGDIR=$CD/cache/mpl \
        TRITON_CACHE_DIR=$CD/cache/triton TORCHINDUCTOR_CACHE_DIR=$CD/cache/inductor
-# TMPDIR short and node-local: AF_UNIX socket paths are limited to 108 chars (Jupiter smoke 3023869, 20 Nov)
-export TMPDIR=/tmp/${USER}_cd_${SLURM_JOB_ID:-x}
+# TMPDIR short and present on every node (AF_UNIX paths <= 108 chars, Jupiter smoke 3023869; a per-job folder made on the batch node is missing on the other nodes)
+export TMPDIR=/tmp
 mkdir -p $XDG_CACHE_HOME $WANDB_DIR $NUMBA_CACHE_DIR $MPLCONFIGDIR $TMPDIR 2>/dev/null
 source $CD_VENV/bin/activate
 # GitPython: no git binary guaranteed on compute nodes (Jupiter reg seg1 3023870 "Bad git executable", 20 Nov)

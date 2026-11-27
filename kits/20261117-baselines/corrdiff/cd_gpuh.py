@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """GPU-hours used by a CorrDiff training chain on MN5 (the job ids recorded in state/chain_*/jobs.txt), from sacct:
 sum over the jobs of ElapsedRaw (s, the running job up to now, failed and cancelled segments included) x the GPUs in
-AllocTRES (gres/gpu=N; a job that never started has none and counts 0). Used by cd_train_mn5.sbatch for the ceiling.
+AllocTRES (gres/gpu=N; a started job without gres/gpu in AllocTRES counts node=N x 4, the job ids are GPU jobs only;
+a job that never started has an empty AllocTRES and counts 0). Used by cd_train_mn5.sbatch for the ceiling.
 
     python3 cd_gpuh.py used --jobs STATE/jobs.txt [--exclude JOBID]     -> prints the GPU-h (float)
     python3 cd_gpuh.py selftest                                         -> parser on fake sacct lines
@@ -37,7 +38,8 @@ def parse(lines):
         except ValueError:
             sec = 0
         m = re.search(r"gres/gpu(?::[^=,]+)?=(\d+)", f[2])
-        gpus = int(m.group(1)) if m else 0
+        n = re.search(r"(?:^|,)node=(\d+)", f[2])
+        gpus = int(m.group(1)) if m else (4 * int(n.group(1)) if n else 0)
         out[jid] = max(out.get(jid, 0.0), sec * gpus / 3600.0)
     return out
 
@@ -56,11 +58,11 @@ def selftest():
             "49500002|3600|billing=640,cpu=160,gres/gpu=8,mem=960G,node=2",
             "49500003|0||",                                   # pending, never started
             "49500004|1800|cpu=80,gres/gpu:h100=4,node=1",    # typed gres
-            "49500005|120|cpu=80,mem=10G,node=1"]             # CPU job
+            "49500005|120|cpu=80,mem=10G,node=1"]             # no gres/gpu: node=1 x 4 GPUs
     d = parse(fake)
     assert abs(d["49500001"] - 48.0) < 1e-9 and abs(d["49500002"] - 8.0) < 1e-9, d
-    assert d["49500003"] == 0.0 and abs(d["49500004"] - 2.0) < 1e-9 and d["49500005"] == 0.0, d
-    assert abs(sum(d.values()) - 58.0) < 1e-9
+    assert d["49500003"] == 0.0 and abs(d["49500004"] - 2.0) < 1e-9 and abs(d["49500005"] - 120 * 4 / 3600) < 1e-9, d
+    assert abs(sum(d.values()) - 58.0 - 120 * 4 / 3600) < 1e-9
     print("GPUH_SELFTEST_OK", d)
 
 

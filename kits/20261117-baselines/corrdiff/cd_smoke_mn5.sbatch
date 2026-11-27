@@ -2,13 +2,14 @@
 # CorrDiff Europe on MN5: smoke of both stages with the m5 configs (regression on random 448 crops + EMA, patched
 # diffusion + EMA), at most 30 min. Node count from the command line (1 node = the speed and memory smoke, 2 nodes =
 # the scaling smoke, same script). Run folders $CD/smoke/<job id>/..., summary appended to $CD/state/SMOKE_SUMMARY.txt.
-#  1. regression part 1: CD_SMOKE_REG samples (default 320) on crops, from CD_REG_INIT if set (a widened .mdlus) else
+#  1. regression part 1: CD_SMOKE_REG samples (default 640) on crops, from CD_REG_INIT if set (a widened .mdlus) else
 #     from scratch; batch ladder 4:0 2:1 1:2 1:3 (batch_size_per_gpu:checkpoint level, no accumulation) until one
 #     fits; one full-box validation at that batch; checkpoint + EMA saved at the end. The rung that fits is written to
 #     $CD/state/FIT_regression (read by cd_train_mn5.sbatch) on the 1-node smoke.
 #  2. regression part 2: same run folder, training_duration doubled -> resumes from part 1 (model, Adam, EMA must load:
 #     REG_RESUME_OK line) and saves again.
-#  3. diffusion: CD_SMOKE_DIFF samples (default 320) with the part-2 regression checkpoint, the config's batch, level
+#  3. diffusion: CD_SMOKE_DIFF samples (default 640) with the part-2 regression checkpoint (else CD_REG_INIT, else a
+#     random-weight regression of the real size and channels, made here: the diffusion smoke then still runs), the config's batch, level
 #     ladder 1, 2, 3; then a resume part as in 2 (DIFF_RESUME_OK).
 # Each part runs under its own timeout; the diffusion runs even if the regression resume failed.
 #   sbatch --nodes=1 [--export=ALL,CD_REG_INIT=<widened .mdlus>] cd_smoke_mn5.sbatch
@@ -35,7 +36,7 @@ say() { echo "[$SLURM_JOB_ID n$NODES] $*" | tee -a $SUM; }
 say "smoke start $(date -u) host $(hostname) nodes $NODES"
 python -c "import physicsnemo, torch; print('physicsnemo', physicsnemo.__version__, 'torch', torch.__version__, 'cuda', torch.cuda.is_available(), torch.cuda.device_count())" | tee -a $SUM
 cd_code_ok | tee -a $SUM; cd_data_ok | tee -a $SUM || exit 1
-NR=${CD_SMOKE_REG:-320}; ND=${CD_SMOKE_DIFF:-320}
+NR=${CD_SMOKE_REG:-640}; ND=${CD_SMOKE_DIFF:-640}
 COMMON="training.io.validation_steps=2 wandb.mode=disabled"
 summ() {  # stage label, log, nodes -> speed and memory line
   local ts; ts=$(tick_stats $2)
@@ -75,8 +76,19 @@ if [[ -n "$FIT" ]]; then
 fi
 
 # 3. diffusion with the smoke's regression checkpoint
+if [[ -z "$REG_CKPT" && -n "${CD_REG_INIT:-}" ]]; then REG_CKPT=$CD_REG_INIT; say "diffusion uses CD_REG_INIT (the regression smoke gave no checkpoint)"; fi
 if [[ -z "$REG_CKPT" ]]; then
-  [[ -n "${CD_REG_INIT:-}" ]] && REG_CKPT=$CD_REG_INIT && say "diffusion uses CD_REG_INIT (the regression smoke gave no checkpoint)"
+  REG_CKPT=$S/CorrDiffRegressionUNet.random.mdlus
+  python - "$CD_CONF_DIR/config_training_e2v4${CD_CONF_SUFFIX}_regression.yaml" $REG_CKPT <<'EOF' && say "diffusion uses a random-weight regression $REG_CKPT (the regression smoke gave no checkpoint; speed and memory only)" || REG_CKPT=""
+import sys, yaml
+from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
+d = yaml.safe_load(open(sys.argv[1]))["dataset"]
+nin = len(d["input_variables"]) + len(d["invariant_variables"]) + (5 if d.get("time_inputs") else 0)
+m = CorrDiffRegressionUNet(img_resolution=[864, 1728], img_in_channels=nin + 4, img_out_channels=len(d["output_variables"]),
+                           N_grid_channels=4, embedding_type="zero", model_channels=128, channel_mult=[1, 2, 2, 2, 2],
+                           attn_resolutions=[28], amp_mode=True)
+m.save(sys.argv[2]); print("random regression", sys.argv[2], nin + 4, "input channels")
+EOF
 fi
 if [[ -n "$REG_CKPT" ]]; then
   export CD_REG_CKPT=$REG_CKPT; say "diffusion with CD_REG_CKPT=$CD_REG_CKPT"
