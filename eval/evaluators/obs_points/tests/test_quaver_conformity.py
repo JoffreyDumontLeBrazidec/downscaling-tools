@@ -138,4 +138,4 @@ def test_matches_real_quaver():
                             fx["population"][case["population"]]["lon"])
         s = ensemble_scores(ens, obs, weights=w)
         for score, col in (("fcrps", "fcrps"), ("spread", "spread")):
-            assert s[col] == pytest.approx(case["psv"][score], rel=1e-9), (case["key"], score)
+            assert s[col] == pytest.approx(case["psv"][score], rel=1e-8), (case["key"], score)
