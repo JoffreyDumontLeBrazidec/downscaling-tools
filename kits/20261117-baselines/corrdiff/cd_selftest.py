@@ -3,7 +3,11 @@
 part). Checks: cd_dataset default unchanged (46 channels), time_inputs (51 channels, the 5 extra = time_fields at the
 row's valid time, the first 46 unchanged, channel metadata), spread (rows evenly over the split, default = first
 rows), cd_residual_ladder run (2 shards) + restart + report on tiny regression checkpoints with and without the time
-inputs (a widened checkpoint must give its donor's residuals).
+inputs (a widened checkpoint must give its donor's residuals); 27 Nov: crop (the crop equals the slice of the full-box
+sample bit for bit, origins cover every valid origin, visit counts), and with PhysicsNeMo the crop path of train_cd.py:
+global_index selects the full-box positional grid at the crop (network input of a crop forward = slice of the network
+input of the full-box forward, also after a save / load of the full-box model), CropRegressionLoss, EMA beta / save /
+load, visit map.
 
     python3 cd_selftest.py --work DIR
 """
@@ -82,6 +86,104 @@ def test_dataset(dest):
           f"{list(spr.rows)} vs first {list(first.rows)}", flush=True)
 
 
+def test_crop(dest):
+    import torch
+    from cd_dataset import E2v4Box
+    kw = dict(data_path=str(dest), stats_path=str(dest.with_suffix(".stats.json")), split="train", time_inputs=True)
+    full = E2v4Box(**kw)
+    cr = E2v4Box(**kw, crop=16)
+    assert cr.image_shape() == full.image_shape() == (NY, NX)
+    torch.manual_seed(3)
+    seen = set()
+    for i in range(400):
+        idx = i % len(cr)
+        y, x, o = cr[idx]
+        oy, ox = int(o[0]), int(o[1])
+        assert 0 <= oy <= NY - 16 and 0 <= ox <= NX - 16 and y.shape == (10, 16, 16) and x.shape == (51, 16, 16)
+        seen.add((oy, ox))
+        if i < 40:
+            yf, xf = full[idx]
+            assert np.array_equal(y, yf[:, oy:oy + 16, ox:ox + 16]) and np.array_equal(x, xf[:, oy:oy + 16, ox:ox + 16]), (i, oy, ox)
+    corner = any(o[0] in (0, NY - 16) and o[1] in (0, NX - 16) for o in seen)
+    print(f"CROP_OK 40 crops equal to the full-box slice bit for bit (51 channels incl. time inputs); {len(seen)} distinct "
+          f"origins of {(NY - 15) * (NX - 15)} in 400 draws; a corner origin drawn: {corner}", flush=True)
+
+
+def test_train_ext(work):
+    import torch
+    from physicsnemo import Module
+    from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
+    import cd_train_ext as cdx
+    torch.manual_seed(0)
+    kw = dict(img_resolution=[NY, NX], img_out_channels=10, model_type="SongUNetPosEmbd", N_grid_channels=4,
+              embedding_type="zero", model_channels=16, channel_mult=[1, 2], attn_resolutions=[], checkpoint_level=0)
+    net = CorrDiffRegressionUNet(img_in_channels=51 + 4, **kw).eval()
+    pe = net.model.pos_embd
+    assert pe.shape == (4, NY, NX) and "pos_embd" not in net.state_dict(), "regression grid: non-persistent buffer"
+    lin = lambda n: np.linspace(0, 2 * np.pi, n)
+    ref = np.stack([np.tile(np.sin(lin(NX)), (NY, 1)), np.tile(np.sin(lin(NY))[:, None], (1, NX)),
+                    np.tile(np.cos(lin(NX)), (NY, 1)), np.tile(np.cos(lin(NY))[:, None], (1, NX))])
+    assert np.allclose(pe.numpy(), ref, atol=1e-6), "grid channels = sin x, sin y, cos x, cos y over the box"
+    first = next(iter(net.model.enc.values()))
+    seen = []
+    h = first.register_forward_pre_hook(lambda m, a: seen.append(a[0].detach().clone()))
+    xf = torch.randn(1, 51, NY, NX)
+    with torch.no_grad():
+        net(torch.zeros(1, 10, NY, NX), xf)
+        full_in = seen.pop()
+        origins = torch.tensor([[0, 0], [16, 48], [7, 23]])
+        xc = torch.stack([xf[0, :, oy:oy + 16, ox:ox + 16] for oy, ox in origins.tolist()])
+        gi = cdx.crop_global_index(origins, 16, 16, "cpu")
+        net(torch.zeros(3, 10, 16, 16), xc, global_index=gi)
+        crop_in = seen.pop()
+        for b, (oy, ox) in enumerate(origins.tolist()):
+            assert torch.equal(crop_in[b], full_in[0, :, oy:oy + 16, ox:ox + 16]), (b, oy, ox)
+    h.remove()
+    try:
+        with torch.no_grad():
+            net(torch.zeros(3, 10, 16, 16), xc)       # control: a crop without global_index cannot take the box grid
+        ctrl = "ran (unexpected)"
+    except Exception as e:
+        ctrl = f"fails ({type(e).__name__})"
+    print(f"EMBED_OK network input of a crop forward (data + 4 grid channels) = the full-box input at the crop, 3 crops "
+          f"in one batch, each its own origin; control without global_index: {ctrl}", flush=True)
+    p = Path(work) / "full_box.mdlus"
+    net.save(str(p))
+    re = Module.from_checkpoint(str(p)).eval()
+    assert torch.equal(re.model.pos_embd, pe)
+    print("EMBED_LOAD_OK a model saved at the box size rebuilds the same grid on load", flush=True)
+    loss = cdx.CropRegressionLoss()(net=re, img_clean=torch.randn(3, 10, 16, 16), img_lr=xc, global_index=gi)
+    assert loss.shape == (3, 10, 16, 16) and torch.isfinite(loss).all()
+    ema = cdx.EMA(re, halflife_nimg=1000, rampup_ratio=0.05)
+    assert ema.beta_at(0, 8) == 0.0 and abs(ema.beta_at(10 ** 6, 8) - 0.5 ** (8 / 1000)) < 1e-12
+    assert abs(ema.beta_at(4000, 8) - 0.5 ** (8 / 200)) < 1e-12
+    with torch.no_grad():
+        for q in re.parameters():
+            q.add_(1.0)
+    b = ema.update(re, 10 ** 6, 8)
+    q0, e0 = next(iter(re.parameters())), next(iter(ema.module.parameters()))
+    ck = str(Path(work) / "ck" / "checkpoints_regression")
+    path = ema.save(ck, 1234)
+    assert path.endswith("checkpoints_regression_ema/CorrDiffRegressionUNet.0.1234.mdlus"), path
+    e2 = cdx.EMA(re)
+    assert e2.load(ck, 1234, "cpu") and torch.equal(next(iter(e2.module.parameters())), e0)
+    assert e2.load(ck, 999, "cpu") is None
+    assert not torch.equal(e0, q0) and torch.allclose(e0, q0 - 1.0 + (1 - b) * 1.0, atol=1e-6)
+    v = cdx.CropVisits((NY, NX), 16)
+    o = torch.tensor([[0, 0], [16, 48], [16, 48]])
+    v.add(o)
+    vis = cdx.CropVisits.visits_from(v.hist, 16, (NY, NX))
+    brute = np.zeros((NY, NX), np.int64)
+    for oy, ox in o.tolist():
+        brute[oy:oy + 16, ox:ox + 16] += 1
+    assert np.array_equal(vis, brute)
+    e = v.expected()
+    n, lo, hi = v.write(str(Path(work) / "visits.npz"), 0, 1)
+    assert n == 3 and abs(e.sum() - 16 * 16) < 1e-6 and lo == e[0, 0] and hi == e.max()
+    print(f"EXT_OK crop loss, EMA (beta {b:.6f} = 0.5^(8/1000), save/load to checkpoints_regression_ema), visit map "
+          f"(expected visit probability per crop {lo:.4f} at the corners, {hi:.4f} at most)", flush=True)
+
+
 def test_ladder(work, dest):
     import torch
     import yaml
@@ -133,7 +235,9 @@ def main():
     Path(a.work).mkdir(parents=True, exist_ok=True)
     dest = build(a.work)
     test_dataset(dest)
+    test_crop(dest)
     if not a.skip_ladder:
+        test_train_ext(a.work)
         test_ladder(a.work, dest)
     print("SELFTEST_OK", flush=True)
 

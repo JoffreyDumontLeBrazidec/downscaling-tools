@@ -12,6 +12,14 @@ Options (all default off; the 46-channel input of the first regression run is un
                      stored invariants cos_local_time / sin_local_time stay as they are (constant, = -cos/-sin lon).
   spread: true       with max_rows: the max_rows rows evenly spread over the whole split (deterministic) instead of
                      the first max_rows (the first 64 valid rows are 29 Jun - 3 Aug 2022 only).
+  crop: N            (regression training, 27 Nov) each __getitem__ returns a random N x N crop of the box and its
+                     origin: (y[:, oy:oy+N, ox:ox+N], x[:, oy:oy+N, ox:ox+N], int64 [oy, ox]). Origin uniform over the
+                     valid origins (0..NY-N, 0..NX-N, as PhysicsNeMo RandomPatching2D), fresh at every call, drawn with
+                     the torch RNG (DataLoader seeds it per worker; train.py seeds it per rank and resume point). The
+                     crop is bit for bit the slice of the full-box sample (upsampling and time inputs are evaluated
+                     on the crop's points only). image_shape() stays the full box, so the U-Net is built at the box
+                     size and its positional grid is the full box's; train_cd.py passes global_index = the crop's
+                     box indices, which selects that grid at the crop. 0 = off (the full box, as before).
 """
 from __future__ import annotations
 
@@ -75,7 +83,8 @@ def spread_index(n: int, k: int) -> np.ndarray:
 class E2v4Box(DownscalingDataset):
     def __init__(self, data_path: str, stats_path: str, input_variables: Union[List[str], None] = None,
                  output_variables: Union[List[str], None] = None, invariant_variables: Union[List[str], None] = None,
-                 split: str = "train", max_rows: int = 0, time_inputs: bool = False, spread: bool = False):
+                 split: str = "train", max_rows: int = 0, time_inputs: bool = False, spread: bool = False,
+                 crop: int = 0):
         import zarr
         self.root = zarr.open_group(str(data_path), mode="r")
         at = self.root.attrs
@@ -89,6 +98,9 @@ class E2v4Box(DownscalingDataset):
         self.invariants = inv[[self.all_inv.index(v) for v in self.invariant_variables]]
         self.factor = int(at["factor"])
         self.img_shape = (int(at["ny"]), int(at["nx"]))
+        self.crop = int(crop or 0)
+        if self.crop and not (0 < self.crop <= min(self.img_shape)):
+            raise ValueError(f"crop {self.crop} does not fit the box {self.img_shape}")
         rows = list(csv.DictReader(open(Path(str(data_path)).with_suffix(".rows.csv"))))
         sel = [r for r in rows if r["split"] == split]
         if max_rows:
@@ -118,22 +130,44 @@ class E2v4Box(DownscalingDataset):
         self._lon = np.repeat((w + (np.arange(nx) + 0.5) * (e - w) / nx)[None, :], ny, 0)
         assert abs(self._lat[0, 0] - lat0) < 1e-9 and abs(self._lon[0, 0] - lon0) < 1e-9
 
-    def coarse_input(self, x_coarse: np.ndarray, valid: Union[datetime.datetime, None] = None) -> np.ndarray:
+    def coarse_input(self, x_coarse: np.ndarray, valid: Union[datetime.datetime, None] = None,
+                     window: Union[Tuple[int, int, int, int], None] = None) -> np.ndarray:
         """(C_all_in, NYC, NXC) physical -> normalised network input (C_in + C_inv [+ 5 time inputs], NY, NX).
-        valid (UTC) is required with time_inputs."""
-        x = self.upsample(np.ascontiguousarray(x_coarse[self.ii], np.float32))
-        parts = [x, self.invariants]
+        valid (UTC) is required with time_inputs. window = (oy, ox, h, w): only the box cells [oy:oy+h, ox:ox+w]
+        (equal bit for bit to the same slice of the full-box result)."""
+        xs = np.ascontiguousarray(x_coarse[self.ii], np.float32)
+        if window is None:
+            x, sl = self.upsample(xs), (slice(None), slice(None))
+        else:
+            oy, ox, h, w = window
+            x = np.empty((xs.shape[0], h, w), dtype=np.float32)
+            _zoom_extrapolate_window(xs, x, self.factor, oy, ox)
+            sl = (slice(oy, oy + h), slice(ox, ox + w))
+        parts = [x, self.invariants[:, sl[0], sl[1]]]
         if self.time_inputs:
             if valid is None:
                 raise ValueError("time_inputs: coarse_input needs the valid time")
-            parts.append(time_fields(valid, self._lat, self._lon))
+            parts.append(time_fields(valid, self._lat[sl], self._lon[sl]))
         return self.normalize_input(np.concatenate(parts, axis=0))
+
+    def crop_origin(self) -> Tuple[int, int]:
+        """Uniform over the valid origins, torch RNG (per DataLoader worker / per rank seeding)."""
+        import torch
+        ny, nx = self.img_shape
+        return (int(torch.randint(0, ny - self.crop + 1, (1,)).item()),
+                int(torch.randint(0, nx - self.crop + 1, (1,)).item()))
 
     def __getitem__(self, idx):
         r = int(self.rows[idx])
-        x = self.coarse_input(np.asarray(self.root["input"][r], np.float32), self.valid[idx])
-        y = self.normalize_output(np.asarray(self.root["output"][r], np.float32)[self.oi])
-        return (y, x)
+        if not self.crop:
+            x = self.coarse_input(np.asarray(self.root["input"][r], np.float32), self.valid[idx])
+            y = self.normalize_output(np.asarray(self.root["output"][r], np.float32)[self.oi])
+            return (y, x)
+        oy, ox = self.crop_origin()
+        n = self.crop
+        x = self.coarse_input(np.asarray(self.root["input"][r], np.float32), self.valid[idx], window=(oy, ox, n, n))
+        y = self.normalize_output(np.asarray(self.root["output"][r, :, oy:oy + n, ox:ox + n], np.float32)[self.oi])
+        return (y, x, np.array([oy, ox], np.int64))
 
     def __len__(self):
         return len(self.rows)
@@ -200,3 +234,31 @@ def _zoom_extrapolate(x, y, factor):
                 x0 = x00 + djx * (x01 - x00)
                 x1 = x10 + djx * (x11 - x10)
                 y[k, iy, jy] = x0 + (ix - ix0) * (x1 - x0)
+
+
+@jit(nopython=True)
+def _zoom_extrapolate_window(x, y, factor, oy, ox):
+    """_zoom_extrapolate restricted to the output cells [oy:oy+y.shape[1], ox:ox+y.shape[2]] (same arithmetic, so
+    the window equals the slice of the full result bit for bit)."""
+    s = 1 / factor
+    for k in prange(y.shape[0]):
+        for a in range(y.shape[1]):
+            iy = oy + a
+            ix = (iy + 0.5) * s - 0.5
+            ix0 = int(math.floor(ix))
+            ix0 = max(0, min(ix0, x.shape[1] - 2))
+            ix1 = ix0 + 1
+            for b in range(y.shape[2]):
+                jy = ox + b
+                jx = (jy + 0.5) * s - 0.5
+                jx0 = int(math.floor(jx))
+                jx0 = max(0, min(jx0, x.shape[2] - 2))
+                jx1 = jx0 + 1
+                x00 = x[k, ix0, jx0]
+                x01 = x[k, ix0, jx1]
+                x10 = x[k, ix1, jx0]
+                x11 = x[k, ix1, jx1]
+                djx = jx - jx0
+                x0 = x00 + djx * (x01 - x00)
+                x1 = x10 + djx * (x11 - x10)
+                y[k, a, b] = x0 + (ix - ix0) * (x1 - x0)

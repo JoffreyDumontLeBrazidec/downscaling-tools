@@ -1,0 +1,174 @@
+--- train.py
++++ train_cd.py
+@@ -14,7 +14,12 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++# CD_KIT_PATCH 20261127: PhysicsNeMo v2.2.2 examples/weather/corrdiff/train.py + the CorrDiff kit's additions
++# (downscaling-tools kits/20261117-baselines/corrdiff, train_cd_v2.2.2.patch; code in cd_train_ext.py): EMA of the
++# weights (training.ema), regression on random crops (dataset.crop), data-wait time in the progress line. Without
++# training.ema and dataset.crop it trains exactly as train.py.
+ import os
++import sys
+ import time
+ from contextlib import nullcontext
+ 
+@@ -137,7 +142,14 @@
+     # Register custom dataset if specified in config
+     register_dataset(cfg.dataset.type)
+     logger0.info(f"Using dataset: {cfg.dataset.type}")
++    # CD_KIT_PATCH: the kit's additions, from the folder of the dataset file (dataset.type = <path>::<class>)
++    _kit = os.path.dirname(os.path.abspath(str(cfg.dataset.type).split("::")[0]))
++    if _kit not in sys.path:
++        sys.path.insert(0, _kit)
++    import cd_train_ext as cdx
+ 
++    reg_crop = int(dataset_cfg.get("crop", 0) or 0)
++
+     if hasattr(cfg, "validation"):
+         validation = True
+         validation_dataset_cfg = OmegaConf.to_container(cfg.validation)
+@@ -191,6 +203,15 @@
+         sampler_start_idx=cur_nimg,
+     )
+ 
++    # CD_KIT_PATCH: random-crop regression; validation stays on the full box
++    if reg_crop:
++        if cfg.model.name != "regression":
++            raise ValueError("dataset.crop is for the regression only (the diffusion patches with RandomPatching2D)")
++        if validation_dataset is not None and getattr(validation_dataset, "crop", 0):
++            raise ValueError("dataset.crop: the validation must be the full box (validation.crop: 0)")
++        logger0.info(f"Regression on random {reg_crop}x{reg_crop} crops of the {dataset.image_shape()} box "
++                     f"(U-Net and positional grid built at the box size, global_index = crop box indices)")
++
+     # Parse image configuration & update model args
+     dataset_channels = len(dataset.input_channels())
+     img_in_channels = dataset_channels
+@@ -477,6 +498,7 @@
+         loss_fn = RegressionLoss()
+     elif cfg.model.name == "lt_aware_ce_regression":
+         loss_fn = RegressionLossCE(prob_channels=prob_channels)
++    crop_loss_fn = cdx.CropRegressionLoss() if reg_crop else None  # CD_KIT_PATCH
+ 
+     # Instantiate the optimizer
+     optimizer = torch.optim.Adam(
+@@ -501,6 +523,24 @@
+         )
+     except Exception:
+         pass
++
++    # CD_KIT_PATCH: EMA of the weights (EDM's update; rank 0 holds and saves it), resumed with the checkpoint
++    ema = None
++    ema_cfg = cfg.training.get("ema", None)
++    if ema_cfg is not None and ema_cfg.get("enabled", False) and dist.rank == 0:
++        ema = cdx.EMA(model, halflife_nimg=ema_cfg.get("halflife_nimg", 500000),
++                      rampup_ratio=ema_cfg.get("rampup_ratio", 0.05))
++        got = ema.load(checkpoint_dir, cur_nimg, dist.device)
++        if got:
++            logger0.info(f"EMA loaded from {got}")
++        elif cur_nimg > 0:
++            raise RuntimeError(f"EMA_RESUME_MISSING: resuming at {cur_nimg} samples but "
++                               f"{ema.path(checkpoint_dir, cur_nimg)} does not exist")
++        else:
++            logger0.info(f"EMA initialised from the start weights (half-life {ema.halflife_nimg:,.0f} samples, "
++                         f"ramp-up ratio {ema.rampup_ratio}); saved in {cdx.ema_dir(checkpoint_dir)}")
++    visits = cdx.CropVisits(img_shape, reg_crop) if (reg_crop and dist.rank == 0) else None
++    data_wait = 0.0
+ 
+     ############################################################################
+     #                            MAIN TRAINING LOOP                            #
+@@ -525,6 +565,7 @@
+             while not done:
+                 tick_start_nimg = cur_nimg
+                 tick_start_time = time.time()
++                data_wait = 0.0  # CD_KIT_PATCH
+ 
+                 if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
+                     logger0.info(f"Starting Profiler at {cur_nimg}")
+@@ -543,9 +584,16 @@
+                             f"accumulation round {n_i}", color="Magenta"
+                         ):
+                             with nvtx.annotate("loading data", color="green"):
+-                                img_clean, img_lr, *lead_time_label = next(
+-                                    dataset_iterator
+-                                )
++                                _t_data = time.time()  # CD_KIT_PATCH
++                                _batch = next(dataset_iterator)
++                                data_wait += time.time() - _t_data
++                                if reg_crop:
++                                    img_clean, img_lr, crop_origin = _batch
++                                    lead_time_label = []
++                                    if visits is not None:
++                                        visits.add(crop_origin)
++                                else:
++                                    img_clean, img_lr, *lead_time_label = _batch
+                                 if use_apex_gn:
+                                     img_clean = img_clean.to(
+                                         dist.device,
+@@ -599,7 +647,20 @@
+                                     with torch.autocast(
+                                         "cuda", dtype=amp_dtype, enabled=enable_amp
+                                     ):
+-                                        loss = loss_fn(**loss_fn_kwargs)
++                                        if reg_crop:  # CD_KIT_PATCH
++                                            loss = crop_loss_fn(
++                                                net=model,
++                                                img_clean=img_clean,
++                                                img_lr=img_lr,
++                                                global_index=cdx.crop_global_index(
++                                                    crop_origin,
++                                                    img_clean.shape[-2],
++                                                    img_clean.shape[-1],
++                                                    dist.device,
++                                                ),
++                                            )
++                                        else:
++                                            loss = loss_fn(**loss_fn_kwargs)
+ 
+                                 loss = loss.sum() / batch_size_per_gpu
+                                 loss_accum += (
+@@ -670,6 +731,8 @@
+                         )
+                     with nvtx.annotate("optimizer step", color="blue"):
+                         optimizer.step()
++                    if ema is not None:  # CD_KIT_PATCH: EDM order (samples before this step)
++                        ema.update(model, cur_nimg, cfg.training.hp.total_batch_size)
+ 
+                     cur_nimg += cfg.training.hp.total_batch_size
+                     done = cur_nimg >= cfg.training.hp.training_duration
+@@ -799,6 +862,9 @@
+                     fields += [
+                         f"sec_per_sample {((tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg)):<7.2f}"
+                     ]
++                    fields += [f"sec_data_wait {data_wait:<7.2f}"]  # CD_KIT_PATCH
++                    if ema is not None:
++                        fields += [f"ema_beta {ema.beta:.6f}"]
+                     fields += [
+                         f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
+                     ]
+@@ -829,6 +895,25 @@
+                         optimizer=optimizer,
+                         epoch=cur_nimg,
+                     )
++                    if ema is not None:  # CD_KIT_PATCH
++                        logger0.info(
++                            "EMA saved "
++                            + ema.save(
++                                checkpoint_dir,
++                                cur_nimg,
++                                keep=cfg.training.io.save_n_recent_checkpoints,
++                            )
++                        )
++                    if visits is not None:
++                        _n, _lo, _hi = visits.write(
++                            os.path.join(os.path.dirname(checkpoint_dir), "crop_visits_rank0.npz"),
++                            cur_nimg,
++                            dist.world_size,
++                        )
++                        logger0.info(
++                            f"crop visits written: {_n} crops of rank 0; expected visit probability per crop "
++                            f"{_lo:.4f} (corners) to {_hi:.4f} (centre)"
++                        )
+ 
+                     # Retain only the recent n checkpoints, if desired
+                     if cfg.training.io.save_n_recent_checkpoints > 0:

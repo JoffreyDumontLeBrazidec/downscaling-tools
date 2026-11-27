@@ -37,6 +37,14 @@ regional grid): regression U-Net on the full image, then the patched residual di
     every 2,560; wandb offline; hydra run folder under RUN
   - --time-inputs (opt-in): dataset.time_inputs, 5 per-row time channels appended after the 46 (cd_dataset.py); a
     regression checkpoint trained without them has 46 input channels and does not load into a config with them
+  - --reg-crop N (opt-in, 27 Nov): the regression trains on random N x N crops of the box (dataset.crop, cd_dataset.py;
+    train_cd.py passes the crop's box indices to the positional grid), validation on the full box (validation.crop 0);
+    the diffusion config is unchanged by it (it patches with RandomPatching2D)
+  - --ema (opt-in, 27 Nov): training.ema {enabled, halflife_nimg, rampup_ratio} in both stages = EMA of the weights
+    (EDM's update, in the CorrDiff paper, absent from the v2.2.2 code; train_cd.py + cd_train_ext.py), saved beside
+    every checkpoint in checkpoints_<model>_ema/. Defaults EDM's: half-life 500,000 samples, ramp-up ratio 0.05.
+    Both options need train_cd.py (cd_apply_train_patch.sh); the example's train.py ignores training.ema and fails
+    on dataset.crop
 Input channels: GL512's own input variables (its in_lres list after `drop`), from GL512's config file.
 --name-suffix S: files config_training_e2v4S_{regression,diffusion}.yaml, run folders RUN/reg_S, RUN/diff_S (the
 unsuffixed files and RUN/reg, RUN/diff are left alone).
@@ -46,7 +54,8 @@ unsuffixed files and RUN/reg, RUN/diff are left alone).
         [--reg-samples N] [--diff-samples N] [--reg-bpg 1] [--diff-bpg 4] [--reg-total-batch 256] [--diff-total-batch 256]
         [--{reg,diff}-lr X] [--{reg,diff}-lr-rampup N] [--{reg,diff}-lr-decay X] [--{reg,diff}-lr-decay-rate N]
         [--{reg,diff}-save-freq N] [--{reg,diff}-val-freq N] [--diff-p-mean X] [--diff-p-std X] [--scale-schedule-to-batch]
-        [--reg-ckpt-level 3] [--diff-ckpt-level 1] [--diff-max-patch 4]
+        [--reg-ckpt-level 3] [--diff-ckpt-level 1] [--diff-max-patch 4] [--reg-crop 448] [--ema]
+        [--ema-halflife-nimg 500000] [--ema-rampup-ratio 0.05] [--dataloader-workers 4]
 """
 import argparse
 from pathlib import Path
@@ -137,6 +146,11 @@ def main():
     ap.add_argument("--reg-ckpt-level", type=int, default=3)
     ap.add_argument("--diff-ckpt-level", type=int, default=1)
     ap.add_argument("--diff-max-patch", type=int, default=4)
+    ap.add_argument("--reg-crop", type=int, default=0, help="regression on random N x N crops (0 = full box)")
+    ap.add_argument("--ema", action="store_true", help="training.ema in both stages (train_cd.py)")
+    ap.add_argument("--ema-halflife-nimg", type=int, default=500_000)
+    ap.add_argument("--ema-rampup-ratio", type=float, default=0.05)
+    ap.add_argument("--dataloader-workers", type=int, default=4)
     a = ap.parse_args()
     import zarr
     conf = Path(a.repo) / "examples" / "weather" / "corrdiff" / "conf"
@@ -162,6 +176,11 @@ def main():
     sfx = a.name_suffix
     reg_dir, diff_dir = (f"{a.run_dir}/reg_{sfx}", f"{a.run_dir}/diff_{sfx}") if sfx else (f"{a.run_dir}/reg", f"{a.run_dir}/diff")
     wandb = {"mode": "offline", "results_dir": f"{a.run_dir}/wandb", "watch_model": False}
+    reg_ds, reg_val = dict(ds), dict(val)
+    if a.reg_crop:
+        reg_ds["crop"] = a.reg_crop
+        reg_val["crop"] = 0
+    ema = {"enabled": True, "halflife_nimg": a.ema_halflife_nimg, "rampup_ratio": a.ema_rampup_ratio} if a.ema else None
     rs = schedule("regression", "regression", conf, a, scale=False)
     dsch = schedule("diffusion", "patched_diffusion", conf, a, scale=a.scale_schedule_to_batch)
     dhp = dict(dsch, patch_shape_x=448, patch_shape_y=448, patch_num=4, max_patch_per_gpu=a.diff_max_patch)
@@ -173,9 +192,9 @@ def main():
         "hydra": {"job": {"chdir": False, "name": f"e2v4{sfx}_regression"},
                   "run": {"dir": f"{a.run_dir}/hydra/${{hydra:job.name}}"}, "searchpath": ["pkg://conf/base"]},
         "defaults": [{"dataset": "custom"}, {"model": "regression"}, {"model_size": "normal"}, {"training": "${model}"}, "_self_"],
-        "dataset": ds, "validation": val,
+        "dataset": reg_ds, "validation": reg_val,
         "training": {"hp": rs,
-                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4,
+                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": a.dataloader_workers,
                               "songunet_checkpoint_level": a.reg_ckpt_level},
                      "io": {"checkpoint_dir": reg_dir, "save_checkpoint_freq": a.reg_save_freq,
                             "validation_freq": a.reg_val_freq, "print_progress_freq": 2_560}},
@@ -187,20 +206,23 @@ def main():
         "defaults": [{"dataset": "custom"}, {"model": "patched_diffusion"}, {"model_size": "normal"}, {"training": "${model}"}, "_self_"],
         "dataset": ds, "validation": val,
         "training": {"hp": dhp,
-                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": 4,
+                     "perf": {"fp_optimizations": "amp-bf16", "dataloader_workers": a.dataloader_workers,
                               "songunet_checkpoint_level": a.diff_ckpt_level},
                      "io": {"checkpoint_dir": diff_dir, "regression_checkpoint_path": "${oc.env:CD_REG_CKPT}",
                             "save_checkpoint_freq": a.diff_save_freq, "validation_freq": a.diff_val_freq,
                             "print_progress_freq": 2_560}},
         "wandb": wandb,
     }
+    if ema:
+        reg["training"]["ema"] = dict(ema)
+        diff["training"]["ema"] = dict(ema)
     out = Path(a.out_conf_dir) if a.out_conf_dir else conf
     out.mkdir(parents=True, exist_ok=True)
     for name, c in ((f"config_training_e2v4{sfx}_regression.yaml", reg), (f"config_training_e2v4{sfx}_diffusion.yaml", diff)):
         (out / name).write_text(yaml.safe_dump(c, sort_keys=False, width=4096))
         print("wrote", out / name)
     print(f"input variables ({len(in_vars)}): {in_vars}; dropped by GL512: {drop}; invariants: {inv}; "
-          f"time inputs: {a.time_inputs}; validation: {val}")
+          f"time inputs: {a.time_inputs}; validation: {val}; regression crop: {a.reg_crop or 'full box'}; ema: {ema}")
 
 
 if __name__ == "__main__":
