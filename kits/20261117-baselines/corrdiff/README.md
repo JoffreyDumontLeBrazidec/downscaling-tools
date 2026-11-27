@@ -161,3 +161,22 @@ Self-tests: `python $CD/kit/cd_selftest.py --work DIR` (adds the crop, embedding
 `python $CD/kit/cd_widen_regression.py selftest --work DIR`, `python $CD/kit/cd_gpuh.py selftest`, and
 `bash $CD/kit/cd_cpu_e2e.sh DIR` (train_cd.py end to end on CPU on a synthetic export: crop regression, save, resume
 with EMA, patched diffusion, resume).
+
+Results of 27 Nov on MN5 (login node alogin1 and GPP job 49464812; no GPU job run):
+- venv: 156 packages, `uv pip freeze` identical to the Leonardo venv (torch 2.10.0+cu128, nvidia-physicsnemo 2.2.2,
+  zarr 3.1.6, numba 0.68.1; Python 3.11.10); git_hash patch applied; `IMPORT_OK`. CUDA is not usable on the login node
+  (the smoke checks it on the GPU nodes).
+- `cd_selftest.py`: `DATASET_OK`, `CROP_OK` (40 crops equal to the full-box slice bit for bit), `EMBED_OK` (crop
+  network input = full-box network input at the crop; a crop without `global_index` fails), `EMBED_LOAD_OK`, `EXT_OK`,
+  `WEIGHTS_OK`, `LADDER_OK`, `SELFTEST_OK`; `cd_widen_regression.py selftest`: `SELFTEST_OK`; `cd_gpuh.py selftest`:
+  `GPUH_SELFTEST_OK`; `cd_cpu_e2e.sh`: `E2E_OK`.
+- Export: probe `rows OK: {'train': 15870, 'valid': 864, 'test': 546}`; `rows.csv` identical to the Leonardo export's;
+  invariants the same 8 as before; fill of 17,280 rows in 636 s on one GPP node (48 parts).
+- A compute node can submit (`sbatch --test-only` from the export job answered), so the chains can queue successors.
+
+Watch points:
+- With `--scale-schedule-to-batch` at batch 16 the diffusion decays by 0.7 every 31,250 samples after a 62,500-sample
+  ramp, so its learning rate is below 1 % of peak after about 470,000 samples (13 decays): the published schedule counted
+  in updates (39,000 updates for 10M samples at batch 256) is used up after about 625,000 samples. Regenerate the
+  diffusion config before its chain if the budget allows more samples than that.
+- The regression keeps NVIDIA's constant learning rate 2e-4 (no ramp-up, no decay) for the continuation.
