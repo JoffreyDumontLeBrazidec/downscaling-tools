@@ -134,7 +134,7 @@ def check(donor, widened, cfg, seed=0):
     dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     dcfg = dict(yaml.safe_load(open(cfg))["dataset"])
     dcfg.pop("type")
-    dcfg.update(split="valid", max_rows=1, time_inputs=False)
+    dcfg.update(split="valid", max_rows=1, time_inputs=False, crop=0)
     ds = E2v4Box(**dcfg)
     x46 = ds[0][1]
     add = int(read_mdlus(widened, "args.json")["__args__"]["img_in_channels"]) - \

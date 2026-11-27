@@ -19,7 +19,9 @@
 #   the config's batch (its schedule is scaled to it) must equal batch_size_per_gpu x GPUs, else the segment stops;
 #   out of memory steps the checkpoint level up (1, 2, 3).
 # - load guards: a run folder holding a model file must show "Loaded model state dictionary" (train.py swallows load
-#   errors); EMA: train_cd.py stops on a resume without the EMA file (EMA_RESUME_MISSING).
+#   errors); EMA: train_cd.py stops on a resume without the EMA file (EMA_RESUME_MISSING); a segment that starts from the
+#   same checkpoint as the previous one (nothing saved in between) writes STOP. Work after the last checkpoint is lost
+#   at every time limit: save_checkpoint_freq must be well inside one segment.
 #   sbatch --nodes=N --time=HH:MM:SS --export=ALL,MODE=regression[,CD_REG_INIT=<widened .mdlus>][,CD_MAX_SEG=K][,CD_GPUH_CEIL=X] cd_train_mn5.sbatch
 #   sbatch --nodes=N --time=HH:MM:SS --export=ALL,MODE=diffusion,CD_REG_CKPT=<regression .mdlus>[,CD_MAX_SEG=K][,CD_GPUH_CEIL=X] cd_train_mn5.sbatch
 #   stop the chain: touch $CD/state/chain_<mode>_m5/STOP
@@ -74,6 +76,14 @@ if [[ $MODE == regression && -n "${CD_REG_INIT:-}" ]]; then
 elif [[ $MODE == regression ]] && ! ls $CKD/*.mdlus >/dev/null 2>&1; then echo "regression from scratch (CD_REG_INIT unset, empty run folder)"; fi
 HAD_MODEL=$(ls $CKD/*.mdlus 2>/dev/null | wc -l)
 echo "model files in $CKD at start: $HAD_MODEL"
+# no progress guard: a segment that starts from the same checkpoint as the previous segment did (that segment saved
+# nothing, e.g. its time limit is shorter than save_checkpoint_freq) stops the chain instead of repeating it
+NEWEST=$(ls $CKD/checkpoint.0.*.pt 2>/dev/null | sort -V | tail -1); NEWEST=${NEWEST:-none}
+if (( SEG > 1 )) && [[ -f $ST/START_CKPT && "$(cat $ST/START_CKPT)" == "$NEWEST" ]]; then
+  echo "FATAL: segment $SEG starts from $NEWEST like the previous segment: no checkpoint saved in between; STOP written" | tee -a $ST/jobs.txt
+  touch $ST/STOP; exit 5
+fi
+echo "$NEWEST" > $ST/START_CKPT; echo "start checkpoint: $NEWEST"
 
 # batch / memory ladder
 if [[ $MODE == regression ]]; then
@@ -125,9 +135,11 @@ for (( i=START; i<${#LADDER[@]}; i++ )); do
       if (( SUBMITTED == 0 && SEG < MAX_SEG )) && [[ ! -f $ST/STOP && ! -f $ST/DONE ]]; then
         SUBMITTED=1
         OTHERS=$(python $CD_KIT/cd_gpuh.py used --jobs $ST/jobs.txt --exclude $SLURM_JOB_ID) || OTHERS=""
-        [[ $OTHERS =~ ^[0-9.]+$ ]] || { echo "sacct accounting failed: no successor submitted; STOP written"; touch $ST/STOP; OTHERS=1e9; }
-        NEXT_S=$(python -c "r=($CEIL-$OTHERS)*3600/$GPUS-$TLIM_S; print(int(min($TLIM_S, max(0, r))))")
-        if (( NEXT_S < 3600 )); then
+        NEXT_S=0
+        if [[ ! $OTHERS =~ ^[0-9.]+$ ]]; then echo "sacct accounting failed: no successor submitted; STOP written"; touch $ST/STOP
+        else NEXT_S=$(python -c "r=($CEIL-$OTHERS)*3600/$GPUS-$TLIM_S; print(int(min($TLIM_S, max(0, r))))"); fi
+        if [[ -f $ST/STOP ]]; then :
+        elif (( NEXT_S < 3600 )); then
           echo "no successor: after this segment's full time limit the chain would have used $OTHERS + $(( TLIM_S * GPUS / 3600 )) of $CEIL H100-h (under 1 h left) $(date -u)" | tee $ST/CEILING_REACHED
         else
           NT=$(printf '%d:%02d:%02d' $(( NEXT_S / 3600 )) $(( NEXT_S % 3600 / 60 )) $(( NEXT_S % 60 )))

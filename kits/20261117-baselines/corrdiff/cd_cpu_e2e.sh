@@ -23,7 +23,7 @@ python $K/make_cd_configs.py --gl512-config $W/gl.yaml --data $W/syn.zarr --repo
   --reg-crop 16 --ema --ema-halflife-nimg 50 --reg-bpg 2 --reg-total-batch 2 --diff-bpg 2 --diff-total-batch 2 \
   --reg-ckpt-level 0 --diff-ckpt-level 0 --diff-max-patch 2 --dataloader-workers 1 > $W/configs.log 2>&1 || { cat $W/configs.log; exit 1; }
 TINY="model.model_args.model_channels=16 model.model_args.channel_mult=[1,2] model.model_args.attn_resolutions=[] \
- training.perf.fp_optimizations=fp32 training.io.validation_steps=1 wandb.mode=disabled"
+ training.perf.fp_optimizations=fp32 training.io.validation_steps=1"   # wandb: the configs' offline mode, as the chain
 cd $CD_REPO/examples/weather/corrdiff
 run() {  # mode dir log duration extra...
   local m=$1 d=$2 log=$3 n=$4; shift 4

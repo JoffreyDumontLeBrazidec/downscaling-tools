@@ -74,6 +74,7 @@ def main():
     dcfg.pop("type")
     dcfg["split"] = "valid"
     dcfg["max_rows"] = 1
+    dcfg["crop"] = 0   # full box (a regression config of the crop runs has dataset.crop)
     ds = E2v4Box(**dcfg)
     img_shape = ds.image_shape()
     n_out = len(ds.output_channels())

@@ -82,6 +82,7 @@ def cmd_run(a):
     dcfg = dict(yaml.safe_load(open(a.cfg))["dataset"])
     dcfg.pop("type")
     dcfg.pop("time_inputs", None)
+    dcfg.pop("crop", None)   # full box (a regression config of the crop runs has dataset.crop)
     dsets = {(sp, ti): E2v4Box(**dict(dcfg, split=sp, max_rows=0, time_inputs=ti))
              for sp in ("train", "valid") for ti in (False, True)}
     rows = {}

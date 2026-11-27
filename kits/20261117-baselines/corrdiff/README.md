@@ -149,7 +149,7 @@ Steps on MN5 (login node `alogin1`; login processes are killed past 300 CPU-s):
    --dataset-py $CD/kit/cd_dataset.py --run-dir $CD/run --out-conf-dir $CD/conf --name-suffix m5 --time-inputs
    --val-spread --scale-schedule-to-batch --reg-crop 448 --ema --reg-bpg 4 --reg-total-batch 16 --reg-ckpt-level 0
    --diff-bpg 4 --diff-total-batch 16 --diff-ckpt-level 1 --diff-max-patch 4 --reg-samples 2000000
-   --diff-samples 10000000 --reg-save-freq 100000 --reg-val-freq 20000 --diff-save-freq 250000 --dataloader-workers 8`
+   --diff-samples 10000000 --reg-save-freq 100000 --reg-val-freq 20000 --diff-save-freq 50000 --dataloader-workers 8`
    (the diffusion batch 16 = 1 node; regenerate with `--diff-total-batch 4 x 4 x nodes` for more nodes).
 4. Smokes (1 node, then 2 nodes, <= 30 min each): `sbatch --nodes=1 $CD/kit/cd_smoke_mn5.sbatch`, `sbatch --nodes=2
    $CD/kit/cd_smoke_mn5.sbatch` (`--export=ALL,CD_REG_INIT=<widened .mdlus>` to start the regression from it); summary
