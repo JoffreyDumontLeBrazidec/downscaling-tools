@@ -44,7 +44,7 @@ if [[ $APPLY == 1 ]]; then
     echo "$hdr"
     echo "#SBATCH --output=$S/logs/%x_%j.out"
     echo "#SBATCH --error=$S/logs/%x_%j.err"
-    echo "CHAIN_PY=python3 CHAIN_TOOLS=$S/jobs/chain bash $S/jobs/chain/pilot_job.sh $S/pool/POOL.tsv 0"
+    echo "CHAIN_PY=python3 CHAIN_TOOLS=$S/jobs/chain bash $S/jobs/chain/pilot_job.sh $S/pool/POOL.tsv 0 14400"   # take over a live arm only in its last 4 h
   } > "$S/jobs/useq_pilot.sbatch"
   cp "$BODY.new" "$BODY"; chmod +x "$BODY"; bash -n "$BODY"
   cat "$S/pool/POOL.tsv"; echo "APPLIED: $BODY, $S/pool/POOL.tsv, $S/jobs/useq_pilot.sbatch"
