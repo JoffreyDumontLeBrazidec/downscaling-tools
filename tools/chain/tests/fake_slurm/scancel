@@ -1,0 +1,7 @@
+#!/bin/bash
+# Fake scancel <id>: kills the job's recorded pid (if any) and marks it CANCELLED.
+f="$FAKE_SLURM_DIR/jobs/$1"; [[ -f "$f" ]] || { echo "scancel: error: Invalid job id $1" >&2; exit 1; }
+pid="$(sed -n 's/^pid=//p' "$f")"
+[[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+sed -i 's/^state=.*/state=CANCELLED/' "$f"
+echo "$1" >> "$FAKE_SLURM_DIR/scancel.log"

@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake sacct -j ID -o State
+jid=""; prev=""
+for a in "$@"; do [[ "$prev" == "-j" ]] && jid="$a"; prev="$a"; done
+f="$FAKE_SLURM_DIR/jobs/$jid"; [[ -f "$f" ]] && sed -n 's/^state=//p' "$f"

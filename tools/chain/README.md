@@ -108,6 +108,34 @@ Moving a run to another cluster: copy the run folder and `CHAIN.json` together (
 Extending a run past its planned end: raise `END_STEP` in the job file (and switch the loss per the
 standing rules); the resolver then resumes instead of reporting `done`.
 
+## Overlap mode (`chain_handover.py`, 28 Nov 2026)
+
+Why: on MareNostrum 5 a job held by a dependency gets `AccrueTime=Unknown` and no `sprio` row (PriorityFlags
+empty, age weight 100000 = as large as fair share), so an `afterany` successor starts queueing with zero age
+when its predecessor ends. Our 2-node `acc` jobs waited a median 40.2 h once eligible when they had been held
+(n=8), 8.9 h when submitted free (n=13), last 60 days (docs `scripts/queue_probe/`).
+
+The successor is queued with NO dependency (optionally `--begin=now+S`) and takes the run over when it starts:
+
+```bash
+source "$EXP/jobs/chain/chain_segment.sh"
+chain_takeover "$CKPT_ROOT"                     # FIRST: wait for the running writer's next checkpoint, scancel it,
+                                                #  wait until Slurm no longer lists it; exit 3 if that fails
+chain_resolve  "$CKPT_ROOT" "$END_STEP"
+chain_next_overlap "$CKPT_ROOT" "$BEGIN_DELAY_S"   # instead of chain_next
+```
+
+One writer: `CHAIN.writer` names the job that trains; `.chain_takeover.lock` (mkdir) serialises takeovers; the
+new job trains only after `squeue`/`sacct` stop listing the old one (a query error is never read as gone). The
+old writer is stopped with a plain `scancel` (SIGTERM). Never `--signal=USR1`: pytorch_lightning's SLURM plugin
+answers USR1 by saving an `hpc_ckpt` and REQUEUEING the job, which would bring a second writer back later. A
+requeued (PENDING) writer found at takeover is cancelled. Options: `--timeout` (default 1.5 h: then
+`--on-timeout kill` or `refuse`), `--stable` (90 s unchanged before the cancel), `--kill-wait` (900 s).
+Cost per handover: the successor's GPUs idle until the next checkpoint plus its start-up. Set the begin delay
+from the cluster's measured waits so handovers happen late in a segment, not minutes after its start.
+Tests: `tests/test_handover.py` (fake Slurm). Real-Slurm smoke without GPUs: `smoke/` (CPU partitions,
+`overlap_smoke_audit.py` checks that writers never interleave).
+
 ## Input store guard (`store_guard.py`, `chain_store_guard`)
 
 On 2026-11-09 the Atos scratch purge (each file deleted about 30 days after its last access) removed single row

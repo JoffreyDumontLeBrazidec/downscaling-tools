@@ -1,5 +1,14 @@
 #!/bin/bash
-# Fake squeue: supports -h -u U -t PENDING -o '%i|%o' only.
+# Fake squeue. Forms: '-h -u U -t PENDING -o %i|%o' (pending jobs with their command) and '-h -j ID -o %T'
+# (state of one job; nothing once it ended).
+jid=""; prev=""
+for a in "$@"; do [[ "$prev" == "-j" ]] && jid="$a"; prev="$a"; done
+if [[ -n "$jid" ]]; then
+  f="$FAKE_SLURM_DIR/jobs/$jid"; [[ -f "$f" ]] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
+  st="$(sed -n 's/^state=//p' "$f")"
+  case "$st" in PENDING|RUNNING|COMPLETING) echo "$st" ;; esac
+  exit 0
+fi
 for f in "$FAKE_SLURM_DIR"/jobs/*; do
   [[ -f "$f" ]] || continue
   grep -q '^state=PENDING$' "$f" || continue

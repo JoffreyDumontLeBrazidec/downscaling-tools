@@ -115,3 +115,31 @@ chain_record() {
   local ok="$1/.chain_guard/${SLURM_JOB_ID:-local}.ok"
   [[ -f "$ok" ]] || echo "[chain] WARNING: no guard marker $ok: the step guard did not confirm this segment's start" >&2
 }
+
+# ── Overlap mode (28 Nov 2026, chain_handover.py) ─────────────────────────────────────────────────────────
+# The successor is queued with NO dependency so it waits in the queue while this segment trains. At its start it
+# waits for the running segment's next checkpoint, scancels it, waits until Slurm no longer lists it, and only then
+# trains. Use INSTEAD of chain_next:
+#   chain_takeover "$CKPT_ROOT"                       # FIRST, before chain_resolve (exit 3 if it cannot be sole writer)
+#   chain_resolve  "$CKPT_ROOT" "$END_STEP"
+#   chain_next_overlap "$CKPT_ROOT" "$BEGIN_DELAY_S"  # 0 = queue now; else sbatch --begin=now+S
+chain_takeover() {
+  local root="$1"; shift
+  "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" takeover --root "$root" "$@" || {
+    echo "[chain] segment refused: could not become the chain's only writer; nothing trained" >&2; exit 3; }
+}
+
+chain_next_overlap() {
+  local root="$1" delay="${2:-0}" cmd
+  local -a cmd_words=()
+  [[ -n "${SLURM_JOB_ID:-}" ]] || { echo "[chain] chain_next_overlap: not inside a Slurm job"; return 0; }
+  cmd="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/^[[:space:]]*Command=//p' | head -n 1)" || true
+  read -r -a cmd_words <<< "$cmd"
+  if [[ ${#cmd_words[@]} -eq 0 || ! -f "${cmd_words[0]}" ]]; then
+    echo "[chain] WARNING: cannot read this job's script (Command='$cmd'); no successor" >&2
+    "$CHAIN_PY" "$CHAIN_TOOLS/chain_state.py" log --root "$root" "overlap-next NOT submitted: no job script" || true
+    return 0
+  fi
+  "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" next --root "$root" --begin-delay "$delay" \
+      --job-file "${cmd_words[0]}" -- "${cmd_words[@]:1}" || true
+}
