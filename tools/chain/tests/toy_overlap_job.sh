@@ -6,4 +6,5 @@ CKPT_ROOT="$1" END_STEP="$2"
 chain_takeover "$CKPT_ROOT"
 chain_resolve "$CKPT_ROOT" "$END_STEP"
 chain_next_overlap "$CKPT_ROOT" 0
+chain_fence "$CKPT_ROOT"
 exec "$CHAIN_PY" "$TOY_CHAIN_TOOLS/tests/toy_writer.py" "$CHAIN_LAST_CKPT" "$CHAIN_EXPECT_STEP" 0.5

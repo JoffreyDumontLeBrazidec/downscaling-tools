@@ -12,6 +12,8 @@ CHAIN_PY="${CHAIN_PY:-python}"
 pick_args=(pick --pool "$POOL"); [[ -n "$BELOW" ]] && pick_args+=(--takeover-below "$BELOW")
 out="$("$CHAIN_PY" "$CHAIN_TOOLS/chain_pool.py" "${pick_args[@]}")" || { echo "[pool] pick refused" >&2; exit 3; }
 eval "$out"
+# A pilot that found nothing to train must not queue its successor at once: on a quiet queue that is a job storm.
+[[ "$POOL_ACTION" != train && "$DELAY" -lt 900 ]] && DELAY=900
 if [[ "${POOL_ACTIVE:-0}" -gt 0 && -n "${SLURM_JOB_ID:-}" ]]; then
   cmd="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/^[[:space:]]*Command=//p' | head -n 1)" || true
   read -r -a w <<< "$cmd"

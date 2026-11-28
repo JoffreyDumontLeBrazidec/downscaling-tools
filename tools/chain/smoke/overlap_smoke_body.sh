@@ -16,6 +16,7 @@ echo "[smoke] job $SLURM_JOB_ID start $(date -u +%FT%TZ) on $(hostname -s)"
 chain_takeover "$ROOT"
 chain_resolve "$ROOT" "$END_STEP"
 chain_next_auto "$ROOT"   # CHAIN.overlap (delay) or CHAIN.pool on disk decides
+chain_fence "$ROOT"   # fence (self-stop when no longer CHAIN.writer) and keeper (a lost successor is queued again)
 last="${CHAIN_LAST_CKPT:-$ROOT/run1/last.ckpt}"
 echo "[smoke] job $SLURM_JOB_ID trains from step $CHAIN_EXPECT_STEP at $(date -u +%FT%TZ)"
 python3 - "$last" "$CHAIN_EXPECT_STEP" "$END_STEP" "${SMOKE_PERIOD:-60}" "$ROOT/steps.log" <<'PY'
@@ -27,7 +28,7 @@ while step < end:
     time.sleep(period)
     step += 100
     buf = io.BytesIO(); pickle.dump({"global_step": step, "job": job}, buf, protocol=2)
-    with zipfile.ZipFile(ckpt, "w") as zf:          # in place, not atomic, like Lightning
+    with zipfile.ZipFile(ckpt, "w") as zf:          # in place, not atomic: harsher than Lightning 2.6.1, whose _atomic_save writes a temp file and renames
         zf.writestr("archive/data.pkl", buf.getvalue())
     with open(log, "a") as fh:
         fh.write("{} {} {}\n".format(job, step, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))

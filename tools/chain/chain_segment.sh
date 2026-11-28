@@ -30,6 +30,11 @@ chain_resolve() {
   local root="$1" end_step="$2" out
   [[ -n "$root" && -n "$end_step" ]] || { echo "[chain] usage: chain_resolve <ckpt_root> <end_step>" >&2; exit 2; }
   chain_kernel_guard
+  # One writer: a segment that is not CHAIN.writer refuses while that writer is alive (overlap and pool chains).
+  if [[ -f "$root/CHAIN.writer" ]]; then
+    "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" check --root "$root" || {
+      echo "[chain] segment refused: another live job is this chain's writer; nothing trained" >&2; exit 3; }
+  fi
   out="$("$CHAIN_PY" "$CHAIN_TOOLS/chain_state.py" resolve --root "$root" --end-step "$end_step")" || {
     echo "[chain] segment refused (state above); nothing trained" >&2; exit 3; }
   eval "$out"
@@ -124,9 +129,35 @@ chain_record() {
 #   chain_resolve  "$CKPT_ROOT" "$END_STEP"
 #   chain_next_overlap "$CKPT_ROOT" "$BEGIN_DELAY_S"  # 0 = queue now; else sbatch --begin=now+S
 chain_takeover() {
-  local root="$1"; shift
-  "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" takeover --root "$root" "$@" || {
+  local root="$1" rc=0; shift
+  "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" takeover --root "$root" "$@" || rc=$?
+  if [[ $rc -eq 10 ]]; then
+    echo "[chain] yield: the chain's writer is young; this job queued itself again and trains nothing"; exit 0; fi
+  [[ $rc -eq 0 ]] || {
     echo "[chain] segment refused: could not become the chain's only writer; nothing trained" >&2; exit 3; }
+}
+
+# Fence and keeper, in the background of the segment. Call it AFTER chain_resolve and before srun:
+#   chain_fence "$CKPT_ROOT"
+# Fence: if CHAIN.writer stops naming this job, the segment cancels and kills itself (second line of defence for
+# one writer; does not need slurmctld). Keeper (overlap chains only, <root>/CHAIN.overlap): every 15 min it makes
+# sure a successor is queued, so a refused, cancelled or never-submitted successor does not end the chain.
+# A body that runs `srun ... &` and then a BARE `wait` would wait for the fence for ever: use `wait <srun pid>`,
+# or call chain_fence_stop before the bare wait.
+chain_fence_stop() { [[ -n "${CHAIN_FENCE_PID:-}" ]] && kill "$CHAIN_FENCE_PID" 2>/dev/null; CHAIN_FENCE_PID=""; return 0; }
+chain_fence() {
+  local root="$1" delay cmd
+  local -a cmd_words=() keeper=()
+  [[ -n "${SLURM_JOB_ID:-}" && -f "$root/CHAIN.writer" ]] || return 0
+  if [[ -f "$root/CHAIN.overlap" && "${CHAIN_POOL_PILOT:-}" != 1 && ! -f "$root/CHAIN.pool" ]]; then
+    delay="$(awk 'NR==1{print $1}' "$root/CHAIN.overlap")"; [[ "$delay" =~ ^[0-9]+$ ]] || delay=0
+    cmd="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/^[[:space:]]*Command=//p' | head -n 1)" || true
+    read -r -a cmd_words <<< "$cmd"
+    [[ ${#cmd_words[@]} -gt 0 && -f "${cmd_words[0]}" ]] && \
+      keeper=(--begin-delay "$delay" --job-file "${cmd_words[0]}" -- "${cmd_words[@]:1}")
+  fi
+  "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" fence --root "$root" --pid $$ "${keeper[@]}" &
+  CHAIN_FENCE_PID=$!
 }
 
 chain_next_overlap() {

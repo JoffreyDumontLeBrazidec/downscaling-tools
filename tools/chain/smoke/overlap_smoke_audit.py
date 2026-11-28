@@ -19,6 +19,10 @@ log = open(os.path.join(root, "CHAIN.log")).read()
 handovers = len(re.findall(r"takeover: scancel \d+ after checkpoint", log))
 timeouts = len(re.findall(r"takeover: scancel \d+ after timeout", log))
 refused = len(re.findall(r"REFUSED", log))
+yields, fenced, kept = (len(re.findall(k, log)) for k in (r"takeover: YIELD", r"fence: CHAIN.writer names", r"keeper: no successor"))
+print("{} yields, {} fence stops (must be 0 in a clean run), {} keeper resubmissions".format(yields, fenced, kept))
+if fenced:
+    print("FAIL a segment was fenced: two jobs believed they were the writer"); ok = False
 print("writers in order: {}".format(" ".join(blocks)))
 print("{} {} writes, {} writers, {} checkpoint handovers, {} timeout kills, {} refusals, last step {}".format(
     "AUDIT_OK" if ok else "AUDIT_FAIL", len(rows), len(blocks), handovers, timeouts, refused, steps[-1]))

@@ -111,19 +111,7 @@ def choose(views, takeover_below):
 
 
 def _lock(pool_dir, me):
-    lock = os.path.join(pool_dir, POOL_LOCK)
-    for _ in range(2):
-        try:
-            os.mkdir(lock)
-            with open(os.path.join(lock, "owner"), "w") as fh:
-                fh.write(me + "\n")
-            return lock
-        except FileExistsError:
-            owner = _first_word(os.path.join(lock, "owner"))
-            if owner and owner != me and ch.job_state(owner):
-                raise cs.Refuse("pool lock held by live job {}".format(owner))
-            shutil.rmtree(lock, ignore_errors=True)
-    raise cs.Refuse("could not take the pool lock {}".format(lock))
+    return ch.take_lock(os.path.join(pool_dir, POOL_LOCK), me)
 
 
 def _pool_log(pool, line):
@@ -146,7 +134,7 @@ def cmd_pick(a):
             os.replace(claim + ".tmp", claim)
             cs._log(pick["root"], "pool: claimed by pilot {} ({})".format(me, why))
     finally:
-        shutil.rmtree(lock, ignore_errors=True)
+        ch.release_lock(lock, me)
     summary = " ".join("{}={}".format(os.path.basename(v["root"]), v["state"]) for v in views)
     _pool_log(a.pool, "pick {} ({}); chains: {}".format(pick["root"] if pick else "none", why, summary))
     print("POOL_ACTION={}".format("train" if pick else "none"))

@@ -15,7 +15,7 @@ NEW="$(cd "$(dirname "$0")" && pwd)/chain"
 APPLY=0; [[ "${1:-}" == --apply ]] && APPLY=1
 BODY=$EXP/jobs/muon_job.sh
 python3 "$NEW/../rollout/edit_body.py" "$BODY" --takeover-before 'chain_resolve "$CKPT_ROOT" "$LL_END_STEP"' \
-    --root-var CKPT_ROOT --next-from 'chain_next "$CKPT_ROOT"' --next-to 'chain_next_auto "$CKPT_ROOT"' \
+    --root-var CKPT_ROOT --next-from 'chain_next "$CKPT_ROOT"' --next-to 'chain_next_auto "$CKPT_ROOT"; chain_fence "$CKPT_ROOT"' \
     --out "$BODY.new"
 diff -u "$BODY" "$BODY.new" || true
 if [[ $APPLY == 1 ]]; then

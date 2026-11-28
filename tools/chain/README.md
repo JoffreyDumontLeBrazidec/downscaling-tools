@@ -170,6 +170,24 @@ smokes only. Repair lists: `python3 store_guard.py missing <store> --ranges` pri
 `data`. A store written with skipped all-fill-value chunks would be reported as incomplete; anemoi-datasets
 stores write every chunk.
 
+## One writer, liveness and churn in overlap and pool mode (review of 28 Nov 2026)
+
+Body order: `chain_takeover` -> `chain_resolve` -> `chain_next_auto` -> `chain_fence` -> `srun ...`.
+
+| risk | mechanism | where |
+|---|---|---|
+| two starters at once, or a stale lock | lock FILE taken with link(2), owner written before the name exists; a stale lock is removed under a second lock and only if it still names the dead owner | `take_lock` (also the pool lock) |
+| a body without `chain_takeover` (old pre-submitted segment, hand-made job) | `chain_resolve` refuses (exit 3) while `CHAIN.writer` names another job that Slurm lists | `chain_handover.py check` |
+| a writer Slurm lost sight of (cut-off node), a protocol bug | fence: the segment reads `CHAIN.writer` every 60 s and cancels and kills itself when it names another job or another restart of the same job | `chain_fence` |
+| requeue after a node failure | the requeued job runs `chain_takeover` again; a writer that turns PENDING during a takeover is cancelled at once; a requeued writer waits 150 s so an old copy can fence itself | `takeover` |
+| slurmctld outage | every Slurm question is retried for `CHAIN_SLURM_PATIENCE` s (default 1800) before a refusal; an error is never read as "gone" | `job_state` |
+| the successor refused, was cancelled, or was never queued | keeper: the running writer checks every 15 min that a job with its command is pending or running, and queues one if not (at most 8 per segment) | `chain_fence` on a `CHAIN.overlap` chain |
+| churn on a quiet queue (successor starts minutes after the writer) | yield: `CHAIN.overlap` = `<begin delay s> <min writer age s>`; a successor that finds a writer younger than the min age queues itself again with `--begin` and exits 0 | `takeover --min-writer-age` |
+
+`--begin` delays also delay age accrual (a job with a future begin time is not eligible), so prefer begin delay 0
+with a min writer age (e.g. `0 21600` on a 24 h segment). Pool chains have the fence but no keeper yet.
+`smoke/shape_probe.sh` prints the scheduler's expected start per job shape (`sbatch --test-only`, nothing submitted).
+
 ## Tests
 
 `python -m pytest tools/chain` (25 tests, about 40 s on CPU; `tests/test_store_guard.py` covers the store guard): the resolver's decision table on synthetic
