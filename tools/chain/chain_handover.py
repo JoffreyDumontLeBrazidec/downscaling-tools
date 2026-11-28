@@ -247,12 +247,16 @@ def cmd_next(a):
     cmd_str = " ".join(cmd)
     r = subprocess.run(["squeue", "-h", "-u", os.environ.get("USER", ""), "-t", "PENDING", "-o", "%i|%o"],
                        stdout=subprocess.PIPE, universal_newlines=True)
-    for line in (r.stdout or "").splitlines():
-        jid, _, c = line.partition("|")
-        if c.strip() == cmd_str:
-            print("[handover] successor already queued: job {}".format(jid))
-            cs._log(root, "overlap-next already queued job={}".format(jid))
-            return 0
+    if r.returncode != 0:
+        sys.stderr.write("[handover] WARNING: squeue failed; no successor submitted (a duplicate would be worse)\n")
+        cs._log(root, "overlap-next NOT submitted: squeue failed")
+        return 0
+    same = [line.partition("|")[0] for line in (r.stdout or "").splitlines()
+            if line.partition("|")[2].strip() == cmd_str]
+    if len(same) >= a.max_pending:
+        print("[handover] successor already queued: job(s) {} (max pending {})".format(",".join(same), a.max_pending))
+        cs._log(root, "overlap-next already queued job={}".format(",".join(same)))
+        return 0
     env = {k: v for k, v in os.environ.items() if not (k.startswith("SLURM_") and k != "SLURM_CONF")}
     sb = ["sbatch", "--parsable"]
     if a.begin_delay > 0:
@@ -298,6 +302,9 @@ def main(argv=None):
     s.add_argument("--job-file", required=True)
     s.add_argument("--begin-delay", type=float, default=0)
     s.add_argument("--max-same-start", type=int, default=3)
+    s.add_argument("--max-pending", type=int, default=1,
+                   help="queue a successor only while fewer than this many jobs with the same command are pending "
+                        "(1 for a chain; the pool size for pilot jobs)")
     s.add_argument("job_args", nargs="*")
     a = p.parse_args(argv)
     if not a.cmd:

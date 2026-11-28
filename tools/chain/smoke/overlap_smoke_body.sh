@@ -15,7 +15,7 @@ source "$CHAIN_TOOLS/chain_segment.sh"
 echo "[smoke] job $SLURM_JOB_ID start $(date -u +%FT%TZ) on $(hostname -s)"
 chain_takeover "$ROOT"
 chain_resolve "$ROOT" "$END_STEP"
-chain_next_overlap "$ROOT" "${SMOKE_BEGIN_DELAY:-0}"
+chain_next_auto "$ROOT"   # CHAIN.overlap (delay) or CHAIN.pool on disk decides
 last="${CHAIN_LAST_CKPT:-$ROOT/run1/last.ckpt}"
 echo "[smoke] job $SLURM_JOB_ID trains from step $CHAIN_EXPECT_STEP at $(date -u +%FT%TZ)"
 python3 - "$last" "$CHAIN_EXPECT_STEP" "$END_STEP" "${SMOKE_PERIOD:-60}" "$ROOT/steps.log" <<'PY'

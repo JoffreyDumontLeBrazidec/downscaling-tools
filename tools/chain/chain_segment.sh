@@ -130,7 +130,7 @@ chain_takeover() {
 }
 
 chain_next_overlap() {
-  local root="$1" delay="${2:-0}" cmd
+  local root="$1" delay="${2:-0}" max_pending="${3:-1}" cmd
   local -a cmd_words=()
   [[ -n "${SLURM_JOB_ID:-}" ]] || { echo "[chain] chain_next_overlap: not inside a Slurm job"; return 0; }
   cmd="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -n 's/^[[:space:]]*Command=//p' | head -n 1)" || true
@@ -141,5 +141,23 @@ chain_next_overlap() {
     return 0
   fi
   "$CHAIN_PY" "$CHAIN_TOOLS/chain_handover.py" next --root "$root" --begin-delay "$delay" \
-      --job-file "${cmd_words[0]}" -- "${cmd_words[@]:1}" || true
+      --max-pending "$max_pending" --job-file "${cmd_words[0]}" -- "${cmd_words[@]:1}" || true
+}
+
+# One body for every mode, chosen ON DISK (never by a submit-time variable):
+#   inside a pilot job (CHAIN_POOL_PILOT=1), or <root>/CHAIN.pool exists: queue nothing (the pool's pilots do);
+#   <root>/CHAIN.overlap exists: overlap mode, its first word = begin delay in seconds (0 = queue now);
+#   otherwise: the classic afterany successor (chain_next).
+# Call it where chain_next was called, and call chain_takeover before chain_resolve (harmless in classic mode).
+chain_next_auto() {
+  local root="$1" delay
+  if [[ "${CHAIN_POOL_PILOT:-}" == 1 || -f "$root/CHAIN.pool" ]]; then
+    echo "[chain] pool chain (pilot job or $root/CHAIN.pool): the pool queues pilots; this body queues nothing"; return 0; fi
+  if [[ -f "$root/CHAIN.overlap" ]]; then
+    delay="$(awk 'NR==1{print $1}' "$root/CHAIN.overlap")"
+    [[ "$delay" =~ ^[0-9]+$ ]] || delay=0
+    chain_next_overlap "$root" "$delay"
+  else
+    chain_next "$root"
+  fi
 }

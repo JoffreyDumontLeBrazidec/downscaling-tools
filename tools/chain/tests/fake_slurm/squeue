@@ -1,11 +1,15 @@
 #!/bin/bash
 # Fake squeue. Forms: '-h -u U -t PENDING -o %i|%o' (pending jobs with their command) and '-h -j ID -o %T'
 # (state of one job; nothing once it ended).
-jid=""; prev=""
-for a in "$@"; do [[ "$prev" == "-j" ]] && jid="$a"; prev="$a"; done
+jid=""; prev=""; fmt=""
+for a in "$@"; do [[ "$prev" == "-j" ]] && jid="$a"; [[ "$prev" == "-o" ]] && fmt="$a"; prev="$a"; done
 if [[ -n "$jid" ]]; then
   f="$FAKE_SLURM_DIR/jobs/$jid"; [[ -f "$f" ]] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
   st="$(sed -n 's/^state=//p' "$f")"
+  if [[ "$fmt" == "%L" ]]; then
+    [[ "$st" == RUNNING ]] && { l="$(sed -n 's/^left=//p' "$f")"; echo "${l:-1-00:00:00}"; }
+    exit 0
+  fi
   case "$st" in PENDING|RUNNING|COMPLETING) echo "$st" ;; esac
   exit 0
 fi

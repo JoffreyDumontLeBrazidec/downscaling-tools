@@ -136,6 +136,19 @@ from the cluster's measured waits so handovers happen late in a segment, not min
 Tests: `tests/test_handover.py` (fake Slurm). Real-Slurm smoke without GPUs: `smoke/` (CPU partitions,
 `overlap_smoke_audit.py` checks that writers never interleave).
 
+### Mode on disk, pools of chains, rollout scripts (28 Nov 2026)
+
+- `chain_next_auto ROOT` replaces `chain_next` in a body that should serve every mode: `ROOT/CHAIN.pool` (or a pilot
+  job) -> queue nothing; `ROOT/CHAIN.overlap` (first word = `--begin` delay in s) -> overlap successor; else classic
+  `afterany` (chain_next). `chain_takeover` before `chain_resolve` is harmless in classic mode.
+- Pilot pool (`chain_pool.py`, `pilot_job.sh`): N chains with the SAME resources share generic pilot jobs. A pilot
+  that starts trains the idle chain (oldest checkpoint first), else the chain whose writer has the least time left,
+  claims it (`CHAIN.claim`), queues the next pilot while fewer than (active chains) are pending, then runs that
+  chain's body. Pool file: `root<TAB>end_step<TAB>body [args]`. Tests `tests/test_pool.py`; smoke
+  `smoke/pool_smoke_setup.sh`.
+- `rollout/`: `edit_body.py` (exact-anchor body edits, refuses on doubt), `apply_mn5_muon_overlap.sh`,
+  `apply_leo_useq_pool.sh` (dry by default, `--apply` to change; they never submit or cancel).
+
 ## Input store guard (`store_guard.py`, `chain_store_guard`)
 
 On 2026-11-09 the Atos scratch purge (each file deleted about 30 days after its last access) removed single row
