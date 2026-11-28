@@ -108,6 +108,47 @@ Moving a run to another cluster: copy the run folder and `CHAIN.json` together (
 Extending a run past its planned end: raise `END_STEP` in the job file (and switch the loss per the
 standing rules); the resolver then resumes instead of reporting `done`.
 
+## Overlap mode (`chain_handover.py`, 28 Nov 2026)
+
+Why: on MareNostrum 5 a job held by a dependency gets `AccrueTime=Unknown` and no `sprio` row (PriorityFlags
+empty, age weight 100000 = as large as fair share), so an `afterany` successor starts queueing with zero age
+when its predecessor ends. Our 2-node `acc` jobs waited a median 40.2 h once eligible when they had been held
+(n=8), 8.9 h when submitted free (n=13), last 60 days (docs `scripts/queue_probe/`).
+
+The successor is queued with NO dependency (optionally `--begin=now+S`) and takes the run over when it starts:
+
+```bash
+source "$EXP/jobs/chain/chain_segment.sh"
+chain_takeover "$CKPT_ROOT"                     # FIRST: wait for the running writer's next checkpoint, scancel it,
+                                                #  wait until Slurm no longer lists it; exit 3 if that fails
+chain_resolve  "$CKPT_ROOT" "$END_STEP"
+chain_next_overlap "$CKPT_ROOT" "$BEGIN_DELAY_S"   # instead of chain_next
+```
+
+One writer: `CHAIN.writer` names the job that trains; `.chain_takeover.lock` (mkdir) serialises takeovers; the
+new job trains only after `squeue`/`sacct` stop listing the old one (a query error is never read as gone). The
+old writer is stopped with a plain `scancel` (SIGTERM). Never `--signal=USR1`: pytorch_lightning's SLURM plugin
+answers USR1 by saving an `hpc_ckpt` and REQUEUEING the job, which would bring a second writer back later. A
+requeued (PENDING) writer found at takeover is cancelled. Options: `--timeout` (default 1.5 h: then
+`--on-timeout kill` or `refuse`), `--stable` (90 s unchanged before the cancel), `--kill-wait` (900 s).
+Cost per handover: the successor's GPUs idle until the next checkpoint plus its start-up. Set the begin delay
+from the cluster's measured waits so handovers happen late in a segment, not minutes after its start.
+Tests: `tests/test_handover.py` (fake Slurm). Real-Slurm smoke without GPUs: `smoke/` (CPU partitions,
+`overlap_smoke_audit.py` checks that writers never interleave).
+
+### Mode on disk, pools of chains, rollout scripts (28 Nov 2026)
+
+- `chain_next_auto ROOT` replaces `chain_next` in a body that should serve every mode: `ROOT/CHAIN.pool` (or a pilot
+  job) -> queue nothing; `ROOT/CHAIN.overlap` (first word = `--begin` delay in s) -> overlap successor; else classic
+  `afterany` (chain_next). `chain_takeover` before `chain_resolve` is harmless in classic mode.
+- Pilot pool (`chain_pool.py`, `pilot_job.sh`): N chains with the SAME resources share generic pilot jobs. A pilot
+  that starts trains the idle chain (oldest checkpoint first), else the chain whose writer has the least time left,
+  claims it (`CHAIN.claim`), queues the next pilot while fewer than (active chains) are pending, then runs that
+  chain's body. Pool file: `root<TAB>end_step<TAB>body [args]`. Tests `tests/test_pool.py`; smoke
+  `smoke/pool_smoke_setup.sh`.
+- `rollout/`: `edit_body.py` (exact-anchor body edits, refuses on doubt), `apply_mn5_muon_overlap.sh`,
+  `apply_leo_useq_pool.sh` (dry by default, `--apply` to change; they never submit or cancel).
+
 ## Input store guard (`store_guard.py`, `chain_store_guard`)
 
 On 2026-11-09 the Atos scratch purge (each file deleted about 30 days after its last access) removed single row
@@ -128,6 +169,24 @@ and rsync temporaries ignored). `STORE_GUARD_ALLOW_INCOMPLETE=1` downgrades the 
 smokes only. Repair lists: `python3 store_guard.py missing <store> --ranges` prints the missing row indices of
 `data`. A store written with skipped all-fill-value chunks would be reported as incomplete; anemoi-datasets
 stores write every chunk.
+
+## One writer, liveness and churn in overlap and pool mode (review of 28 Nov 2026)
+
+Body order: `chain_takeover` -> `chain_resolve` -> `chain_next_auto` -> `chain_fence` -> `srun ...`.
+
+| risk | mechanism | where |
+|---|---|---|
+| two starters at once, or a stale lock | lock FILE taken with link(2), owner written before the name exists; a stale lock is removed under a second lock and only if it still names the dead owner | `take_lock` (also the pool lock) |
+| a body without `chain_takeover` (old pre-submitted segment, hand-made job) | `chain_resolve` refuses (exit 3) while `CHAIN.writer` names another job that Slurm lists | `chain_handover.py check` |
+| a writer Slurm lost sight of (cut-off node), a protocol bug | fence: the segment reads `CHAIN.writer` every 60 s and cancels and kills itself when it names another job or another restart of the same job | `chain_fence` |
+| requeue after a node failure | the requeued job runs `chain_takeover` again; a writer that turns PENDING during a takeover is cancelled at once; a requeued writer waits 150 s so an old copy can fence itself | `takeover` |
+| slurmctld outage | every Slurm question is retried for `CHAIN_SLURM_PATIENCE` s (default 1800) before a refusal; an error is never read as "gone" | `job_state` |
+| the successor refused, was cancelled, or was never queued | keeper: the running writer checks every 15 min that a job with its command is pending or running, and queues one if not (at most 8 per segment) | `chain_fence` on a `CHAIN.overlap` chain |
+| churn on a quiet queue (successor starts minutes after the writer) | yield: `CHAIN.overlap` = `<begin delay s> <min writer age s>`; a successor that finds a writer younger than the min age queues itself again with `--begin` and exits 0 | `takeover --min-writer-age` |
+
+`--begin` delays also delay age accrual (a job with a future begin time is not eligible), so prefer begin delay 0
+with a min writer age (e.g. `0 21600` on a 24 h segment). Pool chains have the fence but no keeper yet.
+`smoke/shape_probe.sh` prints the scheduler's expected start per job shape (`sbatch --test-only`, nothing submitted).
 
 ## Tests
 

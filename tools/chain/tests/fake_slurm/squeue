@@ -1,7 +1,27 @@
 #!/bin/bash
-# Fake squeue: supports -h -u U -t PENDING -o '%i|%o' only.
+# Fake squeue. Forms: '-h -u U -t STATES -o %i|%o' (jobs in those states with their command) and '-h -j ID -o FMT'
+# with FMT %T (state; like real squeue, an ended job is still listed with its terminal state unless the job file
+# says purged=1), %L (time left) or %M (elapsed).
+jid=""; prev=""; fmt=""; states="PENDING"
+for a in "$@"; do [[ "$prev" == "-j" ]] && jid="$a"; [[ "$prev" == "-o" ]] && fmt="$a"; [[ "$prev" == "-t" ]] && states="$a"; prev="$a"; done
+[[ -f "$FAKE_SLURM_DIR/down" ]] && { echo "slurm_load_jobs error: Socket timed out on send/recv operation" >&2; exit 1; }
+if [[ -n "$jid" ]]; then
+  f="$FAKE_SLURM_DIR/jobs/$jid"; [[ -f "$f" ]] || { echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1; }
+  st="$(sed -n 's/^state=//p' "$f")"
+  if [[ "$fmt" == "%L" ]]; then
+    [[ "$st" == RUNNING ]] && { l="$(sed -n 's/^left=//p' "$f")"; echo "${l:-1-00:00:00}"; }
+    exit 0
+  fi
+  if [[ "$fmt" == "%M" ]]; then
+    [[ "$st" == RUNNING ]] && { l="$(sed -n 's/^elapsed=//p' "$f")"; echo "${l:-5:00:00}"; }
+    exit 0
+  fi
+  grep -q '^purged=1$' "$f" || echo "$st"
+  exit 0
+fi
 for f in "$FAKE_SLURM_DIR"/jobs/*; do
   [[ -f "$f" ]] || continue
-  grep -q '^state=PENDING$' "$f" || continue
+  st="$(sed -n 's/^state=//p' "$f")"
+  [[ ",$states," == *",$st,"* ]] || continue
   cmd="$(sed -n 's/^command=//p' "$f")"; echo "$(basename "$f")|${cmd% }"
 done
