@@ -15,17 +15,17 @@ NEW="$(cd "$(dirname "$0")" && pwd)/chain"
 [[ -f "$NEW/chain_handover.py" ]] || { echo "need ./chain (tools/chain of downscaling-tools PR 66)" >&2; exit 2; }
 APPLY=0; [[ "${1:-}" == --apply ]] && APPLY=1
 BODY=$EXP/jobs/muon_job.sh
+NEWBODY="$(cd "$(dirname "$0")" && pwd)/$(basename "$BODY").new"   # outside the sandbox
 python3 "$NEW/../rollout/edit_body.py" "$BODY" --takeover-before 'chain_resolve "$CKPT_ROOT" "$LL_END_STEP"' \
     --root-var CKPT_ROOT --next-from 'chain_next "$CKPT_ROOT"' --next-to 'chain_next_auto "$CKPT_ROOT"; chain_fence "$CKPT_ROOT"' \
-    --out "$BODY.new"
-diff -u "$BODY" "$BODY.new" || true
+    --out "$NEWBODY"
+diff -u "$BODY" "$NEWBODY" || true
 if [[ $APPLY == 1 ]]; then
   [[ -e $EXP/jobs/chain.bak_20261128 ]] || cp -rp "$EXP/jobs/chain" "$EXP/jobs/chain.bak_20261128"
   [[ -e $BODY.bak_20261128 ]] || cp -p "$BODY" "$BODY.bak_20261128"
   for f in chain_segment.sh chain_handover.py chain_pool.py pilot_job.sh kernel_guard.py; do cp "$NEW/$f" "$EXP/jobs/chain/$f"; done
   cat "$NEW/SHA.txt" > "$EXP/jobs/chain/COMMIT.overlap" 2>/dev/null || true
-  cp "$BODY.new" "$BODY"; chmod +x "$BODY"
+  cp "$NEWBODY" "$BODY"; chmod +x "$BODY"
   echo "0 21600 overlap: begin delay 0 s, min writer age 6 h; MN5 Muon, 28 Nov 2026" > "$ROOT/CHAIN.overlap"
   bash -n "$BODY" && echo "APPLIED: $BODY, $ROOT/CHAIN.overlap"
 fi
-rm -f "$BODY.new"

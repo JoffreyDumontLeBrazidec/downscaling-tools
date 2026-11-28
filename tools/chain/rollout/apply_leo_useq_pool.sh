@@ -18,9 +18,10 @@ NEW="$(cd "$(dirname "$0")" && pwd)/chain"
 [[ -f "$NEW/chain_pool.py" ]] || { echo "need ./chain (tools/chain of downscaling-tools PR 66)" >&2; exit 2; }
 APPLY=0; [[ "${1:-}" == --apply ]] && APPLY=1
 BODY=$S/jobs/useq_job.sh
-python3 "$NEW/../rollout/edit_body.py" "$BODY" --out "$BODY.new" --insert-after 'CK=$OUTPUT/checkpoint' \
+NEWBODY="$(cd "$(dirname "$0")" && pwd)/$(basename "$BODY").new"   # outside the sandbox
+python3 "$NEW/../rollout/edit_body.py" "$BODY" --out "$NEWBODY" --insert-after 'CK=$OUTPUT/checkpoint' \
   --insert-text 'if [[ -f "$CK/CHAIN.json" && "${CFG_ONLY:-0}" != 1 ]]; then   # pool arm (28 Nov 2026): one writer per arm\n  export CHAIN_TOOLS=$S/jobs/chain CHAIN_PY=python KERNEL_GUARD_PY=python\n  source "$CHAIN_TOOLS/chain_segment.sh"\n  chain_takeover "$CK"\n  chain_next_auto "$CK"\n  chain_fence "$CK"\nfi'
-diff -u "$BODY" "$BODY.new" || true
+diff -u "$BODY" "$NEWBODY" || true
 for a in $ARMS; do [[ -f $S/jobs/$a.sbatch ]] || { echo "missing $S/jobs/$a.sbatch" >&2; exit 2; }; done
 hdr="$(grep '^#SBATCH' $S/jobs/HB.sbatch | grep -v -e '--job-name' -e '--output' -e '--error')"
 for a in $ARMS; do
@@ -46,7 +47,6 @@ if [[ $APPLY == 1 ]]; then
     echo "#SBATCH --error=$S/logs/%x_%j.err"
     echo "CHAIN_PY=python3 CHAIN_TOOLS=$S/jobs/chain bash $S/jobs/chain/pilot_job.sh $S/pool/POOL.tsv 0 14400"   # take over a live arm only in its last 4 h
   } > "$S/jobs/useq_pilot.sbatch"
-  cp "$BODY.new" "$BODY"; chmod +x "$BODY"; bash -n "$BODY"
+  cp "$NEWBODY" "$BODY"; chmod +x "$BODY"; bash -n "$BODY"
   cat "$S/pool/POOL.tsv"; echo "APPLIED: $BODY, $S/pool/POOL.tsv, $S/jobs/useq_pilot.sbatch"
 fi
-rm -f "$BODY.new"
