@@ -14,7 +14,7 @@
 set -eo pipefail
 S=/leonardo_work/DestE_340_26/users/jdumontl/sandbox/20261127-u-screen
 ARMS="HB UK UW U8 PM P-c"
-NEW="$(cd "$(dirname "$0")" && pwd)/chain"
+NEW="$(cd "$(dirname "$0")/.." && pwd)/chain"   # kit layout: <kit>/chain, <kit>/rollout
 [[ -f "$NEW/chain_pool.py" ]] || { echo "need ./chain (tools/chain of downscaling-tools PR 66)" >&2; exit 2; }
 APPLY=0; [[ "${1:-}" == --apply ]] && APPLY=1
 BODY=$S/jobs/useq_job.sh

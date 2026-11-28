@@ -11,7 +11,7 @@
 set -eo pipefail
 EXP=/gpfs/projects/ehpc01/ecm800825/sandbox/20261125-gl450-muon-e2
 ROOT=$EXP/runs/checkpoints/gl450_muon_e2_50k
-NEW="$(cd "$(dirname "$0")" && pwd)/chain"
+NEW="$(cd "$(dirname "$0")/.." && pwd)/chain"   # kit layout: <kit>/chain, <kit>/rollout
 [[ -f "$NEW/chain_handover.py" ]] || { echo "need ./chain (tools/chain of downscaling-tools PR 66)" >&2; exit 2; }
 APPLY=0; [[ "${1:-}" == --apply ]] && APPLY=1
 BODY=$EXP/jobs/muon_job.sh
